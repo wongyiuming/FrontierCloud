@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.v1.endpoints import router as api_v1_router
+from app.core.admin_log import append_admin_log
 from app.core.db import init_db
 from app.services.admin_service import issue_admin_token
 
@@ -56,16 +57,19 @@ class RealIPLogMiddleware:
             path = scope.get("path", "")
             raw_query = scope.get("query_string", b"")
             raw_target = path + (("?" + raw_query.decode("utf-8", errors="replace")) if raw_query else "")
-            print(
+            log_line = (
                 f"[LOG] REAL_IP: {client_ip} | PROXY_IP: {proxy_ip} | "
-                f"{method} {path} - {status_code} ({elapsed:.2f}ms)",
-                flush=True,
+                f"{method} {path} - {status_code} ({elapsed:.2f}ms)"
             )
-            print(
+            request_line = (
                 f"[REQUEST] REAL_IP: {client_ip} | PROXY_IP: {proxy_ip} | "
-                f"{method} {render_query_log(raw_target)} - {status_code} ({elapsed:.2f}ms)",
-                flush=True,
+                f"{method} {render_query_log(raw_target)} - {status_code} ({elapsed:.2f}ms)"
             )
+            print(log_line, flush=True)
+            print(request_line, flush=True)
+            if path != "/api/v1/media/admin/logs":
+                append_admin_log(log_line)
+                append_admin_log(request_line)
 
 
 def render_query_log(target: str) -> str:

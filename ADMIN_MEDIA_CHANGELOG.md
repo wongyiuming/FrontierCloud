@@ -2,7 +2,7 @@
 
 ## 新增/修改文件
 
-- `app/api/v1/admin.py`：Admin 提权、Session、上传、下载、删除、移动、隐藏、退出。
+- `app/api/v1/admin.py`：Admin 提权、Session、逐文件上传、下载、删除、隐藏、安全日志、退出。
 - `app/services/admin_service.py`：15 分钟滑动临时 Token、Redis Session、MySQL 历史记录、审计。
 - `app/services/media_manager.py`：文件树、上传校验、批量文件操作、ZIP 下载、隐藏状态。
 - `app/core/db.py`：MySQL 初始化表结构。
@@ -10,8 +10,8 @@
 - `app/api/v1/media.py`：公共索引与播放增加隐藏状态和根目录媒体禁止规则。
 - `main.py`：保留旧 `[LOG]`，增加 `[REQUEST]` 中文 Query 渲染日志，并启动时生成临时 Admin Token。
 - `static/media/index.html`：增加“提权”。
-- `static/media/admin.html`、`static/css/admin.css`、`static/js/admin.js`：完整 Admin UI。
-- `docker-compose.yaml`：新增 MySQL，Redis/MySQL healthcheck。
+- `static/media/admin.html`、`static/css/admin.css`、`static/js/admin.js`：Admin 文件管理、双上传进度条与安全日志 UI。
+- `docker-compose.yaml`：新增 MySQL、服务 healthcheck 与 10 MiB × 3 的容器日志轮转。
 - `nginx/nginx.conf`：Admin 上传代理、真实 IP 固定为 Nginx remote address、上传超时与 no-store。
 - `pyproject.toml`：增加 SQLAlchemy + asyncmy。
 
@@ -30,5 +30,6 @@ Web 容器启动后会自动生成 32-byte URL-safe Token。未使用的 Token �
 - 公共视图隐藏目录完全不可见，Admin 仍然可见。
 - Admin 文件树按目录懒加载，不一次性递归返回整个媒体库。
 - Admin Session 和临时 Token 都是 15 分钟滑动 TTL。
-- 浏览器会按 96 MiB/200 个文件自动拆分文件及文件夹上传请求，Nginx 单请求上限为 128 MiB。
+- 多文件与文件夹任务逐文件上传（默认单任务最多 5000 个），分别显示当前文件和整个任务进度；Nginx 单请求上限为 128 MiB。
+- Admin 播放与移动功能已移除；日志区只镜像当前 Web 进程日志，不挂载高权限 Docker Socket。
 - 所有管理修改接口要求 HttpOnly Session Cookie + CSRF Header。

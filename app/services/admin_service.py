@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import HTTPException, Request, Response
 from sqlalchemy import text
 
+from app.core.admin_log import append_admin_log
 from app.core.config import settings
 from app.core.db import engine
 from app.core.redis import redis_client
@@ -50,11 +51,12 @@ async def issue_admin_token() -> str:
             """),
             {"token_hash": token_hash, "created_at": _now(), "expires_at": expires_at},
         )
-    print(
+    log_line = (
         f"[ADMIN_TOKEN] temporary admin token={token} "
-        f"created_at={_now().isoformat()} claim_expires_at={expires_at.isoformat()}",
-        flush=True,
+        f"created_at={_now().isoformat()} claim_expires_at={expires_at.isoformat()}"
     )
+    print(log_line, flush=True)
+    append_admin_log(log_line)
     return token
 
 

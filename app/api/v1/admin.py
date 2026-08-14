@@ -1,4 +1,5 @@
 import json
+import secrets
 from pathlib import Path
 from typing import Annotated
 
@@ -11,32 +12,30 @@ from fastapi import (
     Request,
     Response,
     UploadFile,
+    Query,
 )
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.background import BackgroundTask
 
 from app.core.config import settings
+from app.core.admin_log import admin_log_buffer
 from app.services import admin_service
-from app.services.media_manager import (
-    MEDIA_ROOT,
-    MediaManager,
-    resolve_safe_path,
-)
+from app.services.media_manager import MediaManager
 
 
 router = APIRouter()
 
 
-def client_ip(request: Request) -> str:
-    return request.headers.get("X-Real-IP") or (
-        request.client.host
-        if request.client
-        else "127.0.0.1"
-    )
-
-
 async def require_session(request: Request) -> str:
     return await admin_service.require_admin(request)
+
+
+def secure_admin_transport(request: Request) -> bool:
+    # Direct loopback HTTP is allowed only for the local IDE workflow.
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
+    direct_scheme = request.url.scheme.lower()
+    client_host = request.client.host if request.client else ""
+    return forwarded_proto == "https" or direct_scheme == "https" or client_host in {"127.0.0.1", "::1"}
 
 
 # ============================================================
@@ -81,7 +80,7 @@ async def issue_token(
 
     if (
         not supplied
-        or supplied != settings.WALL_ADMIN_TOKEN
+        or not secrets.compare_digest(supplied, settings.WALL_ADMIN_TOKEN)
     ):
         raise HTTPException(
             status_code=403,
@@ -157,9 +156,10 @@ async def admin_status(
         "session": True,
         "limits": {
             "max_upload_file_size": settings.ADMIN_MAX_UPLOAD_FILE_SIZE,
-            "upload_batch_size": settings.ADMIN_UPLOAD_BATCH_SIZE,
+            "max_upload_task_files": settings.ADMIN_MAX_UPLOAD_TASK_FILES,
             "max_batch_files": settings.ADMIN_MAX_BATCH_FILES,
         },
+        "csrf_cookie_name": settings.ADMIN_CSRF_COOKIE_NAME,
     }
 
 
@@ -177,233 +177,61 @@ async def admin_tree(
 
 
 # ============================================================
-# 6. 上传文件
+# 6. 单文件上传（多文件和文件夹由浏览器逐文件调用，便于精确显示进度）
 # ============================================================
 
-@router.post("/upload/files")
-async def upload_files(
+@router.post("/upload/item")
+async def upload_item(
     request: Request,
-    files: Annotated[
-        list[UploadFile],
+    file: Annotated[
+        UploadFile,
         File(...),
     ],
     target_dir: Annotated[
         str,
-        Form(...),
-    ],
+        Form(),
+    ] = "",
+    relative_path: Annotated[
+        str | None,
+        Form(),
+    ] = None,
     session_hash: str = Depends(require_session),
 ):
-    if (
-        len(files)
-        > settings.ADMIN_MAX_BATCH_FILES
-    ):
-        raise HTTPException(
-            status_code=413,
-            detail="一次上传文件数量超过限制",
-        )
+    if relative_path:
+        target, upload_name = MediaManager.folder_upload_target(target_dir, relative_path)
+        file.filename = upload_name
+        source = relative_path
+    else:
+        target = MediaManager.validate_destination_dir(target_dir)
+        source = file.filename or ""
 
-    target = MediaManager.validate_destination_dir(
-        target_dir,
-    )
+    try:
+        saved_path = await MediaManager.upload_one(file, target)
+    except HTTPException as exc:
+        await admin_service.audit(session_hash, "upload_item", 1, source, "failed", str(exc.detail), request)
+        raise
 
-    results = []
-    errors = []
-
-    for upload in files:
-        try:
-            results.append(
-                await MediaManager.upload_one(
-                    upload,
-                    target,
-                )
-            )
-        except HTTPException as exc:
-            errors.append(
-                {
-                    "name": upload.filename,
-                    "error": exc.detail,
-                }
-            )
-
-    await admin_service.audit(
-        session_hash,
-        "upload_files",
-        len(files),
-        target_dir,
-        "partial" if errors else "success",
-        json.dumps(
-            {
-                "ok": results,
-                "errors": errors,
-            },
-            ensure_ascii=False,
-        ),
-        request,
-    )
-
-    return {
-        "success": results,
-        "failed": errors,
-    }
+    await admin_service.audit(session_hash, "upload_item", 1, source, "success", saved_path, request)
+    return {"path": saved_path}
 
 
-# ============================================================
-# 7. 上传文件夹
-# ============================================================
-
-@router.post("/upload/folder")
-async def upload_folder(
+@router.get("/logs")
+async def admin_logs(
     request: Request,
-    files: Annotated[
-        list[UploadFile],
-        File(...),
-    ],
-    relative_paths: Annotated[
-        str,
-        Form(...),
-    ],
-    target_dir: Annotated[
-        str,
-        Form(...),
-    ],
+    after: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=500),
     session_hash: str = Depends(require_session),
 ):
-    if (
-        len(files)
-        > settings.ADMIN_MAX_BATCH_FILES
-    ):
-        raise HTTPException(
-            status_code=413,
-            detail="一次上传文件数量超过限制",
-        )
-
-    try:
-        rels = json.loads(relative_paths)
-
-        if (
-            not isinstance(rels, list)
-            or len(rels) != len(files)
-        ):
-            raise ValueError
-
-    except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail="上传文件夹的目录结构数据无效",
-        )
-
-    try:
-        base = (
-            resolve_safe_path(
-                MEDIA_ROOT,
-                target_dir,
-            )
-            if target_dir
-            else MEDIA_ROOT
-        )
-
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="非法上传目录",
-        )
-
-    if (
-        not base.exists()
-        or not base.is_dir()
-    ):
-        raise HTTPException(
-            status_code=404,
-            detail="目标目录不存在",
-        )
-
-    results = []
-    errors = []
-
-    for upload, rel in zip(files, rels):
-        try:
-            rel = MediaManager.normalize_relative(
-                str(rel)
-            )
-
-            parts = rel.split("/")
-
-            name = MediaManager.validate_name(
-                parts[-1]
-            )
-
-            nested = "/".join(parts[:-1])
-
-            destination_dir = (
-                base
-                if not nested
-                else base / nested
-            )
-
-            destination_dir = (
-                destination_dir.resolve()
-            )
-
-            if (
-                not destination_dir.is_relative_to(
-                    MEDIA_ROOT
-                )
-                or destination_dir == MEDIA_ROOT
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "禁止直接向 "
-                        "data/media 根目录上传媒体文件"
-                    ),
-                )
-
-            destination_dir.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
-
-            upload.filename = name
-
-            results.append(
-                await MediaManager.upload_one(
-                    upload,
-                    destination_dir,
-                )
-            )
-
-        except HTTPException as exc:
-            errors.append(
-                {
-                    "name": rel,
-                    "error": exc.detail,
-                }
-            )
-
-    await admin_service.audit(
-        session_hash,
-        "upload_folder",
-        len(files),
-        target_dir,
-        "partial" if errors else "success",
-        json.dumps(
-            {
-                "ok": results,
-                "errors": errors,
-            },
-            ensure_ascii=False,
-        ),
-        request,
+    if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
+        raise HTTPException(status_code=426, detail="生产环境日志控制台只允许通过 HTTPS 访问")
+    return JSONResponse(
+        {"entries": admin_log_buffer.read(after=after, limit=limit), "secure_transport": secure_admin_transport(request)},
+        headers={"Cache-Control": "private, no-store"},
     )
-
-    return {
-        "success": results,
-        "failed": errors,
-    }
 
 
 # ============================================================
-# 8. 删除
+# 7. 删除
 # ============================================================
 
 @router.post("/delete")
@@ -448,65 +276,7 @@ async def delete_objects(
 
 
 # ============================================================
-# 9. 移动
-# ============================================================
-
-@router.post("/move")
-async def move_objects(
-    request: Request,
-    payload: dict,
-    session_hash: str = Depends(require_session),
-):
-    paths = payload.get("paths")
-    destination = payload.get("destination")
-
-    if (
-        not isinstance(paths, list)
-        or not paths
-        or not isinstance(destination, str)
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="移动参数无效",
-        )
-
-    if (
-        len(paths)
-        > settings.ADMIN_MAX_BATCH_FILES
-    ):
-        raise HTTPException(
-            status_code=413,
-            detail="一次移动对象数量超过限制",
-        )
-
-    result = await MediaManager.move(
-        paths,
-        destination,
-    )
-
-    await admin_service.audit(
-        session_hash,
-        "move",
-        len(paths),
-        json.dumps(
-            paths,
-            ensure_ascii=False,
-        ),
-        "success",
-        json.dumps(
-            result,
-            ensure_ascii=False,
-        ),
-        request,
-    )
-
-    return {
-        "moved": result,
-    }
-
-
-# ============================================================
-# 10. 隐藏 / 恢复
+# 8. 隐藏 / 恢复
 # ============================================================
 
 @router.post("/hide")
@@ -556,7 +326,7 @@ async def hide_objects(
 
 
 # ============================================================
-# 11. 下载
+# 9. 下载
 # ============================================================
 
 @router.get("/download")
@@ -649,7 +419,7 @@ async def download_objects(
 
 
 # ============================================================
-# 12. Admin 退出
+# 10. Admin 退出
 # ============================================================
 
 @router.post("/logout")

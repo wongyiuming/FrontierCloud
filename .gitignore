@@ -60,6 +60,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Deployment TLS material
+certs/*.pem
+
 # JetBrains IDE
 .idea/
 

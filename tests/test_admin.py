@@ -1,10 +1,16 @@
 import hashlib
+import io
+import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
+from fastapi import UploadFile
 from starlette.requests import Request
 
+from app.api.v1 import admin
 from app.services import admin_service
+from app.services import media_manager
 
 
 class _FakeResult:
@@ -93,6 +99,64 @@ class AdminTokenLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_redis.values[token_key], "active")
         self.assertEqual(fake_redis.ttls[token_key], 900)
         self.assertNotIn(fail_key, fake_redis.values)
+
+
+class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _wav_bytes(marker: bytes) -> bytes:
+        return b"RIFF" + marker[:4].ljust(4, b"0") + b"WAVEfmt "
+
+    @staticmethod
+    def _request() -> Request:
+        return Request({
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/media/admin/upload/item",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+        })
+
+    async def test_folder_upload_accepts_empty_root_target_and_preserves_relative_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            with (
+                patch.object(media_manager, "MEDIA_ROOT", root),
+                patch.object(admin.admin_service, "audit", new=AsyncMock()),
+            ):
+                result = await admin.upload_item(
+                    request=self._request(),
+                    file=UploadFile(filename="一.wav", file=io.BytesIO(self._wav_bytes(b"one"))),
+                    target_dir="",
+                    relative_path="测试目录/一.wav",
+                    session_hash="test-session",
+                )
+
+            self.assertEqual(result["path"], "测试目录/一.wav")
+            self.assertTrue((root / "测试目录" / "一.wav").is_file())
+
+    async def test_multiple_files_use_independent_scalar_upload_requests(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            destination = root / "批量目录"
+            destination.mkdir()
+            with (
+                patch.object(media_manager, "MEDIA_ROOT", root),
+                patch.object(admin.admin_service, "audit", new=AsyncMock()),
+            ):
+                results = [
+                    await admin.upload_item(
+                        request=self._request(),
+                        file=UploadFile(filename=name, file=io.BytesIO(self._wav_bytes(name.encode()))),
+                        target_dir="批量目录",
+                        relative_path=None,
+                        session_hash="test-session",
+                    )
+                    for name in ("一.wav", "二.wav")
+                ]
+
+            self.assertEqual([result["path"] for result in results], ["批量目录/一.wav", "批量目录/二.wav"])
+            self.assertTrue((destination / "一.wav").is_file())
+            self.assertTrue((destination / "二.wav").is_file())
 
 
 if __name__ == "__main__":

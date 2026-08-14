@@ -1,119 +1,409 @@
 let selected = new Set();
 let selectionKind = null;
 let currentPath = '';
-let art = null;
-let currentMedia = null;
+let csrfCookieName = '__Host-admin-csrf';
+let uploadRunning = false;
+let lastLogId = 0;
+let logPolling = false;
+let logTimer = null;
 let uploadLimits = {
-  max_upload_file_size: 100 * 1024 * 1024,
-  upload_batch_size: 96 * 1024 * 1024,
-  max_batch_files: 200,
+    max_upload_file_size: 100 * 1024 * 1024,
+    max_upload_task_files: 5000,
 };
 
 const $ = id => document.getElementById(id);
-const csrf = () => getCookie('__Host-admin_csrf');
-function getCookie(name){return document.cookie.split('; ').find(x=>x.startsWith(name+'='))?.split('=').slice(1).join('=')||'';}
-function headers(json=true){const h={'X-CSRF-Token':csrf()};if(json)h['Content-Type']='application/json';return h;}
-async function api(url, opts={}){
-  const r=await fetch(url,opts);
-  if(r.status===401){alert('特权模式已失效，请重新提权');location.href='/api/v1/media';throw new Error('unauthorized');}
-  const data=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(data.detail||'操作失败');
-  return data;
+
+function getCookie(name) {
+    return document.cookie
+        .split('; ')
+        .find(value => value.startsWith(`${name}=`))
+        ?.split('=')
+        .slice(1)
+        .join('=') || '';
 }
-function showModal(title, body, onOk){
-  $('modalTitle').textContent=title;$('modalBody').innerHTML=body;$('modal').classList.remove('hidden');
-  $('modalCancel').onclick=()=>{$('modal').classList.add('hidden')};
-  $('modalOk').onclick=async()=>{try{await onOk();$('modal').classList.add('hidden')}catch(e){alert(e.message)}};
+
+function csrf() {
+    return getCookie(csrfCookieName);
 }
-function updateToolbar(){
-  const n=selected.size; $('selection').textContent=n?`已选择 ${n} 个${selectionKind==='directory'?'目录':'文件'}`:'未选择';
-  $('play').disabled=!(n===1&&selectionKind==='file');$('download').disabled=!n;$('move').disabled=!n;$('delete').disabled=!n;$('hide').disabled=!(n&&selectionKind==='directory');
-  if(n&&selectionKind==='directory'){
-    const rows=[...document.querySelectorAll('.tree-row.selected')];$('hide').textContent=rows.every(x=>x.dataset.hidden==='true')?'恢复':'隐藏';
-  }else $('hide').textContent='隐藏';
+
+function requestHeaders(json = true) {
+    const result = {'X-CSRF-Token': csrf()};
+    if (json) result['Content-Type'] = 'application/json';
+    return result;
 }
-function toggleSelection(item){
-  if(selectionKind&&selectionKind!==item.kind){selected.clear();selectionKind=null;}
-  selectionKind=item.kind;
-  if(selected.has(item.path))selected.delete(item.path);else selected.add(item.path);
-  updateToolbar();render();
-}
-async function render(){
-  const data=await api('/api/v1/media/admin/tree?path='+encodeURIComponent(currentPath));
-  $('pathbar').textContent='/'+currentPath;
-  const tree=$('tree');tree.innerHTML='';
-  if(currentPath){
-    const up=document.createElement('div');up.className='tree-row';up.innerHTML='<span class="kind">↩</span><span class="name">返回上级</span>';up.onclick=()=>{currentPath=currentPath.split('/').slice(0,-1).join('/');render()};tree.appendChild(up)}
-  for(const item of data.items){
-    const row=document.createElement('div');row.className='tree-row'+(selected.has(item.path)?' selected':'')+(item.hidden?' hidden-item':'');row.dataset.hidden=String(item.hidden);
-    row.innerHTML=`<span class="kind">${item.kind==='directory'?'📁':'🎵'}</span><span class="name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span><small>${item.kind==='file'?formatSize(item.size):''}</small>`;
-    row.onclick=e=>{e.stopPropagation();toggleSelection(item)};
-    row.ondblclick=e=>{e.stopPropagation();if(item.kind==='directory'){currentPath=item.path;selected.clear();selectionKind=null;render()}else{playItem(item)}};
-    tree.appendChild(row);
-  }
-  updateToolbar();
-}
-function escapeHtml(s){return String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
-function formatSize(n){if(n==null)return'';const u=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<3){n/=1024;i++}return `${n.toFixed(i?1:0)} ${u[i]}`}
-function buildUploadBatches(files, relativePaths=null){
-  const batches=[];let batch=[];let batchBytes=0;
-  for(let i=0;i<files.length;i++){
-    const item={file:files[i],relativePath:relativePaths?relativePaths[i]:null};
-    const exceedsBudget=batch.length>0&&batchBytes+item.file.size>uploadLimits.upload_batch_size;
-    const exceedsCount=batch.length>=uploadLimits.max_batch_files;
-    if(exceedsBudget||exceedsCount){batches.push(batch);batch=[];batchBytes=0;}
-    batch.push(item);batchBytes+=item.file.size;
-  }
-  if(batch.length)batches.push(batch);
-  return batches;
-}
-async function uploadInBatches(endpoint, fileList, relativePaths, targetDir){
-  const files=[...fileList];
-  const failed=[];const acceptedFiles=[];const acceptedPaths=[];
-  files.forEach((file,index)=>{
-    if(file.size>uploadLimits.max_upload_file_size){
-      failed.push({name:relativePaths?relativePaths[index]:file.name,error:`文件超过 ${formatSize(uploadLimits.max_upload_file_size)} 限制`});
-    }else{
-      acceptedFiles.push(file);if(relativePaths)acceptedPaths.push(relativePaths[index]);
+
+function formatErrorDetail(detail) {
+    if (!detail) return '操作失败';
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+        return detail.map(item => {
+            if (typeof item === 'string') return item;
+            const location = Array.isArray(item.loc) ? item.loc.join('.') : '';
+            return `${location ? `${location}: ` : ''}${item.msg || JSON.stringify(item)}`;
+        }).join('；');
     }
-  });
-  const batches=buildUploadBatches(acceptedFiles,relativePaths?acceptedPaths:null);
-  const success=[];
-  for(let i=0;i<batches.length;i++){
-    $('selection').textContent=`正在上传第 ${i+1}/${batches.length} 批…`;
-    const fd=new FormData();fd.append('target_dir',targetDir);
-    const rel=[];
-    for(const item of batches[i]){fd.append('files',item.file);if(relativePaths)rel.push(item.relativePath);}
-    if(relativePaths)fd.append('relative_paths',JSON.stringify(rel));
-    const result=await api(endpoint,{method:'POST',headers:headers(false),body:fd});
-    success.push(...result.success);failed.push(...result.failed);
-  }
-  return {success,failed};
+    if (typeof detail === 'object') return detail.message || JSON.stringify(detail);
+    return String(detail);
 }
-function playItem(item){
-  if(item.kind!=='file'||!item.media)return alert('只能播放音频或视频媒体文件');
-  const url='/api/v1/media/stream?file_path='+encodeURIComponent(item.path);
-  if(!art){art=new Artplayer({container:'#artplayer',url,title:item.name,autoplay:true,fullscreen:true,fullscreenWeb:true,volume:.7});}
-  else art.switchUrl(url);
-  if(!art.url||art.url!==url)art.url=url; art.title=item.name; art.play();
+
+async function api(url, options = {}) {
+    const response = await fetch(url, options);
+    if (response.status === 401) {
+        if (logTimer) clearInterval(logTimer);
+        alert('特权模式已失效，请重新提权');
+        location.href = '/api/v1/media';
+        throw new Error('特权模式已失效');
+    }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(formatErrorDetail(data.detail));
+    return data;
 }
-$('play').onclick=()=>{const path=[...selected][0];const row=[...document.querySelectorAll('.tree-row')].find(x=>x.classList.contains('selected'));if(row)playItem({path,name:row.querySelector('.name').textContent,kind:'file',media:true})};
-$('uploadFiles').onclick=()=>$('fileInput').click();
-$('uploadFolder').onclick=()=>$('folderInput').click();
-$('fileInput').onchange=async e=>{
-  if(!e.target.files.length)return;
-  if(!currentPath){alert('上传失败，媒体文件禁止直接存放在 data/media 根目录，请先进入子目录');e.target.value='';return;}
-  try{const d=await uploadInBatches('/api/v1/media/admin/upload/files',e.target.files,null,currentPath);alert(`上传完成：成功 ${d.success.length}，失败 ${d.failed.length}`);await render()}catch(e){alert(e.message)}e.target.value='';
+
+function escapeHtml(value) {
+    return String(value).replace(/[&<>'"]/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
+    }[character]));
+}
+
+function formatSize(value) {
+    if (value == null) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let index = 0;
+    while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index += 1;
+    }
+    return `${value.toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function showModal(title, body, onConfirm) {
+    $('modalTitle').textContent = title;
+    $('modalBody').innerHTML = body;
+    $('modal').classList.remove('hidden');
+    $('modalCancel').onclick = () => $('modal').classList.add('hidden');
+    $('modalOk').onclick = async () => {
+        try {
+            await onConfirm();
+            $('modal').classList.add('hidden');
+        } catch (error) {
+            alert(error.message);
+        }
+    };
+}
+
+function updateToolbar() {
+    const count = selected.size;
+    $('selection').textContent = count
+        ? `已选择 ${count} 个${selectionKind === 'directory' ? '目录' : '文件'}`
+        : '未选择';
+    $('download').disabled = !count;
+    $('delete').disabled = !count;
+    $('hide').disabled = !(count && selectionKind === 'directory');
+    if (count && selectionKind === 'directory') {
+        const rows = [...document.querySelectorAll('.tree-row.selected')];
+        $('hide').textContent = rows.every(row => row.dataset.hidden === 'true') ? '恢复' : '隐藏';
+    } else {
+        $('hide').textContent = '隐藏';
+    }
+}
+
+function toggleSelection(item) {
+    if (selectionKind && selectionKind !== item.kind) {
+        selected.clear();
+        selectionKind = null;
+    }
+    selectionKind = item.kind;
+    if (selected.has(item.path)) selected.delete(item.path);
+    else selected.add(item.path);
+    renderTree();
+}
+
+async function renderTree() {
+    const data = await api(`/api/v1/media/admin/tree?path=${encodeURIComponent(currentPath)}`);
+    $('pathbar').textContent = `/${currentPath}`;
+    const tree = $('tree');
+    tree.innerHTML = '';
+
+    if (currentPath) {
+        const up = document.createElement('div');
+        up.className = 'tree-row';
+        up.innerHTML = '<span class="kind">↩</span><span class="name">返回上级</span>';
+        up.onclick = () => {
+            currentPath = currentPath.split('/').slice(0, -1).join('/');
+            selected.clear();
+            selectionKind = null;
+            renderTree();
+        };
+        tree.appendChild(up);
+    }
+
+    for (const item of data.items) {
+        const row = document.createElement('div');
+        row.className = `tree-row${selected.has(item.path) ? ' selected' : ''}${item.hidden ? ' hidden-item' : ''}`;
+        row.dataset.hidden = String(item.hidden);
+        row.innerHTML = `<span class="kind">${item.kind === 'directory' ? '📁' : '📄'}</span>`
+            + `<span class="name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>`
+            + `<small>${item.kind === 'file' ? formatSize(item.size) : ''}</small>`;
+        row.onclick = event => {
+            event.stopPropagation();
+            toggleSelection(item);
+        };
+        row.ondblclick = event => {
+            event.stopPropagation();
+            if (item.kind === 'directory') {
+                currentPath = item.path;
+                selected.clear();
+                selectionKind = null;
+                renderTree();
+            }
+        };
+        tree.appendChild(row);
+    }
+    updateToolbar();
+}
+
+function setUploadControlsDisabled(disabled) {
+    uploadRunning = disabled;
+    $('uploadBtn').disabled = disabled;
+    $('uploadFiles').disabled = disabled;
+    $('uploadFolder').disabled = disabled;
+    $('fileInput').disabled = disabled;
+    $('folderInput').disabled = disabled;
+}
+
+function setProgress(elementId, percentId, value) {
+    const bounded = Math.max(0, Math.min(100, value));
+    $(elementId).value = bounded;
+    $(percentId).textContent = `${Math.round(bounded)}%`;
+}
+
+function addUploadResult(name, status, message) {
+    const row = document.createElement('div');
+    row.className = `upload-result ${status}`;
+    row.textContent = `${status === 'ok' ? '✓' : '✗'} ${name}${message ? ` — ${message}` : ''}`;
+    $('uploadResults').appendChild(row);
+    $('uploadResults').scrollTop = $('uploadResults').scrollHeight;
+}
+
+function parseXhrData(xhr) {
+    if (xhr.response && typeof xhr.response === 'object') return xhr.response;
+    try {
+        return JSON.parse(xhr.responseText || '{}');
+    } catch (_error) {
+        return {};
+    }
+}
+
+function uploadOne(formData, onProgress) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/v1/media/admin/upload/item');
+        xhr.responseType = 'json';
+        xhr.setRequestHeader('X-CSRF-Token', csrf());
+        xhr.upload.onprogress = event => {
+            if (event.lengthComputable) onProgress(event.loaded / event.total);
+        };
+        xhr.onerror = () => reject(new Error('网络连接中断'));
+        xhr.onabort = () => reject(new Error('上传已取消'));
+        xhr.onload = () => {
+            const data = parseXhrData(xhr);
+            if (xhr.status === 401) {
+                reject(new Error('特权模式已失效，请重新提权'));
+                location.href = '/api/v1/media';
+                return;
+            }
+            if (xhr.status < 200 || xhr.status >= 300) {
+                reject(new Error(formatErrorDetail(data.detail)));
+                return;
+            }
+            resolve(data);
+        };
+        xhr.send(formData);
+    });
+}
+
+async function runUploadTask(fileList, relativePaths = null) {
+    if (uploadRunning) return;
+    const files = [...fileList];
+    if (!files.length) return;
+    if (files.length > uploadLimits.max_upload_task_files) {
+        alert(`一次上传任务最多选择 ${uploadLimits.max_upload_task_files} 个文件`);
+        return;
+    }
+    if (!relativePaths && !currentPath) {
+        alert('上传文件前请先进入 data/media 下的子目录');
+        return;
+    }
+
+    setUploadControlsDisabled(true);
+    $('uploadProgress').classList.remove('hidden');
+    $('uploadResults').innerHTML = '';
+    $('uploadTaskTitle').textContent = relativePaths ? '文件夹上传任务' : '多文件上传任务';
+    setProgress('currentProgress', 'currentPercent', 0);
+    setProgress('totalProgress', 'totalPercent', 0);
+
+    const totalUnits = files.reduce((sum, file) => sum + Math.max(file.size, 1), 0);
+    let completedUnits = 0;
+    let successCount = 0;
+    let failedCount = 0;
+
+    try {
+        for (let index = 0; index < files.length; index += 1) {
+            const file = files[index];
+            const displayName = relativePaths ? relativePaths[index] : file.name;
+            const fileUnits = Math.max(file.size, 1);
+            $('currentFileLabel').textContent = `当前：${displayName}`;
+            $('totalTaskLabel').textContent = `任务总进度 ${index + 1}/${files.length}`;
+            $('uploadSummary').textContent = `成功 ${successCount}，失败 ${failedCount}`;
+            setProgress('currentProgress', 'currentPercent', 0);
+
+            if (file.size > uploadLimits.max_upload_file_size) {
+                failedCount += 1;
+                completedUnits += fileUnits;
+                addUploadResult(displayName, 'error', `超过 ${formatSize(uploadLimits.max_upload_file_size)} 限制`);
+                setProgress('totalProgress', 'totalPercent', completedUnits / totalUnits * 100);
+                continue;
+            }
+
+            const formData = new FormData();
+            formData.append('target_dir', currentPath);
+            if (relativePaths) formData.append('relative_path', relativePaths[index]);
+            formData.append('file', file, file.name);
+
+            try {
+                const result = await uploadOne(formData, fraction => {
+                    setProgress('currentProgress', 'currentPercent', fraction * 100);
+                    setProgress(
+                        'totalProgress',
+                        'totalPercent',
+                        (completedUnits + fileUnits * fraction) / totalUnits * 100,
+                    );
+                });
+                successCount += 1;
+                addUploadResult(displayName, 'ok', result.path);
+            } catch (error) {
+                failedCount += 1;
+                addUploadResult(displayName, 'error', error.message);
+            }
+
+            completedUnits += fileUnits;
+            setProgress('currentProgress', 'currentPercent', 100);
+            setProgress('totalProgress', 'totalPercent', completedUnits / totalUnits * 100);
+        }
+    } finally {
+        setUploadControlsDisabled(false);
+        $('uploadSummary').textContent = `完成：成功 ${successCount}，失败 ${failedCount}`;
+        $('currentFileLabel').textContent = '当前文件处理完成';
+        await renderTree().catch(() => {});
+    }
+}
+
+async function pollLogs() {
+    if (logPolling || document.hidden) return;
+    logPolling = true;
+    try {
+        const data = await api(`/api/v1/media/admin/logs?after=${lastLogId}&limit=200`);
+        const output = $('logOutput');
+        const nearBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 80;
+        if (lastLogId === 0) output.textContent = '';
+        for (const entry of data.entries) {
+            output.textContent += `${entry.timestamp} ${entry.line}\n`;
+            lastLogId = Math.max(lastLogId, entry.id);
+        }
+        const lines = output.textContent.split('\n');
+        if (lines.length > 501) output.textContent = lines.slice(-501).join('\n');
+        if (nearBottom) output.scrollTop = output.scrollHeight;
+
+        const badge = $('transportBadge');
+        badge.textContent = location.protocol === 'https:' ? 'HTTPS 加密传输' : '本机回环调试';
+        badge.classList.toggle('secure', data.secure_transport);
+    } catch (error) {
+        $('logOutput').textContent += `日志读取失败：${error.message}\n`;
+    } finally {
+        logPolling = false;
+    }
+}
+
+$('uploadFiles').onclick = () => $('fileInput').click();
+$('uploadFolder').onclick = () => $('folderInput').click();
+$('fileInput').onchange = async event => {
+    await runUploadTask(event.target.files);
+    event.target.value = '';
 };
-$('folderInput').onchange=async e=>{
-  if(!e.target.files.length)return;
-  const rel=[...e.target.files].map(f=>f.webkitRelativePath||f.name);
-  try{const d=await uploadInBatches('/api/v1/media/admin/upload/folder',e.target.files,rel,currentPath);alert(`上传完成：成功 ${d.success.length}，失败 ${d.failed.length}`);await render()}catch(e){alert(e.message)}e.target.value='';
+$('folderInput').onchange = async event => {
+    const paths = [...event.target.files].map(file => file.webkitRelativePath || file.name);
+    await runUploadTask(event.target.files, paths);
+    event.target.value = '';
 };
-$('delete').onclick=()=>{const paths=[...selected];showModal('确认删除',`将删除选中的 ${paths.length} 个${selectionKind==='directory'?'目录及其全部内容':'文件'}。此操作不可恢复。`,async()=>{await api('/api/v1/media/admin/delete',{method:'POST',headers:headers(),body:JSON.stringify({paths})});selected.clear();selectionKind=null;await render()})};
-$('move').onclick=()=>{const paths=[...selected];showModal('移动到目录','<input id="moveTarget" placeholder="例如：明哥/新目录">',async()=>{const dest=$('moveTarget').value.trim();await api('/api/v1/media/admin/move',{method:'POST',headers:headers(),body:JSON.stringify({paths,destination:dest})});selected.clear();selectionKind=null;await render()})};
-$('hide').onclick=()=>{const paths=[...selected];const hidden=$('hide').textContent==='隐藏';showModal(hidden?'确认隐藏':'确认恢复',`${hidden?'公共视图将隐藏':'公共视图将恢复显示'}选中的 ${paths.length} 个目录。`,async()=>{await api('/api/v1/media/admin/hide',{method:'POST',headers:headers(),body:JSON.stringify({paths,hidden})});selected.clear();selectionKind=null;await render()})};
-$('download').onclick=async()=>{const paths=[...selected];const url='/api/v1/media/admin/download?paths='+encodeURIComponent(JSON.stringify(paths));const r=await fetch(url);if(!r.ok){const d=await r.json().catch(()=>({}));return alert(d.detail||'下载失败')}const blob=await r.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=paths.length===1?paths[0].split('/').pop():'media-download.zip';a.click();URL.revokeObjectURL(a.href)};
-$('backPublic').onclick=()=>location.href='/api/v1/media';
-$('logout').onclick=async()=>{try{await fetch('/api/v1/media/admin/logout',{method:'POST',headers:headers(false)})}finally{location.href='/api/v1/media'}};
-(async()=>{try{const status=await api('/api/v1/media/admin/status');if(status.limits)uploadLimits={...uploadLimits,...status.limits};await render()}catch(e){}})();
+
+$('delete').onclick = () => {
+    const paths = [...selected];
+    showModal(
+        '确认删除',
+        `将删除选中的 ${paths.length} 个${selectionKind === 'directory' ? '目录及其全部内容' : '文件'}。此操作不可恢复。`,
+        async () => {
+            await api('/api/v1/media/admin/delete', {
+                method: 'POST', headers: requestHeaders(), body: JSON.stringify({paths}),
+            });
+            selected.clear();
+            selectionKind = null;
+            await renderTree();
+        },
+    );
+};
+
+$('hide').onclick = () => {
+    const paths = [...selected];
+    const hidden = $('hide').textContent === '隐藏';
+    showModal(
+        hidden ? '确认隐藏' : '确认恢复',
+        `${hidden ? '公共视图将隐藏' : '公共视图将恢复显示'}选中的 ${paths.length} 个目录。`,
+        async () => {
+            await api('/api/v1/media/admin/hide', {
+                method: 'POST', headers: requestHeaders(), body: JSON.stringify({paths, hidden}),
+            });
+            selected.clear();
+            selectionKind = null;
+            await renderTree();
+        },
+    );
+};
+
+$('download').onclick = async () => {
+    const paths = [...selected];
+    const url = `/api/v1/media/admin/download?paths=${encodeURIComponent(JSON.stringify(paths))}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        alert(formatErrorDetail(data.detail) || '下载失败');
+        return;
+    }
+    const blob = await response.blob();
+    const anchor = document.createElement('a');
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = paths.length === 1 ? paths[0].split('/').pop() : 'media-download.zip';
+    anchor.click();
+    URL.revokeObjectURL(anchor.href);
+};
+
+$('backPublic').onclick = () => { location.href = '/api/v1/media'; };
+$('logout').onclick = async () => {
+    try {
+        await fetch('/api/v1/media/admin/logout', {method: 'POST', headers: requestHeaders(false)});
+    } finally {
+        location.href = '/api/v1/media';
+    }
+};
+
+(async () => {
+    try {
+        const status = await api('/api/v1/media/admin/status');
+        uploadLimits = {...uploadLimits, ...status.limits};
+        csrfCookieName = status.csrf_cookie_name || csrfCookieName;
+        await renderTree();
+        await pollLogs();
+        logTimer = setInterval(pollLogs, 2000);
+    } catch (_error) {
+        // api() handles expired sessions and navigation.
+    }
+})();

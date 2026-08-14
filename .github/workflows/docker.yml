@@ -2,79 +2,107 @@ name: Build and Test Docker Compose
 
 on:
   push:
-    branches: [ "feat/docker-deploy", "main" ]
+    branches: ["feat/docker-deploy", "main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
-  test-and-deploy:
+  test-compose:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 动态生成 CI 专用的证书与 .env 文件
-      - name: Prepare Certificates and Environment Variables
+      - name: Prepare CI certificates and environment
         run: |
-          mkdir -p certs
+          mkdir -p certs data/media
           openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
             -keyout certs/privkey.pem \
             -out certs/fullchain.pem \
-            -subj "/C=CN/ST=Default/L=Default/O=Default/CN=localhost"
-          
-          # 覆盖生成 CI 专用的 .env，将 SERVER_NAME 设置为 localhost，证书路径指向本地 relative 路径
-          cat << 'EOF' > .env
-          PROJECT_NAME="Office-Automation"
+            -subj "/C=CN/ST=CI/L=CI/O=FrontierCloud/CN=localhost"
+          cat <<'EOF' > .env
+          PROJECT_NAME="Office-Automation-CI"
           DEFAULT_TEXT="CONFIDENTIAL"
           REDIS_URL=redis://redis:6379/0
-          WALL_ADMIN_TOKEN=ci_test_token
+          WALL_ADMIN_TOKEN=ci_wall_admin_token_please_do_not_use_in_production
           WALL_TTL=240
+          MYSQL_URL=mysql+asyncmy://media_admin:ci_mysql_password@mysql:3306/office_automation
+          ADMIN_TOKEN_TTL=900
+          ADMIN_TOKEN_INITIAL_TTL=3600
+          ADMIN_SESSION_TTL=900
+          ADMIN_MAX_FAILED_ATTEMPTS_PER_IP=10
+          ADMIN_FAILED_WINDOW=300
+          ADMIN_MAX_UPLOAD_FILE_SIZE=104857600
+          ADMIN_MAX_UPLOAD_TASK_FILES=5000
+          ADMIN_MAX_BATCH_FILES=200
+          ADMIN_MAX_DOWNLOAD_ITEMS=100
+          ADMIN_MAX_FILENAME_LENGTH=240
+          MEDIA_MAX_DEPTH=32
+          ADMIN_COOKIE_SECURE=true
+          ADMIN_COOKIE_SAMESITE=strict
+          ADMIN_COOKIE_NAME=__Host-admin_session
+          ADMIN_CSRF_COOKIE_NAME=__Host-admin-csrf
+          MYSQL_DATABASE=office_automation
+          MYSQL_USER=media_admin
+          MYSQL_PASSWORD=ci_mysql_password
+          MYSQL_ROOT_PASSWORD=ci_mysql_root_password
           SERVER_NAME=localhost
           SSL_CERT_PATH=./certs/fullchain.pem
           SSL_KEY_PATH=./certs/privkey.pem
           EOF
 
-      # 2. 启动服务
-      - name: Build and Start Services
+      - name: Validate configuration and frontend syntax
         run: |
-          docker compose up -d --build
+          docker compose config --quiet
+          node --check static/js/admin.js
+          node --check static/js/player.js
+          node tests/admin_ui_smoke.mjs
 
-      # 3. 等待服务就绪
-      - name: Wait for Services
+      - name: Build and start services
+        run: docker compose up -d --build --wait --wait-timeout 180
+
+      - name: Run unit and configuration tests
         run: |
-          sleep 10
-          docker compose ps
+          docker compose exec -T web python -m unittest discover -s tests -v
+          docker compose exec -T nginx nginx -t
+          docker compose exec -T redis redis-cli ping | grep PONG
+          docker compose exec -T mysql mysqladmin ping -h 127.0.0.1 -umedia_admin -pci_mysql_password --silent
 
-      # 4. 验证核心功能 (匹配当前 FastAPI 路由与 HTTP/HTTPS 逻辑)
-      - name: Test Endpoints
+      - name: Test public and admin flows
         run: |
-          # A. 验证文档路径 (-k 忽略自签名证书，-L 自动跟随 301 重定向到 HTTPS)
-          curl -k -L --fail http://localhost/docs || exit 1
-          
-          # B. 验证 API 根路径响应
-          ROOT_RES=$(curl -k -L -s http://localhost/)
-          echo "Root Endpoint Result: $ROOT_RES"
-          if [[ "$ROOT_RES" != *"Office Automation Service"* ]]; then
-            echo "API Validation Failed: Welcome message not found"
-            exit 1
-          fi
+          curl -kfsS https://localhost/ | grep "Office Automation Service"
+          curl -kfsS https://localhost/api/v1/health | grep '"status":"healthy"'
+          curl -kfsS https://localhost/api/v1/media/ | grep "前沿视界"
 
-      # 5. 验证 Redis 连通性
-      - name: Verify Redis Service
-        run: |
-          docker exec $(docker compose ps -q redis) redis-cli ping | grep "PONG"
+          TOKEN_RESPONSE=$(curl -kfsS -X POST https://localhost/api/v1/media/admin/token/issue \
+            -H 'X-Token: ci_wall_admin_token_please_do_not_use_in_production')
+          ADMIN_TOKEN=$(python -c 'import json,sys; print(json.load(sys.stdin)["token"])' <<<"$TOKEN_RESPONSE")
+          curl -kfsS -c /tmp/admin-cookies.txt -X POST https://localhost/api/v1/media/admin/elevate \
+            --data-urlencode "token=$ADMIN_TOKEN" | grep '"status":"ok"'
+          CSRF_TOKEN=$(awk '$6 == "__Host-admin-csrf" {print $7}' /tmp/admin-cookies.txt)
 
-      # 6. 故障排查
-      - name: View logs on failure
+          printf 'RIFF0000WAVEfmt ' > /tmp/ci-one.wav
+          printf 'RIFF1111WAVEfmt ' > /tmp/ci-two.wav
+          mkdir -p data/media/ci-multiple
+
+          curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
+            -F 'target_dir=' -F 'relative_path=ci-folder/one.wav' -F 'file=@/tmp/ci-one.wav;type=audio/wav' \
+            https://localhost/api/v1/media/admin/upload/item | grep 'ci-folder/one.wav'
+          curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
+            -F 'target_dir=ci-multiple' -F 'file=@/tmp/ci-one.wav;type=audio/wav' \
+            https://localhost/api/v1/media/admin/upload/item | grep 'ci-multiple/ci-one.wav'
+          curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
+            -F 'target_dir=ci-multiple' -F 'file=@/tmp/ci-two.wav;type=audio/wav' \
+            https://localhost/api/v1/media/admin/upload/item | grep 'ci-multiple/ci-two.wav'
+          curl -kfsS -b /tmp/admin-cookies.txt \
+            'https://localhost/api/v1/media/admin/logs?after=0&limit=20' | grep '"secure_transport":true'
+
+      - name: Show service logs on failure
         if: failure()
-        run: |
-          docker compose logs nginx
-          docker compose logs web
-          docker compose logs redis
+        run: docker compose logs --no-color nginx web redis mysql
 
-      # 7. 清理现场
-      - name: Stop and Cleanup
+      - name: Stop and clean CI services
         if: always()
-        run: |
-          docker compose down --volumes --remove-orphans
+        run: docker compose down --volumes --remove-orphans

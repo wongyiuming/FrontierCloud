@@ -1,1 +1,166 @@
-*{box-sizing:border-box}body{margin:0;background:#0f0f0f;color:#eee;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;display:flex;height:100vh;overflow:hidden}.admin-player{flex:3;position:relative;background:#000;min-width:0}.admin-player #artplayer{position:absolute;inset:0}.admin-player #audioCover{display:none;position:absolute;inset:0;align-items:center;justify-content:center;overflow:hidden}.admin-player #audioBlurBg{position:absolute;inset:-30px;background:url('/favicon.ico') center/cover;filter:blur(40px) brightness(.4)}.admin-player #audioDisk{width:250px;height:250px;border-radius:50%;background:url('/favicon.ico') center/cover;z-index:2;border:8px solid #333}.admin-side{width:430px;background:#181818;border-left:1px solid #292929;display:flex;flex-direction:column}.admin-side header{padding:15px;border-bottom:1px solid #292929;display:flex;justify-content:space-between;gap:8px}.admin-side button{background:#292929;border:1px solid #3b3b3b;color:#eee;border-radius:6px;padding:7px 10px;cursor:pointer}.admin-side button:disabled{opacity:.35;cursor:not-allowed}.toolbar{display:flex;gap:6px;padding:10px;border-bottom:1px solid #292929}.upload-wrap{position:relative}.upload-menu{display:none;position:absolute;top:38px;left:0;background:#222;border:1px solid #444;border-radius:6px;z-index:50;min-width:130px;padding:5px}.upload-wrap:hover .upload-menu{display:block}.upload-menu button{display:block;width:100%;text-align:left;margin:2px 0}.selection,.pathbar{padding:9px 12px;color:#aaa;border-bottom:1px solid #292929;font-size:13px}.tree{flex:1;overflow:auto;padding:8px}.tree-row{display:flex;align-items:center;gap:8px;padding:9px;border-radius:6px;user-select:none}.tree-row:hover{background:#242424}.tree-row.selected{background:#343434;outline:1px solid #4d83b8}.tree-row .name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kind{width:24px;text-align:center}.children{margin-left:24px}.hidden-item{opacity:.55}.modal{position:fixed;inset:0;background:#0009;display:flex;align-items:center;justify-content:center;z-index:100}.modal.hidden{display:none}.modal-box{width:min(520px,90vw);background:#202020;border:1px solid #444;border-radius:10px;padding:20px}.modal-box h3{margin-top:0}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}.modal input,.modal select{width:100%;background:#111;color:#fff;border:1px solid #444;padding:10px;border-radius:6px}.error{color:#ff8b8b}.ok{color:#8ee6a0}@media(max-width:900px){body{flex-direction:column}.admin-player{height:50vh;flex:none}.admin-side{width:100%;height:50vh}}
+* { box-sizing: border-box; }
+
+:root {
+    color-scheme: dark;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+    display: flex;
+    height: 100vh;
+    margin: 0;
+    overflow: hidden;
+    color: #eee;
+    background: #0f0f0f;
+}
+
+button {
+    padding: 7px 10px;
+    color: #eee;
+    cursor: pointer;
+    background: #292929;
+    border: 1px solid #3b3b3b;
+    border-radius: 6px;
+}
+
+button:disabled { cursor: not-allowed; opacity: .35; }
+
+.admin-console {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    background: #080b0f;
+}
+
+.console-header,
+.admin-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid #292929;
+}
+
+.console-header div { display: flex; flex-direction: column; gap: 4px; }
+.console-header small { color: #77818d; }
+
+.transport-badge {
+    padding: 5px 9px;
+    font-size: 12px;
+    color: #ffd479;
+    white-space: nowrap;
+    background: #3b2d0f;
+    border-radius: 999px;
+}
+
+.transport-badge.secure { color: #8ee6a0; background: #173820; }
+
+.log-output {
+    flex: 1;
+    min-height: 0;
+    padding: 16px;
+    margin: 0;
+    overflow: auto;
+    font: 12px/1.65 "Cascadia Mono", Consolas, monospace;
+    color: #b6f5c3;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.admin-side {
+    display: flex;
+    width: min(540px, 46vw);
+    min-width: 400px;
+    flex-direction: column;
+    background: #181818;
+    border-left: 1px solid #292929;
+}
+
+.admin-header > div { display: flex; gap: 6px; }
+.toolbar { display: flex; gap: 6px; padding: 10px; border-bottom: 1px solid #292929; }
+.upload-wrap { position: relative; }
+
+.upload-menu {
+    position: absolute;
+    top: 38px;
+    left: 0;
+    z-index: 50;
+    display: none;
+    min-width: 130px;
+    padding: 5px;
+    background: #222;
+    border: 1px solid #444;
+    border-radius: 6px;
+}
+
+.upload-wrap:hover .upload-menu,
+.upload-wrap:focus-within .upload-menu { display: block; }
+.upload-menu button { display: block; width: 100%; margin: 2px 0; text-align: left; }
+
+.upload-progress {
+    padding: 12px;
+    background: #121923;
+    border-bottom: 1px solid #2d3948;
+}
+
+.progress-heading,
+.upload-progress label {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.progress-heading { margin-bottom: 10px; }
+.progress-heading span { color: #9da8b5; font-size: 12px; }
+.upload-progress label { margin: 8px 0 4px; color: #c7d0da; font-size: 12px; }
+.upload-progress progress { width: 100%; height: 12px; accent-color: #4d9fea; }
+
+.upload-results {
+    max-height: 112px;
+    margin-top: 10px;
+    overflow: auto;
+    font: 12px/1.5 "Cascadia Mono", Consolas, monospace;
+}
+
+.upload-result { padding: 2px 0; color: #aeb8c4; overflow-wrap: anywhere; }
+.upload-result.ok { color: #8ee6a0; }
+.upload-result.error { color: #ff8b8b; }
+
+.selection,
+.pathbar {
+    padding: 9px 12px;
+    color: #aaa;
+    font-size: 13px;
+    border-bottom: 1px solid #292929;
+}
+
+.tree { flex: 1; padding: 8px; overflow: auto; }
+.tree-row { display: flex; align-items: center; gap: 8px; padding: 9px; user-select: none; border-radius: 6px; }
+.tree-row:hover { background: #242424; }
+.tree-row.selected { background: #343434; outline: 1px solid #4d83b8; }
+.tree-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kind { width: 24px; text-align: center; }
+.hidden-item { opacity: .55; }
+
+.modal {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0009;
+}
+
+.hidden { display: none !important; }
+.modal-box { width: min(520px, 90vw); padding: 20px; background: #202020; border: 1px solid #444; border-radius: 10px; }
+.modal-box h3 { margin-top: 0; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+@media (max-width: 900px) {
+    body { flex-direction: column; }
+    .admin-console { height: 42vh; flex: none; }
+    .admin-side { width: 100%; min-width: 0; height: 58vh; }
+}

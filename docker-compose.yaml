@@ -15,6 +15,18 @@ services:
       - ./app:/app/app
       - ./data:/app/data
       - ./static:/app/static
+      - ./tests:/app/tests:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   redis:
     image: redis:7-alpine
@@ -28,6 +40,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   mysql:
     image: mysql:8.4
@@ -46,6 +63,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   nginx:
     build: ./nginx
@@ -62,7 +84,13 @@ services:
       - ${SSL_CERT_PATH}:/etc/nginx/certs/fullchain.pem:ro
       - ${SSL_KEY_PATH}:/etc/nginx/certs/privkey.pem:ro
     depends_on:
-      - web
+      web:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   redis_data:

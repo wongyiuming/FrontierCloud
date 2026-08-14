@@ -121,6 +121,26 @@ class MediaManager:
             tmp.unlink(missing_ok=True)
 
     @staticmethod
+    def folder_upload_target(target_dir: str, relative_path: str) -> tuple[Path, str]:
+        rel = MediaManager.normalize_relative(relative_path)
+        parts = rel.split("/")
+        name = MediaManager.validate_name(parts[-1])
+        nested = "/".join(parts[:-1])
+
+        try:
+            base = resolve_safe_path(MEDIA_ROOT, target_dir) if target_dir else MEDIA_ROOT
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="非法上传目录") from exc
+        if not base.exists() or not base.is_dir():
+            raise HTTPException(status_code=404, detail="目标目录不存在")
+
+        destination_dir = (base / nested).resolve() if nested else base.resolve()
+        if not destination_dir.is_relative_to(MEDIA_ROOT) or destination_dir == MEDIA_ROOT:
+            raise HTTPException(status_code=400, detail="禁止直接向 data/media 根目录上传媒体文件")
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        return destination_dir, name
+
+    @staticmethod
     async def list_tree(relative_dir: str = "") -> dict:
         rel = MediaManager.normalize_relative(relative_dir) if relative_dir else ""
         current = resolve_safe_path(MEDIA_ROOT, rel)
@@ -194,38 +214,6 @@ class MediaManager:
                 p.unlink()
             count += 1
         return count
-
-    @staticmethod
-    async def move(paths: list[str], destination_dir: str) -> list[dict]:
-        objects = await MediaManager._collect(paths)
-        dest_rel = MediaManager.normalize_relative(destination_dir)
-        destination = resolve_safe_path(MEDIA_ROOT, dest_rel)
-        if not destination.is_dir():
-            raise HTTPException(status_code=404, detail="目标目录不存在")
-        results = []
-        for rel, source in objects:
-            was_dir = source.is_dir()
-            if was_dir and (destination == source or source in destination.parents):
-                raise HTTPException(status_code=400, detail=f"不能将目录移动到自身或自身子目录: {rel}")
-            target = destination / source.name
-            if target.exists():
-                raise HTTPException(status_code=409, detail=f"目标已存在同名对象: {target.relative_to(MEDIA_ROOT).as_posix()}")
-            old_rel = source.relative_to(MEDIA_ROOT).as_posix()
-            shutil.move(str(source), str(target))
-            if was_dir:
-                await MediaManager._move_visibility_prefix(old_rel, target.relative_to(MEDIA_ROOT).as_posix())
-            results.append({"from": old_rel, "to": target.relative_to(MEDIA_ROOT).as_posix()})
-        return results
-
-    @staticmethod
-    async def _move_visibility_prefix(old: str, new: str) -> None:
-        async with engine.begin() as conn:
-            rows = await conn.execute(text("SELECT relative_path FROM media_visibility WHERE relative_path=:p OR relative_path LIKE :prefix"), {"p": old, "prefix": old + "/%"})
-            paths = [r[0] for r in rows.fetchall()]
-            await conn.execute(text("DELETE FROM media_visibility WHERE relative_path=:p OR relative_path LIKE :prefix"), {"p": old, "prefix": old + "/%"})
-            for p in paths:
-                suffix = p[len(old):]
-                await conn.execute(text("INSERT INTO media_visibility(relative_path,hidden,updated_at) VALUES(:p,1,:t)"), {"p": new + suffix, "t": datetime.utcnow()})
 
     @staticmethod
     async def build_zip(paths: list[str]) -> Path:
