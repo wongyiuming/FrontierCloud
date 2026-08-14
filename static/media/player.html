@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>{{PAGE_TITLE}}</title>
+    <link rel="stylesheet" href="/static/css/player.css">
+</head>
+<body>
+    <div class="player-section" id="playerSection">
+        <div id="cornerTL" class="corner-text corner-tl"></div>
+        <div id="cornerTR" class="corner-text corner-tr"></div>
+        <div id="cornerBL" class="corner-text corner-bl"></div>
+        <div id="cornerBR" class="corner-text corner-br"></div>
+
+        <div id="audioCover" class="audio-cover-container">
+            <div id="audioBlurBg" class="audio-blur-bg"></div>
+            <div id="audioDisk" class="audio-disk"></div>
+        </div>
+        <div id="artplayer" class="artplayer-app"></div>
+        <div id="gestureHud" class="gesture-hud"></div>
+    </div>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <span>四大发明</span>
+            <a href="{{CATEGORY_LIST_URL}}" class="back-btn">← 返回分类</a>
+        </div>
+        <div class="player-controls">
+            <button class="control-btn" onclick="playPrev()">⏮ up_music</button>
+            <button class="control-btn" onclick="playNext()">next_music ⏭</button>
+        </div>
+        <ul id="mediaList" class="media-list"></ul>
+    </div>
+
+    <!-- 提前声明全局变量，供后端执行字符替换 -->
+    <script>
+        const currentMediaList = {{MEDIA_JSON}};
+        const PAGE_TITLE = '{{PAGE_TITLE}}';
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/artplayer/5.1.1/artplayer.js"></script>
+    <script src="/static/js/player.js"></script>
+</body>
+</html>

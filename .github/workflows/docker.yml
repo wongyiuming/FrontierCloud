@@ -1,0 +1,80 @@
+name: Build and Test Docker Compose
+
+on:
+  push:
+    branches: [ "feat/docker-deploy", "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 1. 动态生成 CI 专用的证书与 .env 文件
+      - name: Prepare Certificates and Environment Variables
+        run: |
+          mkdir -p certs
+          openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+            -keyout certs/privkey.pem \
+            -out certs/fullchain.pem \
+            -subj "/C=CN/ST=Default/L=Default/O=Default/CN=localhost"
+          
+          # 覆盖生成 CI 专用的 .env，将 SERVER_NAME 设置为 localhost，证书路径指向本地 relative 路径
+          cat << 'EOF' > .env
+          PROJECT_NAME="Office-Automation"
+          DEFAULT_TEXT="CONFIDENTIAL"
+          REDIS_URL=redis://redis:6379/0
+          WALL_ADMIN_TOKEN=ci_test_token
+          WALL_TTL=240
+          SERVER_NAME=localhost
+          SSL_CERT_PATH=./certs/fullchain.pem
+          SSL_KEY_PATH=./certs/privkey.pem
+          EOF
+
+      # 2. 启动服务
+      - name: Build and Start Services
+        run: |
+          docker compose up -d --build
+
+      # 3. 等待服务就绪
+      - name: Wait for Services
+        run: |
+          sleep 10
+          docker compose ps
+
+      # 4. 验证核心功能 (匹配当前 FastAPI 路由与 HTTP/HTTPS 逻辑)
+      - name: Test Endpoints
+        run: |
+          # A. 验证文档路径 (-k 忽略自签名证书，-L 自动跟随 301 重定向到 HTTPS)
+          curl -k -L --fail http://localhost/docs || exit 1
+          
+          # B. 验证 API 根路径响应
+          ROOT_RES=$(curl -k -L -s http://localhost/)
+          echo "Root Endpoint Result: $ROOT_RES"
+          if [[ "$ROOT_RES" != *"Office Automation Service"* ]]; then
+            echo "API Validation Failed: Welcome message not found"
+            exit 1
+          fi
+
+      # 5. 验证 Redis 连通性
+      - name: Verify Redis Service
+        run: |
+          docker exec $(docker compose ps -q redis) redis-cli ping | grep "PONG"
+
+      # 6. 故障排查
+      - name: View logs on failure
+        if: failure()
+        run: |
+          docker compose logs nginx
+          docker compose logs web
+          docker compose logs redis
+
+      # 7. 清理现场
+      - name: Stop and Cleanup
+        if: always()
+        run: |
+          docker compose down --volumes --remove-orphans

@@ -1,0 +1,69 @@
+services:
+  web:
+    build: .
+    container_name: office_automation_web
+    restart: always
+    env_file: .env
+    expose:
+      - "8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+      - ./data:/app/data
+      - ./static:/app/static
+
+  redis:
+    image: redis:7-alpine
+    container_name: office_automation_redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mysql:
+    image: mysql:8.4
+    container_name: office_automation_mysql
+    restart: always
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-office_automation}
+      MYSQL_USER: ${MYSQL_USER:-media_admin}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change_me}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change_root_password}
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  nginx:
+    build: ./nginx
+    container_name: office_automation_nginx
+    restart: always
+    environment:
+      - SERVER_NAME=${SERVER_NAME}
+      - NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./static:/app/static:ro
+      - ${SSL_CERT_PATH}:/etc/nginx/certs/fullchain.pem:ro
+      - ${SSL_KEY_PATH}:/etc/nginx/certs/privkey.pem:ro
+    depends_on:
+      - web
+
+volumes:
+  redis_data:
+  mysql_data:

@@ -1,0 +1,21 @@
+# 排除 Git 信息
+.git
+.gitignore
+
+# 排除本地虚拟环境 (这是最占空间的，必须排除)
+.venv
+venv
+ENV
+data
+
+# 排除 Python 字节码
+__pycache__
+*.pyc
+
+# 排除 IDE 配置文件
+.idea
+.vscode
+
+# 排除本地敏感数据
+.env
+tests/

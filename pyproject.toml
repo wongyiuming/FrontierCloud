@@ -1,0 +1,26 @@
+[project]
+name = "office-automation"
+version = "1.1.0"
+description = "自动化办公与媒体管理接口"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.128.5",
+    "uvicorn[standard]",
+    "python-multipart",
+    "Pillow",
+    "pymupdf",
+    "python-docx",
+    "pydantic-settings",
+    "py7zr",
+    "redis",
+    "sqlalchemy>=2.0,<3.0",
+    "asyncmy>=0.2.10,<1.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

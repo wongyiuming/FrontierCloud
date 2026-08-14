@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>前沿视界 · Admin</title><link rel="stylesheet" href="/static/css/player.css"><link rel="stylesheet" href="/static/css/admin.css"></head>
+<body>
+<div class="admin-player"><div id="artplayer"></div><div id="audioCover"><div id="audioBlurBg"></div><div id="audioDisk"></div></div></div>
+<aside class="admin-side"><header><strong>媒体管理</strong><div><button id="backPublic">公共视图</button><button id="logout">退出特权</button></div></header>
+<div class="toolbar"><div class="upload-wrap"><button id="uploadBtn">上传 ▾</button><div class="upload-menu"><button id="uploadFiles">上传文件</button><button id="uploadFolder">上传文件夹</button></div></div><button id="play" disabled>播放</button><button id="download" disabled>下载</button><button id="move" disabled>移动</button><button id="hide" disabled>隐藏</button><button id="delete" disabled>删除</button></div>
+<div class="selection" id="selection">未选择</div><div class="pathbar" id="pathbar">/</div><div id="tree" class="tree"></div></aside>
+<input id="fileInput" type="file" multiple hidden accept=".mp3,.m4a,.flac,.wav,.mp4,.webm,.mkv"><input id="folderInput" type="file" multiple webkitdirectory directory hidden>
+<div id="modal" class="modal hidden"><div class="modal-box"><h3 id="modalTitle"></h3><div id="modalBody"></div><div class="modal-actions"><button id="modalCancel">取消</button><button id="modalOk">确定</button></div></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/artplayer/5.1.1/artplayer.js"></script><script src="/static/js/admin.js"></script>
+</body></html>

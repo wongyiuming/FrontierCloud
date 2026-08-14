@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{PAGE_TITLE}}</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #121212; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .container { text-align: center; max-width: 600px; width: 90%; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
+        h1 { font-size: 1.75rem; color: #f5f5f5; }
+        .back-btn { color: #888; text-decoration: none; font-size: 14px; }
+        .back-btn:hover { color: #fff; }
+        .card-grid { display: flex; flex-direction: column; gap: 15px; }
+        .card { background: #1e1e1e; border: 1px solid #2d2d2d; border-radius: 10px; padding: 20px; text-decoration: none; color: #fff; display: flex; align-items: center; justify-content: space-between; transition: background 0.2s; }
+        .card:hover { background: #282828; }
+        .card-title { font-size: 1.1rem; font-weight: bold; }
+        .card-arrow { color: #666; font-size: 1.2rem; }
+        .empty { color: #666; padding: 40px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{PAGE_TITLE}}</h1>
+            <a href="{{BACK_URL}}" class="back-btn">← 返回首页</a>
+        </div>
+        <div id="categoryGrid" class="card-grid"></div>
+    </div>
+    <script>
+        const categories = {{CATEGORIES_JSON}};
+
+        // 防御 DOM XSS 核心：HTML 字符转义函数
+        function escapeHTML(str) {
+            if (typeof str !== 'string') return str;
+            return str.replace(/[&<>'"]/g, tag => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                "'": '&#39;',
+                '"': '&quot;'
+            }[tag] || tag));
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const grid = document.getElementById('categoryGrid');
+            if (categories.length === 0) {
+                grid.innerHTML = '<div class="empty">暂无分类目录，请在 data/media 下创建子文件夹</div>';
+                return;
+            }
+
+            // 使用 escapeHTML 清洗所有由用户控制的目录名与注入属性，防止 XSS 执行
+            grid.innerHTML = categories.map(cat => `
+                <a href="${escapeHTML(cat.url)}" class="card">
+                    <div class="card-title">📁 ${escapeHTML(cat.name)}</div>
+                    <div class="card-arrow">→</div>
+                </a>
+            `).join('');
+        });
+    </script>
+</body>
+</html>
