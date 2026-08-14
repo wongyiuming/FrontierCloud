@@ -23,15 +23,15 @@
 
 首次拉取：
 ```bash
-git clone https://github.com/wongyiuming/my_FastAPI.git
-cd my_FastAPI
+git clone https://github.com/wongyiuming/FrontierCloud.git
+cd FrontierCloud
 cp .env.example .env
 docker compose down && docker compose up -d --build
 ```
 
 更新:
 ```bash
-git pull https://github.com/wongyiuming/my_FastAPI.git
+git pull https://github.com/wongyiuming/FrontierCloud.git
 docker compose down && docker compose up -d --build
 ```
 
