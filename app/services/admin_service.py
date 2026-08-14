@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request, Response
 from sqlalchemy import text
 
 from app.core.admin_log import append_admin_log
+from app.core.client_ip import client_ip
 from app.core.config import settings
 from app.core.db import engine
 from app.core.redis import redis_client
@@ -25,8 +26,7 @@ def _hash(value: str) -> str:
 
 
 def _client_ip(request: Request) -> str:
-    # Nginx overwrites these headers; never trust arbitrary proxy chains here.
-    return request.headers.get("X-Real-IP") or (request.client.host if request.client else "127.0.0.1")
+    return request.scope.get("verified_client_ip") or client_ip(request.scope)
 
 
 def _ua(request: Request) -> str:

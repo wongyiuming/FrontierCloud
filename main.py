@@ -10,13 +10,17 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.v1.endpoints import router as api_v1_router
 from app.core.admin_log import append_admin_log
+from app.core.client_ip import client_ip
 from app.core.db import init_db
+from app.middleware.ip_security import IPSecurityMiddleware
 from app.services.admin_service import issue_admin_token
+from app.services.ip_security import initialize_ip_security_cache
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await initialize_ip_security_cache()
     await issue_admin_token()
     yield
 
@@ -37,9 +41,7 @@ class RealIPLogMiddleware:
             return
 
         start = time.perf_counter()
-        headers = dict(scope.get("headers", []))
-        x_real_ip = headers.get(b"x-real-ip", b"").decode("utf-8", errors="replace")
-        client_ip = x_real_ip or (scope.get("client")[0] if scope.get("client") else "127.0.0.1")
+        verified_client_ip = scope.get("verified_client_ip") or client_ip(scope)
         proxy_ip = scope.get("client")[0] if scope.get("client") else "127.0.0.1"
         status_code = 500
 
@@ -58,11 +60,11 @@ class RealIPLogMiddleware:
             raw_query = scope.get("query_string", b"")
             raw_target = path + (("?" + raw_query.decode("utf-8", errors="replace")) if raw_query else "")
             log_line = (
-                f"[LOG] REAL_IP: {client_ip} | PROXY_IP: {proxy_ip} | "
+                f"[LOG] REAL_IP: {verified_client_ip} | PROXY_IP: {proxy_ip} | "
                 f"{method} {path} - {status_code} ({elapsed:.2f}ms)"
             )
             request_line = (
-                f"[REQUEST] REAL_IP: {client_ip} | PROXY_IP: {proxy_ip} | "
+                f"[REQUEST] REAL_IP: {verified_client_ip} | PROXY_IP: {proxy_ip} | "
                 f"{method} {render_query_log(raw_target)} - {status_code} ({elapsed:.2f}ms)"
             )
             print(log_line, flush=True)
@@ -89,6 +91,7 @@ def render_query_log(target: str) -> str:
 
 
 app.add_middleware(RealIPLogMiddleware)
+app.add_middleware(IPSecurityMiddleware)
 app.include_router(api_v1_router, prefix="/api/v1")
 
 FAVICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "favicon.ico")
@@ -108,4 +111,4 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, proxy_headers=True, forwarded_allow_ips="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, proxy_headers=False)

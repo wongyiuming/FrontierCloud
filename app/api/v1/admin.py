@@ -20,6 +20,7 @@ from starlette.background import BackgroundTask
 from app.core.config import settings
 from app.core.admin_log import admin_log_buffer
 from app.services import admin_service
+from app.services import ip_security
 from app.services.media_catalog_cache import invalidate_media_catalog
 from app.services.media_manager import MediaManager
 
@@ -119,7 +120,10 @@ async def issue_token(
     response_class=HTMLResponse,
     include_in_schema=False,
 )
-async def admin_page():
+async def admin_page(
+    request: Request,
+    session_hash: str = Depends(require_session),
+):
     path = (
         Path(__file__).resolve().parents[3]
         / "static"
@@ -230,6 +234,69 @@ async def admin_logs(
         {"entries": admin_log_buffer.read(after=after, limit=limit), "secure_transport": secure_admin_transport(request)},
         headers={"Cache-Control": "private, no-store"},
     )
+
+
+@router.get("/security/blocks")
+async def security_blocks(
+    request: Request,
+    session_hash: str = Depends(require_session),
+):
+    if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
+        raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
+    result = await ip_security.list_recent_security()
+    result["legal_api_count"] = ip_security.legal_api_count(request.app)
+    return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/security/unban")
+async def security_unban(
+    request: Request,
+    payload: dict,
+    session_hash: str = Depends(require_session),
+):
+    if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
+        raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
+    try:
+        ip = await ip_security.unban_ip(str(payload.get("ip", "")), session_hash)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="IP 地址无效") from exc
+    await admin_service.audit(session_hash, "security_unban", 1, ip, "success", "", request)
+    return {"status": "ok", "ip": ip}
+
+
+@router.post("/security/whitelist")
+async def security_whitelist(
+    request: Request,
+    payload: dict,
+    session_hash: str = Depends(require_session),
+):
+    if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
+        raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
+    note = payload.get("note", "")
+    if not isinstance(note, str):
+        raise HTTPException(status_code=400, detail="备注无效")
+    try:
+        ip = await ip_security.add_whitelist(str(payload.get("ip", "")), session_hash, note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="IP 地址无效") from exc
+    await admin_service.audit(session_hash, "security_whitelist", 1, ip, "success", note, request)
+    return {"status": "ok", "ip": ip}
+
+
+@router.post("/security/whitelist/remove")
+async def security_whitelist_remove(
+    request: Request,
+    payload: dict,
+    session_hash: str = Depends(require_session),
+):
+    if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
+        raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
+    try:
+        ip = await ip_security.remove_whitelist(str(payload.get("ip", "")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="IP 地址无效") from exc
+    await admin_service.audit(session_hash, "security_whitelist_remove", 1, ip, "success", "", request)
+    return {"status": "ok", "ip": ip}
 
 
 # ============================================================
@@ -430,6 +497,7 @@ async def download_objects(
 async def logout(
     request: Request,
     response: Response,
+    session_hash: str = Depends(require_session),
 ):
     await admin_service.logout_admin(
         request,

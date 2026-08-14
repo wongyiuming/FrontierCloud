@@ -9,6 +9,8 @@
 - `app/core/config.py`：Admin/MySQL 配置。
 - `app/api/v1/media.py`：公共索引与播放增加隐藏状态和根目录媒体禁止规则。
 - `app/services/media_catalog_cache.py`：Redis 分类/曲目缓存、版本化主动失效与故障降级。
+- `app/core/client_ip.py`、`app/middleware/ip_security.py`：可信 Nginx 单一真实 IP、非法 API 识别与请求封禁。
+- `app/services/ip_security.py`：Redis 滑动窗口/24 小时封禁、MySQL 审计与永久白名单。
 - `main.py`：保留旧 `[LOG]`，增加 `[REQUEST]` 中文 Query 渲染日志，并启动时生成临时 Admin Token。
 - `static/media/index.html`：增加“提权”。
 - `static/media/admin.html`、`static/css/admin.css`、`static/js/admin.js`：Admin 文件管理、双上传进度条与安全日志 UI。
@@ -35,3 +37,5 @@ Web 容器启动后会自动生成 32-byte URL-safe Token。未使用的 Token �
 - 公共分类和曲目列表默认在 Redis 缓存 300 秒；Admin 上传、删除、隐藏或恢复后立即切换缓存版本。
 - Admin 播放与移动功能已移除；日志区只镜像当前 Web 进程日志，不挂载高权限 Docker Socket。
 - 所有管理修改接口要求 HttpOnly Session Cookie + CSRF Header。
+- 未匹配路由或错误 HTTP 方法在 1 小时内第 6 次触发 24 小时自动封禁；合法路由内部返回的 404 不计数。
+- Admin 安全小窗口展示合法 API 数、最近 24 小时封禁和永久白名单，并支持单次解封、加白及移出白名单。

@@ -6,6 +6,8 @@ let uploadRunning = false;
 let lastLogId = 0;
 let logPolling = false;
 let logTimer = null;
+let securityTimer = null;
+let securityLoading = false;
 let uploadLimits = {
     max_upload_file_size: 800 * 1024 * 1024,
     max_upload_task_files: 5000,
@@ -50,6 +52,7 @@ async function api(url, options = {}) {
     const response = await fetch(url, options);
     if (response.status === 401) {
         if (logTimer) clearInterval(logTimer);
+        if (securityTimer) clearInterval(securityTimer);
         alert('特权模式已失效，请重新提权');
         location.href = '/api/v1/media';
         throw new Error('特权模式已失效');
@@ -329,6 +332,143 @@ async function pollLogs() {
     }
 }
 
+function securityDate(value) {
+    if (!value) return '-';
+    const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : `${value}Z`;
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function securityButton(label, className, handler) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    if (className) button.className = className;
+    button.onclick = async () => {
+        button.disabled = true;
+        try {
+            await handler();
+            await loadSecurityStatus(true);
+        } catch (error) {
+            alert(error.message);
+        } finally {
+            button.disabled = false;
+        }
+    };
+    return button;
+}
+
+function renderSecurityList(data) {
+    $('legalApiCount').textContent = String(data.legal_api_count ?? 0);
+    $('activeBanCount').textContent = String(data.active_ban_count ?? 0);
+    $('whitelistCount').textContent = String(data.whitelist?.length ?? 0);
+    $('securitySummary').textContent = `1 小时内超过 ${data.threshold} 次非法 API，封禁 ${Math.round(data.ban_seconds / 3600)} 小时`;
+
+    const banList = $('banList');
+    banList.innerHTML = '';
+    if (!data.events?.length) {
+        const empty = document.createElement('div');
+        empty.className = 'security-empty';
+        empty.textContent = '最近 24 小时没有自动封禁记录';
+        banList.appendChild(empty);
+    }
+    for (const event of data.events || []) {
+        const row = document.createElement('div');
+        row.className = `security-row${event.active ? ' active' : ''}${event.whitelisted ? ' whitelisted' : ''}`;
+        const main = document.createElement('div');
+        main.className = 'security-row-main';
+        const ip = document.createElement('div');
+        ip.className = 'security-ip';
+        ip.textContent = event.ip;
+        const meta = document.createElement('div');
+        meta.className = 'security-meta';
+        meta.textContent = `${event.status} · ${event.trigger_count} 次 · ${securityDate(event.banned_at)} → ${securityDate(event.expires_at)}`;
+        const path = document.createElement('div');
+        path.className = 'security-path';
+        path.textContent = `${event.last_method || ''} ${event.last_path || ''}`.trim();
+        main.append(ip, meta, path);
+        const actions = document.createElement('div');
+        actions.className = 'security-actions';
+        if (event.active) {
+            actions.appendChild(securityButton('解封', 'danger', () => api('/api/v1/media/admin/security/unban', {
+                method: 'POST', headers: requestHeaders(), body: JSON.stringify({ip: event.ip}),
+            })));
+        }
+        if (!event.whitelisted) {
+            actions.appendChild(securityButton('加白', 'allow', () => api('/api/v1/media/admin/security/whitelist', {
+                method: 'POST', headers: requestHeaders(), body: JSON.stringify({ip: event.ip, note: 'Admin 封禁列表加白'}),
+            })));
+        }
+        row.append(main, actions);
+        banList.appendChild(row);
+    }
+
+    const whitelistList = $('whitelistList');
+    whitelistList.innerHTML = '';
+    if (!data.whitelist?.length) {
+        const empty = document.createElement('div');
+        empty.className = 'security-empty';
+        empty.textContent = '永久白名单为空';
+        whitelistList.appendChild(empty);
+    }
+    for (const entry of data.whitelist || []) {
+        const row = document.createElement('div');
+        row.className = 'security-row whitelisted';
+        const main = document.createElement('div');
+        main.className = 'security-row-main';
+        const ip = document.createElement('div');
+        ip.className = 'security-ip';
+        ip.textContent = entry.ip;
+        const meta = document.createElement('div');
+        meta.className = 'security-meta';
+        meta.textContent = `${securityDate(entry.created_at)}${entry.note ? ` · ${entry.note}` : ''}`;
+        main.append(ip, meta);
+        const actions = document.createElement('div');
+        actions.className = 'security-actions';
+        actions.appendChild(securityButton('移出', 'danger', () => api('/api/v1/media/admin/security/whitelist/remove', {
+            method: 'POST', headers: requestHeaders(), body: JSON.stringify({ip: entry.ip}),
+        })));
+        row.append(main, actions);
+        whitelistList.appendChild(row);
+    }
+}
+
+async function loadSecurityStatus(force = false) {
+    if (securityLoading || (document.hidden && !force)) return;
+    securityLoading = true;
+    try {
+        renderSecurityList(await api('/api/v1/media/admin/security/blocks'));
+    } catch (error) {
+        $('securitySummary').textContent = `加载失败：${error.message}`;
+    } finally {
+        securityLoading = false;
+    }
+}
+
+$('securityRefresh').onclick = () => loadSecurityStatus(true);
+$('securityToggle').onclick = () => {
+    const collapsed = $('securityPanel').classList.toggle('collapsed');
+    $('securityToggle').textContent = collapsed ? '展开' : '收起';
+    $('securityToggle').setAttribute('aria-expanded', String(!collapsed));
+};
+$('whitelistForm').onsubmit = async event => {
+    event.preventDefault();
+    const ip = $('whitelistIp').value.trim();
+    if (!ip) return;
+    try {
+        await api('/api/v1/media/admin/security/whitelist', {
+            method: 'POST',
+            headers: requestHeaders(),
+            body: JSON.stringify({ip, note: $('whitelistNote').value.trim()}),
+        });
+        $('whitelistIp').value = '';
+        $('whitelistNote').value = '';
+        await loadSecurityStatus(true);
+    } catch (error) {
+        alert(error.message);
+    }
+};
+
 $('uploadFiles').onclick = () => $('fileInput').click();
 $('uploadFolder').onclick = () => $('folderInput').click();
 $('fileInput').onchange = async event => {
@@ -407,7 +547,9 @@ $('logout').onclick = async () => {
         csrfCookieName = status.csrf_cookie_name || csrfCookieName;
         await renderTree();
         await pollLogs();
+        await loadSecurityStatus(true);
         logTimer = setInterval(pollLogs, 2000);
+        securityTimer = setInterval(loadSecurityStatus, 15000);
     } catch (_error) {
         // api() handles expired sessions and navigation.
     }

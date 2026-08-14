@@ -2,6 +2,7 @@ import json
 import uuid
 from datetime import datetime
 from fastapi import Request
+from app.core.client_ip import client_ip
 from app.core.redis import redis_client
 from app.core.config import settings
 
@@ -17,8 +18,7 @@ class WallService:
         """
         if is_admin: return True
 
-        # 优先获取 Nginx 透传的真实 IP
-        ip = request.headers.get("X-Real-IP") or request.client.host
+        ip = request.scope.get("verified_client_ip") or client_ip(request.scope)
         key = f"{self.RATE_PREFIX}{ip}"
 
         # SET NX EX: 只有 Key 不存在时才设置，并在 TTL 后自动过期

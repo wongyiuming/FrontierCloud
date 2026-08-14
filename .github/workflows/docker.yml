@@ -41,6 +41,12 @@ jobs:
           ADMIN_MAX_FILENAME_LENGTH=240
           MEDIA_MAX_DEPTH=32
           MEDIA_CATALOG_CACHE_TTL=300
+          TRUSTED_PROXY_NETWORKS=172.16.0.0/12
+          SECURITY_EXEMPT_NETWORKS=127.0.0.0/8,::1/128
+          SECURITY_INVALID_API_LIMIT=5
+          SECURITY_INVALID_API_WINDOW=3600
+          SECURITY_AUTO_BAN_TTL=86400
+          SECURITY_RECENT_BAN_HOURS=24
           ADMIN_COOKIE_SECURE=true
           ADMIN_COOKIE_SAMESITE=strict
           ADMIN_COOKIE_NAME=__Host-admin_session
@@ -76,6 +82,7 @@ jobs:
           curl -kfsS https://localhost/ | grep "Office Automation Service"
           curl -kfsS https://localhost/api/v1/health | grep '"status":"healthy"'
           curl -kfsS https://localhost/api/v1/media/ | grep "前沿视界"
+          test "$(curl -ksS -o /dev/null -w '%{http_code}' https://localhost/api/v1/media/admin/)" = 401
 
           TOKEN_RESPONSE=$(curl -kfsS -X POST https://localhost/api/v1/media/admin/token/issue \
             -H 'X-Token: ci_wall_admin_token_please_do_not_use_in_production')
@@ -103,6 +110,25 @@ jobs:
             --pattern 'media:catalog:v1:*:tracks:*' | grep 'media:catalog:v1:'
           curl -kfsS -b /tmp/admin-cookies.txt \
             'https://localhost/api/v1/media/admin/logs?after=0&limit=20' | grep '"secure_transport":true'
+
+          for attempt in $(seq 1 6); do
+            docker compose exec -T web python -c \
+              "import asyncio; from app.services.ip_security import record_invalid_api; asyncio.run(record_invalid_api('203.0.113.77','GET','/etc/passwd','ci-scanner'))"
+          done
+          docker compose exec -T redis redis-cli GET security:auto-ban:203.0.113.77 | grep '203.0.113.77'
+          curl -kfsS -b /tmp/admin-cookies.txt \
+            https://localhost/api/v1/media/admin/security/blocks | grep '203.0.113.77'
+          curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
+            -H 'Content-Type: application/json' -d '{"ip":"203.0.113.77"}' \
+            https://localhost/api/v1/media/admin/security/unban | grep '"status":"ok"'
+          test -z "$(docker compose exec -T redis redis-cli GET security:auto-ban:203.0.113.77)"
+          curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
+            -H 'Content-Type: application/json' -d '{"ip":"203.0.113.77","note":"CI"}' \
+            https://localhost/api/v1/media/admin/security/whitelist | grep '"status":"ok"'
+          docker compose exec -T redis redis-cli SISMEMBER security:ip-whitelist 203.0.113.77 | grep '^1$'
+          curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
+            -H 'Content-Type: application/json' -d '{"ip":"203.0.113.77"}' \
+            https://localhost/api/v1/media/admin/security/whitelist/remove | grep '"status":"ok"'
 
       - name: Show service logs on failure
         if: failure()

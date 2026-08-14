@@ -30,6 +30,8 @@ function makeElement() {
             this.children.push(child);
             this.scrollHeight = this.children.length * 20;
         },
+        append(...children) { children.forEach(child => this.appendChild(child)); },
+        setAttribute(name, value) { this[name] = String(value); },
     };
     Object.defineProperty(element, 'innerHTML', {
         get() { return ''; },
@@ -133,10 +135,31 @@ vm.runInContext(`
 assert.equal(context.selectionRenderCalls, 0);
 assert.equal(context.selectedAfterClick, true);
 
+vm.runInContext(`
+    renderSecurityList({
+        legal_api_count: 21,
+        active_ban_count: 1,
+        threshold: 5,
+        ban_seconds: 86400,
+        events: [{
+            ip: '203.0.113.9', trigger_count: 6, status: 'active', active: true,
+            whitelisted: false, banned_at: '2026-08-15T00:00:00',
+            expires_at: '2026-08-16T00:00:00', last_method: 'GET', last_path: '/etc/passwd',
+        }],
+        whitelist: [{ip: '198.51.100.4', created_at: '2026-08-15T00:00:00', note: 'office'}],
+    });
+`, context);
+assert.equal(element('legalApiCount').textContent, '21');
+assert.equal(element('activeBanCount').textContent, '1');
+assert.equal(element('banList').children.length, 1);
+assert.equal(element('whitelistList').children.length, 1);
+
 const adminHtml = fs.readFileSync('static/media/admin.html', 'utf8');
 assert(adminHtml.includes('id="currentProgress"'));
 assert(adminHtml.includes('id="totalProgress"'));
 assert(!adminHtml.includes('Artplayer'));
 assert(!adminHtml.includes('id="move"'));
+assert(adminHtml.includes('id="securityPanel"'));
+assert(adminHtml.includes('id="banList"'));
 
 console.log('admin-ui-smoke-ok');

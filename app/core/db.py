@@ -55,3 +55,31 @@ async def init_db() -> None:
                 INDEX idx_audit_action (action)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """))
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS ip_auto_ban_events (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                ip_address VARCHAR(45) NOT NULL,
+                trigger_count INT UNSIGNED NOT NULL,
+                window_started_at DATETIME(6) NOT NULL,
+                banned_at DATETIME(6) NOT NULL,
+                expires_at DATETIME(6) NOT NULL,
+                last_method VARCHAR(16) NULL,
+                last_path VARCHAR(2048) NULL,
+                user_agent VARCHAR(512) NULL,
+                status VARCHAR(32) NOT NULL DEFAULT 'active',
+                released_at DATETIME(6) NULL,
+                released_by_session_hash CHAR(64) NULL,
+                INDEX idx_ip_ban_ip_time (ip_address, banned_at),
+                INDEX idx_ip_ban_recent (banned_at, status),
+                INDEX idx_ip_ban_expiry (expires_at, status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """))
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS ip_permanent_whitelist (
+                ip_address VARCHAR(45) NOT NULL PRIMARY KEY,
+                created_at DATETIME(6) NOT NULL,
+                created_by_session_hash CHAR(64) NULL,
+                note VARCHAR(255) NULL,
+                INDEX idx_ip_whitelist_created_at (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """))

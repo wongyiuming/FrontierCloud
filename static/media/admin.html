@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿视界 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260814-2">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260815-1">
 </head>
 <body>
     <section class="admin-console">
@@ -16,6 +16,35 @@
             <span id="transportBadge" class="transport-badge">检查传输安全性…</span>
         </header>
         <pre id="logOutput" class="log-output" aria-live="polite">正在连接日志控制台…</pre>
+
+        <section id="securityPanel" class="security-panel">
+            <header class="security-header">
+                <div>
+                    <strong>IP 安全防护</strong>
+                    <small id="securitySummary">正在加载…</small>
+                </div>
+                <div class="security-header-actions">
+                    <button id="securityRefresh" type="button">刷新</button>
+                    <button id="securityToggle" type="button" aria-expanded="true">收起</button>
+                </div>
+            </header>
+            <div id="securityPanelBody" class="security-body">
+                <div class="security-stats">
+                    <span>合法 API <strong id="legalApiCount">-</strong></span>
+                    <span>当前封禁 <strong id="activeBanCount">-</strong></span>
+                    <span>永久白名单 <strong id="whitelistCount">-</strong></span>
+                </div>
+                <form id="whitelistForm" class="whitelist-form">
+                    <input id="whitelistIp" type="text" inputmode="text" autocomplete="off" placeholder="IPv4 或 IPv6">
+                    <input id="whitelistNote" type="text" maxlength="255" autocomplete="off" placeholder="备注（可选）">
+                    <button type="submit">永久加白</button>
+                </form>
+                <div class="security-section-title">最近 24 小时自动封禁</div>
+                <div id="banList" class="security-list"></div>
+                <div class="security-section-title">永久白名单</div>
+                <div id="whitelistList" class="security-list whitelist-list"></div>
+            </div>
+        </section>
     </section>
 
     <aside class="admin-side">
@@ -71,6 +100,6 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260814-3"></script>
+    <script src="/static/js/admin.js?v=20260815-1"></script>
 </body>
 </html>

@@ -26,6 +26,7 @@ button {
 button:disabled { cursor: not-allowed; opacity: .35; }
 
 .admin-console {
+    position: relative;
     display: flex;
     flex: 1;
     min-width: 0;
@@ -68,6 +69,61 @@ button:disabled { cursor: not-allowed; opacity: .35; }
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+
+.security-panel {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    z-index: 40;
+    display: flex;
+    width: min(520px, calc(100% - 32px));
+    max-height: min(520px, calc(100% - 86px));
+    flex-direction: column;
+    overflow: hidden;
+    background: #111821f2;
+    border: 1px solid #35506d;
+    border-radius: 10px;
+    box-shadow: 0 12px 36px #000a;
+    backdrop-filter: blur(8px);
+}
+
+.security-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #2b3c50;
+}
+
+.security-header > div:first-child { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.security-header small { overflow: hidden; color: #8fa4ba; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.security-header-actions { display: flex; gap: 5px; }
+.security-header-actions button { padding: 4px 7px; font-size: 11px; }
+.security-panel.collapsed { max-height: none; }
+.security-panel.collapsed .security-header { border-bottom: 0; }
+.security-panel.collapsed .security-body { display: none; }
+
+.security-body { min-height: 0; padding: 10px; overflow: auto; }
+.security-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 9px; }
+.security-stats span { padding: 7px; color: #9eb0c2; font-size: 11px; text-align: center; background: #192432; border-radius: 6px; }
+.security-stats strong { display: block; margin-top: 3px; color: #e4f1ff; font-size: 16px; }
+.whitelist-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 5px; }
+.whitelist-form input { min-width: 0; padding: 7px; color: #e5edf5; background: #0b1118; border: 1px solid #34475c; border-radius: 5px; }
+.security-section-title { margin: 11px 0 6px; color: #8fa4ba; font-size: 11px; text-transform: uppercase; }
+.security-list { display: flex; flex-direction: column; gap: 6px; }
+.security-empty { padding: 12px; color: #738398; font-size: 12px; text-align: center; border: 1px dashed #314257; border-radius: 6px; }
+.security-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px; background: #151f2a; border-left: 3px solid #6c7886; border-radius: 6px; }
+.security-row.active { border-left-color: #ff6767; }
+.security-row.whitelisted { border-left-color: #65d98a; }
+.security-row-main { min-width: 0; }
+.security-ip { color: #e8f2ff; font: 12px/1.4 "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
+.security-meta { margin-top: 3px; color: #8294a8; font-size: 10px; overflow-wrap: anywhere; }
+.security-path { max-height: 30px; overflow: hidden; color: #b9c7d5; font: 10px/1.4 "Cascadia Mono", Consolas, monospace; }
+.security-actions { display: flex; align-items: flex-start; gap: 4px; }
+.security-actions button { padding: 4px 6px; font-size: 10px; }
+.security-actions .danger { color: #ffadad; border-color: #754040; }
+.security-actions .allow { color: #a9efba; border-color: #39734a; }
 
 .admin-side {
     display: flex;
@@ -163,4 +219,6 @@ button:disabled { cursor: not-allowed; opacity: .35; }
     body { flex-direction: column; }
     .admin-console { height: 42vh; flex: none; }
     .admin-side { width: 100%; min-width: 0; height: 58vh; }
+    .security-panel { right: 8px; bottom: 8px; width: calc(100% - 16px); max-height: calc(100% - 64px); }
+    .whitelist-form { grid-template-columns: 1fr; }
 }
