@@ -4,6 +4,14 @@ services:
     container_name: office_automation_web
     restart: always
     env_file: .env
+    environment:
+      ENVIRONMENT: production
+      PYTHONDONTWRITEBYTECODE: "1"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     expose:
       - "8000"
     depends_on:
@@ -12,10 +20,11 @@ services:
       mysql:
         condition: service_healthy
     volumes:
-      - ./app:/app/app
+      - ./app:/app/app:ro
       - ./data:/app/data
-      - ./static:/app/static
+      - ./static:/app/static:ro
       - ./tests:/app/tests:ro
+      - web_tmp:/tmp
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
       interval: 10s
@@ -53,8 +62,8 @@ services:
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-office_automation}
       MYSQL_USER: ${MYSQL_USER:-media_admin}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change_me}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change_root_password}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
     volumes:
       - mysql_data:/var/lib/mysql
@@ -93,5 +102,6 @@ services:
         max-file: "3"
 
 volumes:
+  web_tmp:
   redis_data:
   mysql_data:

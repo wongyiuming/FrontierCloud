@@ -1,10 +1,12 @@
 import os
 import secrets
-from fastapi import APIRouter, Request, Header, HTTPException, Query
+
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
+
 from app.core.client_ip import client_ip
-from app.services.wall import wall_service
 from app.core.config import settings
+from app.services.wall import wall_service
 
 router = APIRouter()
 
@@ -20,14 +22,23 @@ async def list_posts():
     return await wall_service.get_all()
 
 @router.post("/publish")
-async def create_post(request: Request, content: str = Query(...), x_token: str = Header(None)):
+async def create_post(
+    request: Request,
+    content: str = Query(..., min_length=1, max_length=2000),
+    x_token: str = Header(None),
+):
     is_admin = bool(x_token) and secrets.compare_digest(x_token, settings.WALL_ADMIN_TOKEN)
     if not await wall_service.can_perform_action(request, is_admin):
         raise HTTPException(status_code=429, detail="操作太频繁，请冷却 4 分钟")
     return await wall_service.add_post(content, client_ip(request.scope))
 
 @router.post("/comment/{post_id}")
-async def create_comment(post_id: str, request: Request, content: str = Query(...), x_token: str = Header(None)):
+async def create_comment(
+    post_id: str,
+    request: Request,
+    content: str = Query(..., min_length=1, max_length=2000),
+    x_token: str = Header(None),
+):
     is_admin = bool(x_token) and secrets.compare_digest(x_token, settings.WALL_ADMIN_TOKEN)
     if not await wall_service.can_perform_action(request, is_admin):
         raise HTTPException(status_code=429, detail="冷却中")

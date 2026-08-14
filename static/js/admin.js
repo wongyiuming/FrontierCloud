@@ -81,7 +81,7 @@ function formatSize(value) {
 
 function showModal(title, body, onConfirm) {
     $('modalTitle').textContent = title;
-    $('modalBody').innerHTML = body;
+    $('modalBody').textContent = body;
     $('modal').classList.remove('hidden');
     $('modalCancel').onclick = () => $('modal').classList.add('hidden');
     $('modalOk').onclick = async () => {

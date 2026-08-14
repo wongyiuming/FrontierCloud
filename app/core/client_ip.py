@@ -8,6 +8,8 @@ from starlette.types import Scope
 
 from app.core.config import settings
 
+UNKNOWN_CLIENT_IP = ipaddress.ip_address(0).compressed
+
 
 @dataclass(frozen=True)
 class ClientIdentity:
@@ -43,8 +45,8 @@ def _in_networks(ip: str, configured: str) -> bool:
 
 
 def resolve_client_identity(scope: Scope) -> ClientIdentity:
-    peer_raw = scope.get("client")[0] if scope.get("client") else "0.0.0.0"
-    peer_ip = _canonical_ip(str(peer_raw)) or "0.0.0.0"
+    peer_raw = scope.get("client")[0] if scope.get("client") else UNKNOWN_CLIENT_IP
+    peer_ip = _canonical_ip(str(peer_raw)) or UNKNOWN_CLIENT_IP
     trusted_peer = _in_networks(peer_ip, settings.TRUSTED_PROXY_NETWORKS)
 
     if not trusted_peer:

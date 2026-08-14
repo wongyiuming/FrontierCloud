@@ -3,13 +3,13 @@ import time
 import urllib.parse
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.v1.endpoints import router as api_v1_router
-from app.core.admin_log import append_admin_log
+from app.core.admin_log import append_admin_log, sanitize_log_value
 from app.core.client_ip import client_ip
 from app.core.db import init_db
 from app.middleware.ip_security import IPSecurityMiddleware
@@ -55,8 +55,8 @@ class RealIPLogMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             elapsed = (time.perf_counter() - start) * 1000
-            method = scope.get("method", "")
-            path = scope.get("path", "")
+            method = sanitize_log_value(scope.get("method", ""), 16)
+            path = sanitize_log_value(scope.get("path", ""), 2048)
             raw_query = scope.get("query_string", b"")
             raw_target = path + (("?" + raw_query.decode("utf-8", errors="replace")) if raw_query else "")
             log_line = (
@@ -80,14 +80,14 @@ def render_query_log(target: str) -> str:
         parsed = urllib.parse.urlsplit(target)
         pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=False)
         if not pairs:
-            return parsed.path
+            return sanitize_log_value(parsed.path, 4000)
         query = "&".join(
             f"{k}={v}"
             for k, v in pairs
         )
-        return f"{parsed.path}?{query}"
-    except Exception:
-        return target
+        return sanitize_log_value(f"{parsed.path}?{query}", 4000)
+    except ValueError:
+        return sanitize_log_value(target, 4000)
 
 
 app.add_middleware(RealIPLogMiddleware)
@@ -111,4 +111,10 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, proxy_headers=False)
+    uvicorn.run(
+        "main:app",
+        host=os.getenv("DEV_HOST", "127.0.0.1"),
+        port=8000,
+        reload=os.getenv("ENVIRONMENT", "development").lower() == "development",
+        proxy_headers=False,
+    )

@@ -1,8 +1,31 @@
 from __future__ import annotations
 
+import unicodedata
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Lock
+
+
+def sanitize_log_value(value: object, max_length: int = 4000) -> str:
+    """Keep one untrusted value on one printable log line."""
+    output = []
+    output_length = 0
+    for character in str(value):
+        if character == "\r":
+            rendered = "\\r"
+        elif character == "\n":
+            rendered = "\\n"
+        elif character == "\t":
+            rendered = "\\t"
+        elif unicodedata.category(character).startswith("C"):
+            rendered = f"\\u{{{ord(character):x}}}"
+        else:
+            rendered = character
+        output.append(rendered)
+        output_length += len(rendered)
+        if output_length >= max_length:
+            break
+    return "".join(output)[:max_length]
 
 
 class AdminLogBuffer:
@@ -14,12 +37,12 @@ class AdminLogBuffer:
         self._sequence = 0
 
     def append(self, line: str) -> None:
-        safe_line = str(line).replace("\x00", "")[:4000]
+        safe_line = sanitize_log_value(line)
         with self._lock:
             self._sequence += 1
             self._lines.append({
                 "id": self._sequence,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "line": safe_line,
             })
 
