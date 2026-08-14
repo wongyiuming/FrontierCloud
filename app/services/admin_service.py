@@ -35,11 +35,11 @@ def _ua(request: Request) -> str:
 async def issue_admin_token() -> str:
     token = secrets.token_urlsafe(32)
     token_hash = _hash(token)
-    expires_at = _now() + timedelta(seconds=settings.ADMIN_TOKEN_TTL)
+    expires_at = _now() + timedelta(seconds=settings.ADMIN_TOKEN_INITIAL_TTL)
     await redis_client.set(
         TOKEN_PREFIX + token_hash,
-        "1",
-        ex=settings.ADMIN_TOKEN_TTL,
+        "pending",
+        ex=settings.ADMIN_TOKEN_INITIAL_TTL,
     )
     async with engine.begin() as conn:
         await conn.execute(
@@ -52,7 +52,7 @@ async def issue_admin_token() -> str:
         )
     print(
         f"[ADMIN_TOKEN] temporary admin token={token} "
-        f"created_at={_now().isoformat()} expires_at={expires_at.isoformat()}",
+        f"created_at={_now().isoformat()} claim_expires_at={expires_at.isoformat()}",
         flush=True,
     )
     return token
@@ -71,7 +71,8 @@ async def verify_admin_token(token: str, request: Request) -> str:
 
     token_hash = _hash(token)
     key = TOKEN_PREFIX + token_hash
-    if not await redis_client.exists(key):
+    token_state = await redis_client.get(key)
+    if not token_state:
         count = await redis_client.incr(fail_key)
         if count == 1:
             await redis_client.expire(fail_key, settings.ADMIN_FAILED_WINDOW)
@@ -82,8 +83,10 @@ async def verify_admin_token(token: str, request: Request) -> str:
             )
         raise HTTPException(status_code=403, detail="特权验证失败")
 
-    # Sliding token TTL: every successful use extends the current credential.
-    await redis_client.expire(key, settings.ADMIN_TOKEN_TTL)
+    # An unused token has a longer, finite claim window. Its first successful
+    # use activates the normal short sliding TTL used by admin sessions.
+    await redis_client.set(key, "active", ex=settings.ADMIN_TOKEN_TTL)
+    await redis_client.delete(fail_key)
     async with engine.begin() as conn:
         await conn.execute(
             text("""

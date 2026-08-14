@@ -3,6 +3,11 @@ let selectionKind = null;
 let currentPath = '';
 let art = null;
 let currentMedia = null;
+let uploadLimits = {
+  max_upload_file_size: 100 * 1024 * 1024,
+  upload_batch_size: 96 * 1024 * 1024,
+  max_batch_files: 200,
+};
 
 const $ = id => document.getElementById(id);
 const csrf = () => getCookie('__Host-admin_csrf');
@@ -50,6 +55,41 @@ async function render(){
 }
 function escapeHtml(s){return String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 function formatSize(n){if(n==null)return'';const u=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<3){n/=1024;i++}return `${n.toFixed(i?1:0)} ${u[i]}`}
+function buildUploadBatches(files, relativePaths=null){
+  const batches=[];let batch=[];let batchBytes=0;
+  for(let i=0;i<files.length;i++){
+    const item={file:files[i],relativePath:relativePaths?relativePaths[i]:null};
+    const exceedsBudget=batch.length>0&&batchBytes+item.file.size>uploadLimits.upload_batch_size;
+    const exceedsCount=batch.length>=uploadLimits.max_batch_files;
+    if(exceedsBudget||exceedsCount){batches.push(batch);batch=[];batchBytes=0;}
+    batch.push(item);batchBytes+=item.file.size;
+  }
+  if(batch.length)batches.push(batch);
+  return batches;
+}
+async function uploadInBatches(endpoint, fileList, relativePaths, targetDir){
+  const files=[...fileList];
+  const failed=[];const acceptedFiles=[];const acceptedPaths=[];
+  files.forEach((file,index)=>{
+    if(file.size>uploadLimits.max_upload_file_size){
+      failed.push({name:relativePaths?relativePaths[index]:file.name,error:`文件超过 ${formatSize(uploadLimits.max_upload_file_size)} 限制`});
+    }else{
+      acceptedFiles.push(file);if(relativePaths)acceptedPaths.push(relativePaths[index]);
+    }
+  });
+  const batches=buildUploadBatches(acceptedFiles,relativePaths?acceptedPaths:null);
+  const success=[];
+  for(let i=0;i<batches.length;i++){
+    $('selection').textContent=`正在上传第 ${i+1}/${batches.length} 批…`;
+    const fd=new FormData();fd.append('target_dir',targetDir);
+    const rel=[];
+    for(const item of batches[i]){fd.append('files',item.file);if(relativePaths)rel.push(item.relativePath);}
+    if(relativePaths)fd.append('relative_paths',JSON.stringify(rel));
+    const result=await api(endpoint,{method:'POST',headers:headers(false),body:fd});
+    success.push(...result.success);failed.push(...result.failed);
+  }
+  return {success,failed};
+}
 function playItem(item){
   if(item.kind!=='file'||!item.media)return alert('只能播放音频或视频媒体文件');
   const url='/api/v1/media/stream?file_path='+encodeURIComponent(item.path);
@@ -63,13 +103,12 @@ $('uploadFolder').onclick=()=>$('folderInput').click();
 $('fileInput').onchange=async e=>{
   if(!e.target.files.length)return;
   if(!currentPath){alert('上传失败，媒体文件禁止直接存放在 data/media 根目录，请先进入子目录');e.target.value='';return;}
-  const fd=new FormData();fd.append('target_dir',currentPath);for(const f of e.target.files)fd.append('files',f);
-  try{const d=await api('/api/v1/media/admin/upload/files',{method:'POST',headers:headers(false),body:fd});alert(`上传完成：成功 ${d.success.length}，失败 ${d.failed.length}`);await render()}catch(e){alert(e.message)}e.target.value='';
+  try{const d=await uploadInBatches('/api/v1/media/admin/upload/files',e.target.files,null,currentPath);alert(`上传完成：成功 ${d.success.length}，失败 ${d.failed.length}`);await render()}catch(e){alert(e.message)}e.target.value='';
 };
 $('folderInput').onchange=async e=>{
   if(!e.target.files.length)return;
-  const fd=new FormData();fd.append('target_dir',currentPath);const rel=[];for(const f of e.target.files){fd.append('files',f);rel.push(f.webkitRelativePath||f.name)}fd.append('relative_paths',JSON.stringify(rel));
-  try{const d=await api('/api/v1/media/admin/upload/folder',{method:'POST',headers:headers(false),body:fd});alert(`上传完成：成功 ${d.success.length}，失败 ${d.failed.length}`);await render()}catch(e){alert(e.message)}e.target.value='';
+  const rel=[...e.target.files].map(f=>f.webkitRelativePath||f.name);
+  try{const d=await uploadInBatches('/api/v1/media/admin/upload/folder',e.target.files,rel,currentPath);alert(`上传完成：成功 ${d.success.length}，失败 ${d.failed.length}`);await render()}catch(e){alert(e.message)}e.target.value='';
 };
 $('delete').onclick=()=>{const paths=[...selected];showModal('确认删除',`将删除选中的 ${paths.length} 个${selectionKind==='directory'?'目录及其全部内容':'文件'}。此操作不可恢复。`,async()=>{await api('/api/v1/media/admin/delete',{method:'POST',headers:headers(),body:JSON.stringify({paths})});selected.clear();selectionKind=null;await render()})};
 $('move').onclick=()=>{const paths=[...selected];showModal('移动到目录','<input id="moveTarget" placeholder="例如：明哥/新目录">',async()=>{const dest=$('moveTarget').value.trim();await api('/api/v1/media/admin/move',{method:'POST',headers:headers(),body:JSON.stringify({paths,destination:dest})});selected.clear();selectionKind=null;await render()})};
@@ -77,4 +116,4 @@ $('hide').onclick=()=>{const paths=[...selected];const hidden=$('hide').textCont
 $('download').onclick=async()=>{const paths=[...selected];const url='/api/v1/media/admin/download?paths='+encodeURIComponent(JSON.stringify(paths));const r=await fetch(url);if(!r.ok){const d=await r.json().catch(()=>({}));return alert(d.detail||'下载失败')}const blob=await r.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=paths.length===1?paths[0].split('/').pop():'media-download.zip';a.click();URL.revokeObjectURL(a.href)};
 $('backPublic').onclick=()=>location.href='/api/v1/media';
 $('logout').onclick=async()=>{try{await fetch('/api/v1/media/admin/logout',{method:'POST',headers:headers(false)})}finally{location.href='/api/v1/media'}};
-(async()=>{try{await api('/api/v1/media/admin/status');await render()}catch(e){}})();
+(async()=>{try{const status=await api('/api/v1/media/admin/status');if(status.limits)uploadLimits={...uploadLimits,...status.limits};await render()}catch(e){}})();

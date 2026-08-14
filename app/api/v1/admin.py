@@ -92,7 +92,8 @@ async def issue_token(
 
     return {
         "status": "issued",
-        "expires_in": settings.ADMIN_TOKEN_TTL,
+        "expires_in": settings.ADMIN_TOKEN_INITIAL_TTL,
+        "active_ttl": settings.ADMIN_TOKEN_TTL,
         "token": token,
     }
 
@@ -154,6 +155,11 @@ async def admin_status(
     return {
         "status": "ok",
         "session": True,
+        "limits": {
+            "max_upload_file_size": settings.ADMIN_MAX_UPLOAD_FILE_SIZE,
+            "upload_batch_size": settings.ADMIN_UPLOAD_BATCH_SIZE,
+            "max_batch_files": settings.ADMIN_MAX_BATCH_FILES,
+        },
     }
 
 

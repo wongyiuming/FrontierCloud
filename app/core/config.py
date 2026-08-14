@@ -14,10 +14,12 @@ class Settings(BaseSettings):
     )
 
     ADMIN_TOKEN_TTL: int = Field(900, validation_alias="ADMIN_TOKEN_TTL")
+    ADMIN_TOKEN_INITIAL_TTL: int = Field(86400, validation_alias="ADMIN_TOKEN_INITIAL_TTL")
     ADMIN_SESSION_TTL: int = Field(900, validation_alias="ADMIN_SESSION_TTL")
     ADMIN_MAX_FAILED_ATTEMPTS_PER_IP: int = Field(10, validation_alias="ADMIN_MAX_FAILED_ATTEMPTS_PER_IP")
     ADMIN_FAILED_WINDOW: int = Field(300, validation_alias="ADMIN_FAILED_WINDOW")
     ADMIN_MAX_UPLOAD_FILE_SIZE: int = Field(100 * 1024 * 1024, validation_alias="ADMIN_MAX_UPLOAD_FILE_SIZE")
+    ADMIN_UPLOAD_BATCH_SIZE: int = Field(96 * 1024 * 1024, validation_alias="ADMIN_UPLOAD_BATCH_SIZE")
     ADMIN_MAX_BATCH_FILES: int = Field(200, validation_alias="ADMIN_MAX_BATCH_FILES")
     ADMIN_MAX_DOWNLOAD_ITEMS: int = Field(100, validation_alias="ADMIN_MAX_DOWNLOAD_ITEMS")
     ADMIN_COOKIE_SECURE: bool = Field(True, validation_alias="ADMIN_COOKIE_SECURE")

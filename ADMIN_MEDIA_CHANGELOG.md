@@ -17,7 +17,7 @@
 
 ## 临时 Token
 
-Web 容器启动后会自动生成 32-byte URL-safe Token，Redis 保存 15 分钟滑动 TTL，MySQL 只保存 SHA-256 摘要；明文只输出到 web 容器 stdout，因此宿主机可以使用 `docker logs -f office_automation_web` 获取。
+Web 容器启动后会自动生成 32-byte URL-safe Token。未使用的 Token 默认有 24 小时领取窗口；首次提权成功后切换为 15 分钟滑动 TTL。MySQL 只保存 SHA-256 摘要；明文只输出到 web 容器 stdout，因此宿主机可以使用 `docker logs -f office_automation_web` 获取。
 
 也保留了 `/api/v1/media/admin/token/issue`，需要 `X-Token: WALL_ADMIN_TOKEN` 才能重新签发。
 
@@ -30,4 +30,5 @@ Web 容器启动后会自动生成 32-byte URL-safe Token，Redis 保存 15 分�
 - 公共视图隐藏目录完全不可见，Admin 仍然可见。
 - Admin 文件树按目录懒加载，不一次性递归返回整个媒体库。
 - Admin Session 和临时 Token 都是 15 分钟滑动 TTL。
+- 浏览器会按 96 MiB/200 个文件自动拆分文件及文件夹上传请求，Nginx 单请求上限为 128 MiB。
 - 所有管理修改接口要求 HttpOnly Session Cookie + CSRF Header。
