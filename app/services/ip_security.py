@@ -1,0 +1,368 @@
+from __future__ import annotations
+
+import json
+import secrets
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from redis.exceptions import RedisError
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.core.admin_log import append_admin_log
+from app.core.client_ip import is_security_exempt, normalize_ip
+from app.core.config import settings
+from app.core.db import engine
+from app.core.redis import redis_client
+
+
+VIOLATION_PREFIX = "security:invalid-api:"
+BAN_PREFIX = "security:auto-ban:"
+RECENT_BANS_KEY = "security:auto-bans:recent"
+WHITELIST_KEY = "security:ip-whitelist"
+CACHE_READY_KEY = "security:cache-ready"
+
+_SLIDING_WINDOW_SCRIPT = """
+local key = KEYS[1]
+local now_ms = tonumber(ARGV[1])
+local cutoff_ms = now_ms - tonumber(ARGV[2])
+redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff_ms)
+redis.call('ZADD', key, now_ms, ARGV[3])
+local count = redis.call('ZCARD', key)
+local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+redis.call('EXPIRE', key, tonumber(ARGV[4]))
+return {count, oldest[2] or now_ms}
+"""
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _ban_key(ip: str) -> str:
+    return BAN_PREFIX + ip
+
+
+def _violation_key(ip: str) -> str:
+    return VIOLATION_PREFIX + ip
+
+
+async def initialize_ip_security_cache() -> None:
+    """Hydrate permanent whitelist and still-active bans from MySQL on startup."""
+    now = _utcnow()
+    async with engine.connect() as conn:
+        whitelist_rows = await conn.execute(text("SELECT ip_address FROM ip_permanent_whitelist"))
+        ban_rows = await conn.execute(text("""
+            SELECT ip_address, trigger_count, window_started_at, banned_at, expires_at,
+                   last_method, last_path, status
+            FROM ip_auto_ban_events
+            WHERE status='active' AND expires_at > :now
+            ORDER BY banned_at DESC
+        """), {"now": now})
+        recent_rows = await conn.execute(text("""
+            SELECT ip_address, MAX(banned_at) AS banned_at
+            FROM ip_auto_ban_events
+            WHERE banned_at >= :cutoff
+            GROUP BY ip_address
+        """), {"cutoff": now - timedelta(hours=settings.SECURITY_RECENT_BAN_HOURS)})
+
+    whitelist = [str(row[0]) for row in whitelist_rows.fetchall()]
+    active_bans: dict[str, dict[str, Any]] = {}
+    for row in ban_rows.mappings().all():
+        active_bans.setdefault(str(row["ip_address"]), dict(row))
+
+    pipe = redis_client.pipeline(transaction=True)
+    pipe.delete(WHITELIST_KEY)
+    if whitelist:
+        pipe.sadd(WHITELIST_KEY, *whitelist)
+    cutoff = time.time() - settings.SECURITY_RECENT_BAN_HOURS * 3600
+    pipe.zremrangebyscore(RECENT_BANS_KEY, "-inf", cutoff)
+    for row in recent_rows.mappings().all():
+        banned_timestamp = row["banned_at"].replace(tzinfo=timezone.utc).timestamp()
+        pipe.zadd(RECENT_BANS_KEY, {str(row["ip_address"]): banned_timestamp})
+    for ip, event in active_bans.items():
+        remaining = max(1, int((event["expires_at"] - now).total_seconds()))
+        payload = {
+            "ip": ip,
+            "trigger_count": int(event["trigger_count"]),
+            "window_started_at": event["window_started_at"].isoformat(),
+            "banned_at": event["banned_at"].isoformat(),
+            "expires_at": event["expires_at"].isoformat(),
+            "last_method": event["last_method"],
+            "last_path": event["last_path"],
+        }
+        pipe.set(_ban_key(ip), json.dumps(payload, ensure_ascii=False), ex=remaining)
+    pipe.set(CACHE_READY_KEY, "1")
+    await pipe.execute()
+
+
+async def ensure_ip_security_cache() -> None:
+    """Rehydrate permanent state if Redis was flushed or restarted without its cache."""
+    if not await redis_client.exists(CACHE_READY_KEY):
+        await initialize_ip_security_cache()
+
+
+async def _mysql_block_fallback(ip: str) -> dict[str, Any] | None:
+    now = _utcnow()
+    async with engine.connect() as conn:
+        whitelisted = await conn.scalar(
+            text("SELECT 1 FROM ip_permanent_whitelist WHERE ip_address=:ip LIMIT 1"),
+            {"ip": ip},
+        )
+        if whitelisted:
+            return None
+        result = await conn.execute(text("""
+            SELECT ip_address, trigger_count, window_started_at, banned_at, expires_at,
+                   last_method, last_path
+            FROM ip_auto_ban_events
+            WHERE ip_address=:ip AND status='active' AND expires_at > :now
+            ORDER BY banned_at DESC LIMIT 1
+        """), {"ip": ip, "now": now})
+        row = result.mappings().first()
+    if not row:
+        return None
+    return {
+        "ip": str(row["ip_address"]),
+        "trigger_count": int(row["trigger_count"]),
+        "window_started_at": row["window_started_at"].isoformat(),
+        "banned_at": row["banned_at"].isoformat(),
+        "expires_at": row["expires_at"].isoformat(),
+        "last_method": row["last_method"],
+        "last_path": row["last_path"],
+    }
+
+
+async def get_ip_block(ip: str) -> dict[str, Any] | None:
+    if is_security_exempt(ip):
+        return None
+    try:
+        await ensure_ip_security_cache()
+        pipe = redis_client.pipeline(transaction=False)
+        pipe.sismember(WHITELIST_KEY, ip)
+        pipe.get(_ban_key(ip))
+        whitelisted, payload = await pipe.execute()
+        if whitelisted or not payload:
+            return None
+        value = json.loads(payload)
+        return value if isinstance(value, dict) else None
+    except (RedisError, SQLAlchemyError, TypeError, json.JSONDecodeError) as exc:
+        append_admin_log(f"[IP_SECURITY] Redis block lookup failed for {ip}; using MySQL: {exc}")
+        try:
+            return await _mysql_block_fallback(ip)
+        except SQLAlchemyError as db_exc:
+            append_admin_log(f"[IP_SECURITY] MySQL block lookup also failed for {ip}: {db_exc}")
+            return None
+
+
+async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -> int:
+    if is_security_exempt(ip):
+        return 0
+    try:
+        await ensure_ip_security_cache()
+        if await redis_client.sismember(WHITELIST_KEY, ip):
+            return 0
+        now_ms = int(time.time() * 1000)
+        result = await redis_client.eval(
+            _SLIDING_WINDOW_SCRIPT,
+            1,
+            _violation_key(ip),
+            now_ms,
+            settings.SECURITY_INVALID_API_WINDOW * 1000,
+            f"{now_ms}:{secrets.token_hex(6)}",
+            settings.SECURITY_INVALID_API_WINDOW,
+        )
+        count = int(result[0])
+        window_started_at = datetime.fromtimestamp(float(result[1]) / 1000, timezone.utc).replace(tzinfo=None)
+    except (RedisError, SQLAlchemyError, TypeError, ValueError) as exc:
+        append_admin_log(f"[IP_SECURITY] invalid API counter failed for {ip}: {exc}")
+        return 0
+
+    if count <= settings.SECURITY_INVALID_API_LIMIT:
+        return count
+
+    now = _utcnow()
+    expires_at = now + timedelta(seconds=settings.SECURITY_AUTO_BAN_TTL)
+    payload = {
+        "ip": ip,
+        "trigger_count": count,
+        "window_started_at": window_started_at.isoformat(),
+        "banned_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "last_method": method[:16],
+        "last_path": path[:2048],
+    }
+    try:
+        created = await redis_client.set(
+            _ban_key(ip),
+            json.dumps(payload, ensure_ascii=False),
+            ex=settings.SECURITY_AUTO_BAN_TTL,
+            nx=True,
+        )
+        if not created:
+            return count
+        await redis_client.zadd(RECENT_BANS_KEY, {ip: now.timestamp()})
+        await redis_client.zremrangebyscore(
+            RECENT_BANS_KEY,
+            "-inf",
+            now.timestamp() - settings.SECURITY_RECENT_BAN_HOURS * 3600,
+        )
+    except RedisError as exc:
+        append_admin_log(f"[IP_SECURITY] failed to activate ban for {ip}: {exc}")
+        return count
+
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                DELETE FROM ip_auto_ban_events
+                WHERE banned_at < :cutoff AND expires_at <= :now
+                LIMIT 1000
+            """), {
+                "cutoff": now - timedelta(hours=settings.SECURITY_RECENT_BAN_HOURS),
+                "now": now,
+            })
+            await conn.execute(text("""
+                INSERT INTO ip_auto_ban_events
+                (ip_address, trigger_count, window_started_at, banned_at, expires_at,
+                 last_method, last_path, user_agent, status)
+                VALUES (:ip, :count, :window_start, :banned_at, :expires_at,
+                        :method, :path, :ua, 'active')
+            """), {
+                "ip": ip,
+                "count": count,
+                "window_start": window_started_at,
+                "banned_at": now,
+                "expires_at": expires_at,
+                "method": method[:16],
+                "path": path[:2048],
+                "ua": user_agent[:512],
+            })
+    except SQLAlchemyError as exc:
+        append_admin_log(f"[IP_SECURITY] ban active in Redis but MySQL audit failed for {ip}: {exc}")
+
+    append_admin_log(
+        f"[IP_SECURITY] auto-banned ip={ip} count={count} "
+        f"expires_at={expires_at.isoformat()} last={method[:16]} {path[:512]}"
+    )
+    return count
+
+
+async def unban_ip(ip_value: str, session_hash: str, status: str = "unbanned") -> str:
+    ip = normalize_ip(ip_value)
+    now = _utcnow()
+    pipe = redis_client.pipeline(transaction=True)
+    pipe.delete(_ban_key(ip))
+    pipe.delete(_violation_key(ip))
+    await pipe.execute()
+    async with engine.begin() as conn:
+        await conn.execute(text("""
+            UPDATE ip_auto_ban_events
+            SET status=:status, released_at=:now, released_by_session_hash=:session
+            WHERE ip_address=:ip AND status='active'
+        """), {"status": status, "now": now, "session": session_hash, "ip": ip})
+    return ip
+
+
+async def add_whitelist(ip_value: str, session_hash: str, note: str = "") -> str:
+    ip = normalize_ip(ip_value)
+    now = _utcnow()
+    async with engine.begin() as conn:
+        await conn.execute(text("""
+            INSERT INTO ip_permanent_whitelist
+            (ip_address, created_at, created_by_session_hash, note)
+            VALUES (:ip, :now, :session, :note)
+            ON DUPLICATE KEY UPDATE note=:note
+        """), {"ip": ip, "now": now, "session": session_hash, "note": note[:255]})
+    await redis_client.sadd(WHITELIST_KEY, ip)
+    await redis_client.set(CACHE_READY_KEY, "1")
+    await unban_ip(ip, session_hash, status="whitelisted")
+    return ip
+
+
+async def remove_whitelist(ip_value: str) -> str:
+    ip = normalize_ip(ip_value)
+    async with engine.begin() as conn:
+        await conn.execute(text("DELETE FROM ip_permanent_whitelist WHERE ip_address=:ip"), {"ip": ip})
+    await redis_client.srem(WHITELIST_KEY, ip)
+    await redis_client.delete(_violation_key(ip))
+    return ip
+
+
+async def list_recent_security() -> dict[str, Any]:
+    now = _utcnow()
+    cutoff = now - timedelta(hours=settings.SECURITY_RECENT_BAN_HOURS)
+    async with engine.begin() as conn:
+        await conn.execute(text("""
+            UPDATE ip_auto_ban_events
+            SET status='expired'
+            WHERE status='active' AND expires_at <= :now
+        """), {"now": now})
+        await conn.execute(text("""
+            DELETE FROM ip_auto_ban_events
+            WHERE banned_at < :cutoff AND expires_at <= :now
+            LIMIT 1000
+        """), {"cutoff": cutoff, "now": now})
+        ban_result = await conn.execute(text("""
+            SELECT id, ip_address, trigger_count, window_started_at, banned_at, expires_at,
+                   last_method, last_path, status, released_at
+            FROM ip_auto_ban_events
+            WHERE banned_at >= :cutoff
+            ORDER BY banned_at DESC
+            LIMIT 500
+        """), {"cutoff": cutoff})
+        whitelist_result = await conn.execute(text("""
+            SELECT ip_address, created_at, note
+            FROM ip_permanent_whitelist
+            ORDER BY created_at DESC
+        """))
+
+    whitelist_rows = whitelist_result.mappings().all()
+    whitelist = {str(row["ip_address"]) for row in whitelist_rows}
+    events = []
+    for row in ban_result.mappings().all():
+        expires_at = row["expires_at"]
+        status = str(row["status"])
+        active = status == "active" and expires_at > now and str(row["ip_address"]) not in whitelist
+        events.append({
+            "id": int(row["id"]),
+            "ip": str(row["ip_address"]),
+            "trigger_count": int(row["trigger_count"]),
+            "window_started_at": row["window_started_at"].isoformat(),
+            "banned_at": row["banned_at"].isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "last_method": row["last_method"],
+            "last_path": row["last_path"],
+            "status": status,
+            "active": active,
+            "whitelisted": str(row["ip_address"]) in whitelist,
+            "released_at": row["released_at"].isoformat() if row["released_at"] else None,
+        })
+
+    return {
+        "events": events,
+        "whitelist": [
+            {
+                "ip": str(row["ip_address"]),
+                "created_at": row["created_at"].isoformat(),
+                "note": row["note"] or "",
+            }
+            for row in whitelist_rows
+        ],
+        "active_ban_count": sum(1 for event in events if event["active"]),
+        "threshold": settings.SECURITY_INVALID_API_LIMIT,
+        "window_seconds": settings.SECURITY_INVALID_API_WINDOW,
+        "ban_seconds": settings.SECURITY_AUTO_BAN_TTL,
+    }
+
+
+def legal_api_count(app: Any) -> int:
+    pairs = set()
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        methods = getattr(route, "methods", None)
+        if not path.startswith("/api/") or not methods:
+            continue
+        for method in methods:
+            if method not in {"HEAD", "OPTIONS"}:
+                pairs.add((method, path))
+    return len(pairs)
