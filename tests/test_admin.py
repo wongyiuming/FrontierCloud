@@ -86,11 +86,15 @@ class AdminTokenLifecycleTests(unittest.IsolatedAsyncioTestCase):
             patch.object(admin_service.secrets, "token_urlsafe", return_value=token),
             patch.object(admin_service.settings, "ADMIN_TOKEN_INITIAL_TTL", 86400),
             patch.object(admin_service.settings, "ADMIN_TOKEN_TTL", 900),
+            patch("builtins.print") as print_mock,
+            patch.object(admin_service, "append_admin_log") as append_log_mock,
         ):
             issued = await admin_service.issue_admin_token()
             self.assertEqual(issued, token)
             self.assertEqual(fake_redis.values[token_key], "pending")
             self.assertEqual(fake_redis.ttls[token_key], 86400)
+            self.assertNotIn(token, print_mock.call_args.args[0])
+            self.assertNotIn(token, append_log_mock.call_args.args[0])
 
             fake_redis.values[fail_key] = "3"
             token_hash = await admin_service.verify_admin_token(token, request)

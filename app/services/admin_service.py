@@ -52,7 +52,7 @@ async def issue_admin_token() -> str:
             {"token_hash": token_hash, "created_at": _now(), "expires_at": expires_at},
         )
     log_line = (
-        f"[ADMIN_TOKEN] temporary admin token={token} "
+        "[ADMIN_TOKEN] temporary admin token issued "
         f"created_at={_now().isoformat()} claim_expires_at={expires_at.isoformat()}"
     )
     print(log_line, flush=True)
