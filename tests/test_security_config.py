@@ -1,3 +1,4 @@
+import os
 import unittest
 from pathlib import Path
 
@@ -35,14 +36,26 @@ class ProductionConfigurationTests(unittest.TestCase):
         self.assertEqual(settings.ENVIRONMENT, "production")
 
     def test_web_container_runs_with_reduced_filesystem_and_process_privileges(self):
-        dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
-        compose = Path("docker-compose.yaml").read_text(encoding="utf-8")
-        self.assertIn("USER 10001:10001", dockerfile)
-        self.assertIn("read_only: true", compose)
-        self.assertIn("no-new-privileges:true", compose)
-        self.assertIn("cap_drop:", compose)
-        self.assertIn("./app:/app/app:ro", compose)
-        self.assertIn("./static:/app/static:ro", compose)
+        if os.name != "posix" or not Path("/.dockerenv").exists():
+            self.skipTest("container runtime hardening is verified inside Docker")
+
+        self.assertEqual(os.geteuid(), 10001)
+        process_status = Path("/proc/self/status").read_text(encoding="utf-8")
+        status_fields = dict(
+            line.split(":", 1) for line in process_status.splitlines() if ":" in line
+        )
+        self.assertEqual(status_fields["NoNewPrivs"].strip(), "1")
+        self.assertEqual(int(status_fields["CapEff"].strip(), 16), 0)
+
+        for directory in (Path("/app"), Path("/app/app"), Path("/app/static")):
+            probe = directory / ".container-write-probe"
+            try:
+                probe.write_text("must not be writable", encoding="utf-8")
+            except OSError:
+                continue
+            else:
+                probe.unlink(missing_ok=True)
+                self.fail(f"container path is unexpectedly writable: {directory}")
 
 
 if __name__ == "__main__":
