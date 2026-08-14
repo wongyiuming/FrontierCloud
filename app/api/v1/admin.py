@@ -20,6 +20,7 @@ from starlette.background import BackgroundTask
 from app.core.config import settings
 from app.core.admin_log import admin_log_buffer
 from app.services import admin_service
+from app.services.media_catalog_cache import invalidate_media_catalog
 from app.services.media_manager import MediaManager
 
 
@@ -211,6 +212,7 @@ async def upload_item(
         await admin_service.audit(session_hash, "upload_item", 1, source, "failed", str(exc.detail), request)
         raise
 
+    await invalidate_media_catalog()
     await admin_service.audit(session_hash, "upload_item", 1, source, "success", saved_path, request)
     return {"path": saved_path}
 
@@ -256,6 +258,7 @@ async def delete_objects(
     count = await MediaManager.delete(
         paths,
     )
+    await invalidate_media_catalog()
 
     await admin_service.audit(
         session_hash,
@@ -305,6 +308,7 @@ async def hide_objects(
         paths,
         hidden,
     )
+    await invalidate_media_catalog()
 
     await admin_service.audit(
         session_hash,

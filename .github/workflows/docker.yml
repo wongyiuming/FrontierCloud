@@ -34,12 +34,13 @@ jobs:
           ADMIN_SESSION_TTL=900
           ADMIN_MAX_FAILED_ATTEMPTS_PER_IP=10
           ADMIN_FAILED_WINDOW=300
-          ADMIN_MAX_UPLOAD_FILE_SIZE=104857600
+          ADMIN_MAX_UPLOAD_FILE_SIZE=838860800
           ADMIN_MAX_UPLOAD_TASK_FILES=5000
           ADMIN_MAX_BATCH_FILES=200
           ADMIN_MAX_DOWNLOAD_ITEMS=100
           ADMIN_MAX_FILENAME_LENGTH=240
           MEDIA_MAX_DEPTH=32
+          MEDIA_CATALOG_CACHE_TTL=300
           ADMIN_COOKIE_SECURE=true
           ADMIN_COOKIE_SAMESITE=strict
           ADMIN_COOKIE_NAME=__Host-admin_session
@@ -96,6 +97,10 @@ jobs:
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -F 'target_dir=ci-multiple' -F 'file=@/tmp/ci-two.wav;type=audio/wav' \
             https://localhost/api/v1/media/admin/upload/item | grep 'ci-multiple/ci-two.wav'
+          test "$(docker compose exec -T redis redis-cli GET media:catalog:v1:generation)" -ge 3
+          curl -kfsS 'https://localhost/api/v1/media/music/category?path=ci-folder' | grep 'one'
+          docker compose exec -T redis redis-cli --scan \
+            --pattern 'media:catalog:v1:*:tracks:*' | grep 'media:catalog:v1:'
           curl -kfsS -b /tmp/admin-cookies.txt \
             'https://localhost/api/v1/media/admin/logs?after=0&limit=20' | grep '"secure_transport":true'
 

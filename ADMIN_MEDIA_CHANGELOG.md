@@ -8,6 +8,7 @@
 - `app/core/db.py`：MySQL 初始化表结构。
 - `app/core/config.py`：Admin/MySQL 配置。
 - `app/api/v1/media.py`：公共索引与播放增加隐藏状态和根目录媒体禁止规则。
+- `app/services/media_catalog_cache.py`：Redis 分类/曲目缓存、版本化主动失效与故障降级。
 - `main.py`：保留旧 `[LOG]`，增加 `[REQUEST]` 中文 Query 渲染日志，并启动时生成临时 Admin Token。
 - `static/media/index.html`：增加“提权”。
 - `static/media/admin.html`、`static/css/admin.css`、`static/js/admin.js`：Admin 文件管理、双上传进度条与安全日志 UI。
@@ -30,6 +31,7 @@ Web 容器启动后会自动生成 32-byte URL-safe Token。未使用的 Token �
 - 公共视图隐藏目录完全不可见，Admin 仍然可见。
 - Admin 文件树按目录懒加载，不一次性递归返回整个媒体库。
 - Admin Session 和临时 Token 都是 15 分钟滑动 TTL。
-- 多文件与文件夹任务逐文件上传（默认单任务最多 5000 个），分别显示当前文件和整个任务进度；Nginx 单请求上限为 128 MiB。
+- 多文件与文件夹任务逐文件上传（默认单任务最多 5000 个），分别显示当前文件和整个任务进度；单文件上限为 800 MiB，Nginx 请求上限保留 multipart 余量为 820 MiB。
+- 公共分类和曲目列表默认在 Redis 缓存 300 秒；Admin 上传、删除、隐藏或恢复后立即切换缓存版本。
 - Admin 播放与移动功能已移除；日志区只镜像当前 Web 进程日志，不挂载高权限 Docker Socket。
 - 所有管理修改接口要求 HttpOnly Session Cookie + CSRF Header。

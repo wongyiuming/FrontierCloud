@@ -122,6 +122,7 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch.object(media_manager, "MEDIA_ROOT", root),
                 patch.object(admin.admin_service, "audit", new=AsyncMock()),
+                patch.object(admin, "invalidate_media_catalog", new=AsyncMock()),
             ):
                 result = await admin.upload_item(
                     request=self._request(),
@@ -142,6 +143,7 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch.object(media_manager, "MEDIA_ROOT", root),
                 patch.object(admin.admin_service, "audit", new=AsyncMock()),
+                patch.object(admin, "invalidate_media_catalog", new=AsyncMock()),
             ):
                 results = [
                     await admin.upload_item(

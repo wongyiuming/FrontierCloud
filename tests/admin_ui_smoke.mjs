@@ -121,6 +121,18 @@ assert.equal(element('totalPercent').textContent, '100%');
 assert.equal(element('uploadResults').children.length, 2);
 assert.match(element('uploadSummary').textContent, /成功 2，失败 0/);
 
+vm.runInContext(`
+    selected.clear();
+    selectionKind = null;
+    let selectionRenderCalls = 0;
+    renderTree = async () => { selectionRenderCalls += 1; };
+    toggleSelection({name: 'one.wav', path: 'folder/one.wav', kind: 'file'});
+    globalThis.selectionRenderCalls = selectionRenderCalls;
+    globalThis.selectedAfterClick = selected.has('folder/one.wav');
+`, context);
+assert.equal(context.selectionRenderCalls, 0);
+assert.equal(context.selectedAfterClick, true);
+
 const adminHtml = fs.readFileSync('static/media/admin.html', 'utf8');
 assert(adminHtml.includes('id="currentProgress"'));
 assert(adminHtml.includes('id="totalProgress"'));

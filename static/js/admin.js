@@ -7,7 +7,7 @@ let lastLogId = 0;
 let logPolling = false;
 let logTimer = null;
 let uploadLimits = {
-    max_upload_file_size: 100 * 1024 * 1024,
+    max_upload_file_size: 800 * 1024 * 1024,
     max_upload_task_files: 5000,
 };
 
@@ -115,7 +115,11 @@ function toggleSelection(item) {
     selectionKind = item.kind;
     if (selected.has(item.path)) selected.delete(item.path);
     else selected.add(item.path);
-    renderTree();
+    if (!selected.size) selectionKind = null;
+    for (const row of document.querySelectorAll('.tree-row[data-path]')) {
+        row.classList.toggle('selected', selected.has(row.dataset.path));
+    }
+    updateToolbar();
 }
 
 async function renderTree() {
@@ -140,6 +144,7 @@ async function renderTree() {
     for (const item of data.items) {
         const row = document.createElement('div');
         row.className = `tree-row${selected.has(item.path) ? ' selected' : ''}${item.hidden ? ' hidden-item' : ''}`;
+        row.dataset.path = item.path;
         row.dataset.hidden = String(item.hidden);
         row.innerHTML = `<span class="kind">${item.kind === 'directory' ? '📁' : '📄'}</span>`
             + `<span class="name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>`

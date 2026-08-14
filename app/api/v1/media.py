@@ -8,6 +8,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 
+from app.services.media_catalog_cache import load_media_catalog, store_media_catalog
+
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parents[3]
 MEDIA_ROOT = (BASE_DIR / "data" / "media").resolve()
@@ -73,8 +75,13 @@ def _get_media_categories_sync(media_type, valid_exts, hidden: set[str]):
 
 
 async def get_media_categories(media_type, valid_exts):
+    generation, cached = await load_media_catalog("categories", media_type)
+    if cached is not None:
+        return cached
     hidden = await _hidden_set()
-    return await asyncio.to_thread(_get_media_categories_sync, media_type, valid_exts, hidden)
+    categories = await asyncio.to_thread(_get_media_categories_sync, media_type, valid_exts, hidden)
+    await store_media_catalog(generation, "categories", media_type, categories)
+    return categories
 
 
 def _scan_media_files_by_category_sync(category_subpath, valid_exts, media_type, hidden):
@@ -107,8 +114,20 @@ def _scan_media_files_by_category_sync(category_subpath, valid_exts, media_type,
 
 
 async def scan_media_files_by_category(category_subpath, valid_exts, media_type):
+    identity = f"{media_type}:{category_subpath}"
+    generation, cached = await load_media_catalog("tracks", identity)
+    if cached is not None:
+        return cached
     hidden = await _hidden_set()
-    return await asyncio.to_thread(_scan_media_files_by_category_sync, category_subpath, valid_exts, media_type, hidden)
+    media_list = await asyncio.to_thread(
+        _scan_media_files_by_category_sync,
+        category_subpath,
+        valid_exts,
+        media_type,
+        hidden,
+    )
+    await store_media_catalog(generation, "tracks", identity, media_list)
+    return media_list
 
 
 def load_html_template(filename: str) -> str:
@@ -149,7 +168,7 @@ async def get_music_categories_page():
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape("前沿媒体"))
     html = html.replace("{{BACK_URL}}", html_escape.escape("/api/v1/media"))
     html = html.replace("{{CATEGORIES_JSON}}", safe_json_dumps(await get_media_categories("music", AUDIO_EXTS)))
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=600"})
+    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
 
 
 @router.get("/video", response_class=HTMLResponse)
@@ -158,7 +177,7 @@ async def get_video_categories_page():
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape("前沿视讯"))
     html = html.replace("{{BACK_URL}}", html_escape.escape("/api/v1/media"))
     html = html.replace("{{CATEGORIES_JSON}}", safe_json_dumps(await get_media_categories("video", VIDEO_EXTS)))
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=600"})
+    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
 
 
 @router.get("/music/category", response_class=HTMLResponse)
@@ -168,7 +187,7 @@ async def get_music_player_page(path: str = Query(...)):
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"前沿音乐 - {path}"))
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/music"))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=600"})
+    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
 
 
 @router.get("/video/category", response_class=HTMLResponse)
@@ -178,4 +197,4 @@ async def get_video_player_page(path: str = Query(...)):
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"前沿视讯 - {path}"))
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/video"))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=600"})
+    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
