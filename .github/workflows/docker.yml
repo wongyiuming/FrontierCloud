@@ -17,7 +17,7 @@ jobs:
 
       - name: Prepare CI certificates and environment
         run: |
-          mkdir -p certs data/media
+          mkdir -p certs data/media/ci-multiple
           sudo chown -R 10001:10001 data
           openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
             -keyout certs/privkey.pem \
@@ -94,8 +94,6 @@ jobs:
 
           printf 'RIFF0000WAVEfmt ' > /tmp/ci-one.wav
           printf 'RIFF1111WAVEfmt ' > /tmp/ci-two.wav
-          mkdir -p data/media/ci-multiple
-
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -F 'target_dir=' -F 'relative_path=ci-folder/one.wav' -F 'file=@/tmp/ci-one.wav;type=audio/wav' \
             https://localhost/api/v1/media/admin/upload/item | grep 'ci-folder/one.wav'
