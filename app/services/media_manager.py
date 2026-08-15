@@ -115,10 +115,22 @@ class MediaManager:
                 os.fsync(out.fileno())
             if total == 0 or not MediaManager._signature_ok(ext, head):
                 raise HTTPException(status_code=400, detail="上传失败，文件内容不是受支持的媒体格式")
+            # mkstemp creates files as 0600. The Nginx container uses a
+            # different unprivileged UID and must be able to read media after
+            # FastAPI authorizes an X-Accel-Redirect download.
+            tmp.chmod(0o644)
             os.replace(tmp, destination)
             return str(destination.relative_to(MEDIA_ROOT).as_posix())
         finally:
             tmp.unlink(missing_ok=True)
+
+    @staticmethod
+    def ensure_download_readable(path: Path) -> None:
+        """Repair legacy 0600 uploads before delegating them to Nginx."""
+        mode = path.stat().st_mode
+        readable_mode = mode | 0o044
+        if readable_mode != mode:
+            path.chmod(readable_mode)
 
     @staticmethod
     def folder_upload_target(target_dir: str, relative_path: str) -> tuple[Path, str]:

@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import io
 import json
+import stat
 import tempfile
 import unittest
 import zipfile
@@ -192,7 +193,9 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
                 )
 
             self.assertEqual(result["path"], "测试目录/一.wav")
-            self.assertTrue((root / "测试目录" / "一.wav").is_file())
+            uploaded = root / "测试目录" / "一.wav"
+            self.assertTrue(uploaded.is_file())
+            self.assertTrue(uploaded.stat().st_mode & stat.S_IROTH)
 
     async def test_multiple_files_use_independent_scalar_upload_requests(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -228,6 +231,7 @@ class AdminDownloadContractTests(unittest.IsolatedAsyncioTestCase):
             folder.mkdir()
             media_file = folder / "一 首.wav"
             media_file.write_bytes(b"RIFF0000WAVEfmt ")
+            media_file.chmod(0o600)
             request = Request({
                 "type": "http",
                 "method": "GET",
@@ -247,6 +251,7 @@ class AdminDownloadContractTests(unittest.IsolatedAsyncioTestCase):
                 )
 
             self.assertEqual(response.status_code, 200)
+            self.assertTrue(media_file.stat().st_mode & stat.S_IROTH)
             self.assertEqual(
                 response.headers["x-accel-redirect"],
                 "/_protected_media/%E6%B5%8B%E8%AF%95%E7%9B%AE%E5%BD%95/%E4%B8%80%20%E9%A6%96.wav",

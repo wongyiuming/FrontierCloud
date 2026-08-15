@@ -447,6 +447,11 @@ async def download_objects(
             request,
         )
 
+        # Uploads created before the Nginx download path was introduced may
+        # still be 0600. Repair those lazily so existing media does not fail
+        # with a permission-denied 403 after the internal redirect.
+        MediaManager.ensure_download_readable(path)
+
         # Authentication stays in FastAPI, while Nginx sends the validated file
         # with sendfile. The internal location cannot be requested directly.
         return Response(
