@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import io
+import json
 import tempfile
 import unittest
 import zipfile
@@ -220,6 +221,38 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AdminDownloadContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_single_file_download_is_delegated_to_protected_nginx_location(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            folder = root / "测试目录"
+            folder.mkdir()
+            media_file = folder / "一 首.wav"
+            media_file.write_bytes(b"RIFF0000WAVEfmt ")
+            request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/api/v1/media/admin/download",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+            })
+
+            with (
+                patch.object(media_manager, "MEDIA_ROOT", root),
+                patch.object(admin.admin_service, "audit", new=AsyncMock()),
+            ):
+                response = await admin.download_objects(
+                    request=request,
+                    paths=json.dumps(["测试目录/一 首.wav"], ensure_ascii=False),
+                    session_hash="test-session",
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(
+                response.headers["x-accel-redirect"],
+                "/_protected_media/%E6%B5%8B%E8%AF%95%E7%9B%AE%E5%BD%95/%E4%B8%80%20%E9%A6%96.wav",
+            )
+            self.assertIn("filename*=UTF-8''", response.headers["content-disposition"])
+
     async def test_folder_download_streams_a_valid_zip_without_a_temporary_archive(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir).resolve()

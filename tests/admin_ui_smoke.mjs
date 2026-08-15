@@ -161,6 +161,7 @@ assert(!adminHtml.includes('Artplayer'));
 assert(!adminHtml.includes('id="move"'));
 assert(adminHtml.includes('id="securityPanel"'));
 assert(adminHtml.includes('id="banList"'));
+assert(adminHtml.includes('/static/js/admin.js?v=20260815-2'));
 
 const adminJs = fs.readFileSync('static/js/admin.js', 'utf8');
 assert(!adminJs.includes('response.blob()'));

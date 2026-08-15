@@ -88,6 +88,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
+      - ./data:/app/data:ro
       - ${SSL_CERT_PATH}:/etc/nginx/certs/fullchain.pem:ro
       - ${SSL_KEY_PATH}:/etc/nginx/certs/privkey.pem:ro
     depends_on:

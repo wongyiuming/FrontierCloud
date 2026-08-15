@@ -2,6 +2,7 @@ import json
 import secrets
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -14,7 +15,7 @@ from fastapi import (
     UploadFile,
     Query,
 )
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from app.core.config import settings
 from app.core.admin_log import admin_log_buffer
@@ -446,13 +447,16 @@ async def download_objects(
             request,
         )
 
-        return FileResponse(
-            path,
-            filename=path.name,
+        # Authentication stays in FastAPI, while Nginx sends the validated file
+        # with sendfile. The internal location cannot be requested directly.
+        return Response(
             headers={
-                "Cache-Control": (
-                    "private, no-store"
+                "X-Accel-Redirect": f"/_protected_media/{quote(rel, safe='/')}",
+                "Content-Disposition": (
+                    "attachment; filename*=UTF-8''"
+                    f"{quote(path.name, safe='')}"
                 ),
+                "Cache-Control": "private, no-store",
             },
         )
 

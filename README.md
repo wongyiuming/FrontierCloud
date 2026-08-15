@@ -32,7 +32,50 @@ docker compose down && docker compose up -d --build
 更新:
 ```bash
 git pull https://github.com/wongyiuming/FrontierCloud.git
-docker compose down && docker compose up -d --build
+docker compose build
+docker compose up -d
+```
+
+## 本地 Python 环境
+
+项目继续兼容标准 `pip`，也提供 `uv.lock` 供 uv 复现依赖。
+
+### uv（推荐用于本项目）
+
+```powershell
+uv sync
+uv run python -m unittest discover -s tests -v
+uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+uv 默认使用项目内的 `.venv`。PyCharm 解释器选择：
+
+```text
+<项目目录>\.venv\Scripts\python.exe
+```
+
+### Conda（独立环境）
+
+```powershell
+conda activate frontiercloud
+python -m unittest discover -s tests -v
+uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+conda deactivate
+```
+
+本机 Conda 环境解释器：
+
+```text
+%LOCALAPPDATA%\miniconda3\envs\frontiercloud\python.exe
+```
+
+### 继续使用 pip
+
+激活任意虚拟环境后仍可直接使用：
+
+```powershell
+python -m pip install -e .
+python -m unittest discover -s tests -v
 ```
 
 

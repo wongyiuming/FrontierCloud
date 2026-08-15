@@ -103,6 +103,10 @@ jobs:
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -F 'target_dir=ci-multiple' -F 'file=@/tmp/ci-two.wav;type=audio/wav' \
             https://localhost/api/v1/media/admin/upload/item | grep 'ci-multiple/ci-two.wav'
+          curl -kfsS -b /tmp/admin-cookies.txt \
+            'https://localhost/api/v1/media/admin/download?paths=%5B%22ci-multiple%2Fci-one.wav%22%5D' \
+            -o /tmp/ci-downloaded.wav
+          cmp /tmp/ci-one.wav /tmp/ci-downloaded.wav
           test "$(docker compose exec -T redis redis-cli GET media:catalog:v1:generation)" -ge 3
           curl -kfsS 'https://localhost/api/v1/media/music/category?path=ci-folder' | grep 'one'
           docker compose exec -T redis redis-cli --scan \
