@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from contextlib import suppress
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -117,7 +117,7 @@ def get_favicon():
 
 @app.get("/", include_in_schema=False)
 async def root():
-    return {"message": "Welcome to Office Automation Service. Go to /docs for API testing."}
+    return RedirectResponse(url="/api/v1/media", status_code=307)
 
 
 if __name__ == "__main__":

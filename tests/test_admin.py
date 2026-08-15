@@ -3,6 +3,7 @@ import hashlib
 import io
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -216,6 +217,56 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([result["path"] for result in results], ["批量目录/一.wav", "批量目录/二.wav"])
             self.assertTrue((destination / "一.wav").is_file())
             self.assertTrue((destination / "二.wav").is_file())
+
+
+class AdminDownloadContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_folder_download_streams_a_valid_zip_without_a_temporary_archive(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            folder = root / "测试目录"
+            folder.mkdir()
+            (folder / "一.wav").write_bytes(b"RIFF0000WAVEfmt ")
+            (folder / "二.mp3").write_bytes(b"ID3test")
+
+            with (
+                patch.object(media_manager, "MEDIA_ROOT", root),
+                patch.object(
+                    media_manager.tempfile,
+                    "mkstemp",
+                    side_effect=AssertionError("download must not create a temporary archive"),
+                ),
+            ):
+                stream = await media_manager.MediaManager.build_zip_stream(["测试目录"])
+                payload = b"".join(stream)
+
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                self.assertEqual(
+                    set(archive.namelist()),
+                    {"测试目录/一.wav", "测试目录/二.mp3"},
+                )
+                self.assertEqual(archive.read("测试目录/一.wav"), b"RIFF0000WAVEfmt ")
+
+    async def test_folder_download_does_not_follow_directory_symlinks(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            folder = root / "folder"
+            outside = root / "outside"
+            folder.mkdir()
+            outside.mkdir()
+            (folder / "inside.mp3").write_bytes(b"ID3inside")
+            (outside / "secret.mp3").write_bytes(b"ID3secret")
+
+            try:
+                (folder / "linked").symlink_to(outside, target_is_directory=True)
+            except OSError:
+                self.skipTest("directory symlinks require additional privileges")
+
+            with patch.object(media_manager, "MEDIA_ROOT", root):
+                stream = await media_manager.MediaManager.build_zip_stream(["folder"])
+                payload = b"".join(stream)
+
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                self.assertEqual(archive.namelist(), ["folder/inside.mp3"])
 
 
 if __name__ == "__main__":

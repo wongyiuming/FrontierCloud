@@ -517,18 +517,12 @@ $('hide').onclick = () => {
 $('download').onclick = async () => {
     const paths = [...selected];
     const url = `/api/v1/media/admin/download?paths=${encodeURIComponent(JSON.stringify(paths))}`;
-    const response = await fetch(url);
-    if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        alert(formatErrorDetail(data.detail) || '下载失败');
-        return;
-    }
-    const blob = await response.blob();
     const anchor = document.createElement('a');
-    anchor.href = URL.createObjectURL(blob);
-    anchor.download = paths.length === 1 ? paths[0].split('/').pop() : 'media-download.zip';
+    anchor.href = url;
+    anchor.download = paths.length === 1
+        ? paths[0].split('/').pop()
+        : 'media-download.zip';
     anchor.click();
-    URL.revokeObjectURL(anchor.href);
 };
 
 $('backPublic').onclick = () => { location.href = '/api/v1/media'; };

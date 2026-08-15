@@ -80,7 +80,7 @@ jobs:
 
       - name: Test public and admin flows
         run: |
-          curl -kfsS https://localhost/ | grep "Office Automation Service"
+          curl -kfsSL https://localhost/ | grep "前沿视界"
           curl -kfsS https://localhost/api/v1/health | grep '"status":"healthy"'
           curl -kfsS https://localhost/api/v1/media/ | grep "前沿视界"
           test "$(curl -ksS -o /dev/null -w '%{http_code}' https://localhost/api/v1/media/admin/)" = 401

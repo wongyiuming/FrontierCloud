@@ -5,13 +5,13 @@ import os
 import re
 import shutil
 import tempfile
-import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import text
+from zipstream import ZIP_STORED, ZipStream
 
 from app.core.config import settings
 from app.core.db import engine
@@ -216,22 +216,37 @@ class MediaManager:
         return count
 
     @staticmethod
-    async def build_zip(paths: list[str]) -> Path:
+    async def build_zip_stream(paths: list[str]) -> ZipStream:
         objects = await MediaManager._collect(paths)
         if len(objects) > settings.ADMIN_MAX_DOWNLOAD_ITEMS:
             raise HTTPException(status_code=413, detail="下载对象数量超过限制")
-        tmp = Path(tempfile.mkstemp(prefix="media-download-", suffix=".zip")[1])
-        try:
-            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-                for rel, p in objects:
-                    if p.is_file():
-                        zf.write(p, arcname=rel)
-                    else:
-                        for child in p.rglob("*"):
-                            if child.is_symlink() or not child.is_file():
-                                continue
-                            zf.write(child, arcname=child.relative_to(MEDIA_ROOT).as_posix())
-            return tmp
-        except Exception:
-            tmp.unlink(missing_ok=True)
-            raise
+
+        # Media files are already compressed, so storing them avoids expensive
+        # recompression. ZipStream emits members directly to the HTTP response;
+        # no archive is materialized in /tmp or held in memory.
+        archive = ZipStream(compress_type=ZIP_STORED)
+        seen_names: set[str] = set()
+
+        def add_file(path: Path, archive_name: str) -> None:
+            if archive_name in seen_names or path.is_symlink() or not path.is_file():
+                return
+            seen_names.add(archive_name)
+            archive.add_path(path, arcname=archive_name)
+
+        for rel, path in objects:
+            if path.is_file():
+                add_file(path, rel)
+                continue
+
+            for current, directories, filenames in os.walk(path, followlinks=False):
+                current_path = Path(current)
+                directories[:] = [
+                    name
+                    for name in directories
+                    if not (current_path / name).is_symlink()
+                ]
+                for filename in filenames:
+                    child = current_path / filename
+                    add_file(child, child.relative_to(MEDIA_ROOT).as_posix())
+
+        return archive

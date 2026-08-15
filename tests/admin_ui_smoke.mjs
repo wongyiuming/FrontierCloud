@@ -162,4 +162,8 @@ assert(!adminHtml.includes('id="move"'));
 assert(adminHtml.includes('id="securityPanel"'));
 assert(adminHtml.includes('id="banList"'));
 
+const adminJs = fs.readFileSync('static/js/admin.js', 'utf8');
+assert(!adminJs.includes('response.blob()'));
+assert(adminJs.includes('anchor.href = url'));
+
 console.log('admin-ui-smoke-ok');

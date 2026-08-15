@@ -14,8 +14,7 @@ from fastapi import (
     UploadFile,
     Query,
 )
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from starlette.background import BackgroundTask
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 from app.core.config import settings
 from app.core.admin_log import admin_log_buffer
@@ -457,7 +456,7 @@ async def download_objects(
             },
         )
 
-    archive = await MediaManager.build_zip(
+    archive = await MediaManager.build_zip_stream(
         items,
     )
 
@@ -474,19 +473,16 @@ async def download_objects(
         request,
     )
 
-    return FileResponse(
+    return StreamingResponse(
         archive,
-        filename="media-download.zip",
         media_type="application/zip",
         headers={
-            "Cache-Control": (
-                "private, no-store"
-            ),
+            "Content-Disposition": 'attachment; filename="media-download.zip"',
+            "Cache-Control": "private, no-store",
+            # Do not let Nginx turn the response stream into another disk-backed
+            # temporary archive when proxy buffering is enabled globally.
+            "X-Accel-Buffering": "no",
         },
-        background=BackgroundTask(
-            archive.unlink,
-            missing_ok=True,
-        ),
     )
 
 
