@@ -15,9 +15,9 @@ class Settings(BaseSettings):
     MYSQL_PASSWORD: str = Field(..., validation_alias="MYSQL_PASSWORD")
     MYSQL_ROOT_PASSWORD: str = Field(..., validation_alias="MYSQL_ROOT_PASSWORD")
 
-    ADMIN_TOKEN_TTL: int = Field(900, validation_alias="ADMIN_TOKEN_TTL")
-    ADMIN_TOKEN_INITIAL_TTL: int = Field(86400, validation_alias="ADMIN_TOKEN_INITIAL_TTL")
-    ADMIN_SESSION_TTL: int = Field(900, validation_alias="ADMIN_SESSION_TTL")
+    ADMIN_TOKEN_TTL: int = Field(900, ge=1, validation_alias="ADMIN_TOKEN_TTL")
+    ADMIN_TOKEN_ISSUE_INTERVAL: int = Field(900, ge=1, validation_alias="ADMIN_TOKEN_ISSUE_INTERVAL")
+    ADMIN_SESSION_TTL: int = Field(900, ge=1, validation_alias="ADMIN_SESSION_TTL")
     ADMIN_MAX_FAILED_ATTEMPTS_PER_IP: int = Field(10, validation_alias="ADMIN_MAX_FAILED_ATTEMPTS_PER_IP")
     ADMIN_FAILED_WINDOW: int = Field(300, validation_alias="ADMIN_FAILED_WINDOW")
     ADMIN_MAX_UPLOAD_FILE_SIZE: int = Field(800 * 1024 * 1024, validation_alias="ADMIN_MAX_UPLOAD_FILE_SIZE")
@@ -64,6 +64,9 @@ class Settings(BaseSettings):
         if environment not in {"development", "test", "production"}:
             raise ValueError("ENVIRONMENT must be development, test, or production")
         self.ENVIRONMENT = environment
+
+        if self.ADMIN_TOKEN_ISSUE_INTERVAL > self.ADMIN_TOKEN_TTL:
+            raise ValueError("ADMIN_TOKEN_ISSUE_INTERVAL must not exceed ADMIN_TOKEN_TTL")
 
         if environment != "production":
             return self

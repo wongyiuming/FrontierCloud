@@ -31,7 +31,7 @@ jobs:
           WALL_TTL=240
           MYSQL_URL=mysql+asyncmy://media_admin:ci_mysql_password@mysql:3306/office_automation
           ADMIN_TOKEN_TTL=900
-          ADMIN_TOKEN_INITIAL_TTL=3600
+          ADMIN_TOKEN_ISSUE_INTERVAL=900
           ADMIN_SESSION_TTL=900
           ADMIN_MAX_FAILED_ATTEMPTS_PER_IP=10
           ADMIN_FAILED_WINDOW=300

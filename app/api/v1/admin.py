@@ -93,8 +93,9 @@ async def issue_token(
 
     return {
         "status": "issued",
-        "expires_in": settings.ADMIN_TOKEN_INITIAL_TTL,
+        "expires_in": settings.ADMIN_TOKEN_TTL + admin_service.TOKEN_ISSUE_OVERLAP_SECONDS,
         "active_ttl": settings.ADMIN_TOKEN_TTL,
+        "automatic_issue_interval": settings.ADMIN_TOKEN_ISSUE_INTERVAL,
         "token": token,
     }
 

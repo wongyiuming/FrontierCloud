@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import io
 import tempfile
@@ -67,7 +68,7 @@ class _FakeRedis:
 
 
 class AdminTokenLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    async def test_pending_token_uses_claim_window_then_switches_to_sliding_ttl(self):
+    async def test_each_token_starts_with_and_keeps_its_own_sliding_ttl(self):
         fake_redis = _FakeRedis()
         request = Request({
             "type": "http",
@@ -84,7 +85,6 @@ class AdminTokenLifecycleTests(unittest.IsolatedAsyncioTestCase):
             patch.object(admin_service, "redis_client", fake_redis),
             patch.object(admin_service, "engine", _FakeEngine()),
             patch.object(admin_service.secrets, "token_urlsafe", return_value=token),
-            patch.object(admin_service.settings, "ADMIN_TOKEN_INITIAL_TTL", 86400),
             patch.object(admin_service.settings, "ADMIN_TOKEN_TTL", 900),
             patch("builtins.print") as print_mock,
             patch.object(admin_service, "append_admin_log") as append_log_mock,
@@ -92,8 +92,11 @@ class AdminTokenLifecycleTests(unittest.IsolatedAsyncioTestCase):
             issued = await admin_service.issue_admin_token()
             self.assertEqual(issued, token)
             self.assertEqual(fake_redis.values[token_key], "pending")
-            self.assertEqual(fake_redis.ttls[token_key], 86400)
-            self.assertNotIn(token, print_mock.call_args.args[0])
+            self.assertEqual(
+                fake_redis.ttls[token_key],
+                900 + admin_service.TOKEN_ISSUE_OVERLAP_SECONDS,
+            )
+            self.assertIn(token, print_mock.call_args.args[0])
             self.assertNotIn(token, append_log_mock.call_args.args[0])
 
             fake_redis.values[fail_key] = "3"
@@ -103,6 +106,56 @@ class AdminTokenLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_redis.values[token_key], "active")
         self.assertEqual(fake_redis.ttls[token_key], 900)
         self.assertNotIn(fail_key, fake_redis.values)
+
+    async def test_new_tokens_coexist_without_replacing_an_active_older_token(self):
+        fake_redis = _FakeRedis()
+        request = Request({
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/media/admin/elevate",
+            "headers": [(b"user-agent", b"test")],
+            "client": ("203.0.113.8", 12345),
+        })
+        tokens = ["token-a", "token-b", "token-c"]
+
+        with (
+            patch.object(admin_service, "redis_client", fake_redis),
+            patch.object(admin_service, "engine", _FakeEngine()),
+            patch.object(admin_service.secrets, "token_urlsafe", side_effect=tokens),
+            patch.object(admin_service.settings, "ADMIN_TOKEN_TTL", 900),
+            patch("builtins.print"),
+            patch.object(admin_service, "append_admin_log"),
+        ):
+            for _token in tokens:
+                await admin_service.issue_admin_token()
+            await admin_service.verify_admin_token("token-a", request)
+
+        for token in tokens:
+            key = admin_service.TOKEN_PREFIX + hashlib.sha256(token.encode()).hexdigest()
+            self.assertIn(key, fake_redis.values)
+        active_key = admin_service.TOKEN_PREFIX + hashlib.sha256(b"token-a").hexdigest()
+        self.assertEqual(fake_redis.values[active_key], "active")
+        self.assertEqual(fake_redis.ttls[active_key], 900)
+        for token in ("token-b", "token-c"):
+            key = admin_service.TOKEN_PREFIX + hashlib.sha256(token.encode()).hexdigest()
+            self.assertEqual(
+                fake_redis.ttls[key],
+                900 + admin_service.TOKEN_ISSUE_OVERLAP_SECONDS,
+            )
+
+    async def test_periodic_issuer_generates_the_next_independent_token(self):
+        issue_mock = AsyncMock(side_effect=[None, asyncio.CancelledError])
+        sleep_mock = AsyncMock(return_value=None)
+        with (
+            patch.object(admin_service, "issue_admin_token", new=issue_mock),
+            patch.object(admin_service.asyncio, "sleep", new=sleep_mock),
+            patch.object(admin_service.settings, "ADMIN_TOKEN_ISSUE_INTERVAL", 900),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await admin_service.run_admin_token_issuer()
+
+        self.assertEqual(issue_mock.await_count, 2)
+        sleep_mock.assert_any_await(900)
 
 
 class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):

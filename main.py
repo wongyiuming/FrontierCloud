@@ -1,7 +1,9 @@
+import asyncio
 import os
 import time
 import urllib.parse
 from contextlib import asynccontextmanager
+from contextlib import suppress
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, Response
@@ -13,7 +15,7 @@ from app.core.admin_log import append_admin_log, sanitize_log_value
 from app.core.client_ip import client_ip
 from app.core.db import init_db
 from app.middleware.ip_security import IPSecurityMiddleware
-from app.services.admin_service import issue_admin_token
+from app.services.admin_service import issue_admin_token, run_admin_token_issuer
 from app.services.ip_security import initialize_ip_security_cache
 
 
@@ -22,7 +24,16 @@ async def lifespan(app: FastAPI):
     await init_db()
     await initialize_ip_security_cache()
     await issue_admin_token()
-    yield
+    token_issuer_task = asyncio.create_task(
+        run_admin_token_issuer(),
+        name="admin-token-issuer",
+    )
+    try:
+        yield
+    finally:
+        token_issuer_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await token_issuer_task
 
 
 app = FastAPI(title="Office Automation Service", lifespan=lifespan)

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,10 @@ from app.core.redis import redis_client
 TOKEN_PREFIX = "admin:token:"
 SESSION_PREFIX = "admin:session:"
 FAIL_PREFIX = "admin:fail:"
+TOKEN_ISSUER_RETRY_SECONDS = 5
+# The next token is issued every 900 seconds by default. A small overlap absorbs
+# event-loop and Redis scheduling jitter, so the valid-token set never becomes empty.
+TOKEN_ISSUE_OVERLAP_SECONDS = 5
 
 
 def _now() -> datetime:
@@ -36,13 +41,22 @@ def _ua(request: Request) -> str:
 async def issue_admin_token() -> str:
     token = secrets.token_urlsafe(32)
     token_hash = _hash(token)
-    expires_at = _now() + timedelta(seconds=settings.ADMIN_TOKEN_INITIAL_TTL)
+    pending_ttl = settings.ADMIN_TOKEN_TTL + TOKEN_ISSUE_OVERLAP_SECONDS
+    expires_at = _now() + timedelta(seconds=pending_ttl)
     await redis_client.set(
         TOKEN_PREFIX + token_hash,
         "pending",
-        ex=settings.ADMIN_TOKEN_INITIAL_TTL,
+        ex=pending_ttl,
     )
     async with engine.begin() as conn:
+        await conn.execute(
+            text("""
+                UPDATE admin_token_history
+                SET status = 'expired'
+                WHERE status = 'active' AND expires_at <= :now
+            """),
+            {"now": _now()},
+        )
         await conn.execute(
             text("""
                 INSERT INTO admin_token_history
@@ -52,12 +66,35 @@ async def issue_admin_token() -> str:
             {"token_hash": token_hash, "created_at": _now(), "expires_at": expires_at},
         )
     log_line = (
-        "[ADMIN_TOKEN] temporary admin token issued "
+        f"[ADMIN_TOKEN] temporary admin token={token} "
         f"created_at={_now().isoformat()} claim_expires_at={expires_at.isoformat()}"
     )
     print(log_line, flush=True)
-    append_admin_log(log_line)
+    append_admin_log(
+        "[ADMIN_TOKEN] temporary admin token issued "
+        f"created_at={_now().isoformat()} claim_expires_at={expires_at.isoformat()}"
+    )
     return token
+
+
+async def run_admin_token_issuer() -> None:
+    """Issue independent tokens forever; retry transient failures without waiting a full cycle."""
+    while True:
+        await asyncio.sleep(settings.ADMIN_TOKEN_ISSUE_INTERVAL)
+        while True:
+            try:
+                await issue_admin_token()
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                message = (
+                    "[ADMIN_TOKEN] automatic issue failed; "
+                    f"retrying in {TOKEN_ISSUER_RETRY_SECONDS}s: {exc}"
+                )
+                print(message, flush=True)
+                append_admin_log(message)
+                await asyncio.sleep(TOKEN_ISSUER_RETRY_SECONDS)
 
 
 async def verify_admin_token(token: str, request: Request) -> str:
@@ -85,8 +122,8 @@ async def verify_admin_token(token: str, request: Request) -> str:
             )
         raise HTTPException(status_code=403, detail="特权验证失败")
 
-    # An unused token has a longer, finite claim window. Its first successful
-    # use activates the normal short sliding TTL used by admin sessions.
+    # Every token owns an independent sliding TTL. Verifying this token refreshes
+    # only this token and never invalidates or replaces other issued tokens.
     await redis_client.set(key, "active", ex=settings.ADMIN_TOKEN_TTL)
     await redis_client.delete(fail_key)
     async with engine.begin() as conn:
@@ -167,8 +204,25 @@ async def require_admin(request: Request) -> str:
         await redis_client.delete(key)
         raise HTTPException(status_code=401, detail="特权凭证已过期，请重新提权")
 
+    now = _now()
+    token_expires_at = now + timedelta(seconds=settings.ADMIN_TOKEN_TTL)
     await redis_client.expire(key, settings.ADMIN_SESSION_TTL)
     await redis_client.expire(TOKEN_PREFIX + token_hash, settings.ADMIN_TOKEN_TTL)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("""
+                UPDATE admin_token_history
+                SET last_used_at = :now,
+                    expires_at = :expires_at,
+                    status = 'active'
+                WHERE token_hash = :token_hash
+            """),
+            {
+                "now": now,
+                "expires_at": token_expires_at,
+                "token_hash": token_hash,
+            },
+        )
     return session_hash
 
 

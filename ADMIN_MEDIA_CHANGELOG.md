@@ -11,7 +11,7 @@
 - `app/services/media_catalog_cache.py`：Redis 分类/曲目缓存、版本化主动失效与故障降级。
 - `app/core/client_ip.py`、`app/middleware/ip_security.py`：可信 Nginx 单一真实 IP、非法 API 识别与请求封禁。
 - `app/services/ip_security.py`：Redis 滑动窗口/24 小时封禁、MySQL 审计与永久白名单。
-- `main.py`：保留旧 `[LOG]`，增加 `[REQUEST]` 中文 Query 渲染日志，并启动时生成临时 Admin Token。
+- `main.py`：保留旧 `[LOG]`，增加 `[REQUEST]` 中文 Query 渲染日志，并运行周期性临时 Admin Token 签发任务。
 - `static/media/index.html`：增加“提权”。
 - `static/media/admin.html`、`static/css/admin.css`、`static/js/admin.js`：Admin 文件管理、双上传进度条与安全日志 UI。
 - `docker-compose.yaml`：新增 MySQL、服务 healthcheck 与 10 MiB × 3 的容器日志轮转。
@@ -20,7 +20,7 @@
 
 ## 临时 Token
 
-Web 容器启动后会自动生成 32-byte URL-safe Token。未使用的 Token 默认有 24 小时领取窗口；首次提权成功后切换为 15 分钟滑动 TTL。MySQL 只保存 SHA-256 摘要；明文只输出到 web 容器 stdout，因此宿主机可以使用 `docker logs -f office_automation_web` 获取。
+Web 容器启动时会生成一枚 32-byte URL-safe Token，之后固定每 15 分钟再生成一枚。待领取 Token 在交接时保留 5 秒重叠，避免调度抖动产生真空；成功使用后，每枚 Token 都有独立的 15 分钟滑动 TTL。新 Token 不覆盖旧 Token，持续被 Admin Session 使用的旧 Token 会独立续期，因此可以比后生成但未使用的 Token 存活更久。MySQL 只保存 SHA-256 摘要；明文只输出到 web 容器 stdout，因此宿主机可以使用 `docker logs -f office_automation_web` 获取。
 
 也保留了 `/api/v1/media/admin/token/issue`，需要 `X-Token: WALL_ADMIN_TOKEN` 才能重新签发。
 

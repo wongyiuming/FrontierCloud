@@ -35,6 +35,20 @@ class ProductionConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(settings.ENVIRONMENT, "production")
 
+    def test_token_issue_interval_cannot_create_a_lifecycle_gap(self):
+        with self.assertRaises(ValidationError):
+            Settings(
+                _env_file=None,
+                ENVIRONMENT="test",
+                REDIS_URL="redis://redis:6379/0",
+                WALL_ADMIN_TOKEN="test-token",
+                MYSQL_URL="mysql+asyncmy://media_admin:test@mysql/db",
+                MYSQL_PASSWORD="test",
+                MYSQL_ROOT_PASSWORD="test",
+                ADMIN_TOKEN_TTL=900,
+                ADMIN_TOKEN_ISSUE_INTERVAL=901,
+            )
+
     def test_web_container_runs_with_reduced_filesystem_and_process_privileges(self):
         if os.name != "posix" or not Path("/.dockerenv").exists():
             self.skipTest("container runtime hardening is verified inside Docker")
