@@ -18,4 +18,4 @@ __pycache__
 
 # 排除本地敏感数据
 .env
-tests/
+certs/

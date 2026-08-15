@@ -24,6 +24,13 @@ COPY --chmod=0644 pyproject.toml .
 # Git worktree permissions can be restrictive on the host. The unprivileged
 # runtime user must always be able to import the application entry point.
 COPY --chmod=0644 main.py .
+COPY app ./app
+COPY static ./static
+COPY tests ./tests
+
+# Runtime code is immutable inside the image. Normalize permissions after COPY
+# so a restrictive host umask cannot make source files unreadable by UID 10001.
+RUN chmod -R a+rX /app/app /app/static /app/tests
 
 # 安装 Python 依赖（使用已修复归档/入口点漏洞的 pip）
 # 注意：如果你用 poetry，可改用 poetry export

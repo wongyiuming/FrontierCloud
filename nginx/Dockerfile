@@ -4,7 +4,9 @@ FROM nginx:1.26-alpine
 RUN rm /etc/nginx/conf.d/default.conf
 
 # 注入env必须用template
-COPY nginx.conf /etc/nginx/templates/nginx.conf.template
+COPY nginx/nginx.conf /etc/nginx/templates/nginx.conf.template
+COPY static /app/static
+RUN chmod -R a+rX /app/static
 
 EXPOSE 80 443
 

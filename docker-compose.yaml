@@ -20,10 +20,7 @@ services:
       mysql:
         condition: service_healthy
     volumes:
-      - ./app:/app/app:ro
       - ./data:/app/data
-      - ./static:/app/static:ro
-      - ./tests:/app/tests:ro
       - web_tmp:/tmp
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
@@ -79,7 +76,9 @@ services:
         max-file: "3"
 
   nginx:
-    build: ./nginx
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
     container_name: office_automation_nginx
     restart: always
     environment:
@@ -89,7 +88,6 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./static:/app/static:ro
       - ${SSL_CERT_PATH}:/etc/nginx/certs/fullchain.pem:ro
       - ${SSL_KEY_PATH}:/etc/nginx/certs/privkey.pem:ro
     depends_on:

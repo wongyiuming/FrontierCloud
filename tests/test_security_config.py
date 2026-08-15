@@ -55,6 +55,8 @@ class ProductionConfigurationTests(unittest.TestCase):
 
         self.assertEqual(os.geteuid(), 10001)
         self.assertTrue(os.access(Path("/app/main.py"), os.R_OK))
+        self.assertTrue(os.access(Path("/app/app/api/v1/endpoints.py"), os.R_OK))
+        self.assertTrue(os.access(Path("/app/static/media/index.html"), os.R_OK))
         process_status = Path("/proc/self/status").read_text(encoding="utf-8")
         status_fields = dict(
             line.split(":", 1) for line in process_status.splitlines() if ":" in line
