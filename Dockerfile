@@ -20,8 +20,10 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
-COPY pyproject.toml .
-COPY main.py .
+COPY --chmod=0644 pyproject.toml .
+# Git worktree permissions can be restrictive on the host. The unprivileged
+# runtime user must always be able to import the application entry point.
+COPY --chmod=0644 main.py .
 
 # 安装 Python 依赖（使用已修复归档/入口点漏洞的 pip）
 # 注意：如果你用 poetry，可改用 poetry export
