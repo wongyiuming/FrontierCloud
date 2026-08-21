@@ -5,8 +5,9 @@ import urllib.parse
 from contextlib import asynccontextmanager
 from contextlib import suppress
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi import Depends, FastAPI
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -15,6 +16,7 @@ from app.core.admin_log import append_admin_log, sanitize_log_value
 from app.core.client_ip import client_ip
 from app.core.db import init_db
 from app.middleware.ip_security import IPSecurityMiddleware
+from app.services import admin_service
 from app.services.admin_service import issue_admin_token, run_admin_token_issuer
 from app.services.ip_security import initialize_ip_security_cache
 
@@ -36,7 +38,13 @@ async def lifespan(app: FastAPI):
             await token_issuer_task
 
 
-app = FastAPI(title="Office Automation Service", lifespan=lifespan)
+app = FastAPI(
+    title="Office Automation Service",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -104,6 +112,27 @@ def render_query_log(target: str) -> str:
 app.add_middleware(RealIPLogMiddleware)
 app.add_middleware(IPSecurityMiddleware)
 app.include_router(api_v1_router, prefix="/api/v1")
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def protected_openapi(_session: str = Depends(admin_service.require_admin)):
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", include_in_schema=False)
+async def protected_docs(_session: str = Depends(admin_service.require_admin)):
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title=f"{app.title} - Swagger UI",
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def protected_redoc(_session: str = Depends(admin_service.require_admin)):
+    return get_redoc_html(
+        openapi_url="/openapi.json",
+        title=f"{app.title} - ReDoc",
+    )
 
 FAVICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "favicon.ico")
 
