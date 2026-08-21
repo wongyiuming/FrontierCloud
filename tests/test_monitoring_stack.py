@@ -33,6 +33,11 @@ class MonitoringStackTests(unittest.TestCase):
         self.assertIn("--storage.tsdb.retention.time=24h", compose)
         self.assertIn("--storage.tsdb.retention.size=6GB", compose)
 
+    def test_renderer_uses_python39_compatible_file_writes(self):
+        renderer = (MONITORING / "render_config.py").read_text(encoding="utf-8")
+        self.assertNotIn(".write_text(", renderer)
+        self.assertIn('.open("w", encoding="utf-8", newline="\\n")', renderer)
+
     def test_alertmanager_is_telegram_only_and_sends_resolved(self):
         template = (MONITORING / "templates" / "alertmanager.yml.template").read_text(encoding="utf-8")
         self.assertIn("telegram_configs:", template)

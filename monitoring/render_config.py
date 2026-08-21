@@ -30,7 +30,8 @@ def require(values: dict[str, str], name: str) -> str:
 
 def write_secret(path: Path, value: str) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(value + "\n", encoding="utf-8", newline="\n")
+    with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(value + "\n")
     os.chmod(temporary, 0o600)
     temporary.replace(path)
 
@@ -43,7 +44,8 @@ def render(template_name: str, output_name: str, replacements: dict[str, str]) -
         raise SystemExit(f"unresolved placeholder in {template_name}")
     output = ROOT / "generated" / output_name
     temporary = output.with_suffix(output.suffix + ".tmp")
-    temporary.write_text(value, encoding="utf-8", newline="\n")
+    with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(value)
     os.chmod(temporary, 0o600)
     temporary.replace(output)
 
