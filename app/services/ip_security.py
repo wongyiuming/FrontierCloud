@@ -216,9 +216,9 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
             await conn.execute(text("""
                 INSERT INTO ip_auto_ban_events
                 (ip_address, trigger_count, window_started_at, banned_at, expires_at,
-                 last_method, last_path, user_agent, status)
+                 last_method, last_path, user_agent, ban_kind, status)
                 VALUES (:ip, :count, :window_start, :banned_at, :expires_at,
-                        :method, :path, :ua, 'active')
+                        :method, :path, :ua, 'auto', 'active')
             """), {
                 "ip": ip,
                 "count": count,
@@ -253,6 +253,67 @@ async def unban_ip(ip_value: str, session_hash: str, status: str = "unbanned") -
             WHERE ip_address=:ip AND status='active'
         """), {"status": status, "now": now, "session": session_hash, "ip": ip})
     return ip
+
+
+async def manual_ban_ip(ip_value: str, session_hash: str, reason: str) -> dict[str, Any]:
+    ip = normalize_ip(ip_value)
+    reason = str(reason or "").strip()
+    if not reason or len(reason) > 255:
+        raise ValueError("Manual ban reason is required")
+    if is_security_exempt(ip):
+        raise ValueError("Security exempt addresses cannot be banned")
+    now = _utcnow()
+    expires_at = now + timedelta(seconds=settings.SECURITY_AUTO_BAN_TTL)
+    payload = {
+        "ip": ip,
+        "trigger_count": 0,
+        "window_started_at": now.isoformat(),
+        "banned_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "last_method": "ADMIN",
+        "last_path": "manual-reban",
+    }
+    async with engine.begin() as conn:
+        whitelisted = await conn.scalar(
+            text("SELECT 1 FROM ip_permanent_whitelist WHERE ip_address=:ip LIMIT 1"),
+            {"ip": ip},
+        )
+        if whitelisted:
+            raise ValueError("Whitelisted addresses cannot be banned")
+        active = await conn.scalar(text("""
+            SELECT 1 FROM ip_auto_ban_events
+            WHERE ip_address=:ip AND status='active' AND expires_at > :now
+            LIMIT 1
+        """), {"ip": ip, "now": now})
+        if active:
+            raise ValueError("Address is already actively banned")
+        inserted = await conn.execute(text("""
+            INSERT INTO ip_auto_ban_events
+            (ip_address, trigger_count, window_started_at, banned_at, expires_at,
+             last_method, last_path, user_agent, ban_kind, reason,
+             created_by_session_hash, status)
+            VALUES (:ip, 0, :now, :now, :expires_at,
+                    'ADMIN', 'manual-reban', NULL, 'manual', :reason,
+                    :session_hash, 'active')
+        """), {
+            "ip": ip,
+            "now": now,
+            "expires_at": expires_at,
+            "reason": reason,
+            "session_hash": session_hash,
+        })
+        event_id = int(inserted.lastrowid)
+    await redis_client.set(
+        _ban_key(ip),
+        json.dumps(payload, ensure_ascii=False),
+        ex=settings.SECURITY_AUTO_BAN_TTL,
+    )
+    await redis_client.zadd(RECENT_BANS_KEY, {ip: now.timestamp()})
+    append_admin_log(
+        f"[IP_SECURITY] manually banned ip={ip} event_id={event_id} "
+        f"expires_at={expires_at.isoformat()} reason={reason[:128]}"
+    )
+    return {"id": event_id, "ip": ip, "expires_at": expires_at.isoformat()}
 
 
 async def add_whitelist(ip_value: str, session_hash: str, note: str = "") -> str:
@@ -327,7 +388,8 @@ async def list_security_history(
         active_ban_count = int(active_count_result.scalar_one())
         ban_result = await conn.execute(text("""
             SELECT id, ip_address, trigger_count, window_started_at, banned_at, expires_at,
-                   last_method, last_path, status, released_at, released_by_session_hash
+                   last_method, last_path, status, released_at, released_by_session_hash,
+                   ban_kind, reason, created_by_session_hash
             FROM ip_auto_ban_events
         """ + where_sql + """
             ORDER BY banned_at DESC
@@ -360,6 +422,9 @@ async def list_security_history(
             "whitelisted": str(row["ip_address"]) in whitelist,
             "released_at": row["released_at"].isoformat() if row["released_at"] else None,
             "released_by_session_hash": row["released_by_session_hash"],
+            "ban_kind": row["ban_kind"],
+            "reason": row["reason"],
+            "created_by_session_hash": row["created_by_session_hash"],
         })
 
     return {

@@ -200,6 +200,13 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("status = :status", source)
         self.assertIn("LIMIT :limit OFFSET :offset", source)
 
+    def test_manual_reban_creates_a_new_audit_event(self):
+        source = inspect.getsource(ip_security.manual_ban_ip)
+        self.assertIn("INSERT INTO ip_auto_ban_events", source)
+        self.assertIn("'manual'", source)
+        self.assertIn("created_by_session_hash", source)
+        self.assertNotIn("UPDATE ip_auto_ban_events", source)
+
 
 class AdminAuthenticationCoverageTests(unittest.TestCase):
     def test_every_admin_view_route_except_bootstrap_requires_session(self):

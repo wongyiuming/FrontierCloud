@@ -66,6 +66,9 @@ async def init_db() -> None:
                 last_method VARCHAR(16) NULL,
                 last_path VARCHAR(2048) NULL,
                 user_agent VARCHAR(512) NULL,
+                ban_kind VARCHAR(16) NOT NULL DEFAULT 'auto',
+                reason VARCHAR(255) NULL,
+                created_by_session_hash CHAR(64) NULL,
                 status VARCHAR(32) NOT NULL DEFAULT 'active',
                 released_at DATETIME(6) NULL,
                 released_by_session_hash CHAR(64) NULL,
@@ -74,6 +77,22 @@ async def init_db() -> None:
                 INDEX idx_ip_ban_expiry (expires_at, status)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """))
+        for column_name, definition in (
+            ("ban_kind", "VARCHAR(16) NOT NULL DEFAULT 'auto'"),
+            ("reason", "VARCHAR(255) NULL"),
+            ("created_by_session_hash", "CHAR(64) NULL"),
+        ):
+            exists = await conn.scalar(text("""
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_schema=DATABASE()
+                  AND table_name='ip_auto_ban_events'
+                  AND column_name=:column_name
+            """), {"column_name": column_name})
+            if not exists:
+                await conn.execute(text(
+                    f"ALTER TABLE ip_auto_ban_events ADD COLUMN {column_name} {definition}"
+                ))
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS ip_permanent_whitelist (
                 ip_address VARCHAR(45) NOT NULL PRIMARY KEY,
