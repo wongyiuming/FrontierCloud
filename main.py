@@ -23,23 +23,33 @@ from app.middleware.ip_security import IPSecurityMiddleware
 from app.services import admin_service
 from app.services.admin_service import issue_admin_token, run_admin_token_issuer
 from app.services.ip_security import initialize_ip_security_cache
+from app.services.wall_store import wall_store
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     await initialize_ip_security_cache()
+    await wall_store.initialize()
     await issue_admin_token()
     token_issuer_task = asyncio.create_task(
         run_admin_token_issuer(),
         name="admin-token-issuer",
     )
+    wall_cleanup_task = asyncio.create_task(
+        wall_store.run_cleanup(),
+        name="wall-ciphertext-cleanup",
+    )
     try:
         yield
     finally:
         token_issuer_task.cancel()
+        wall_cleanup_task.cancel()
         with suppress(asyncio.CancelledError):
             await token_issuer_task
+        with suppress(asyncio.CancelledError):
+            await wall_cleanup_task
+        await wall_store.shutdown()
 
 
 app = FastAPI(

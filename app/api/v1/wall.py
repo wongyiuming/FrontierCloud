@@ -1,55 +1,137 @@
+from __future__ import annotations
+
 import os
-import secrets
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
-from app.core.client_ip import client_ip
 from app.core.config import settings
-from app.services.wall import wall_service
+from app.services.wall_session import AVATARS, wall_sessions
+from app.services.wall_store import TEXT_CIPHERTEXT_LIMIT, wall_store
+
 
 router = APIRouter()
-
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-STATIC_PATH = os.path.join(BASE_DIR)
+STATIC_PATH = os.path.join(BASE_DIR, "static", "wall", "index.html")
+
+
+class AvatarSelection(BaseModel):
+    avatar_id: str
+
 
 @router.get("", include_in_schema=False)
 async def read_wall_index():
-    return FileResponse(os.path.join(STATIC_PATH, "static","wall", "index.html"))
+    return FileResponse(STATIC_PATH, headers={"Cache-Control": "no-store"})
 
-@router.get("/list")
-async def list_posts():
-    return await wall_service.get_all()
 
-@router.post("/publish")
-async def create_post(
+@router.get("/avatars")
+async def list_avatars():
+    return {"avatars": AVATARS, "session_ttl_seconds": settings.WALL_SESSION_TTL}
+
+
+@router.post("/session")
+async def create_session(selection: AvatarSelection, response: Response):
+    try:
+        session = await wall_sessions.create(selection.avatar_id, response)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "avatar_id": session.avatar_id,
+        "csrf_token": session.csrf_token,
+        "expires_at": session.expires_at,
+    }
+
+
+@router.get("/session")
+async def current_session(request: Request):
+    session = await wall_sessions.current(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="匿名会话不存在或已过期")
+    return {
+        "avatar_id": session.avatar_id,
+        "csrf_token": session.csrf_token,
+        "expires_at": session.expires_at,
+    }
+
+
+@router.delete("/session", status_code=204)
+async def leave_session(request: Request, response: Response):
+    await wall_sessions.destroy(request, response)
+
+
+@router.get("/messages")
+async def list_messages(request: Request):
+    await wall_sessions.require(request)
+    return {"messages": await wall_store.list_messages(), "ttl_seconds": settings.WALL_TTL}
+
+
+async def _read_encrypted_payload(upload: UploadFile, maximum: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > maximum:
+            raise HTTPException(status_code=413, detail="加密内容超过大小限制")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post("/messages", status_code=201)
+async def publish_message(
     request: Request,
-    content: str = Query(..., min_length=1, max_length=2000),
-    x_token: str = Header(None),
+    kind: str = Form(...),
+    mime_type: str = Form(...),
+    nonce: str = Form(...),
+    key: str = Form(...),
+    payload: UploadFile = File(...),
+    x_wall_csrf: str | None = Header(None),
 ):
-    is_admin = bool(x_token) and secrets.compare_digest(x_token, settings.WALL_ADMIN_TOKEN)
-    if not await wall_service.can_perform_action(request, is_admin):
-        raise HTTPException(status_code=429, detail="操作太频繁，请冷却 4 分钟")
-    return await wall_service.add_post(content, client_ip(request.scope))
+    session = await wall_sessions.require(request, x_wall_csrf)
+    if not await wall_sessions.allow_action(request, "publish", 15):
+        raise HTTPException(status_code=429, detail="发送过于频繁，请稍后重试")
+    maximum = wall_store.maximum_image_ciphertext_size if kind == "image" else TEXT_CIPHERTEXT_LIMIT
+    ciphertext = await _read_encrypted_payload(payload, maximum)
+    try:
+        message = await wall_store.publish(
+            kind=kind,
+            mime_type=mime_type,
+            nonce=nonce,
+            encoded_key=key,
+            ciphertext=ciphertext,
+            avatar_id=session.avatar_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"message": message}
 
-@router.post("/comment/{post_id}")
-async def create_comment(
-    post_id: str,
+
+@router.post("/messages/{message_id}/reveal")
+async def reveal_message(
+    message_id: str,
     request: Request,
-    content: str = Query(..., min_length=1, max_length=2000),
-    x_token: str = Header(None),
+    x_wall_csrf: str | None = Header(None),
 ):
-    is_admin = bool(x_token) and secrets.compare_digest(x_token, settings.WALL_ADMIN_TOKEN)
-    if not await wall_service.can_perform_action(request, is_admin):
-        raise HTTPException(status_code=429, detail="冷却中")
-    res = await wall_service.add_comment(post_id, content, client_ip(request.scope))
-    if not res:
-        raise HTTPException(status_code=404, detail="该帖已焚毁")
-    return res
-
-@router.delete("/delete/{post_id}")
-async def delete_post(post_id: str, x_token: str = Header(None)):
-    if not x_token or not secrets.compare_digest(x_token, settings.WALL_ADMIN_TOKEN):
-        raise HTTPException(status_code=403, detail="无权操作")
-    await wall_service.delete_post(post_id)
-    return {"status": "deleted"}
+    await wall_sessions.require(request, x_wall_csrf)
+    try:
+        envelope = await wall_store.reveal(message_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="消息不存在或已经焚毁") from exc
+    if not envelope:
+        raise HTTPException(status_code=410, detail="消息不存在或已经焚毁")
+    return Response(
+        content=envelope.ciphertext,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "X-Wall-Key": envelope.key,
+            "X-Wall-Nonce": envelope.nonce,
+            "X-Wall-Kind": envelope.kind,
+            "X-Wall-Mime": envelope.mime_type,
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
