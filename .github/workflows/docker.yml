@@ -128,10 +128,10 @@ jobs:
             'https://localhost/api/v1/media/admin/download?paths=%5B%22ci-multiple%2Fci-one.wav%22%5D' \
             -o /tmp/ci-downloaded.wav
           cmp /tmp/ci-one.wav /tmp/ci-downloaded.wav
-          test "$(docker compose exec -T redis redis-cli GET media:catalog:v1:generation)" -ge 3
+          test "$(docker compose exec -T redis redis-cli GET media:catalog:v2:generation)" -ge 3
           curl -kfsS 'https://localhost/api/v1/media/music/category?path=ci-folder' | grep 'one'
           docker compose exec -T redis redis-cli --scan \
-            --pattern 'media:catalog:v1:*:tracks:*' | grep 'media:catalog:v1:'
+            --pattern 'media:catalog:v2:*:tracks:*' | grep 'media:catalog:v2:'
           curl -kfsS -b /tmp/admin-cookies.txt \
             'https://localhost/api/v1/media/admin/logs?after=0&limit=20' | grep '"secure_transport":true'
 
