@@ -240,11 +240,25 @@ async def admin_logs(
 @router.get("/security/blocks")
 async def security_blocks(
     request: Request,
+    ip: str | None = Query(None, max_length=45),
+    status: str | None = Query(None, max_length=32),
+    scope: str = Query("recent", pattern="^(recent|all)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=200),
     session_hash: str = Depends(require_session),
 ):
     if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
         raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
-    result = await ip_security.list_recent_security()
+    try:
+        result = await ip_security.list_security_history(
+            ip_filter=ip,
+            status_filter=status,
+            page=page,
+            page_size=page_size,
+            recent_only=scope == "recent",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     result["legal_api_count"] = ip_security.legal_api_count(request.app)
     return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 

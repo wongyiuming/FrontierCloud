@@ -214,14 +214,6 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
     try:
         async with engine.begin() as conn:
             await conn.execute(text("""
-                DELETE FROM ip_auto_ban_events
-                WHERE banned_at < :cutoff AND expires_at <= :now
-                LIMIT 1000
-            """), {
-                "cutoff": now - timedelta(hours=settings.SECURITY_RECENT_BAN_HOURS),
-                "now": now,
-            })
-            await conn.execute(text("""
                 INSERT INTO ip_auto_ban_events
                 (ip_address, trigger_count, window_started_at, banned_at, expires_at,
                  last_method, last_path, user_agent, status)
@@ -288,28 +280,59 @@ async def remove_whitelist(ip_value: str) -> str:
     return ip
 
 
-async def list_recent_security() -> dict[str, Any]:
+async def list_security_history(
+    ip_filter: str | None = None,
+    status_filter: str | None = None,
+    page: int = 1,
+    page_size: int = 100,
+    recent_only: bool = True,
+) -> dict[str, Any]:
     now = _utcnow()
     cutoff = now - timedelta(hours=settings.SECURITY_RECENT_BAN_HOURS)
+    conditions: list[str] = []
+    params: dict[str, Any] = {
+        "now": now,
+        "cutoff": cutoff,
+        "limit": page_size,
+        "offset": (page - 1) * page_size,
+    }
+    if recent_only:
+        conditions.append("banned_at >= :cutoff")
+    if ip_filter:
+        conditions.append("ip_address = :ip")
+        params["ip"] = normalize_ip(ip_filter)
+    if status_filter:
+        allowed_statuses = {"active", "expired", "unbanned", "whitelisted", "replaced"}
+        if status_filter not in allowed_statuses:
+            raise ValueError("Invalid ban status")
+        conditions.append("status = :status")
+        params["status"] = status_filter
+    where_sql = " WHERE " + " AND ".join(conditions) if conditions else ""
+
     async with engine.begin() as conn:
         await conn.execute(text("""
             UPDATE ip_auto_ban_events
             SET status='expired'
             WHERE status='active' AND expires_at <= :now
         """), {"now": now})
-        await conn.execute(text("""
-            DELETE FROM ip_auto_ban_events
-            WHERE banned_at < :cutoff AND expires_at <= :now
-            LIMIT 1000
-        """), {"cutoff": cutoff, "now": now})
+        count_result = await conn.execute(
+            text("SELECT COUNT(*) FROM ip_auto_ban_events" + where_sql),
+            params,
+        )
+        total_events = int(count_result.scalar_one())
+        active_count_result = await conn.execute(text("""
+            SELECT COUNT(*) FROM ip_auto_ban_events
+            WHERE status='active' AND expires_at > :now
+        """), {"now": now})
+        active_ban_count = int(active_count_result.scalar_one())
         ban_result = await conn.execute(text("""
             SELECT id, ip_address, trigger_count, window_started_at, banned_at, expires_at,
-                   last_method, last_path, status, released_at
+                   last_method, last_path, status, released_at, released_by_session_hash
             FROM ip_auto_ban_events
-            WHERE banned_at >= :cutoff
+        """ + where_sql + """
             ORDER BY banned_at DESC
-            LIMIT 500
-        """), {"cutoff": cutoff})
+            LIMIT :limit OFFSET :offset
+        """), params)
         whitelist_result = await conn.execute(text("""
             SELECT ip_address, created_at, note
             FROM ip_permanent_whitelist
@@ -336,6 +359,7 @@ async def list_recent_security() -> dict[str, Any]:
             "active": active,
             "whitelisted": str(row["ip_address"]) in whitelist,
             "released_at": row["released_at"].isoformat() if row["released_at"] else None,
+            "released_by_session_hash": row["released_by_session_hash"],
         })
 
     return {
@@ -348,11 +372,23 @@ async def list_recent_security() -> dict[str, Any]:
             }
             for row in whitelist_rows
         ],
-        "active_ban_count": sum(1 for event in events if event["active"]),
+        "active_ban_count": active_ban_count,
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total_events,
+            "pages": max(1, (total_events + page_size - 1) // page_size),
+            "recent_only": recent_only,
+        },
         "threshold": settings.SECURITY_INVALID_API_LIMIT,
         "window_seconds": settings.SECURITY_INVALID_API_WINDOW,
         "ban_seconds": settings.SECURITY_AUTO_BAN_TTL,
     }
+
+
+async def list_recent_security() -> dict[str, Any]:
+    """Compatibility wrapper for callers that only need the default recent page."""
+    return await list_security_history()
 
 
 def legal_api_count(app: Any) -> int:

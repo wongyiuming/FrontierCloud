@@ -1,3 +1,4 @@
+import inspect
 import time
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -185,6 +186,19 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_redis.set.await_args.kwargs["ex"], 86400)
         self.assertTrue(fake_redis.set.await_args.kwargs["nx"])
         fake_redis.zadd.assert_awaited_once()
+
+    def test_ban_runtime_never_deletes_audit_history(self):
+        record_source = inspect.getsource(ip_security.record_invalid_api)
+        list_source = inspect.getsource(ip_security.list_security_history)
+        self.assertNotIn("DELETE FROM ip_auto_ban_events", record_source)
+        self.assertNotIn("DELETE FROM ip_auto_ban_events", list_source)
+        self.assertIn("SET status='expired'", list_source)
+
+    def test_history_query_supports_filters_and_bounded_pagination(self):
+        source = inspect.getsource(ip_security.list_security_history)
+        self.assertIn("ip_address = :ip", source)
+        self.assertIn("status = :status", source)
+        self.assertIn("LIMIT :limit OFFSET :offset", source)
 
 
 class AdminAuthenticationCoverageTests(unittest.TestCase):
