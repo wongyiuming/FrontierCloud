@@ -42,10 +42,12 @@ class ExporterConfigurationTests(unittest.TestCase):
 
     def test_nginx_log_metrics_include_status_and_latency(self):
         nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+        entrypoint = (ROOT / "nginx" / "10-metrics-auth.sh").read_text(encoding="utf-8")
         exporter = (ROOT / "monitoring" / "nginxlog-exporter.hcl").read_text(encoding="utf-8")
         self.assertIn("$status", nginx)
         self.assertIn("$request_time", nginx)
         self.assertIn("$upstream_response_time", exporter)
+        self.assertIn("touch /var/log/nginx/access_log.log", entrypoint)
 
 
 if __name__ == "__main__":

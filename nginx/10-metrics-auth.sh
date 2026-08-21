@@ -14,3 +14,9 @@ fi
 install -d -m 0700 /run/frontiercloud
 htpasswd -bcB /run/frontiercloud/metrics.htpasswd "$METRICS_BASIC_USER" "$METRICS_BASIC_PASSWORD" >/dev/null
 chmod 0600 /run/frontiercloud/metrics.htpasswd
+
+# The log exporter starts as soon as Nginx is running. Create its source before
+# the Nginx master starts so the exporter never misses the file during startup.
+install -d -m 0755 /var/log/nginx
+touch /var/log/nginx/access_log.log
+chmod 0640 /var/log/nginx/access_log.log
