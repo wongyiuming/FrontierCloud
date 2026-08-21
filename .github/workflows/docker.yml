@@ -72,6 +72,7 @@ jobs:
           docker compose config --quiet
           node --check static/js/admin.js
           node --check static/js/player.js
+          node --check static/js/wall.js
           node tests/admin_ui_smoke.mjs
 
       - name: Build and start services
