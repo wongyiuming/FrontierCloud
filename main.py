@@ -1,20 +1,24 @@
 import asyncio
 import os
+import secrets
 import time
 import urllib.parse
 from contextlib import asynccontextmanager
 from contextlib import suppress
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.v1.endpoints import router as api_v1_router
 from app.core.admin_log import append_admin_log, sanitize_log_value
+from app.core.config import settings
 from app.core.client_ip import client_ip
 from app.core.db import init_db
+from app.core.metrics import PrometheusMetricsMiddleware
 from app.middleware.ip_security import IPSecurityMiddleware
 from app.services import admin_service
 from app.services.admin_service import issue_admin_token, run_admin_token_issuer
@@ -111,7 +115,16 @@ def render_query_log(target: str) -> str:
 
 app.add_middleware(RealIPLogMiddleware)
 app.add_middleware(IPSecurityMiddleware)
+app.add_middleware(PrometheusMetricsMiddleware)
 app.include_router(api_v1_router, prefix="/api/v1")
+
+
+@app.get("/internal/metrics", include_in_schema=False)
+async def internal_metrics(x_metrics_token: str | None = Header(None)):
+    configured = settings.INTERNAL_METRICS_TOKEN
+    if not configured or not x_metrics_token or not secrets.compare_digest(configured, x_metrics_token):
+        raise HTTPException(status_code=404, detail="Not found")
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/openapi.json", include_in_schema=False)

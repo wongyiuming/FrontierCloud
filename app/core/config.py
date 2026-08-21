@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     MEDIA_CATALOG_CACHE_TTL: int = Field(300, validation_alias="MEDIA_CATALOG_CACHE_TTL")
     WEBRTC_STUN_URLS: str = Field("", validation_alias="WEBRTC_STUN_URLS")
     WEBRTC_REPORT_COOLDOWN: int = Field(60, ge=10, le=3600, validation_alias="WEBRTC_REPORT_COOLDOWN")
+    INTERNAL_METRICS_TOKEN: str = Field("", validation_alias="INTERNAL_METRICS_TOKEN")
 
     WATERMARK_MAX_FILES: int = Field(20, ge=1, validation_alias="WATERMARK_MAX_FILES")
     WATERMARK_MAX_UPLOAD_FILE_SIZE: int = Field(64 * 1024 * 1024, ge=1, validation_alias="WATERMARK_MAX_UPLOAD_FILE_SIZE")
