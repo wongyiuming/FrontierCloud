@@ -249,6 +249,13 @@ function formatTime(seconds) {
     return `${m}:${s < 10 ? '0' : ''}${s}`;
 }
 
+function isGestureControl(target) {
+    return Boolean(target && target.closest(
+        '.sidebar, .art-bottom, .art-controls, .art-progress, .art-control-progress, '
+        + '.art-setting, .art-contextmenu, button, a, input, select, textarea, [role="button"]'
+    ));
+}
+
 function initGestureControl() {
     const playerSection = document.getElementById('playerSection');
     const gestureHud = document.getElementById('gestureHud');
@@ -258,9 +265,11 @@ function initGestureControl() {
     let initialTime = 0;
     let targetTime = 0;
     let isDragging = false;
+    let touchStartedOnControl = false;
 
     playerSection.addEventListener('touchstart', (e) => {
-        if (e.touches.length > 1 || !art) return;
+        touchStartedOnControl = isGestureControl(e.target);
+        if (touchStartedOnControl || e.touches.length > 1 || !art) return;
 
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
@@ -270,7 +279,7 @@ function initGestureControl() {
     }, { passive: false });
 
     playerSection.addEventListener('touchmove', (e) => {
-        if (e.touches.length > 1 || !art) return;
+        if (touchStartedOnControl || e.touches.length > 1 || !art) return;
 
         const currentX = e.touches[0].clientX;
         const currentY = e.touches[0].clientY;
@@ -303,6 +312,7 @@ function initGestureControl() {
             isDragging = false;
             if (e.cancelable) e.preventDefault();
         }
+        touchStartedOnControl = false;
     });
 
     playerSection.addEventListener('touchcancel', () => {
@@ -310,27 +320,18 @@ function initGestureControl() {
             gestureHud.style.display = 'none';
             isDragging = false;
         }
+        touchStartedOnControl = false;
     });
 
     playerSection.addEventListener('dblclick', (e) => {
-        const isControl = e.target.closest('.sidebar') ||
-                          e.target.closest('.art-bottom') ||
-                          e.target.closest('.art-controls') ||
-                          e.target.closest('.art-setting') ||
-                          e.target.closest('.art-contextmenu');
-        if (isControl) return;
+        if (isGestureControl(e.target)) return;
 
         e.stopPropagation();
         e.preventDefault();
     }, true);
 
     playerSection.addEventListener('click', (e) => {
-        const isControl = e.target.closest('.sidebar') ||
-                          e.target.closest('.art-bottom') ||
-                          e.target.closest('.art-controls') ||
-                          e.target.closest('.art-setting') ||
-                          e.target.closest('.art-contextmenu');
-        if (isControl) return;
+        if (isGestureControl(e.target)) return;
 
         e.stopPropagation();
         e.preventDefault();

@@ -17,6 +17,17 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("event.stopPropagation()", script)
         self.assertIn("const playbackSessionId = {{PLAYBACK_SESSION_ID}}", template)
 
+    def test_progress_hit_area_is_large_and_excluded_from_page_gestures(self):
+        script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
+        style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
+
+        self.assertIn("--art-progress-height: 26px", style)
+        self.assertIn(".art-control-progress-inner { height: 8px", style)
+        self.assertIn("function isGestureControl(target)", script)
+        self.assertIn(".art-control-progress", script)
+        self.assertIn("touchStartedOnControl", script)
+        self.assertGreaterEqual(script.count("isGestureControl(e.target)"), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
