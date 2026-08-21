@@ -33,6 +33,12 @@ class MonitoringStackTests(unittest.TestCase):
         self.assertIn("--storage.tsdb.retention.time=24h", compose)
         self.assertIn("--storage.tsdb.retention.size=6GB", compose)
 
+    def test_loopback_management_ports_are_environment_configurable(self):
+        compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
+        self.assertIn("127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090", compose)
+        self.assertIn("127.0.0.1:${GRAFANA_HOST_PORT:-3000}:3000", compose)
+        self.assertIn("127.0.0.1:${ALERTMANAGER_HOST_PORT:-9093}:9093", compose)
+
     def test_renderer_uses_python39_compatible_file_writes(self):
         renderer = (MONITORING / "render_config.py").read_text(encoding="utf-8")
         self.assertNotIn(".write_text(", renderer)
