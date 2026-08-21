@@ -3,6 +3,7 @@ set -eu
 
 umask 077
 mkdir -p /backups /textfile
+: "${MYSQL_BACKUP_USER:?MYSQL_BACKUP_USER is required}"
 
 write_metrics() {
   success="$1"
@@ -32,7 +33,7 @@ while true; do
 
   if mysqldump \
       --host=mysql \
-      --user=root \
+      --user="$MYSQL_BACKUP_USER" \
       --single-transaction \
       --quick \
       --routines \

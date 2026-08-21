@@ -241,7 +241,8 @@ services:
     container_name: frontiercloud_mysql_backup
     restart: always
     environment:
-      MYSQL_PWD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
+      MYSQL_PWD: ${MYSQL_BACKUP_PASSWORD:?MYSQL_BACKUP_PASSWORD must be set}
+      MYSQL_BACKUP_USER: ${MYSQL_BACKUP_USER:-frontiercloud_backup}
     entrypoint:
       - /bin/sh
       - /opt/frontiercloud/mysql_backup.sh
