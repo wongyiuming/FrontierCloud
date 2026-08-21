@@ -36,6 +36,13 @@ class AnonymousWallUITests(unittest.TestCase):
         self.assertNotIn("innerHTML", self.javascript)
         self.assertIn("textContent", self.javascript)
 
+    def test_proxy_rejects_oversized_wall_uploads_before_multipart_parsing(self):
+        nginx = Path("nginx/nginx.conf").read_text(encoding="utf-8")
+        self.assertIn("zone=wall_write_per_ip", nginx)
+        self.assertIn("location = /api/v1/wall/messages", nginx)
+        self.assertIn("client_max_body_size 21M", nginx)
+        self.assertIn("proxy_request_buffering on", nginx)
+
 
 if __name__ == "__main__":
     unittest.main()

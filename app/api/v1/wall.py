@@ -116,6 +116,8 @@ async def reveal_message(
     x_wall_csrf: str | None = Header(None),
 ):
     await wall_sessions.require(request, x_wall_csrf)
+    if not await wall_sessions.allow_action(request, "reveal", 2):
+        raise HTTPException(status_code=429, detail="揭示过于频繁，请稍后重试")
     try:
         envelope = await wall_store.reveal(message_id)
     except ValueError as exc:
