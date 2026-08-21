@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     REDIS_URL: str = Field(..., validation_alias="REDIS_URL")
     WALL_ADMIN_TOKEN: str = Field(..., validation_alias="WALL_ADMIN_TOKEN")
     WALL_TTL: int = Field(240, validation_alias="WALL_TTL")
+    WALL_SESSION_TTL: int = Field(900, ge=60, le=86400, validation_alias="WALL_SESSION_TTL")
+    WALL_MAX_IMAGE_SIZE: int = Field(20 * 1024 * 1024, ge=1, le=20 * 1024 * 1024, validation_alias="WALL_MAX_IMAGE_SIZE")
 
     MYSQL_URL: str = Field(..., validation_alias="MYSQL_URL")
     MYSQL_PASSWORD: str = Field(..., validation_alias="MYSQL_PASSWORD")
