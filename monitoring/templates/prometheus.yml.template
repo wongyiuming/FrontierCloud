@@ -1,0 +1,84 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: production
+    monitoring_role: monitoring-vps
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
+
+  - job_name: blackbox-health
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: [https://__PRODUCTION_METRICS_HOST__/api/v1/health]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  - job_name: frontiercloud-app
+    scheme: https
+    metrics_path: /internal/metrics/app
+    basic_auth: &production_auth
+      username: __METRICS_BASIC_USER__
+      password_file: /run/secrets/metrics_password
+    static_configs:
+      - targets: [__PRODUCTION_METRICS_HOST__]
+
+  - job_name: production-node
+    scheme: https
+    metrics_path: /internal/metrics/node
+    basic_auth: *production_auth
+    static_configs:
+      - targets: [__PRODUCTION_METRICS_HOST__]
+
+  - job_name: production-containers
+    scheme: https
+    metrics_path: /internal/metrics/cadvisor
+    basic_auth: *production_auth
+    static_configs:
+      - targets: [__PRODUCTION_METRICS_HOST__]
+
+  - job_name: production-redis
+    scheme: https
+    metrics_path: /internal/metrics/redis
+    basic_auth: *production_auth
+    static_configs:
+      - targets: [__PRODUCTION_METRICS_HOST__]
+
+  - job_name: production-mysql
+    scheme: https
+    metrics_path: /internal/metrics/mysql
+    basic_auth: *production_auth
+    static_configs:
+      - targets: [__PRODUCTION_METRICS_HOST__]
+
+  - job_name: production-nginx
+    scheme: https
+    metrics_path: /internal/metrics/nginx
+    basic_auth: *production_auth
+    static_configs:
+      - targets: [__PRODUCTION_METRICS_HOST__]
+
+  - job_name: production-nginx-logs
+    scheme: https
+    metrics_path: /internal/metrics/nginxlog
+    basic_auth: *production_auth
+    static_configs:
+      - targets: [__PRODUCTION_METRICS_HOST__]
