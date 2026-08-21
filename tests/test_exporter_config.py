@@ -43,6 +43,17 @@ class ExporterConfigurationTests(unittest.TestCase):
         self.assertIn("chmod 0640 /run/frontiercloud/metrics.htpasswd", entrypoint)
         self.assertNotIn("chmod 0600 /run/frontiercloud/metrics.htpasswd", entrypoint)
 
+    def test_application_metrics_supply_a_verified_proxy_identity(self):
+        nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+        location = re.search(
+            r"(?ms)location = /internal/metrics/app \{(.*?)^        \}", nginx
+        )
+        self.assertIsNotNone(location)
+        block = location.group(1)
+        self.assertIn("proxy_set_header X-Real-IP $remote_addr;", block)
+        self.assertIn('proxy_set_header X-Forwarded-For "";', block)
+        self.assertIn('proxy_set_header Forwarded "";', block)
+
     def test_cadvisor_supports_docker_containerd_snapshotters(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         self.assertIn("ghcr.io/google/cadvisor:0.56.2", compose)
