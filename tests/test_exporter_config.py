@@ -36,6 +36,13 @@ class ExporterConfigurationTests(unittest.TestCase):
         self.assertIn('${INTERNAL_METRICS_TOKEN}', nginx)
         self.assertIsNone(re.search(r"allow\s+(?:\d{1,3}\.){3}\d{1,3}", nginx))
 
+    def test_nginx_worker_can_read_metrics_credentials(self):
+        entrypoint = (ROOT / "nginx" / "10-metrics-auth.sh").read_text(encoding="utf-8")
+        self.assertIn("install -d -o root -g nginx -m 0750 /run/frontiercloud", entrypoint)
+        self.assertIn("chown root:nginx /run/frontiercloud/metrics.htpasswd", entrypoint)
+        self.assertIn("chmod 0640 /run/frontiercloud/metrics.htpasswd", entrypoint)
+        self.assertNotIn("chmod 0600 /run/frontiercloud/metrics.htpasswd", entrypoint)
+
     def test_cadvisor_supports_docker_containerd_snapshotters(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         self.assertIn("ghcr.io/google/cadvisor:0.56.2", compose)

@@ -11,9 +11,10 @@ if [ -z "${METRICS_BASIC_USER:-}" ] || [ -z "${METRICS_BASIC_PASSWORD:-}" ]; the
   exit 1
 fi
 
-install -d -m 0700 /run/frontiercloud
+install -d -o root -g nginx -m 0750 /run/frontiercloud
 htpasswd -bcB /run/frontiercloud/metrics.htpasswd "$METRICS_BASIC_USER" "$METRICS_BASIC_PASSWORD" >/dev/null
-chmod 0600 /run/frontiercloud/metrics.htpasswd
+chown root:nginx /run/frontiercloud/metrics.htpasswd
+chmod 0640 /run/frontiercloud/metrics.htpasswd
 
 # The log exporter starts as soon as Nginx is running. Create its source before
 # the Nginx master starts so the exporter never misses the file during startup.
