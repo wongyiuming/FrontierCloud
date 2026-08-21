@@ -8,6 +8,8 @@ let logPolling = false;
 let logTimer = null;
 let securityTimer = null;
 let securityLoading = false;
+let securityPage = 1;
+let securityPages = 1;
 let uploadLimits = {
     max_upload_file_size: 800 * 1024 * 1024,
     max_upload_task_files: 5000,
@@ -369,7 +371,7 @@ function renderSecurityList(data) {
     if (!data.events?.length) {
         const empty = document.createElement('div');
         empty.className = 'security-empty';
-        empty.textContent = '最近 24 小时没有自动封禁记录';
+        empty.textContent = '当前查询没有封禁审计记录';
         banList.appendChild(empty);
     }
     for (const event of data.events || []) {
@@ -382,10 +384,10 @@ function renderSecurityList(data) {
         ip.textContent = event.ip;
         const meta = document.createElement('div');
         meta.className = 'security-meta';
-        meta.textContent = `${event.status} · ${event.trigger_count} 次 · ${securityDate(event.banned_at)} → ${securityDate(event.expires_at)}`;
+        meta.textContent = `${event.status} · ${event.ban_kind || 'auto'} · ${event.trigger_count} 次 · ${securityDate(event.banned_at)} → ${securityDate(event.expires_at)}`;
         const path = document.createElement('div');
         path.className = 'security-path';
-        path.textContent = `${event.last_method || ''} ${event.last_path || ''}`.trim();
+        path.textContent = [event.reason, `${event.last_method || ''} ${event.last_path || ''}`.trim()].filter(Boolean).join(' · ');
         main.append(ip, meta, path);
         const actions = document.createElement('div');
         actions.className = 'security-actions';
@@ -398,6 +400,17 @@ function renderSecurityList(data) {
             actions.appendChild(securityButton('加白', 'allow', () => api('/api/v1/media/admin/security/whitelist', {
                 method: 'POST', headers: requestHeaders(), body: JSON.stringify({ip: event.ip, note: 'Admin 封禁列表加白'}),
             })));
+            if (!event.active) {
+                actions.appendChild(securityButton('重新封禁', 'danger', async () => {
+                    const reason = prompt('请输入重新封禁原因:');
+                    if (!reason?.trim()) return;
+                    await api('/api/v1/media/admin/security/reban', {
+                        method: 'POST',
+                        headers: requestHeaders(),
+                        body: JSON.stringify({ip: event.ip, reason: reason.trim()}),
+                    });
+                }));
+            }
         }
         row.append(main, actions);
         banList.appendChild(row);
@@ -431,13 +444,28 @@ function renderSecurityList(data) {
         row.append(main, actions);
         whitelistList.appendChild(row);
     }
+
+    securityPage = data.pagination?.page || 1;
+    securityPages = data.pagination?.pages || 1;
+    $('securityPageInfo').textContent = `第 ${securityPage} / ${securityPages} 页，共 ${data.pagination?.total || 0} 条`;
+    $('securityPrev').disabled = securityPage <= 1;
+    $('securityNext').disabled = securityPage >= securityPages;
 }
 
 async function loadSecurityStatus(force = false) {
     if (securityLoading || (document.hidden && !force)) return;
     securityLoading = true;
     try {
-        renderSecurityList(await api('/api/v1/media/admin/security/blocks'));
+        const params = new URLSearchParams({
+            scope: $('securityScopeFilter').value,
+            page: String(securityPage),
+            page_size: '100',
+        });
+        const ip = $('securityIpFilter').value.trim();
+        const status = $('securityStatusFilter').value;
+        if (ip) params.set('ip', ip);
+        if (status) params.set('status', status);
+        renderSecurityList(await api(`/api/v1/media/admin/security/blocks?${params}`));
     } catch (error) {
         $('securitySummary').textContent = `加载失败：${error.message}`;
     } finally {
@@ -446,6 +474,23 @@ async function loadSecurityStatus(force = false) {
 }
 
 $('securityRefresh').onclick = () => loadSecurityStatus(true);
+$('securityFilterForm').onsubmit = event => {
+    event.preventDefault();
+    securityPage = 1;
+    loadSecurityStatus(true);
+};
+$('securityPrev').onclick = () => {
+    if (securityPage > 1) {
+        securityPage -= 1;
+        loadSecurityStatus(true);
+    }
+};
+$('securityNext').onclick = () => {
+    if (securityPage < securityPages) {
+        securityPage += 1;
+        loadSecurityStatus(true);
+    }
+};
 $('securityToggle').onclick = () => {
     const collapsed = $('securityPanel').classList.toggle('collapsed');
     $('securityToggle').textContent = collapsed ? '展开' : '收起';

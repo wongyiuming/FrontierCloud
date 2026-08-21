@@ -39,8 +39,28 @@
                     <input id="whitelistNote" type="text" maxlength="255" autocomplete="off" placeholder="备注（可选）">
                     <button type="submit">永久加白</button>
                 </form>
-                <div class="security-section-title">最近 24 小时自动封禁</div>
+                <form id="securityFilterForm" class="security-filter-form">
+                    <input id="securityIpFilter" type="text" maxlength="45" autocomplete="off" placeholder="精确 IP（可选）">
+                    <select id="securityStatusFilter">
+                        <option value="">全部状态</option>
+                        <option value="active">active</option>
+                        <option value="expired">expired</option>
+                        <option value="unbanned">unbanned</option>
+                        <option value="whitelisted">whitelisted</option>
+                    </select>
+                    <select id="securityScopeFilter">
+                        <option value="recent">最近 24 小时</option>
+                        <option value="all">全部历史</option>
+                    </select>
+                    <button type="submit">查询</button>
+                </form>
+                <div class="security-section-title">封禁审计历史</div>
                 <div id="banList" class="security-list"></div>
+                <div class="security-pagination">
+                    <button id="securityPrev" type="button">上一页</button>
+                    <span id="securityPageInfo">第 1 / 1 页</span>
+                    <button id="securityNext" type="button">下一页</button>
+                </div>
                 <div class="security-section-title">永久白名单</div>
                 <div id="whitelistList" class="security-list whitelist-list"></div>
             </div>
