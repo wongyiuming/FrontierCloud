@@ -6,6 +6,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
+PROMETHEUS_UID = 65534
+PROMETHEUS_GID = 65534
+GRAFANA_UID = 472
+GRAFANA_GID = 0
 
 
 def load_env(path: Path) -> dict[str, str]:
@@ -28,11 +32,12 @@ def require(values: dict[str, str], name: str) -> str:
     return value
 
 
-def write_secret(path: Path, value: str) -> None:
+def write_runtime_file(path: Path, value: str, *, uid: int, gid: int) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     with temporary.open("w", encoding="utf-8", newline="\n") as stream:
         stream.write(value + "\n")
-    os.chmod(temporary, 0o600)
+    os.chown(temporary, uid, gid)
+    os.chmod(temporary, 0o400)
     temporary.replace(path)
 
 
@@ -46,7 +51,8 @@ def render(template_name: str, output_name: str, replacements: dict[str, str]) -
     temporary = output.with_suffix(output.suffix + ".tmp")
     with temporary.open("w", encoding="utf-8", newline="\n") as stream:
         stream.write(value)
-    os.chmod(temporary, 0o600)
+    os.chown(temporary, PROMETHEUS_UID, PROMETHEUS_GID)
+    os.chmod(temporary, 0o400)
     temporary.replace(output)
 
 
@@ -62,13 +68,28 @@ def main() -> None:
     if not re.fullmatch(r"-?\d{1,20}", chat_id):
         raise SystemExit("TG_CHAT_ID is invalid")
 
-    (ROOT / "generated").mkdir(mode=0o700, exist_ok=True)
-    (ROOT / "secrets").mkdir(mode=0o700, exist_ok=True)
-    os.chmod(ROOT / "generated", 0o700)
-    os.chmod(ROOT / "secrets", 0o700)
-    write_secret(ROOT / "secrets" / "metrics_password", require(values, "METRICS_BASIC_PASSWORD"))
-    write_secret(ROOT / "secrets" / "tg_bot_token", require(values, "TG_BOT_TOKEN"))
-    write_secret(ROOT / "secrets" / "grafana_admin_password", require(values, "GRAFANA_ADMIN_PASSWORD"))
+    (ROOT / "generated").mkdir(mode=0o711, exist_ok=True)
+    (ROOT / "secrets").mkdir(mode=0o711, exist_ok=True)
+    os.chmod(ROOT / "generated", 0o711)
+    os.chmod(ROOT / "secrets", 0o711)
+    write_runtime_file(
+        ROOT / "secrets" / "metrics_password",
+        require(values, "METRICS_BASIC_PASSWORD"),
+        uid=PROMETHEUS_UID,
+        gid=PROMETHEUS_GID,
+    )
+    write_runtime_file(
+        ROOT / "secrets" / "tg_bot_token",
+        require(values, "TG_BOT_TOKEN"),
+        uid=PROMETHEUS_UID,
+        gid=PROMETHEUS_GID,
+    )
+    write_runtime_file(
+        ROOT / "secrets" / "grafana_admin_password",
+        require(values, "GRAFANA_ADMIN_PASSWORD"),
+        uid=GRAFANA_UID,
+        gid=GRAFANA_GID,
+    )
     render(
         "prometheus.yml.template",
         "prometheus.yml",

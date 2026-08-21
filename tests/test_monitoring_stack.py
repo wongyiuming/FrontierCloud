@@ -38,6 +38,13 @@ class MonitoringStackTests(unittest.TestCase):
         self.assertNotIn(".write_text(", renderer)
         self.assertIn('.open("w", encoding="utf-8", newline="\\n")', renderer)
 
+    def test_runtime_files_are_readable_only_by_service_users(self):
+        renderer = (MONITORING / "render_config.py").read_text(encoding="utf-8")
+        self.assertIn("PROMETHEUS_UID = 65534", renderer)
+        self.assertIn("GRAFANA_UID = 472", renderer)
+        self.assertIn("os.chown(temporary, uid, gid)", renderer)
+        self.assertIn("os.chmod(temporary, 0o400)", renderer)
+
     def test_alertmanager_is_telegram_only_and_sends_resolved(self):
         template = (MONITORING / "templates" / "alertmanager.yml.template").read_text(encoding="utf-8")
         self.assertIn("telegram_configs:", template)
