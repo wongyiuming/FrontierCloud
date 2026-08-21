@@ -56,6 +56,12 @@ jobs:
           MYSQL_USER=media_admin
           MYSQL_PASSWORD=ci_mysql_password
           MYSQL_ROOT_PASSWORD=ci_mysql_root_password
+          INTERNAL_METRICS_TOKEN=ci_internal_metrics_token_0123456789abcdef
+          MONITORING_ALLOW_CIDR=192.0.2.1/32
+          METRICS_BASIC_USER=ci_frontiercloud_monitor
+          METRICS_BASIC_PASSWORD=ci_metrics_password_0123456789abcdef
+          MYSQL_EXPORTER_PASSWORD=ci_exporter_password_0123456789abcdef
+          MYSQL_BACKUP_PASSWORD=ci_backup_password_0123456789abcdef
           SERVER_NAME=localhost
           SSL_CERT_PATH=./certs/fullchain.pem
           SSL_KEY_PATH=./certs/privkey.pem
