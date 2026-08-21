@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     ADMIN_MAX_FILENAME_LENGTH: int = Field(240, validation_alias="ADMIN_MAX_FILENAME_LENGTH")
     MEDIA_MAX_DEPTH: int = Field(32, validation_alias="MEDIA_MAX_DEPTH")
     MEDIA_CATALOG_CACHE_TTL: int = Field(300, validation_alias="MEDIA_CATALOG_CACHE_TTL")
+    WEBRTC_STUN_URLS: str = Field("", validation_alias="WEBRTC_STUN_URLS")
+    WEBRTC_REPORT_COOLDOWN: int = Field(60, ge=10, le=3600, validation_alias="WEBRTC_REPORT_COOLDOWN")
 
     WATERMARK_MAX_FILES: int = Field(20, ge=1, validation_alias="WATERMARK_MAX_FILES")
     WATERMARK_MAX_UPLOAD_FILE_SIZE: int = Field(64 * 1024 * 1024, ge=1, validation_alias="WATERMARK_MAX_UPLOAD_FILE_SIZE")
@@ -114,6 +116,12 @@ class Settings(BaseSettings):
         if errors:
             raise ValueError("; ".join(errors))
         return self
+
+    def webrtc_stun_urls(self) -> list[str]:
+        urls = [value.strip() for value in self.WEBRTC_STUN_URLS.split(",") if value.strip()]
+        if any(not value.startswith(("stun:", "stuns:")) for value in urls):
+            raise ValueError("WEBRTC_STUN_URLS only accepts STUN URLs")
+        return urls[:4]
 
 
 settings = Settings()

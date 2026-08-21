@@ -29,6 +29,7 @@
         <div id="categoryGrid" class="card-grid"></div>
     </div>
     <script>
+        window.frontierCloudStunUrls = {{STUN_URLS_JSON}};
         const categories = {{CATEGORIES_JSON}};
 
         // 防御 DOM XSS 核心：HTML 字符转义函数
@@ -59,5 +60,6 @@
             `).join('');
         });
     </script>
+    <script src="/static/js/network-observation.js"></script>
 </body>
 </html>

@@ -36,9 +36,11 @@
     <script>
         const currentMediaList = {{MEDIA_JSON}};
         const playbackSessionId = {{PLAYBACK_SESSION_ID}};
+        window.frontierCloudStunUrls = {{STUN_URLS_JSON}};
         const PAGE_TITLE = '{{PAGE_TITLE}}';
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/artplayer/5.1.1/artplayer.js"></script>
+    <script src="/static/js/network-observation.js"></script>
     <script src="/static/js/player.js"></script>
 </body>
 </html>

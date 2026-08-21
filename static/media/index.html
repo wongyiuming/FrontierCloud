@@ -9,6 +9,7 @@
 </head>
 <body><div class="container"><h1>前沿视界</h1><div class="card-grid"><a href="/api/v1/media/music" class="card"><div class="card-icon">🎵</div><div class="card-title">前沿音乐</div></a><a href="/api/v1/media/video" class="card"><div class="card-icon">🎬</div><div class="card-title">前沿视讯</div></a></div><button class="elevate" id="elevate">提权</button></div>
 <script>
+window.frontierCloudStunUrls={{STUN_URLS_JSON}};
 const btn=document.getElementById('elevate');
 btn.onclick=async()=>{const token=prompt('请输入今日内搭颜色款式:');if(!token)return;const body=new URLSearchParams({token});try{const r=await fetch('/api/v1/media/admin/elevate',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const d=await r.json();if(!r.ok){const detail=d.detail;throw new Error(detail&&typeof detail==='object'?(detail.message||'提权失败'):(detail||'提权失败'))}location.href=d.redirect}catch(e){alert(e.message)}};
-</script></body></html>
+</script><script src="/static/js/network-observation.js"></script></body></html>

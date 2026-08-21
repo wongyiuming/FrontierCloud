@@ -6,12 +6,14 @@ import urllib.parse
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from app.services.media_catalog_cache import load_media_catalog, store_media_catalog
 from app.services import playback
+from app.services import network_observation
+from app.core.config import settings
 
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parents[3]
@@ -33,6 +35,15 @@ class PlaybackReport(BaseModel):
 class PreferenceChange(BaseModel):
     media_path: str = Field(min_length=1, max_length=1024)
     delta: int
+
+
+class NetworkObservation(BaseModel):
+    addresses: list[str] = Field(default_factory=list, max_length=8)
+    failure: str | None = Field(None, max_length=32)
+
+
+def inject_network_observation(html: str) -> str:
+    return html.replace("{{STUN_URLS_JSON}}", safe_json_dumps(settings.webrtc_stun_urls()))
 
 
 def safe_json_dumps(data) -> str:
@@ -176,7 +187,10 @@ async def stream_media_file(file_path: str = Query(...)):
 @router.get("/", response_class=HTMLResponse)
 @router.get("", response_class=HTMLResponse)
 async def get_media_index_page():
-    return HTMLResponse(load_html_template("index.html"), headers={"Cache-Control": "public, max-age=3600"})
+    return HTMLResponse(
+        inject_network_observation(load_html_template("index.html")),
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.get("/music", response_class=HTMLResponse)
@@ -185,6 +199,7 @@ async def get_music_categories_page():
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape("前沿媒体"))
     html = html.replace("{{BACK_URL}}", html_escape.escape("/api/v1/media"))
     html = html.replace("{{CATEGORIES_JSON}}", safe_json_dumps(await get_media_categories("music", AUDIO_EXTS)))
+    html = inject_network_observation(html)
     return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
 
 
@@ -194,6 +209,7 @@ async def get_video_categories_page():
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape("前沿视讯"))
     html = html.replace("{{BACK_URL}}", html_escape.escape("/api/v1/media"))
     html = html.replace("{{CATEGORIES_JSON}}", safe_json_dumps(await get_media_categories("video", VIDEO_EXTS)))
+    html = inject_network_observation(html)
     return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
 
 
@@ -209,6 +225,7 @@ async def get_music_player_page(path: str = Query(...)):
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/music"))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
     html = html.replace("{{PLAYBACK_SESSION_ID}}", safe_json_dumps(session_id))
+    html = inject_network_observation(html)
     return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
 
 
@@ -224,6 +241,7 @@ async def get_video_player_page(path: str = Query(...)):
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/video"))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
     html = html.replace("{{PLAYBACK_SESSION_ID}}", safe_json_dumps(session_id))
+    html = inject_network_observation(html)
     return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
 
 
@@ -245,5 +263,13 @@ async def report_playback(payload: PlaybackReport):
 async def update_preference(payload: PreferenceChange):
     try:
         return await playback.change_preference(MEDIA_ROOT, payload.media_path, payload.delta)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/network-observation")
+async def report_network_observation(request: Request, payload: NetworkObservation):
+    try:
+        return await network_observation.record_observation(request, payload.addresses, payload.failure)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
