@@ -113,6 +113,7 @@ services:
       - --path.procfs=/host/proc
       - --path.sysfs=/host/sys
       - --path.rootfs=/host/root
+      - --collector.textfile.directory=/textfile
       - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/containers/storage/.+)($|/)
     expose:
       - "9100"
@@ -120,6 +121,7 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro,rslave
+      - backup_metrics:/textfile:ro
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -234,8 +236,35 @@ services:
     mem_limit: 128m
     logging: *exporter_logging
 
+  mysql_backup:
+    image: mysql:8.4
+    container_name: frontiercloud_mysql_backup
+    restart: always
+    environment:
+      MYSQL_PWD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
+    entrypoint:
+      - /bin/sh
+      - /opt/frontiercloud/mysql_backup.sh
+    volumes:
+      - ./monitoring/mysql_backup.sh:/opt/frontiercloud/mysql_backup.sh:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+      - backup_metrics:/textfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 128m
+    logging: *exporter_logging
+
 volumes:
   web_tmp:
   redis_data:
   mysql_data:
   nginx_logs:
+  backup_metrics:

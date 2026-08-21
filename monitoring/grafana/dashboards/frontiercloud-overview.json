@@ -14,7 +14,9 @@
     {"type":"stat","title":"Redis Up","gridPos":{"h":4,"w":6,"x":0,"y":18},"targets":[{"expr":"redis_up","refId":"A"}]},
     {"type":"stat","title":"MySQL Up","gridPos":{"h":4,"w":6,"x":6,"y":18},"targets":[{"expr":"mysql_up","refId":"A"}]},
     {"type":"timeseries","title":"Nginx Connections","gridPos":{"h":4,"w":6,"x":12,"y":18},"targets":[{"expr":"nginx_connections_active","refId":"A"}]},
-    {"type":"timeseries","title":"Disk Available %","gridPos":{"h":4,"w":6,"x":18,"y":18},"fieldConfig":{"defaults":{"unit":"percent"}},"targets":[{"expr":"node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay|squashfs|nsfs\"}/node_filesystem_size_bytes*100","legendFormat":"{{mountpoint}}","refId":"A"}]}
+    {"type":"timeseries","title":"Disk Available %","gridPos":{"h":4,"w":6,"x":18,"y":18},"fieldConfig":{"defaults":{"unit":"percent"}},"targets":[{"expr":"node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay|squashfs|nsfs\"}/node_filesystem_size_bytes*100","legendFormat":"{{mountpoint}}","refId":"A"}]},
+    {"type":"stat","title":"Backup Age","gridPos":{"h":4,"w":6,"x":0,"y":22},"fieldConfig":{"defaults":{"unit":"s"}},"targets":[{"expr":"time()-frontiercloud_backup_last_success_timestamp_seconds","refId":"A"}]},
+    {"type":"stat","title":"Last Backup Size","gridPos":{"h":4,"w":6,"x":6,"y":22},"fieldConfig":{"defaults":{"unit":"bytes"}},"targets":[{"expr":"frontiercloud_backup_last_size_bytes","refId":"A"}]}
   ],
   "refresh": "15s",
   "schemaVersion": 42,

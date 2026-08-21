@@ -16,6 +16,7 @@ class ExporterConfigurationTests(unittest.TestCase):
             "mysql_exporter",
             "nginx_exporter",
             "nginxlog_exporter",
+            "mysql_backup",
         ):
             match = re.search(
                 rf"(?ms)^  {service}:\n(.*?)(?=^  [a-zA-Z][a-zA-Z0-9_]*:\n|\Z)",

@@ -92,3 +92,19 @@ groups:
         annotations:
           summary: "Web P95 延迟持续超过 2 秒"
           description: "当前 P95 延迟约 {{ $value | printf \"%.2f\" }} 秒。"
+
+      - alert: MySQLBackupFailed
+        expr: frontiercloud_backup_last_run_success == 0
+        for: 5m
+        labels: {severity: critical, service: backup}
+        annotations:
+          summary: "最近一次 MySQL 备份失败"
+          description: "备份任务已连续报告失败超过五分钟。"
+
+      - alert: MySQLBackupStale
+        expr: time() - frontiercloud_backup_last_success_timestamp_seconds > 93600
+        for: 10m
+        labels: {severity: critical, service: backup}
+        annotations:
+          summary: "MySQL 成功备份已超过 26 小时"
+          description: "距最近一次成功备份约 {{ $value | humanizeDuration }}。"

@@ -53,6 +53,18 @@ class MonitoringStackTests(unittest.TestCase):
         dashboard = json.loads((MONITORING / "grafana" / "dashboards" / "frontiercloud-overview.json").read_text(encoding="utf-8"))
         titles = {panel["title"] for panel in dashboard["panels"]}
         self.assertTrue({"Host CPU %", "Host Memory %", "Redis Up", "MySQL Up", "Nginx Connections"} <= titles)
+        self.assertTrue({"Backup Age", "Last Backup Size"} <= titles)
+
+    def test_daily_backup_uses_environment_password_and_publishes_history_metrics(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        script = (MONITORING / "mysql_backup.sh").read_text(encoding="utf-8")
+        rules = (MONITORING / "prometheus" / "alerts.yml").read_text(encoding="utf-8")
+        self.assertIn("MYSQL_PWD:", compose)
+        self.assertNotIn("--password=", script)
+        self.assertIn("--single-transaction", script)
+        self.assertIn("frontiercloud_backup_last_success_timestamp_seconds", script)
+        self.assertIn("-mtime +7 -delete", script)
+        self.assertIn("alert: MySQLBackupStale", rules)
 
 
 if __name__ == "__main__":
