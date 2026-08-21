@@ -83,12 +83,17 @@ services:
     restart: always
     environment:
       - SERVER_NAME=${SERVER_NAME}
+      - MONITORING_ALLOW_CIDR=${MONITORING_ALLOW_CIDR:?MONITORING_ALLOW_CIDR must be set}
+      - METRICS_BASIC_USER=${METRICS_BASIC_USER:?METRICS_BASIC_USER must be set}
+      - METRICS_BASIC_PASSWORD=${METRICS_BASIC_PASSWORD:?METRICS_BASIC_PASSWORD must be set}
+      - INTERNAL_METRICS_TOKEN=${INTERNAL_METRICS_TOKEN:?INTERNAL_METRICS_TOKEN must be set}
       - NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./data:/app/data:ro
+      - nginx_logs:/var/log/nginx
       - ${SSL_CERT_PATH}:/etc/nginx/certs/fullchain.pem:ro
       - ${SSL_KEY_PATH}:/etc/nginx/certs/privkey.pem:ro
     depends_on:
@@ -100,7 +105,137 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  node_exporter:
+    image: prom/node-exporter:v1.9.1
+    container_name: frontiercloud_node_exporter
+    restart: always
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/containers/storage/.+)($|/)
+    expose:
+      - "9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 128m
+    logging: &exporter_logging
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    container_name: frontiercloud_cadvisor
+    restart: always
+    expose:
+      - "8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    logging: *exporter_logging
+
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.89.0-alpine
+    container_name: frontiercloud_redis_exporter
+    restart: always
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    expose:
+      - "9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 64m
+    logging: *exporter_logging
+
+  mysql_exporter:
+    image: prom/mysqld-exporter:v0.19.0
+    container_name: frontiercloud_mysql_exporter
+    restart: always
+    environment:
+      MYSQLD_EXPORTER_PASSWORD: ${MYSQL_EXPORTER_PASSWORD:?MYSQL_EXPORTER_PASSWORD must be set}
+    command:
+      - --mysqld.address=mysql:3306
+      - --mysqld.username=${MYSQL_EXPORTER_USER:-frontiercloud_exporter}
+    expose:
+      - "9104"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 128m
+    logging: *exporter_logging
+
+  nginx_exporter:
+    image: nginx/nginx-prometheus-exporter:1.5.1
+    container_name: frontiercloud_nginx_exporter
+    restart: always
+    command:
+      - --nginx.scrape-uri=http://nginx:8080/stub_status
+    expose:
+      - "9113"
+    depends_on:
+      - nginx
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 64m
+    logging: *exporter_logging
+
+  nginxlog_exporter:
+    image: quay.io/martinhelmich/prometheus-nginxlog-exporter:v1.11.0
+    container_name: frontiercloud_nginxlog_exporter
+    restart: always
+    command:
+      - -config-file
+      - /etc/prometheus-nginxlog-exporter.hcl
+    expose:
+      - "4040"
+    volumes:
+      - nginx_logs:/mnt/nginxlogs:ro
+      - ./monitoring/nginxlog-exporter.hcl:/etc/prometheus-nginxlog-exporter.hcl:ro
+    depends_on:
+      - nginx
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 128m
+    logging: *exporter_logging
+
 volumes:
   web_tmp:
   redis_data:
   mysql_data:
+  nginx_logs:
