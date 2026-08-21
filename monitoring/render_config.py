@@ -10,6 +10,8 @@ PROMETHEUS_UID = 65534
 PROMETHEUS_GID = 65534
 GRAFANA_UID = 472
 GRAFANA_GID = 0
+NGINX_UID = 101
+NGINX_GID = 101
 
 
 def load_env(path: Path) -> dict[str, str]:
@@ -41,7 +43,26 @@ def write_runtime_file(path: Path, value: str, *, uid: int, gid: int) -> None:
     temporary.replace(path)
 
 
-def render(template_name: str, output_name: str, replacements: dict[str, str]) -> None:
+def copy_runtime_file(source: Path, destination: Path, *, uid: int, gid: int) -> None:
+    if not source.is_absolute() or not source.is_file():
+        raise SystemExit(f"runtime source is not a readable absolute file: {source}")
+    value = source.read_bytes()
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    with temporary.open("wb") as stream:
+        stream.write(value)
+    os.chown(temporary, uid, gid)
+    os.chmod(temporary, 0o400)
+    temporary.replace(destination)
+
+
+def render(
+    template_name: str,
+    output_name: str,
+    replacements: dict[str, str],
+    *,
+    uid: int = PROMETHEUS_UID,
+    gid: int = PROMETHEUS_GID,
+) -> None:
     value = (ROOT / "templates" / template_name).read_text(encoding="utf-8")
     for key, replacement in replacements.items():
         value = value.replace(f"__{key}__", replacement)
@@ -51,7 +72,7 @@ def render(template_name: str, output_name: str, replacements: dict[str, str]) -
     temporary = output.with_suffix(output.suffix + ".tmp")
     with temporary.open("w", encoding="utf-8", newline="\n") as stream:
         stream.write(value)
-    os.chown(temporary, PROMETHEUS_UID, PROMETHEUS_GID)
+    os.chown(temporary, uid, gid)
     os.chmod(temporary, 0o400)
     temporary.replace(output)
 
@@ -60,11 +81,23 @@ def main() -> None:
     values = load_env(ROOT / ".env")
     host = require(values, "PRODUCTION_METRICS_HOST")
     username = require(values, "METRICS_BASIC_USER")
+    monitoring_user = require(values, "MONITORING_BASIC_USER")
+    monitoring_password = require(values, "MONITORING_BASIC_PASSWORD")
+    monitoring_password_hash = require(values, "MONITORING_BASIC_PASSWORD_HASH")
+    monitoring_server_name = require(values, "MONITORING_SERVER_NAME")
     chat_id = require(values, "TG_CHAT_ID")
     if not re.fullmatch(r"[A-Za-z0-9.-]+(?::\d+)?", host):
         raise SystemExit("PRODUCTION_METRICS_HOST is invalid")
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", username):
         raise SystemExit("METRICS_BASIC_USER is invalid")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", monitoring_user):
+        raise SystemExit("MONITORING_BASIC_USER is invalid")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", monitoring_password):
+        raise SystemExit("MONITORING_BASIC_PASSWORD must be a 32-128 character random base64url value")
+    if not re.fullmatch(r"\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}", monitoring_password_hash):
+        raise SystemExit("MONITORING_BASIC_PASSWORD_HASH must be a bcrypt hash")
+    if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", monitoring_server_name):
+        raise SystemExit("MONITORING_SERVER_NAME is invalid")
     if not re.fullmatch(r"-?\d{1,20}", chat_id):
         raise SystemExit("TG_CHAT_ID is invalid")
 
@@ -90,12 +123,57 @@ def main() -> None:
         uid=GRAFANA_UID,
         gid=GRAFANA_GID,
     )
+    write_runtime_file(
+        ROOT / "secrets" / "monitoring_password",
+        monitoring_password,
+        uid=PROMETHEUS_UID,
+        gid=PROMETHEUS_GID,
+    )
+    copy_runtime_file(
+        Path(require(values, "MONITORING_TLS_CERT_PATH")),
+        ROOT / "secrets" / "tls_fullchain.pem",
+        uid=NGINX_UID,
+        gid=NGINX_GID,
+    )
+    copy_runtime_file(
+        Path(require(values, "MONITORING_TLS_KEY_PATH")),
+        ROOT / "secrets" / "tls_privkey.pem",
+        uid=NGINX_UID,
+        gid=NGINX_GID,
+    )
     render(
         "prometheus.yml.template",
         "prometheus.yml",
-        {"PRODUCTION_METRICS_HOST": host, "METRICS_BASIC_USER": username},
+        {
+            "PRODUCTION_METRICS_HOST": host,
+            "METRICS_BASIC_USER": username,
+            "MONITORING_BASIC_USER": monitoring_user,
+        },
     )
     render("alertmanager.yml.template", "alertmanager.yml", {"TG_CHAT_ID": chat_id})
+    web_replacements = {
+        "MONITORING_BASIC_USER": monitoring_user,
+        "MONITORING_BASIC_PASSWORD_HASH": monitoring_password_hash,
+    }
+    render("web.yml.template", "prometheus-web.yml", web_replacements)
+    render("web.yml.template", "alertmanager-web.yml", web_replacements)
+    render(
+        "grafana-prometheus.yml.template",
+        "grafana-prometheus.yml",
+        {
+            "MONITORING_BASIC_USER": monitoring_user,
+            "MONITORING_BASIC_PASSWORD": monitoring_password,
+        },
+        uid=GRAFANA_UID,
+        gid=GRAFANA_GID,
+    )
+    render(
+        "../nginx/nginx.conf.template",
+        "nginx.conf",
+        {"MONITORING_SERVER_NAME": monitoring_server_name},
+        uid=NGINX_UID,
+        gid=NGINX_GID,
+    )
     print("monitoring configuration rendered without printing secrets")
 
 

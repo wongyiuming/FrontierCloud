@@ -1,0 +1,13 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: frontiercloud-prometheus
+    access: proxy
+    url: http://prometheus:9090/prometheus
+    basicAuth: true
+    basicAuthUser: __MONITORING_BASIC_USER__
+    secureJsonData:
+      basicAuthPassword: __MONITORING_BASIC_PASSWORD__
+    isDefault: true
+    editable: false

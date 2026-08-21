@@ -9,13 +9,14 @@ MONITORING = ROOT / "monitoring"
 
 
 class MonitoringStackTests(unittest.TestCase):
-    def test_management_ports_only_bind_loopback_and_resources_are_bounded(self):
+    def test_only_tls_gateway_publishes_ports_and_resources_are_bounded(self):
         compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
         expected_limits = {
             "prometheus": "768m",
             "grafana": "384m",
             "alertmanager": "128m",
             "blackbox": "128m",
+            "gateway": "64m",
         }
         for service, limit in expected_limits.items():
             match = re.search(
@@ -25,19 +26,31 @@ class MonitoringStackTests(unittest.TestCase):
             self.assertIsNotNone(match)
             block = match.group(1)
             self.assertIn(f"mem_limit: {limit}", block)
-            for binding in re.findall(r"- (\S+:\d+:\d+)", block):
-                self.assertTrue(binding.startswith("127.0.0.1:"))
+            if service != "gateway":
+                self.assertNotIn("ports:", block)
+        self.assertIn('"80:8080"', compose)
+        self.assertIn('"443:8443"', compose)
 
     def test_prometheus_retention_is_time_and_size_bounded(self):
         compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
         self.assertIn("--storage.tsdb.retention.time=24h", compose)
         self.assertIn("--storage.tsdb.retention.size=6GB", compose)
 
-    def test_loopback_management_ports_are_environment_configurable(self):
+    def test_management_services_use_native_authentication(self):
         compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
-        self.assertIn("127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090", compose)
-        self.assertIn("127.0.0.1:${GRAFANA_HOST_PORT:-3000}:3000", compose)
-        self.assertIn("127.0.0.1:${ALERTMANAGER_HOST_PORT:-9093}:9093", compose)
+        self.assertEqual(compose.count("--web.config.file="), 2)
+        self.assertIn("GF_AUTH_ANONYMOUS_ENABLED: \"false\"", compose)
+        self.assertIn("GF_AUTH_BASIC_PASSWORD_POLICY: \"true\"", compose)
+        template = (MONITORING / "templates" / "web.yml.template").read_text(encoding="utf-8")
+        self.assertIn("basic_auth_users:", template)
+
+    def test_gateway_uses_https_subpaths_and_security_headers(self):
+        config = (MONITORING / "nginx" / "nginx.conf.template").read_text(encoding="utf-8")
+        self.assertIn("location /grafana/", config)
+        self.assertIn("location /prometheus/", config)
+        self.assertIn("location /alertmanager/", config)
+        self.assertIn("Strict-Transport-Security", config)
+        self.assertIn("/.well-known/acme-challenge/", config)
 
     def test_renderer_uses_python39_compatible_file_writes(self):
         renderer = (MONITORING / "render_config.py").read_text(encoding="utf-8")

@@ -12,9 +12,14 @@ alerting:
   alertmanagers:
     - static_configs:
         - targets: [alertmanager:9093]
+      path_prefix: /alertmanager
+      basic_auth: &monitoring_auth
+        username: __MONITORING_BASIC_USER__
+        password_file: /run/secrets/monitoring_password
 
 scrape_configs:
   - job_name: prometheus
+    basic_auth: *monitoring_auth
     static_configs:
       - targets: [localhost:9090]
 
