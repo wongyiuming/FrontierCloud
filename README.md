@@ -18,12 +18,12 @@
 ## 今晚范围、部署拓扑与执行纪律
 
 * [ ] 今晚必须完成：播放排序与喜好、播放器进度条可用性、API 文档认证、管理员 Token 过期诊断、封禁历史永久审计、WebRTC 客户端公网地址观察、核心监控与 24 小时历史指标。
-* [ ] 今晚明确排除“匿名聊天墙完全重构”。下文保留其设计草案，仅作为未来需求，不实现、不测试、不部署。
+* [x] 匿名聊天墙已经纳入本轮范围：使用浏览器端 AES-GCM 加密、进程内一次性 Message Key、15 分钟匿名头像会话，以及“先选择消息、再双指持续按住”的移动端揭示流程。
 * [ ] 完全放弃 Email 告警；Telegram Bot 是唯一告警渠道并升级为今晚 P0 必须项。生产部署前必须完成真实告警与恢复通知的端到端测试。
 * [ ] 生产 Web Compose 部署到 `production-web`；Prometheus、Grafana、Alertmanager、Blackbox Exporter 与历史指标存储部署到独立的固定公网 `monitoring-vps`。家庭 CentOS 环境不再参与部署。
 * [ ] `monitoring-vps` 当前资源预算为 2 CPU、约 2GB RAM、约 35GB Disk；所有监控容器必须设置内存上限，Prometheus 同时设置 24 小时保留与容量上限，所有容器日志必须轮转。
 * [ ] 不使用 SSH 隧道。Web 主机上的 Exporter 只加入内部 Docker 网络，由现有 Nginx 通过 HTTPS 的受保护内部指标路径转发；Nginx 和主机防火墙仅允许 `monitoring-vps` 的固定公网 IP 访问这些路径。
-* [ ] Exporter 容器不得单独发布公网端口；Grafana、Prometheus 与 Alertmanager 管理入口默认只监听 `monitoring-vps` 回环地址，需要远程查看时再使用受控 SSH 端口转发。
+* [x] Exporter 容器不得单独发布公网端口；RN 只公开 HTTPS 网关的 `80/443`。Grafana 使用自身账号系统，Prometheus 与 Alertmanager 使用各自原生 Basic Auth，三个后端端口均仅暴露在 Docker 网络。
 * [ ] 所有密码、Bot Token、Chat ID、Exporter 凭据和环境相关 IP（包括监控端白名单 IP）仅放在目标主机的 `.env`/受限凭据文件中；仓库只提交无秘密的 `.env.example`。代码、Compose、Nginx 模板不得硬编码任何具体部署 IP；`.env` 必须为 `0600` 且永不加入 Git。
 * [ ] 任何曾经出现在聊天、日志或截图里的 Bot Token 都视为已泄露，部署前必须轮换；不得为了赶进度继续使用已暴露 Token。
 * [ ] 开始修改前记录本地、远程仓库和当前生产 commit SHA；生产发布始终使用确定的 SHA，不直接部署不确定的工作区状态。
@@ -101,9 +101,9 @@
 * [ ] 部署程序使用 Bot Token 调用 `getMe` 验证机器人身份；用户先向机器人发送 `/start`，再通过 `getUpdates` 获取 Chat ID。整个过程不得打印、回显或记录 Bot Token。
 * [ ] Telegram 告警必须覆盖 firing 与 resolved 两种状态，并设置分组、抑制、重复间隔和冷却，避免故障期间刷屏。
 * [ ] 告警消息包含服务名、主机、指标值、阈值、开始时间及可能的故障定位信息。
-* [ ] Grafana/Prometheus/Alertmanager 管理入口不得直接暴露公网；默认通过从运维端发起的 SSH 本地端口转发访问。
+* [x] Grafana/Prometheus/Alertmanager 由 RN HTTPS 网关按 `/grafana/`、`/prometheus/`、`/alertmanager/` 子路径发布；禁止直接映射三个后端端口。
 
-## 本次排除：匿名聊天墙重构（未来草案）
+## 匿名聊天墙重构（当前实现）
 
 匿名墙安全目标：
 
@@ -134,26 +134,26 @@ Nginx、FastAPI、Redis、MySQL、Grafana、Prometheus 均禁止记录聊天正�
 
 ### 临时匿名身份
 
-* [ ] 每次进入聊天墙前从头像池中选择一个头像。
-* [ ] 使用匿名 Session 与当前浏览器会话绑定，有效期 15 分钟。
+* [x] 每次进入聊天墙前从头像池中选择一个头像。
+* [x] 使用随机 HttpOnly Cookie + Redis TTL 与当前浏览器会话绑定，有效期 15 分钟。
 * [ ] Session 建议使用随机标识 + Redis TTL，不使用 Canvas/字体/显卡等浏览器 Fingerprint 技术建立长期设备画像。
 * [ ] 头像池采用无明显用户偏好画像特征的统一风格二次元/卡通头像。
 * [ ] 头像资源独立管理，可动态启用、禁用和扩充头像池。
 
 ### 临时揭示消息
 
-* [ ] 默认只显示存在一条消息，不直接展示正文。
-* [ ] 移动端必须同时双指按住才能临时显示明文，松开立即销毁不是隐藏是销毁。
-* [ ] 不为桌面端设计等价操作，桌面端不允许看到明文！
+* [x] 默认只显示密文类型、匿名头像与剩余时间，不直接展示正文。
+* [x] 用户必须先单击选择目标消息，然后在移动端双指持续按住揭示区；不足双指、松手、失焦、切后台或离页都会立即清除明文 DOM、可控 Buffer 与 Blob URL。
+* [x] 不为细指针桌面端设计等价揭示操作；只允许至少双点且主指针为触摸的设备执行 Reveal。
 * [ ] 明确定义消息是否只能揭示一次、刷新后是否还能查看、揭示后何时从服务器删除。
 * [ ] 明确定义附件是否和正文使用同样的销毁规则。
 * [ ] UI/文档明确该功能属于临时揭示及旁观防护，无法阻止截图、录屏、开发者工具或主动抓包获取已经发送到客户端的内容。
 
 ### 文件、图片和表情
 
-* [ ] 消息支持文本、文件、图片和内置表情。
-* [ ] 不支持视频。
-* [ ] 图片单文件最大 20MB。
+* [x] 消息支持文本、文本内置表情或单张图片；通用附件不进入本轮实现。
+* [x] 不支持视频。
+* [x] 图片单文件最大 20MB，并在浏览器安全解码、限制像素后重新编码为 WebP，以清除 EXIF/GPS 等元数据。
 * [ ] 明确定义普通附件最大尺寸、单条消息附件数量和总体存储限制。
 * [ ] 表情统一使用服务端认可的表情库/ID，不允许客户端任意提交 HTML。
 * [ ] 服务端校验文件真实类型和文件大小，不仅依赖文件扩展名及客户端 MIME。
@@ -180,6 +180,41 @@ Nginx、FastAPI、Redis、MySQL、Grafana、Prometheus 均禁止记录聊天正�
 * [ ] 发布失败时回滚到上一生产 commit/image/database 状态。
 * [ ] 修复后重新执行测试、提交、部署和业务验证流程。
 * [ ] 每个功能使用独立原子提交；Release Batch 与 commit 数量不强绑定，但任何 commit 都不得包含超过一个功能性变化。
+
+## 生产运维入口
+
+管理员提权凭据由 Web 容器每 15 分钟签发。始终使用稳定容器名读取最新一条，不使用会随重建改变的容器 ID：
+
+```bash
+docker logs office_automation_web 2>&1 \
+  | grep -F '[ADMIN_TOKEN] temporary admin token=' \
+  | tail -n 1
+```
+
+复制 `temporary admin token=` 后面的值，在 `/api/v1/media` 点击“提权”。凭据过期时等待下一条签发日志，不需要重启服务。
+
+RN 监控入口由 `MONITORING_SERVER_NAME` 决定：
+
+```text
+https://<MONITORING_SERVER_NAME>/grafana/
+https://<MONITORING_SERVER_NAME>/prometheus/
+https://<MONITORING_SERVER_NAME>/alertmanager/
+```
+
+Grafana 使用 `.env` 中的 `GRAFANA_ADMIN_USER` 与 `GRAFANA_ADMIN_PASSWORD`。Prometheus、Alertmanager 共用 `MONITORING_BASIC_USER` 与 `MONITORING_BASIC_PASSWORD`，但由两个服务各自的 `--web.config.file` 验证 bcrypt 哈希。只有网关发布 `80/443`；不要重新映射 `3000/9090/9093`。
+
+首次或凭据轮换后，在 RN 生成 bcrypt 值、渲染受限运行时文件并重建监控栈：
+
+```bash
+cd /opt/frontiercloud-monitoring/app/monitoring
+docker run --rm -it --entrypoint htpasswd httpd:2.4-alpine \
+  -nBC 12 "$MONITORING_BASIC_USER"
+python3 render_config.py
+docker compose config --quiet
+docker compose up -d --remove-orphans
+```
+
+不要把命令输出的用户名部分写入 `MONITORING_BASIC_PASSWORD_HASH`；该变量只保存冒号之后的 bcrypt 哈希，并用单引号包裹以保留 `$`。证书续期后必须再次执行 `render_config.py` 并重建 `gateway`，以把新证书复制到仅网关用户可读的 Secret 文件。
 
 
 
