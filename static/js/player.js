@@ -2,6 +2,8 @@ let art = null;
 let currentIndex = 0;
 let isNextPreloaded = false;
 let clickTimer = null;
+let playbackState = null;
+let playbackReporter = null;
 
 // 防御 DOM XSS：全局 HTML 字符转义函数
 function escapeHTML(str) {
@@ -83,9 +85,96 @@ function playPrev() {
     selectMedia(prevIndex);
 }
 
+function playbackThreshold(duration) {
+    return Math.max(5, Math.min(30, duration * 0.5));
+}
+
+function updateTrackStats(media) {
+    const row = document.querySelector(`.media-item[data-media-id="${media.media_id}"]`);
+    if (!row) return;
+    const preference = row.querySelector('.media-preference');
+    const score = row.querySelector('.media-score');
+    if (preference) preference.textContent = `喜好 ${media.preference > 0 ? '+' : ''}${media.preference}`;
+    if (score) score.textContent = `播放 ${media.play_score}`;
+    for (const button of row.querySelectorAll('.preference-btn')) {
+        const delta = Number(button.dataset.delta);
+        button.disabled = (delta > 0 && media.preference >= 2) || (delta < 0 && media.preference <= -2);
+    }
+}
+
+function resetPlaybackAccounting(media) {
+    playbackState = {
+        mediaId: media.media_id,
+        accumulated: 0,
+        lastTick: null,
+        reporting: false,
+        reported: false,
+    };
+}
+
+function accountPlaybackTime() {
+    if (!art || !playbackState) return;
+    const now = performance.now();
+    const playing = art.playing === true || (art.video && !art.video.paused);
+    if (playing && playbackState.lastTick !== null) {
+        const elapsed = (now - playbackState.lastTick) / 1000;
+        if (elapsed > 0 && elapsed <= 2.5) playbackState.accumulated += elapsed;
+    }
+    playbackState.lastTick = playing ? now : null;
+}
+
+async function reportValidPlayback() {
+    accountPlaybackTime();
+    if (!art || !playbackState || playbackState.reporting || playbackState.reported) return;
+    const media = currentMediaList[currentIndex];
+    const duration = Number(art.duration || 0);
+    if (!media || !duration || playbackState.mediaId !== media.media_id) return;
+    if (playbackState.accumulated + 0.05 < playbackThreshold(duration)) return;
+
+    playbackState.reporting = true;
+    try {
+        const response = await fetch('/api/v1/media/playback', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                media_path: media.media_path,
+                playback_session_id: playbackSessionId,
+                played_seconds: playbackState.accumulated,
+                duration,
+            }),
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        playbackState.reported = true;
+        media.play_score = data.play_score;
+        updateTrackStats(media);
+    } catch (_error) {
+        // Playback remains available while transient accounting failures retry.
+    } finally {
+        playbackState.reporting = false;
+    }
+}
+
+async function changePreference(index, delta) {
+    const media = currentMediaList[index];
+    if (!media) return;
+    const response = await fetch('/api/v1/media/preference', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({media_path: media.media_path, delta}),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || '喜好调整失败');
+    media.preference = data.preference;
+    media.play_score = data.play_score;
+    updateTrackStats(media);
+}
+
 function initPlayer(media, index) {
+    accountPlaybackTime();
     currentIndex = index;
     isNextPreloaded = false;
+    resetPlaybackAccounting(media);
     const isAudio = media.type === 'audio';
     const audioCover = document.getElementById('audioCover');
     const audioDisk = document.getElementById('audioDisk');
@@ -130,17 +219,21 @@ function initPlayer(media, index) {
     });
 
     art.on('play', () => {
-        if (media.type === 'audio') audioDisk.classList.add('rotate-disk');
+        const activeMedia = currentMediaList[currentIndex];
+        if (activeMedia.type === 'audio') audioDisk.classList.add('rotate-disk');
+        if (playbackState) playbackState.lastTick = performance.now();
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
     });
 
     art.on('pause', () => {
+        accountPlaybackTime();
         audioDisk.classList.remove('rotate-disk');
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     });
 
     art.on('video:timeupdate', () => {
         checkAndPreloadNext(art.currentTime);
+        reportValidPlayback();
     });
 
     art.on('video:ended', () => {
@@ -264,18 +357,43 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     listContainer.innerHTML = currentMediaList.map((item, index) => `
-        <li class="media-item ${index === 0 ? 'active' : ''}" onclick="selectMedia(${index})">
+        <li class="media-item ${index === 0 ? 'active' : ''}" data-media-id="${escapeHTML(item.media_id)}" onclick="selectMedia(${index})">
             <img src="${escapeHTML(item.cover)}" alt="cover">
             <div class="media-info">
                 <div class="media-title">${escapeHTML(item.title)}</div>
                 <div class="media-artist">${escapeHTML(item.artist)}</div>
+                <div class="media-stats"><span class="media-preference">喜好 ${item.preference > 0 ? '+' : ''}${item.preference}</span><span class="media-score">播放 ${item.play_score}</span></div>
+            </div>
+            <div class="preference-controls">
+                <button type="button" class="preference-btn" data-index="${index}" data-delta="-1" aria-label="降低喜好" ${item.preference <= -2 ? 'disabled' : ''}>−</button>
+                <button type="button" class="preference-btn" data-index="${index}" data-delta="1" aria-label="提高喜好" ${item.preference >= 2 ? 'disabled' : ''}>＋</button>
             </div>
         </li>
     `).join('');
 
+    for (const button of listContainer.querySelectorAll('.preference-btn')) {
+        button.addEventListener('click', async event => {
+            event.stopPropagation();
+            button.disabled = true;
+            try {
+                await changePreference(Number(button.dataset.index), Number(button.dataset.delta));
+            } catch (error) {
+                alert(error.message);
+            } finally {
+                updateTrackStats(currentMediaList[Number(button.dataset.index)]);
+            }
+        });
+    }
+
     initPlayer(currentMediaList[0], 0);
     initGestureControl();
     initCornerTyping();
+    playbackReporter = setInterval(reportValidPlayback, 1000);
+});
+
+window.addEventListener('pagehide', () => {
+    if (playbackReporter) clearInterval(playbackReporter);
+    accountPlaybackTime();
 });
 
 function selectMedia(index) {
