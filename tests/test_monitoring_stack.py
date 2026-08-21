@@ -44,6 +44,10 @@ class MonitoringStackTests(unittest.TestCase):
         template = (MONITORING / "templates" / "web.yml.template").read_text(encoding="utf-8")
         self.assertIn("basic_auth_users:", template)
 
+    def test_prometheus_self_scrape_uses_the_external_route_prefix(self):
+        template = (MONITORING / "templates" / "prometheus.yml.template").read_text(encoding="utf-8")
+        self.assertIn("metrics_path: /prometheus/metrics", template)
+
     def test_gateway_uses_https_subpaths_and_security_headers(self):
         config = (MONITORING / "nginx" / "nginx.conf.template").read_text(encoding="utf-8")
         self.assertIn("location /grafana/", config)
