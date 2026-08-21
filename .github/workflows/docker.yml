@@ -78,9 +78,23 @@ jobs:
       - name: Build and start services
         run: docker compose up -d --build --wait --wait-timeout 180
 
-      - name: Run unit and configuration tests
+      - name: Run source configuration tests
         run: |
-          docker compose exec -T web python -m unittest discover -s tests -v
+          python3 -m unittest -v \
+            tests/test_exporter_config.py \
+            tests/test_monitoring_stack.py \
+            tests/test_wall_ui.py
+
+      - name: Run unit and runtime tests
+        run: |
+          mapfile -t runtime_tests < <(
+            find tests -maxdepth 1 -type f -name 'test_*.py' \
+              ! -name 'test_exporter_config.py' \
+              ! -name 'test_monitoring_stack.py' \
+              ! -name 'test_wall_ui.py' \
+              -printf '/app/%p\n' | sort
+          )
+          docker compose exec -T web python -m unittest -v "${runtime_tests[@]}"
           docker compose exec -T nginx nginx -t
           docker compose exec -T redis redis-cli ping | grep PONG
           docker compose exec -T mysql mysqladmin ping -h 127.0.0.1 -umedia_admin -pci_mysql_password --silent
