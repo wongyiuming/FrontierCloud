@@ -100,10 +100,11 @@ class WatermarkBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
 class XSSAndLogIntegrityTests(unittest.TestCase):
     def test_wall_renders_untrusted_content_as_text(self):
-        source = Path("static/wall/index.html").read_text(encoding="utf-8")
-        self.assertIn("content.textContent", source)
-        self.assertNotIn("${i.content}", source)
-        self.assertNotIn("cdn.tailwindcss.com", source)
+        source = Path("static/js/wall.js").read_text(encoding="utf-8")
+        self.assertIn("paragraph.textContent=decoder.decode", source)
+        self.assertNotIn("innerHTML", source)
+        html = Path("static/wall/index.html").read_text(encoding="utf-8")
+        self.assertNotIn("cdn.tailwindcss.com", html)
 
     def test_log_values_cannot_inject_new_records_or_terminal_controls(self):
         value = sanitize_log_value("safe\n[ADMIN] forged\x1b[2J")

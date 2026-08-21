@@ -1,84 +1,81 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>匿名即焚墙</title>
-    <style>
-        * { box-sizing: border-box; }
-        body { margin: 0; background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; padding: 16px; }
-        main { width: min(100%, 576px); margin: 0 auto; }
-        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-        h1 { color: #f97316; font-size: 24px; margin: 0; }
-        .ttl { background: #1e293b; border-radius: 6px; font-size: 12px; padding: 8px; }
-        .composer { border-bottom: 1px solid #334155; margin-bottom: 32px; padding-bottom: 24px; }
-        textarea { width: 100%; min-height: 100px; resize: vertical; background: #1e293b; border: 1px solid #334155; border-radius: 8px; color: inherit; padding: 12px; }
-        button { width: 100%; margin-top: 8px; border: 0; border-radius: 8px; background: #ea580c; color: #fff; cursor: pointer; font-weight: 700; padding: 10px; }
-        button:hover { background: #f97316; }
-        #list { display: grid; gap: 16px; }
-        .post { background: #1e293b; border-left: 4px solid #f97316; border-radius: 8px; padding: 16px; }
-        .content { font-size: 18px; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-        .meta { display: flex; justify-content: space-between; color: #64748b; font-size: 10px; margin-top: 12px; }
-    </style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="dark">
+    <title>FrontierCloud · 匿名即焚墙</title>
+    <link rel="stylesheet" href="/static/css/wall.css">
 </head>
 <body>
-    <main>
-        <header>
-            <h1>🔥 阅后即焚墙</h1>
-            <span class="ttl">TTL: 240s</span>
+    <main class="shell">
+        <header class="topbar">
+            <div><p class="eyebrow">FRONTIERCLOUD / EPHEMERAL</p><h1>匿名即焚墙</h1></div>
+            <button id="identityButton" class="identity" type="button" aria-label="更换匿名身份">
+                <span id="identitySymbol" class="identity-symbol">?</span><span id="identityName">选择身份</span>
+            </button>
         </header>
 
-        <section class="composer">
-            <textarea id="ipt" maxlength="2000" placeholder="写点什么..."></textarea>
-            <button id="sendButton" type="button">发射</button>
+        <section class="notice" aria-label="隐私说明">
+            <span class="notice-dot" aria-hidden="true"></span>
+            <p>内容在本机加密。选择一条消息后，必须双指持续按住才能揭示；首次揭示即永久焚毁。</p>
         </section>
 
-        <div id="list"></div>
+        <section class="composer panel" aria-labelledby="composeTitle">
+            <div class="section-heading">
+                <div><p class="section-kicker">NEW SIGNAL</p><h2 id="composeTitle">投递一条密文</h2></div>
+                <span id="sessionClock" class="clock">--:--</span>
+            </div>
+            <div class="mode-switch" role="tablist" aria-label="消息类型">
+                <button id="textModeButton" class="mode active" type="button" role="tab" aria-selected="true">文字 / 表情</button>
+                <button id="imageModeButton" class="mode" type="button" role="tab" aria-selected="false">单张图片</button>
+            </div>
+            <div id="textComposer" class="compose-pane">
+                <label class="sr-only" for="messageInput">匿名消息</label>
+                <textarea id="messageInput" maxlength="2000" placeholder="写下短暂存在的内容……"></textarea>
+                <div class="emoji-row" aria-label="快捷表情">
+                    <button type="button" data-emoji="🙂">🙂</button><button type="button" data-emoji="🫠">🫠</button>
+                    <button type="button" data-emoji="✨">✨</button><button type="button" data-emoji="🌙">🌙</button>
+                    <button type="button" data-emoji="🐧">🐧</button><span id="textCounter">0 / 2000</span>
+                </div>
+            </div>
+            <div id="imageComposer" class="compose-pane hidden">
+                <label class="image-drop" for="imageInput">
+                    <span class="image-icon">▧</span><strong>选择一张图片</strong>
+                    <small>JPEG / PNG / WebP，最大 20 MB；发送前在本机清除元数据</small>
+                    <span id="imageName">尚未选择</span>
+                </label>
+                <input id="imageInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+            </div>
+            <button id="sendButton" class="primary" type="button">加密并投递</button>
+            <p id="composerStatus" class="status" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="feed" aria-labelledby="feedTitle">
+            <div class="section-heading feed-heading">
+                <div><p class="section-kicker">SEALED SIGNALS</p><h2 id="feedTitle">待揭示内容</h2></div>
+                <button id="refreshButton" class="ghost" type="button">刷新</button>
+            </div>
+            <p id="emptyState" class="empty hidden">目前没有仍可揭示的消息。</p>
+            <div id="messageList" class="message-list"></div>
+        </section>
     </main>
 
-    <script>
-        function postElement(post) {
-            const card = document.createElement('article');
-            card.className = 'post';
+    <aside id="revealDock" class="reveal-dock" aria-live="polite">
+        <div id="revealContent" class="reveal-content">
+            <span class="finger-mark" aria-hidden="true">◌ ◌</span>
+            <strong id="revealTitle">先选择一条消息</strong>
+            <span id="revealHint">然后用双指持续按住这里</span>
+        </div>
+    </aside>
 
-            const content = document.createElement('p');
-            content.className = 'content';
-            content.textContent = String(post.content ?? '');
-
-            const meta = document.createElement('div');
-            meta.className = 'meta';
-            const created = document.createElement('span');
-            created.textContent = new Date(post.created_at).toLocaleString();
-            const countdown = document.createElement('span');
-            countdown.textContent = '倒计时: 自动销毁中';
-            meta.append(created, countdown);
-            card.append(content, meta);
-            return card;
-        }
-
-        async function refresh() {
-            const res = await fetch('/api/v1/wall/list');
-            const data = await res.json();
-            const list = document.getElementById('list');
-            list.replaceChildren(...data.map(postElement));
-        }
-
-        async function send() {
-            const content = document.getElementById('ipt').value;
-            if(!content) return;
-            const res = await fetch(`/api/v1/wall/publish?content=${encodeURIComponent(content)}`, {method:'POST'});
-            if(res.ok) {
-                document.getElementById('ipt').value = '';
-                refresh();
-            } else {
-                const err = await res.json();
-                alert(err.detail || "操作太快了");
-            }
-        }
-
-        document.getElementById('sendButton').addEventListener('click', send);
-        setInterval(refresh, 10000);
-        refresh();
-    </script>
+    <div id="avatarModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="avatarTitle">
+        <section class="modal-card">
+            <p class="section-kicker">15 MINUTE IDENTITY</p><h2 id="avatarTitle">选择本次匿名头像</h2>
+            <p>身份只绑定当前浏览器会话，15 分钟后自动失效。</p>
+            <div id="avatarGrid" class="avatar-grid"></div>
+        </section>
+    </div>
+    <script src="/static/js/wall.js" defer></script>
 </body>
 </html>
