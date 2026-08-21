@@ -35,6 +35,11 @@ class ExporterConfigurationTests(unittest.TestCase):
         self.assertIn('${INTERNAL_METRICS_TOKEN}', nginx)
         self.assertIsNone(re.search(r"allow\s+(?:\d{1,3}\.){3}\d{1,3}", nginx))
 
+    def test_cadvisor_supports_docker_containerd_snapshotters(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        self.assertIn("ghcr.io/google/cadvisor:0.56.2", compose)
+        self.assertIn("--disable_metrics=disk", compose)
+
     def test_nginx_log_metrics_include_status_and_latency(self):
         nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
         exporter = (ROOT / "monitoring" / "nginxlog-exporter.hcl").read_text(encoding="utf-8")

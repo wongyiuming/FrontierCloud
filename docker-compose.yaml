@@ -135,9 +135,13 @@ services:
         max-file: "2"
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    image: ghcr.io/google/cadvisor:0.56.2
     container_name: frontiercloud_cadvisor
     restart: always
+    command:
+      # Docker 29 uses the containerd overlayfs image store. Disabling only
+      # per-container disk discovery preserves CPU, memory and network metrics.
+      - --disable_metrics=disk
     expose:
       - "8080"
     volumes:
