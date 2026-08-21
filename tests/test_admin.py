@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 from starlette.requests import Request
 
 from app.api.v1 import admin
@@ -20,6 +20,12 @@ from app.services import media_manager
 class _FakeResult:
     def fetchall(self):
         return []
+
+    def mappings(self):
+        return self
+
+    def first(self):
+        return None
 
 
 class _FakeConnection:
@@ -159,6 +165,62 @@ class AdminTokenLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(issue_mock.await_count, 2)
         sleep_mock.assert_any_await(900)
+
+    async def test_unknown_token_has_specific_invalid_diagnostic(self):
+        fake_redis = _FakeRedis()
+        request = Request({
+            "type": "http", "method": "POST", "path": "/api/v1/media/admin/elevate",
+            "headers": [], "client": ("203.0.113.8", 12345),
+        })
+        with (
+            patch.object(admin_service, "redis_client", fake_redis),
+            patch.object(admin_service, "engine", _FakeEngine()),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await admin_service.verify_admin_token("never-issued", request)
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(raised.exception.detail["code"], "ADMIN_TOKEN_INVALID")
+
+    async def test_expired_token_has_specific_expiry_diagnostic(self):
+        fake_redis = _FakeRedis()
+        request = Request({
+            "type": "http", "method": "POST", "path": "/api/v1/media/admin/elevate",
+            "headers": [], "client": ("203.0.113.8", 12345),
+        })
+        with (
+            patch.object(admin_service, "redis_client", fake_redis),
+            patch.object(
+                admin_service,
+                "_classify_missing_token",
+                new=AsyncMock(return_value=(
+                    401,
+                    {"code": "ADMIN_TOKEN_EXPIRED", "message": "该特权凭证已过期，请获取新凭证"},
+                )),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await admin_service.verify_admin_token("previously-valid", request)
+
+        self.assertEqual(raised.exception.status_code, 401)
+        self.assertEqual(raised.exception.detail["code"], "ADMIN_TOKEN_EXPIRED")
+
+    async def test_rate_limit_has_specific_diagnostic(self):
+        fake_redis = _FakeRedis()
+        fake_redis.values[admin_service.FAIL_PREFIX + "203.0.113.8"] = "10"
+        request = Request({
+            "type": "http", "method": "POST", "path": "/api/v1/media/admin/elevate",
+            "headers": [], "client": ("203.0.113.8", 12345),
+        })
+        with (
+            patch.object(admin_service, "redis_client", fake_redis),
+            patch.object(admin_service.settings, "ADMIN_MAX_FAILED_ATTEMPTS_PER_IP", 10),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await admin_service.verify_admin_token("any-token", request)
+
+        self.assertEqual(raised.exception.status_code, 429)
+        self.assertEqual(raised.exception.detail["code"], "ADMIN_RATE_LIMITED")
 
 
 class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):

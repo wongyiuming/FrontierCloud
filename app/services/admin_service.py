@@ -38,6 +38,42 @@ def _ua(request: Request) -> str:
     return request.headers.get("User-Agent", "")[:512]
 
 
+def _token_error(code: str, message: str) -> dict[str, str]:
+    return {"code": code, "message": message}
+
+
+async def _classify_missing_token(token_hash: str) -> tuple[int, dict[str, str]]:
+    now = _now()
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text("""
+                SELECT status, expires_at
+                FROM admin_token_history
+                WHERE token_hash=:h
+                LIMIT 1
+            """),
+            {"h": token_hash},
+        )
+        row = result.mappings().first()
+        await conn.execute(
+            text("UPDATE admin_token_history SET failed_attempts = failed_attempts + 1 WHERE token_hash=:h"),
+            {"h": token_hash},
+        )
+        if row and (row["expires_at"] <= now or str(row["status"]) in {"expired", "revoked", "invalidated"}):
+            await conn.execute(
+                text("""
+                    UPDATE admin_token_history
+                    SET status='expired', invalidated_reason=COALESCE(invalidated_reason, 'ttl_expired')
+                    WHERE token_hash=:h
+                """),
+                {"h": token_hash},
+            )
+            return 401, _token_error("ADMIN_TOKEN_EXPIRED", "该特权凭证已过期，请获取新凭证")
+        if row:
+            return 403, _token_error("ADMIN_TOKEN_UNAVAILABLE", "该特权凭证已失效，请获取新凭证")
+    return 403, _token_error("ADMIN_TOKEN_INVALID", "特权凭证无效，请检查输入")
+
+
 async def issue_admin_token() -> str:
     token = secrets.token_urlsafe(32)
     token_hash = _hash(token)
@@ -100,13 +136,19 @@ async def run_admin_token_issuer() -> None:
 async def verify_admin_token(token: str, request: Request) -> str:
     token = (token or "").strip()
     if not token or len(token) > 256:
-        raise HTTPException(status_code=403, detail="特权验证失败")
+        raise HTTPException(
+            status_code=403,
+            detail=_token_error("ADMIN_TOKEN_INVALID", "特权凭证无效，请检查输入"),
+        )
 
     ip = _client_ip(request)
     fail_key = FAIL_PREFIX + ip
     failed = await redis_client.get(fail_key)
     if failed and int(failed) >= settings.ADMIN_MAX_FAILED_ATTEMPTS_PER_IP:
-        raise HTTPException(status_code=429, detail="验证请求过于频繁，请稍后再试")
+        raise HTTPException(
+            status_code=429,
+            detail=_token_error("ADMIN_RATE_LIMITED", "验证请求过于频繁，请稍后再试"),
+        )
 
     token_hash = _hash(token)
     key = TOKEN_PREFIX + token_hash
@@ -115,12 +157,8 @@ async def verify_admin_token(token: str, request: Request) -> str:
         count = await redis_client.incr(fail_key)
         if count == 1:
             await redis_client.expire(fail_key, settings.ADMIN_FAILED_WINDOW)
-        async with engine.begin() as conn:
-            await conn.execute(
-                text("UPDATE admin_token_history SET failed_attempts = failed_attempts + 1 WHERE token_hash=:h"),
-                {"h": token_hash},
-            )
-        raise HTTPException(status_code=403, detail="特权验证失败")
+        status_code, detail = await _classify_missing_token(token_hash)
+        raise HTTPException(status_code=status_code, detail=detail)
 
     # Every token owns an independent sliding TTL. Verifying this token refreshes
     # only this token and never invalidates or replaces other issued tokens.
