@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.core.redis import redis_client
 
 
-CACHE_PREFIX = "media:catalog:v1"
+CACHE_PREFIX = "media:catalog:v2"
 GENERATION_KEY = f"{CACHE_PREFIX}:generation"
 
 

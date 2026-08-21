@@ -83,3 +83,25 @@ async def init_db() -> None:
                 INDEX idx_ip_whitelist_created_at (created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """))
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS media_playback_stats (
+                media_id CHAR(64) NOT NULL PRIMARY KEY,
+                media_path VARCHAR(1024) NOT NULL,
+                play_score BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                preference TINYINT NOT NULL DEFAULT 0,
+                created_at DATETIME(6) NOT NULL,
+                updated_at DATETIME(6) NOT NULL,
+                INDEX idx_playback_sort (preference, play_score),
+                CONSTRAINT chk_media_preference CHECK (preference BETWEEN -2 AND 2)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """))
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS media_playback_events (
+                playback_session_id CHAR(36) NOT NULL,
+                media_id CHAR(64) NOT NULL,
+                counted_at DATETIME(6) NOT NULL,
+                expires_at DATETIME(6) NOT NULL,
+                PRIMARY KEY (playback_session_id, media_id),
+                INDEX idx_playback_event_expiry (expires_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """))

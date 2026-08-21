@@ -3,12 +3,15 @@ import html as html_escape
 import json
 import os
 import urllib.parse
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import BaseModel, Field
 
 from app.services.media_catalog_cache import load_media_catalog, store_media_catalog
+from app.services import playback
 
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parents[3]
@@ -18,6 +21,18 @@ MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
 
 AUDIO_EXTS = (".mp3", ".m4a", ".flac", ".wav")
 VIDEO_EXTS = (".mp4", ".webm", ".mkv")
+
+
+class PlaybackReport(BaseModel):
+    media_path: str = Field(min_length=1, max_length=1024)
+    playback_session_id: str = Field(min_length=1, max_length=64)
+    played_seconds: float = Field(gt=0, le=86400)
+    duration: float = Field(gt=0, le=86400)
+
+
+class PreferenceChange(BaseModel):
+    media_path: str = Field(min_length=1, max_length=1024)
+    delta: int
 
 
 def safe_json_dumps(data) -> str:
@@ -104,6 +119,8 @@ def _scan_media_files_by_category_sync(category_subpath, valid_exts, media_type,
             if _is_publicly_hidden(rel, hidden):
                 continue
             result.append({
+                "media_id": playback.media_id_for_path(rel),
+                "media_path": rel,
                 "title": file_path.stem,
                 "artist": "前沿视界",
                 "type": media_type,
@@ -182,19 +199,51 @@ async def get_video_categories_page():
 
 @router.get("/music/category", response_class=HTMLResponse)
 async def get_music_player_page(path: str = Query(...)):
-    media_list = await scan_media_files_by_category(path, AUDIO_EXTS, "audio")
+    session_id = str(uuid.uuid4())
+    media_list = await playback.attach_stats_and_sort(
+        await scan_media_files_by_category(path, AUDIO_EXTS, "audio"),
+        session_id,
+    )
     html = load_html_template("player.html")
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"前沿音乐 - {path}"))
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/music"))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
+    html = html.replace("{{PLAYBACK_SESSION_ID}}", safe_json_dumps(session_id))
     return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
 
 
 @router.get("/video/category", response_class=HTMLResponse)
 async def get_video_player_page(path: str = Query(...)):
-    media_list = await scan_media_files_by_category(path, VIDEO_EXTS, "video")
+    session_id = str(uuid.uuid4())
+    media_list = await playback.attach_stats_and_sort(
+        await scan_media_files_by_category(path, VIDEO_EXTS, "video"),
+        session_id,
+    )
     html = load_html_template("player.html")
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"前沿视讯 - {path}"))
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/video"))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
+    html = html.replace("{{PLAYBACK_SESSION_ID}}", safe_json_dumps(session_id))
     return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
+
+
+@router.post("/playback")
+async def report_playback(payload: PlaybackReport):
+    try:
+        return await playback.record_playback(
+            MEDIA_ROOT,
+            payload.media_path,
+            payload.playback_session_id,
+            payload.played_seconds,
+            payload.duration,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/preference")
+async def update_preference(payload: PreferenceChange):
+    try:
+        return await playback.change_preference(MEDIA_ROOT, payload.media_path, payload.delta)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
