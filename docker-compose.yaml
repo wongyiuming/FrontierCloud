@@ -240,6 +240,28 @@ services:
     mem_limit: 128m
     logging: *exporter_logging
 
+  nginxlog_limiter:
+    image: busybox:1.37.0
+    container_name: frontiercloud_nginxlog_limiter
+    restart: always
+    environment:
+      NGINX_METRIC_LOG_MAX_BYTES: ${NGINX_METRIC_LOG_MAX_BYTES:-10485760}
+    entrypoint:
+      - /bin/sh
+      - /opt/frontiercloud/nginx_log_limiter.sh
+    volumes:
+      - nginx_logs:/mnt/nginxlogs
+      - ./monitoring/nginx_log_limiter.sh:/opt/frontiercloud/nginx_log_limiter.sh:ro
+    depends_on:
+      - nginx
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 32m
+    logging: *exporter_logging
+
   mysql_backup:
     image: mysql:8.4
     container_name: frontiercloud_mysql_backup
