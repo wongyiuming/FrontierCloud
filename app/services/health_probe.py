@@ -12,7 +12,7 @@ from app.core.config import settings
 HEALTH_URL = "http://127.0.0.1:8000/api/v1/health"
 ROLLING_KEY = "health:checks:120m"
 WINDOW_MINUTES = 120
-ROLLING_TTL_SECONDS = (WINDOW_MINUTES + 2) * 60
+ROLLING_TTL_SECONDS = WINDOW_MINUTES * 60
 ROLLING_COUNTER_SCRIPT = """
 local key = KEYS[1]
 local slot = ARGV[1]

@@ -19,7 +19,7 @@ class HealthProbeCounterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first[5], "success")
         self.assertEqual(second[3], 10_001 % 120)
         self.assertEqual(second[5], "failure")
-        self.assertEqual(first[6], 7_320)
+        self.assertEqual(first[6], 7_200)
         self.assertIn("HINCRBY", health_probe.ROLLING_COUNTER_SCRIPT)
         self.assertIn("HSET", health_probe.ROLLING_COUNTER_SCRIPT)
         self.assertIn("EXPIRE", health_probe.ROLLING_COUNTER_SCRIPT)
