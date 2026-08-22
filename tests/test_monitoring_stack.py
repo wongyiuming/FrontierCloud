@@ -56,6 +56,14 @@ class MonitoringStackTests(unittest.TestCase):
         self.assertIn("Strict-Transport-Security", config)
         self.assertIn("/.well-known/acme-challenge/", config)
 
+    def test_login_limiter_does_not_throttle_grafana_assets(self):
+        config = (MONITORING / "nginx" / "nginx.conf.template").read_text(encoding="utf-8")
+        self.assertIn("limit_req_status 429;", config)
+        self.assertIn("location = /grafana/login {", config)
+        grafana_location = config.split("location /grafana/ {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("limit_req", grafana_location)
+        self.assertEqual(config.count("limit_req zone=monitoring_login"), 1)
+
     def test_renderer_uses_python39_compatible_file_writes(self):
         renderer = (MONITORING / "render_config.py").read_text(encoding="utf-8")
         self.assertNotIn(".write_text(", renderer)
