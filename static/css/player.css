@@ -15,35 +15,6 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .rotate-disk { animation: rotate 20s linear infinite; }
 @keyframes rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
-/* 四角炫彩打字效果样式 */
-.corner-text {
-    position: absolute;
-    font-size: min(45vh, 360px);
-    font-weight: 900;
-    z-index: 5;
-    pointer-events: none;
-    user-select: none;
-    background: linear-gradient(135deg, #ff0055, #ff5e00, #ffb700, #00e5ff, #9d00ff, #ff0055);
-    background-size: 400% 400%;
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: transparent;
-    animation: gradientShift 6s ease infinite;
-    filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.2));
-    line-height: 1;
-}
-.corner-tl { top: 6%; left: 8%; }
-.corner-tr { top: 6%; right: 8%; }
-.corner-bl { bottom: 6%; left: 8%; }
-.corner-br { bottom: 6%; right: 8%; }
-
-@keyframes gradientShift {
-    0% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
-}
-
 .audio-interaction-guide { position: absolute; inset: 0; z-index: 8; pointer-events: none; user-select: none; }
 .interaction-hint { position: absolute; left: 4%; right: 4%; display: flex; align-items: center; justify-content: center; text-align: center; color: #fff; font-size: clamp(25px, 4vw, 56px); font-weight: 900; letter-spacing: 0.04em; line-height: 1.25; text-shadow: 0 2px 6px #000, 0 0 18px rgba(0,0,0,0.95), 0 0 28px rgba(0,229,255,0.55); }
 .interaction-hint-upper { top: 43%; transform: translateY(-50%); flex-wrap: wrap; gap: 0.25em 0.9em; }
@@ -93,6 +64,5 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
     .media-item { padding: 10px 12px; }
     .interaction-hint { left: 2%; right: 2%; font-size: clamp(21px, 7vw, 34px); }
     .interaction-hint-upper { gap: 0.18em 0.55em; }
-    .corner-text { font-size: min(30vh, 170px); }
     .audio-disk { width: min(48vw, 210px); height: min(48vw, 210px); }
 }

@@ -18,32 +18,6 @@ function escapeHTML(str) {
     }[tag] || tag));
 }
 
-function initCornerTyping() {
-    const config = [
-        { id: 'cornerTL', text: '中', delay: 0 },
-        { id: 'cornerTR', text: '国', delay: 250 },
-        { id: 'cornerBL', text: '爱', delay: 500 },
-        { id: 'cornerBR', text: '我', delay: 750 }
-    ];
-
-    config.forEach(item => {
-        const el = document.getElementById(item.id);
-        if (!el) return;
-        el.innerText = '';
-        setTimeout(() => {
-            let index = 0;
-            const timer = setInterval(() => {
-                if (index < item.text.length) {
-                    el.innerText += item.text.charAt(index);
-                    index++;
-                } else {
-                    clearInterval(timer);
-                }
-            }, 150);
-        }, item.delay);
-    });
-}
-
 function updateMediaSession(media) {
     if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
@@ -510,7 +484,6 @@ window.addEventListener('DOMContentLoaded', () => {
 
     initPlayer(currentMediaList[0], 0);
     initGestureControl();
-    initCornerTyping();
     playbackReporter = setInterval(reportValidPlayback, 1000);
 });
 
