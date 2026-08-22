@@ -31,18 +31,25 @@
     const addresses = new Set();
     let peer;
     let timer;
+    let finished = false;
+    let sawIceError = false;
     const finish = failure => {
+        if (finished) return;
+        finished = true;
         if (timer) clearTimeout(timer);
         if (peer) peer.close();
         report(addresses, addresses.size ? null : failure);
     };
 
     try {
-        peer = new RTCPeerConnection({iceServers: [{urls}]});
+        peer = new RTCPeerConnection({
+            iceServers: urls.map(url => ({urls: url})),
+            iceTransportPolicy: 'all',
+        });
         peer.createDataChannel('network-observation');
         peer.addEventListener('icecandidate', event => {
             if (!event.candidate) {
-                finish('no_srflx');
+                finish(sawIceError ? 'ice_error' : 'no_srflx');
                 return;
             }
             const candidate = event.candidate;
@@ -52,9 +59,16 @@
             if (address) addresses.add(address);
         });
         peer.addEventListener('icecandidateerror', () => {
-            if (!addresses.size) finish('ice_error');
-        }, {once: true});
-        timer = setTimeout(() => finish('timeout'), 5000);
+            // ICE errors are per server/address-family attempt. A later attempt
+            // can still produce a valid srflx candidate, so wait for completion.
+            sawIceError = true;
+        });
+        peer.addEventListener('icegatheringstatechange', () => {
+            if (peer.iceGatheringState === 'complete') {
+                finish(sawIceError ? 'ice_error' : 'no_srflx');
+            }
+        });
+        timer = setTimeout(() => finish('timeout'), 8000);
         peer.createOffer()
             .then(offer => peer.setLocalDescription(offer))
             .catch(() => finish('ice_error'));

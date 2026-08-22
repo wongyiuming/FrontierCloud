@@ -39,6 +39,9 @@ class NetworkObservationTests(unittest.TestCase):
         self.assertIn("candidate.type !== 'srflx'", script)
         self.assertIn("peer.close()", script)
         self.assertIn("createDataChannel", script)
+        self.assertIn("iceGatheringState === 'complete'", script)
+        self.assertIn("sawIceError = true", script)
+        self.assertNotIn("if (!addresses.size) finish('ice_error')", script)
         self.assertNotIn("getUserMedia", script)
         self.assertIn("/api/v1/media/network-observation", script)
 
