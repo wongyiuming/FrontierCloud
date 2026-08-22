@@ -90,6 +90,14 @@ class PlayerUIContractTests(unittest.TestCase):
             self.assertIn("{{PLAYER_CSS_URL}}", template)
             self.assertIn("{{PLAYER_JS_URL}}", template)
 
+    def test_android_portrait_layout_stacks_player_above_sidebar(self):
+        style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
+
+        self.assertIn("@media (max-width: 700px) and (orientation: portrait)", style)
+        self.assertIn("flex-direction: column", style)
+        self.assertIn("flex-basis: 60dvh", style)
+        self.assertIn("min-width: 0", style)
+
 
 if __name__ == "__main__":
     unittest.main()

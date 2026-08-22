@@ -83,3 +83,16 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .preference-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .gesture-hud { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.75); color: #fff; padding: 12px 24px; border-radius: 8px; font-size: 16px; font-weight: bold; pointer-events: none; z-index: 100; display: none; }
+
+@media (max-width: 700px) and (orientation: portrait) {
+    body { flex-direction: column; height: 100vh; height: 100dvh; }
+    .player-section { flex: 0 0 60vh; flex-basis: 60dvh; width: 100%; min-height: 0; }
+    .sidebar { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 0; border-right: 0; border-top: 1px solid #282828; }
+    .sidebar-header { padding: 12px 14px; }
+    .player-controls { padding: 8px 10px; }
+    .media-item { padding: 10px 12px; }
+    .interaction-hint { left: 2%; right: 2%; font-size: clamp(21px, 7vw, 34px); }
+    .interaction-hint-upper { gap: 0.18em 0.55em; }
+    .corner-text { font-size: min(30vh, 170px); }
+    .audio-disk { width: min(48vw, 210px); height: min(48vw, 210px); }
+}
