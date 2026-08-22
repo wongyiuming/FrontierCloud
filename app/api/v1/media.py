@@ -220,7 +220,7 @@ async def get_music_player_page(path: str = Query(...)):
         await scan_media_files_by_category(path, AUDIO_EXTS, "audio"),
         session_id,
     )
-    html = load_html_template("player.html")
+    html = load_html_template("audio-player.html")
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"前沿音乐 - {path}"))
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/music"))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
@@ -236,7 +236,7 @@ async def get_video_player_page(path: str = Query(...)):
         await scan_media_files_by_category(path, VIDEO_EXTS, "video"),
         session_id,
     )
-    html = load_html_template("player.html")
+    html = load_html_template("video-player.html")
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"前沿视讯 - {path}"))
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/video"))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
