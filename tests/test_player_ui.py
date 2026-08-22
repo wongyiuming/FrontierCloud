@@ -36,7 +36,7 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("function isGestureControl(target)", script)
         self.assertIn(".art-control-progress", script)
         self.assertIn("let pointerId = null", script)
-        self.assertGreaterEqual(script.count("isGestureControl(event.target)"), 5)
+        self.assertGreaterEqual(script.count("isGestureControl(event.target)"), 4)
 
     def test_audio_player_has_visible_split_zone_and_persistent_progress(self):
         script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
@@ -45,6 +45,7 @@ class PlayerUIContractTests(unittest.TestCase):
 
         self.assertIn("const DIRECT_SEEK_ZONE_START = 0.75", script)
         self.assertIn("seekToHorizontalPosition(event.clientX, playerSection)", script)
+        self.assertGreaterEqual(script.count("const isDirectSeekZone = verticalPlayerRatio"), 2)
         self.assertIn("initAudioGestureControl", script)
         self.assertIn("单击下一首", template)
         self.assertIn("双击上一首", template)

@@ -361,12 +361,15 @@ function initAudioGestureControl() {
     }, true);
 
     playerSection.addEventListener('click', event => {
-        if (isGestureControl(event.target) || Date.now() < suppressClickUntil) return;
+        if (Date.now() < suppressClickUntil) return;
+
+        const isDirectSeekZone = verticalPlayerRatio(event, playerSection) >= DIRECT_SEEK_ZONE_START;
+        if (!isDirectSeekZone && isGestureControl(event.target)) return;
 
         event.stopPropagation();
         event.preventDefault();
 
-        if (verticalPlayerRatio(event, playerSection) >= DIRECT_SEEK_ZONE_START) {
+        if (isDirectSeekZone) {
             if (clickTimer) clearTimeout(clickTimer);
             clickTimer = null;
             seekToHorizontalPosition(event.clientX, playerSection);
@@ -445,13 +448,14 @@ function initVideoGestureControl() {
     });
 
     playerSection.addEventListener('click', event => {
-        if (isGestureControl(event.target)) return;
         if (Date.now() < suppressClickUntil) {
             event.stopPropagation();
             event.preventDefault();
             return;
         }
-        if (verticalPlayerRatio(event, playerSection) < DIRECT_SEEK_ZONE_START) return;
+
+        const isDirectSeekZone = verticalPlayerRatio(event, playerSection) >= DIRECT_SEEK_ZONE_START;
+        if (!isDirectSeekZone) return;
 
         event.stopPropagation();
         event.preventDefault();
