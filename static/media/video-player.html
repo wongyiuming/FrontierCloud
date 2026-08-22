@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>{{PAGE_TITLE}}</title>
-    <link rel="stylesheet" href="/static/css/player.css">
+    <link rel="stylesheet" href="{{PLAYER_CSS_URL}}">
 </head>
 <body class="video-player-page">
     <div class="player-section" id="playerSection">
@@ -23,7 +23,7 @@
     <div class="sidebar">
         <div class="sidebar-header">
             <span>四大发明</span>
-            <a href="{{CATEGORY_LIST_URL}}" class="back-btn">← 返回分类</a>
+            <span class="header-actions"><a href="/api/v1/media/refresh" class="refresh-btn">↻ 刷新界面</a><a href="{{CATEGORY_LIST_URL}}" class="back-btn">← 返回分类</a></span>
         </div>
         <div class="player-controls">
             <button class="control-btn" onclick="playPrev()">⏮ up_music</button>
@@ -40,7 +40,7 @@
         const PLAYER_KIND = 'video';
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/artplayer/5.1.1/artplayer.js"></script>
-    <script src="/static/js/network-observation.js"></script>
-    <script src="/static/js/player.js"></script>
+    <script src="{{NETWORK_OBSERVATION_JS_URL}}"></script>
+    <script src="{{PLAYER_JS_URL}}"></script>
 </body>
 </html>

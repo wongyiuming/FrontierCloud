@@ -1,8 +1,10 @@
 import unittest
+import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
 from app.core.config import settings
+from app.api.v1 import media
 from app.services import network_observation
 
 
@@ -41,10 +43,22 @@ class NetworkObservationTests(unittest.TestCase):
         self.assertIn("/api/v1/media/network-observation", script)
 
     def test_all_public_media_templates_load_probe(self):
-        for name in ("index.html", "category.html", "player.html"):
+        for name in ("index.html", "category.html", "audio-player.html", "video-player.html"):
             value = (ROOT / "static" / "media" / name).read_text(encoding="utf-8")
-            self.assertIn("network-observation.js", value)
+            self.assertIn("NETWORK_OBSERVATION_JS_URL", value)
             self.assertIn("STUN_URLS_JSON", value)
+
+    def test_media_pages_render_content_versioned_assets_and_no_store_headers(self):
+        response = asyncio.run(media.get_media_index_page())
+        body = response.body.decode("utf-8")
+
+        self.assertIn("/static/js/network-observation.js?v=", body)
+        self.assertNotIn("NETWORK_OBSERVATION_JS_URL", body)
+        self.assertEqual(response.headers["cache-control"], "no-store, no-cache, must-revalidate, max-age=0")
+
+        refresh = asyncio.run(media.refresh_media_interface())
+        self.assertEqual(refresh.status_code, 303)
+        self.assertEqual(refresh.headers["clear-site-data"], '"cache"')
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import html as html_escape
 import json
 import os
@@ -7,7 +8,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.services.media_catalog_cache import load_media_catalog, store_media_catalog
@@ -23,6 +24,11 @@ MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
 
 AUDIO_EXTS = (".mp3", ".m4a", ".flac", ".wav")
 VIDEO_EXTS = (".mp4", ".webm", ".mkv")
+NO_STORE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 
 
 class PlaybackReport(BaseModel):
@@ -42,8 +48,24 @@ class NetworkObservation(BaseModel):
     failure: str | None = Field(None, max_length=32)
 
 
-def inject_network_observation(html: str) -> str:
-    return html.replace("{{STUN_URLS_JSON}}", safe_json_dumps(settings.webrtc_stun_urls()))
+def static_asset_url(relative_path: str) -> str:
+    path = (BASE_DIR / "static" / relative_path).resolve()
+    if not path.is_relative_to((BASE_DIR / "static").resolve()) or not path.is_file():
+        raise RuntimeError(f"Static asset is missing: {relative_path}")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    return f"/static/{relative_path}?v={digest}"
+
+
+def inject_page_runtime(html: str) -> str:
+    replacements = {
+        "{{STUN_URLS_JSON}}": safe_json_dumps(settings.webrtc_stun_urls()),
+        "{{NETWORK_OBSERVATION_JS_URL}}": html_escape.escape(static_asset_url("js/network-observation.js"), quote=True),
+        "{{PLAYER_JS_URL}}": html_escape.escape(static_asset_url("js/player.js"), quote=True),
+        "{{PLAYER_CSS_URL}}": html_escape.escape(static_asset_url("css/player.css"), quote=True),
+    }
+    for marker, value in replacements.items():
+        html = html.replace(marker, value)
+    return html
 
 
 def safe_json_dumps(data) -> str:
@@ -188,8 +210,17 @@ async def stream_media_file(file_path: str = Query(...)):
 @router.get("", response_class=HTMLResponse)
 async def get_media_index_page():
     return HTMLResponse(
-        inject_network_observation(load_html_template("index.html")),
-        headers={"Cache-Control": "public, max-age=3600"},
+        inject_page_runtime(load_html_template("index.html")),
+        headers=NO_STORE_HEADERS,
+    )
+
+
+@router.get("/refresh")
+async def refresh_media_interface():
+    return RedirectResponse(
+        url=f"/api/v1/media?ui={uuid.uuid4().hex}",
+        status_code=303,
+        headers={**NO_STORE_HEADERS, "Clear-Site-Data": '"cache"'},
     )
 
 
@@ -199,8 +230,8 @@ async def get_music_categories_page():
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape("前沿媒体"))
     html = html.replace("{{BACK_URL}}", html_escape.escape("/api/v1/media"))
     html = html.replace("{{CATEGORIES_JSON}}", safe_json_dumps(await get_media_categories("music", AUDIO_EXTS)))
-    html = inject_network_observation(html)
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
+    html = inject_page_runtime(html)
+    return HTMLResponse(html, headers=NO_STORE_HEADERS)
 
 
 @router.get("/video", response_class=HTMLResponse)
@@ -209,8 +240,8 @@ async def get_video_categories_page():
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape("前沿视讯"))
     html = html.replace("{{BACK_URL}}", html_escape.escape("/api/v1/media"))
     html = html.replace("{{CATEGORIES_JSON}}", safe_json_dumps(await get_media_categories("video", VIDEO_EXTS)))
-    html = inject_network_observation(html)
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
+    html = inject_page_runtime(html)
+    return HTMLResponse(html, headers=NO_STORE_HEADERS)
 
 
 @router.get("/music/category", response_class=HTMLResponse)
@@ -225,8 +256,8 @@ async def get_music_player_page(path: str = Query(...)):
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/music"))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
     html = html.replace("{{PLAYBACK_SESSION_ID}}", safe_json_dumps(session_id))
-    html = inject_network_observation(html)
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
+    html = inject_page_runtime(html)
+    return HTMLResponse(html, headers=NO_STORE_HEADERS)
 
 
 @router.get("/video/category", response_class=HTMLResponse)
@@ -241,8 +272,8 @@ async def get_video_player_page(path: str = Query(...)):
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/video"))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
     html = html.replace("{{PLAYBACK_SESSION_ID}}", safe_json_dumps(session_id))
-    html = inject_network_observation(html)
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=0, must-revalidate"})
+    html = inject_page_runtime(html)
+    return HTMLResponse(html, headers=NO_STORE_HEADERS)
 
 
 @router.post("/playback")

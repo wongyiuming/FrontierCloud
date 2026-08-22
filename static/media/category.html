@@ -24,7 +24,7 @@
     <div class="container">
         <div class="header">
             <h1>{{PAGE_TITLE}}</h1>
-            <a href="{{BACK_URL}}" class="back-btn">← 返回首页</a>
+            <span><a href="/api/v1/media/refresh" class="back-btn">↻ 刷新界面</a>&nbsp;&nbsp;<a href="{{BACK_URL}}" class="back-btn">← 返回首页</a></span>
         </div>
         <div id="categoryGrid" class="card-grid"></div>
     </div>
@@ -60,6 +60,6 @@
             `).join('');
         });
     </script>
-    <script src="/static/js/network-observation.js"></script>
+    <script src="{{NETWORK_OBSERVATION_JS_URL}}"></script>
 </body>
 </html>
