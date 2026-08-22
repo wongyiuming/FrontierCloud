@@ -26,6 +26,7 @@ class ExporterConfigurationTests(unittest.TestCase):
         self.assertIn("${WEBRTC_STUN_PORT:?WEBRTC_STUN_PORT must be set}", block)
         self.assertIn("mem_limit: 32m", block)
         self.assertIn("cpus:", block)
+        self.assertIn("cap_add:\n      - NET_BIND_SERVICE", block)
         self.assertIn("WEBRTC_STUN_URLS=stun:${WEBRTC_STUN_HOST}:${WEBRTC_STUN_PORT}", env_example)
         self.assertIn("WEBRTC_STUN_PORT=3478", workflow)
 
