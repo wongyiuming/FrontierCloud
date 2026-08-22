@@ -91,7 +91,7 @@
 * [ ] Nginx 连接/请求量可使用受限 `stub_status`，状态码和响应时间使用访问日志 Exporter 或等价可验证方案；不得把 FastAPI 指标冒充为 Nginx 指标。
 * [ ] 内部指标路径采用双重限制：Nginx 源 IP Allowlist 只允许 `monitoring-vps` 固定公网 IP，同时使用独立随机 Bearer/Basic Auth 凭据；未授权来源必须返回 403/404。
 * [ ] 资源限制初始预算：Prometheus `768MB`、Grafana `384MB`、Alertmanager `128MB`、Blackbox Exporter `128MB`；监控栈总预算不得挤占系统和 Docker 的安全余量，部署后依据实测 RSS 调整。
-* [ ] 对 FrontierCloud 健检接口增加独立探测，连续异常达到设定时间后进入告警状态。
+* [x] FrontierCloud 容器内健检每 30 秒执行且不写请求日志；Redis 使用 120 个分钟槽循环记录最近 120 分钟成功/失败计数，旧槽覆盖、停止探测后键自动过期。RN 继续负责独立公网探测和连续异常告警。
 * [ ] CPU > 90%、Memory > 90% 等告警必须定义持续时间，避免瞬间尖峰触发告警。
 * [ ] Disk Available < 8% 触发高优先级告警，并排除 tmpfs、overlay 等无需监控的文件系统。
 * [ ] 带宽异常定义明确的阈值或近期基线规则，不使用模糊的“异常流量”判断。

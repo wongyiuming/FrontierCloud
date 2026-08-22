@@ -61,6 +61,12 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+QUIET_REQUEST_PATHS = frozenset({
+    "/api/v1/health",
+    "/internal/metrics",
+    "/api/v1/media/admin/logs",
+})
+
 
 class RealIPLogMiddleware:
     """Emit one decoded request line with all per-request network identities."""
@@ -90,23 +96,23 @@ class RealIPLogMiddleware:
             elapsed = (time.perf_counter() - start) * 1000
             method = sanitize_log_value(scope.get("method", ""), 16)
             path = sanitize_log_value(scope.get("path", ""), 2048)
-            raw_query = scope.get("query_string", b"")
-            raw_target = path + (("?" + raw_query.decode("utf-8", errors="replace")) if raw_query else "")
-            observation = scope.get("webrtc_observation") or {}
-            observed_addresses = observation.get("addresses") or []
-            webrtc_ip = ",".join(observed_addresses) or "-"
-            request_line = (
-                f"[REQUEST] REAL_IP: {verified_client_ip} | PROXY_IP: {proxy_ip} | "
-                f"WEBRTC_IP: {webrtc_ip} | "
-                f"{method} {render_query_log(raw_target)} - {status_code} ({elapsed:.2f}ms)"
-            )
-            if observation:
-                request_line += (
-                    f" | WEBRTC_MATCH: {str(bool(observation.get('matches_verified'))).lower()}"
-                    f" | WEBRTC_OUTCOME: {sanitize_log_value(observation.get('outcome', '-'), 32)}"
+            if path not in QUIET_REQUEST_PATHS:
+                raw_query = scope.get("query_string", b"")
+                raw_target = path + (("?" + raw_query.decode("utf-8", errors="replace")) if raw_query else "")
+                observation = scope.get("webrtc_observation") or {}
+                observed_addresses = observation.get("addresses") or []
+                webrtc_ip = ",".join(observed_addresses) or "-"
+                request_line = (
+                    f"[REQUEST] REAL_IP: {verified_client_ip} | PROXY_IP: {proxy_ip} | "
+                    f"WEBRTC_IP: {webrtc_ip} | "
+                    f"{method} {render_query_log(raw_target)} - {status_code} ({elapsed:.2f}ms)"
                 )
-            print(request_line, flush=True)
-            if path != "/api/v1/media/admin/logs":
+                if observation:
+                    request_line += (
+                        f" | WEBRTC_MATCH: {str(bool(observation.get('matches_verified'))).lower()}"
+                        f" | WEBRTC_OUTCOME: {sanitize_log_value(observation.get('outcome', '-'), 32)}"
+                    )
+                print(request_line, flush=True)
                 append_admin_log(request_line)
 
 

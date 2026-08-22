@@ -7,6 +7,32 @@ import main
 
 
 class RequestLoggingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_health_and_monitoring_polls_are_silent(self):
+        async def app(_scope, _receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"{}"})
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(_message):
+            return None
+
+        for path in main.QUIET_REQUEST_PATHS:
+            scope = {
+                "type": "http",
+                "method": "GET",
+                "path": path,
+                "query_string": b"",
+                "client": ("127.0.0.1", 31000),
+                "verified_client_ip": "127.0.0.1",
+            }
+            output = io.StringIO()
+            with redirect_stdout(output), patch.object(main, "append_admin_log") as append_log:
+                await main.RealIPLogMiddleware(app)(scope, receive, send)
+            self.assertEqual(output.getvalue(), "")
+            append_log.assert_not_called()
+
     async def test_webrtc_observation_is_merged_into_one_request_line(self):
         async def app(scope, receive, send):
             scope["webrtc_observation"] = {
