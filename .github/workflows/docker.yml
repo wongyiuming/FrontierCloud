@@ -62,6 +62,9 @@ jobs:
           METRICS_BASIC_PASSWORD=ci_metrics_password_0123456789abcdef
           MYSQL_EXPORTER_PASSWORD=ci_exporter_password_0123456789abcdef
           MYSQL_BACKUP_PASSWORD=ci_backup_password_0123456789abcdef
+          WEBRTC_STUN_HOST=localhost
+          WEBRTC_STUN_PORT=3478
+          WEBRTC_STUN_URLS=stun:localhost:3478
           SERVER_NAME=localhost
           SSL_CERT_PATH=./certs/fullchain.pem
           SSL_KEY_PATH=./certs/privkey.pem
