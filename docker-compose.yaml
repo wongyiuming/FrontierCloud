@@ -105,6 +105,42 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  stun:
+    image: coturn/coturn:4.17.2-r0-alpine
+    container_name: frontiercloud_stun
+    restart: always
+    command:
+      - -n
+      - --stun-only
+      - --no-auth
+      - --no-cli
+      - --no-tls
+      - --no-dtls
+      - --fingerprint
+      - --no-multicast-peers
+      - --log-file=stdout
+      - --simple-log
+      - --listening-port=3478
+    ports:
+      - "${WEBRTC_STUN_PORT:?WEBRTC_STUN_PORT must be set}:3478/tcp"
+      - "${WEBRTC_STUN_PORT:?WEBRTC_STUN_PORT must be set}:3478/udp"
+    read_only: true
+    tmpfs:
+      - /tmp:size=4m,mode=1777
+      - /var/lib/coturn:size=4m,mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 32m
+    cpus: "0.20"
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
   node_exporter:
     image: prom/node-exporter:v1.9.1
     container_name: frontiercloud_node_exporter

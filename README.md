@@ -68,7 +68,7 @@
 
 ## 第四批：WebRTC 客户端公网地址观察
 
-* [ ] 浏览器通过 `.env` 配置的 STUN URL 收集 `srflx` ICE Candidate；不得在源码中硬编码 STUN 服务商。若使用第三方 STUN，部署记录中必须说明会向该服务商暴露客户端网络元数据。
+* [x] 浏览器通过 `.env` 配置的自建 STUN-only coturn 收集 `srflx` ICE Candidate；公网主机与端口不得硬编码到代码或 Compose，coturn 设置独立资源上限且不启用 TURN 中继。
 * [ ] 不申请摄像头或麦克风权限；收集完成或超时后立即关闭 `RTCPeerConnection`，不建立媒体会话。
 * [ ] 客户端仅上报规范化后的少量 IPv4/IPv6 候选地址；服务端校验格式、去重、限长、限频，不接受客户端声称其地址“可信”。
 * [ ] 日志类型固定为 `[WEBRTC_IP]`，与现有 `[LOG]` 和 `[REQUEST]` 分开；一次正常页面访问理论上可看到三类日志。

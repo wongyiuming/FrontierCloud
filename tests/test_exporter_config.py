@@ -7,6 +7,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ExporterConfigurationTests(unittest.TestCase):
+    def test_self_hosted_stun_is_stun_only_and_resource_bounded(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        match = re.search(
+            r"(?ms)^  stun:\n(.*?)(?=^  [a-zA-Z][a-zA-Z0-9_]*:\n|\Z)",
+            compose,
+        )
+
+        self.assertIsNotNone(match)
+        block = match.group(1)
+        self.assertIn("coturn/coturn:4.17.2-r0-alpine", block)
+        self.assertIn("--stun-only", block)
+        self.assertIn("--no-auth", block)
+        self.assertIn("${WEBRTC_STUN_PORT:?WEBRTC_STUN_PORT must be set}", block)
+        self.assertIn("mem_limit: 32m", block)
+        self.assertIn("cpus:", block)
+        self.assertIn("WEBRTC_STUN_URLS=stun:${WEBRTC_STUN_HOST}:${WEBRTC_STUN_PORT}", env_example)
+
     def test_media_ui_entrypoint_assets_bypass_static_cache(self):
         nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
 
