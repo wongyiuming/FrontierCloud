@@ -7,6 +7,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ExporterConfigurationTests(unittest.TestCase):
+    def test_media_ui_entrypoint_assets_bypass_static_cache(self):
+        nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+
+        self.assertIn("location = /static/js/player.js", nginx)
+        self.assertIn("location = /static/css/player.css", nginx)
+        self.assertIn("location = /static/js/network-observation.js", nginx)
+
     def test_exporters_are_internal_only_and_resource_bounded(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         for service in (

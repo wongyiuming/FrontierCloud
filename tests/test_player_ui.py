@@ -72,7 +72,6 @@ class PlayerUIContractTests(unittest.TestCase):
 
     def test_media_ui_assets_are_versioned_and_offer_cache_reset(self):
         api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")
-        nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
         templates = [
             (ROOT / "static" / "media" / name).read_text(encoding="utf-8")
             for name in ("index.html", "category.html", "audio-player.html", "video-player.html")
@@ -81,8 +80,6 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("hashlib.sha256", api)
         self.assertIn('"Clear-Site-Data": \'"cache"\'', api)
         self.assertIn('"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"', api)
-        self.assertIn("location = /static/js/player.js", nginx)
-        self.assertIn("location = /static/css/player.css", nginx)
         for template in templates:
             self.assertIn("/api/v1/media/refresh", template)
             self.assertIn("{{NETWORK_OBSERVATION_JS_URL}}", template)
