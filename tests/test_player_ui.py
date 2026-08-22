@@ -38,6 +38,22 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("touchStartedOnControl", script)
         self.assertGreaterEqual(script.count("isGestureControl(e.target)"), 3)
 
+    def test_audio_player_has_visible_split_zone_and_persistent_progress(self):
+        script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
+        style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
+        template = (ROOT / "static" / "media" / "audio-player.html").read_text(encoding="utf-8")
+
+        self.assertIn("const DIRECT_SEEK_ZONE_START = 0.75", script)
+        self.assertIn("seekToHorizontalPosition(event.clientX, playerSection)", script)
+        self.assertIn("initAudioGestureControl", script)
+        self.assertIn("单击下一首", template)
+        self.assertIn("双击上一首", template)
+        self.assertIn("拖动微调进度条", template)
+        self.assertIn("点击跳转", template)
+        self.assertIn('class="interaction-boundary"', template)
+        self.assertIn("top: 75%", style)
+        self.assertIn(".audio-player-page .artplayer-app .art-bottom { opacity: 1", style)
+
 
 if __name__ == "__main__":
     unittest.main()

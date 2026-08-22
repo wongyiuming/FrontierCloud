@@ -4,6 +4,7 @@ let isNextPreloaded = false;
 let clickTimer = null;
 let playbackState = null;
 let playbackReporter = null;
+const DIRECT_SEEK_ZONE_START = 0.75;
 
 // 防御 DOM XSS：全局 HTML 字符转义函数
 function escapeHTML(str) {
@@ -256,7 +257,137 @@ function isGestureControl(target) {
     ));
 }
 
-function initGestureControl() {
+function verticalPlayerRatio(event, playerSection) {
+    const rect = playerSection.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (event.clientY - rect.top) / Math.max(1, rect.height)));
+}
+
+function seekToHorizontalPosition(clientX, playerSection) {
+    if (!art) return;
+    const duration = Number(art.duration || 0);
+    if (!duration) return;
+    const rect = playerSection.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
+    art.currentTime = duration * ratio;
+}
+
+function showGestureHud(message, timeout = 0) {
+    const gestureHud = document.getElementById('gestureHud');
+    if (!gestureHud) return;
+    gestureHud.innerText = message;
+    gestureHud.style.display = 'block';
+    if (timeout) {
+        window.setTimeout(() => {
+            if (gestureHud.innerText === message) gestureHud.style.display = 'none';
+        }, timeout);
+    }
+}
+
+function initAudioGestureControl() {
+    const playerSection = document.getElementById('playerSection');
+    const gestureHud = document.getElementById('gestureHud');
+    let pointerId = null;
+    let pointerStartX = 0;
+    let pointerStartY = 0;
+    let initialTime = 0;
+    let targetTime = 0;
+    let isDragging = false;
+    let suppressClickUntil = 0;
+
+    playerSection.addEventListener('pointerdown', event => {
+        if (isGestureControl(event.target) || !art || verticalPlayerRatio(event, playerSection) >= DIRECT_SEEK_ZONE_START) return;
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+
+        pointerId = event.pointerId;
+        pointerStartX = event.clientX;
+        pointerStartY = event.clientY;
+        initialTime = art.currentTime;
+        targetTime = initialTime;
+        isDragging = false;
+    });
+
+    playerSection.addEventListener('pointermove', event => {
+        if (event.pointerId !== pointerId || !art) return;
+
+        const deltaX = event.clientX - pointerStartX;
+        const deltaY = event.clientY - pointerStartY;
+
+        if (!isDragging && Math.abs(deltaX) > 10 && Math.abs(deltaX) > Math.abs(deltaY)) {
+            isDragging = true;
+            playerSection.setPointerCapture?.(pointerId);
+        }
+
+        if (isDragging) {
+            event.preventDefault();
+
+            const duration = art.duration || 1;
+            const sensitivity = 0.2;
+            const seekOffset = deltaX * sensitivity;
+
+            targetTime = Math.min(Math.max(0, initialTime + seekOffset), duration);
+
+            const sign = seekOffset >= 0 ? '+' : '';
+            showGestureHud(`${sign}${Math.round(seekOffset)}s (${formatTime(targetTime)} / ${formatTime(duration)})`);
+        }
+    });
+
+    const finishPointer = event => {
+        if (event.pointerId !== pointerId) return;
+        if (isDragging) {
+            if (art) art.currentTime = targetTime;
+            gestureHud.style.display = 'none';
+            isDragging = false;
+            suppressClickUntil = Date.now() + 500;
+            if (event.cancelable) event.preventDefault();
+        }
+        pointerId = null;
+    };
+
+    playerSection.addEventListener('pointerup', finishPointer);
+    playerSection.addEventListener('pointercancel', event => {
+        if (event.pointerId !== pointerId) return;
+        if (isDragging) {
+            gestureHud.style.display = 'none';
+            isDragging = false;
+        }
+        pointerId = null;
+    });
+
+    playerSection.addEventListener('dblclick', event => {
+        if (isGestureControl(event.target)) return;
+
+        event.stopPropagation();
+        event.preventDefault();
+    }, true);
+
+    playerSection.addEventListener('click', event => {
+        if (isGestureControl(event.target) || Date.now() < suppressClickUntil) return;
+
+        event.stopPropagation();
+        event.preventDefault();
+
+        if (verticalPlayerRatio(event, playerSection) >= DIRECT_SEEK_ZONE_START) {
+            if (clickTimer) clearTimeout(clickTimer);
+            clickTimer = null;
+            seekToHorizontalPosition(event.clientX, playerSection);
+            showGestureHud(`跳转到 ${formatTime(art.currentTime)} / ${formatTime(art.duration || 0)}`, 850);
+            return;
+        }
+
+        if (clickTimer) {
+            clearTimeout(clickTimer);
+            clickTimer = null;
+            playPrev();
+        } else {
+            clickTimer = setTimeout(() => {
+                clickTimer = null;
+                playNext();
+            }, 250);
+        }
+    }, true);
+}
+
+function initLegacyGestureControl() {
     const playerSection = document.getElementById('playerSection');
     const gestureHud = document.getElementById('gestureHud');
 
@@ -281,28 +412,18 @@ function initGestureControl() {
     playerSection.addEventListener('touchmove', (e) => {
         if (touchStartedOnControl || e.touches.length > 1 || !art) return;
 
-        const currentX = e.touches[0].clientX;
-        const currentY = e.touches[0].clientY;
-        const deltaX = currentX - touchStartX;
-        const deltaY = currentY - touchStartY;
+        const deltaX = e.touches[0].clientX - touchStartX;
+        const deltaY = e.touches[0].clientY - touchStartY;
+        if (!isDragging && Math.abs(deltaX) > 10 && Math.abs(deltaX) > Math.abs(deltaY)) isDragging = true;
+        if (!isDragging) return;
 
-        if (!isDragging && Math.abs(deltaX) > 10 && Math.abs(deltaX) > Math.abs(deltaY)) {
-            isDragging = true;
-        }
-
-        if (isDragging) {
-            e.preventDefault();
-
-            const duration = art.duration || 1;
-            const sensitivity = 0.2;
-            const seekOffset = deltaX * sensitivity;
-
-            targetTime = Math.min(Math.max(0, initialTime + seekOffset), duration);
-
-            const sign = seekOffset >= 0 ? '+' : '';
-            gestureHud.innerText = `${sign}${Math.round(seekOffset)}s (${formatTime(targetTime)} / ${formatTime(duration)})`;
-            gestureHud.style.display = 'block';
-        }
+        e.preventDefault();
+        const duration = art.duration || 1;
+        const seekOffset = deltaX * 0.2;
+        targetTime = Math.min(Math.max(0, initialTime + seekOffset), duration);
+        const sign = seekOffset >= 0 ? '+' : '';
+        gestureHud.innerText = `${sign}${Math.round(seekOffset)}s (${formatTime(targetTime)} / ${formatTime(duration)})`;
+        gestureHud.style.display = 'block';
     }, { passive: false });
 
     playerSection.addEventListener('touchend', (e) => {
@@ -325,17 +446,14 @@ function initGestureControl() {
 
     playerSection.addEventListener('dblclick', (e) => {
         if (isGestureControl(e.target)) return;
-
         e.stopPropagation();
         e.preventDefault();
     }, true);
 
     playerSection.addEventListener('click', (e) => {
         if (isGestureControl(e.target)) return;
-
         e.stopPropagation();
         e.preventDefault();
-
         if (clickTimer) {
             clearTimeout(clickTimer);
             clickTimer = null;
@@ -347,6 +465,14 @@ function initGestureControl() {
             }, 250);
         }
     }, true);
+}
+
+function initGestureControl() {
+    if (typeof PLAYER_KIND !== 'undefined' && PLAYER_KIND === 'audio') {
+        initAudioGestureControl();
+    } else {
+        initLegacyGestureControl();
+    }
 }
 
 window.addEventListener('DOMContentLoaded', () => {

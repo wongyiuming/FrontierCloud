@@ -18,6 +18,26 @@
             <div id="audioDisk" class="audio-disk"></div>
         </div>
         <div id="artplayer" class="artplayer-app"></div>
+        <div class="audio-interaction-guide" aria-hidden="true">
+            <div class="interaction-hint interaction-hint-upper">
+                <span>单击下一首</span>
+                <span>双击上一首</span>
+                <span>拖动微调进度条</span>
+            </div>
+            <svg class="interaction-boundary" viewBox="0 0 1200 64" preserveAspectRatio="none">
+                <defs>
+                    <linearGradient id="boundaryGradient" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stop-color="#00e5ff"/>
+                        <stop offset="35%" stop-color="#7cff00"/>
+                        <stop offset="65%" stop-color="#ffd000"/>
+                        <stop offset="100%" stop-color="#ff2bd6"/>
+                    </linearGradient>
+                </defs>
+                <path class="boundary-glow" d="M0 32 L120 32 L145 17 L170 47 L195 8 L220 55 L245 32 L360 32 L385 18 L410 46 L435 9 L460 54 L485 32 L600 32 L625 16 L650 48 L675 7 L700 56 L725 32 L840 32 L865 18 L890 46 L915 9 L940 54 L965 32 L1080 32 L1105 17 L1130 47 L1155 8 L1180 55 L1200 32"/>
+                <path class="boundary-flow" d="M0 32 L120 32 L145 17 L170 47 L195 8 L220 55 L245 32 L360 32 L385 18 L410 46 L435 9 L460 54 L485 32 L600 32 L625 16 L650 48 L675 7 L700 56 L725 32 L840 32 L865 18 L890 46 L915 9 L940 54 L965 32 L1080 32 L1105 17 L1130 47 L1155 8 L1180 55 L1200 32"/>
+            </svg>
+            <div class="interaction-hint interaction-hint-lower">点击跳转</div>
+        </div>
         <div id="gestureHud" class="gesture-hud"></div>
     </div>
     <div class="sidebar">

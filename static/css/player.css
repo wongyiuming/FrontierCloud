@@ -7,6 +7,8 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .artplayer-app .art-bottom .art-progress .art-control-progress .art-control-progress-inner { height: 8px; border-radius: 4px; overflow: visible; }
 .artplayer-app .art-bottom .art-progress .art-control-progress:hover .art-control-progress-inner,
 .artplayer-app .art-bottom .art-progress .art-control-progress:focus-within .art-control-progress-inner { height: 10px; }
+.audio-player-page .artplayer-app .art-bottom { opacity: 1 !important; visibility: visible !important; transform: translateY(0) !important; }
+.audio-player-page .artplayer-app .art-bottom .art-progress { opacity: 1 !important; visibility: visible !important; }
 .audio-cover-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; justify-content: center; align-items: center; background-size: cover; background-position: center; z-index: 1; pointer-events: none; }
 .audio-blur-bg { position: absolute; width: 100%; height: 100%; background-size: cover; background-position: center; filter: blur(40px) brightness(0.4); transform: scale(1.1); }
 .audio-disk { width: 250px; height: 250px; border-radius: 50%; border: 8px solid rgba(255,255,255,0.1); box-shadow: 0 10px 40px rgba(0,0,0,0.6); z-index: 2; background-size: cover; background-position: center; }
@@ -40,6 +42,20 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
     0% { background-position: 0% 50%; }
     50% { background-position: 100% 50%; }
     100% { background-position: 0% 50%; }
+}
+
+.audio-interaction-guide { position: absolute; inset: 0; z-index: 8; pointer-events: none; user-select: none; }
+.interaction-hint { position: absolute; left: 4%; right: 4%; display: flex; align-items: center; justify-content: center; text-align: center; color: #fff; font-size: clamp(25px, 4vw, 56px); font-weight: 900; letter-spacing: 0.04em; line-height: 1.25; text-shadow: 0 2px 6px #000, 0 0 18px rgba(0,0,0,0.95), 0 0 28px rgba(0,229,255,0.55); }
+.interaction-hint-upper { top: 43%; transform: translateY(-50%); flex-wrap: wrap; gap: 0.25em 0.9em; }
+.interaction-hint-lower { top: 87.5%; transform: translateY(-50%); }
+.interaction-boundary { position: absolute; top: 75%; left: 0; width: 100%; height: 64px; transform: translateY(-50%); overflow: visible; filter: drop-shadow(0 0 8px rgba(0,229,255,0.95)); }
+.interaction-boundary path { fill: none; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.boundary-glow { stroke: rgba(255,255,255,0.32); stroke-width: 9; }
+.boundary-flow { stroke: url(#boundaryGradient); stroke-width: 4; stroke-dasharray: 34 12 8 12; animation: boundaryFlow 1.25s linear infinite; }
+@keyframes boundaryFlow { to { stroke-dashoffset: -66; } }
+
+@media (prefers-reduced-motion: reduce) {
+    .boundary-flow { animation-duration: 3s; }
 }
 
 .sidebar { flex: 1; min-width: 280px; background: #181818; border-right: 1px solid #282828; display: flex; flex-direction: column; z-index: 10; touch-action: pan-y; }
