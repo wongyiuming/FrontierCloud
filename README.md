@@ -71,8 +71,8 @@
 * [x] 浏览器通过 `.env` 配置的自建 STUN-only coturn 收集 `srflx` ICE Candidate；公网主机与端口不得硬编码到代码或 Compose，coturn 设置独立资源上限且不启用 TURN 中继。
 * [ ] 不申请摄像头或麦克风权限；收集完成或超时后立即关闭 `RTCPeerConnection`，不建立媒体会话。
 * [ ] 客户端仅上报规范化后的少量 IPv4/IPv6 候选地址；服务端校验格式、去重、限长、限频，不接受客户端声称其地址“可信”。
-* [ ] 日志类型固定为 `[WEBRTC_IP]`，与现有 `[LOG]` 和 `[REQUEST]` 分开；一次正常页面访问理论上可看到三类日志。
-* [ ] `[WEBRTC_IP]` 同时记录“客户端观察地址、Nginx/可信代理解析地址、后端连接对端地址、是否相同”，但不得把相同/不同自动解释成用户资历、代理类型或安全水平。
+* [x] 每个 HTTP 请求只输出一条 `[REQUEST]`；WebRTC 上报请求在同一行同时记录 `REAL_IP`、`PROXY_IP`、`WEBRTC_IP`、匹配结果与采集结果，不再重复输出 `[LOG]`/`[WEBRTC_IP]`。
+* [x] WebRTC 地址仅与承载该 payload 的上报请求关联；普通请求显示 `WEBRTC_IP: -`，不得按共享出口 IP 推断到其他请求，也不得把相同/不同解释成用户资历、代理类型或安全水平。
 * [ ] WebRTC 被浏览器、扩展或网络策略禁用时只记录可诊断的失败原因，不影响播放器和其他业务功能。
 * [ ] 增加 IPv4、IPv6、多个 Candidate、伪造 payload、超时、禁用 WebRTC 与日志注入回归测试；地址不进入 Prometheus Label。
 

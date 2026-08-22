@@ -6,7 +6,6 @@ from typing import Iterable
 from fastapi import HTTPException, Request
 from redis.exceptions import RedisError
 
-from app.core.admin_log import append_admin_log, sanitize_log_value
 from app.core.client_ip import resolve_client_identity
 from app.core.config import settings
 from app.core.redis import redis_client
@@ -45,6 +44,13 @@ async def record_observation(
         raise ValueError("Invalid WebRTC failure reason")
     if not normalized and not failure_value:
         raise ValueError("No WebRTC observation supplied")
+    matches_verified = identity.ip in normalized
+    outcome = failure_value or "ok"
+    request.scope["webrtc_observation"] = {
+        "addresses": normalized,
+        "matches_verified": matches_verified,
+        "outcome": outcome,
+    }
     try:
         accepted = await redis_client.set(
             REPORT_PREFIX + identity.ip,
@@ -57,17 +63,6 @@ async def record_observation(
     if not accepted:
         raise HTTPException(status_code=429, detail="WebRTC observation rate limited")
 
-    matches_verified = identity.ip in normalized
-    outcome = failure_value or "ok"
-    line = (
-        f"[WEBRTC_IP] observed={','.join(normalized) or '-'} "
-        f"verified_client={identity.ip} backend_peer={identity.peer_ip} "
-        f"trusted_proxy={str(identity.from_trusted_proxy).lower()} "
-        f"matches_verified={str(matches_verified).lower()} outcome={outcome}"
-    )
-    safe_line = sanitize_log_value(line, 2000)
-    print(safe_line, flush=True)
-    append_admin_log(safe_line)
     return {
         "status": "recorded",
         "address_count": len(normalized),

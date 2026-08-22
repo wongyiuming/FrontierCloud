@@ -63,7 +63,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 class RealIPLogMiddleware:
-    """Keep the legacy log format and add a decoded, human-readable request line."""
+    """Emit one decoded request line with all per-request network identities."""
 
     def __init__(self, app: ASGIApp):
         self.app = app
@@ -92,18 +92,21 @@ class RealIPLogMiddleware:
             path = sanitize_log_value(scope.get("path", ""), 2048)
             raw_query = scope.get("query_string", b"")
             raw_target = path + (("?" + raw_query.decode("utf-8", errors="replace")) if raw_query else "")
-            log_line = (
-                f"[LOG] REAL_IP: {verified_client_ip} | PROXY_IP: {proxy_ip} | "
-                f"{method} {path} - {status_code} ({elapsed:.2f}ms)"
-            )
+            observation = scope.get("webrtc_observation") or {}
+            observed_addresses = observation.get("addresses") or []
+            webrtc_ip = ",".join(observed_addresses) or "-"
             request_line = (
                 f"[REQUEST] REAL_IP: {verified_client_ip} | PROXY_IP: {proxy_ip} | "
+                f"WEBRTC_IP: {webrtc_ip} | "
                 f"{method} {render_query_log(raw_target)} - {status_code} ({elapsed:.2f}ms)"
             )
-            print(log_line, flush=True)
+            if observation:
+                request_line += (
+                    f" | WEBRTC_MATCH: {str(bool(observation.get('matches_verified'))).lower()}"
+                    f" | WEBRTC_OUTCOME: {sanitize_log_value(observation.get('outcome', '-'), 32)}"
+                )
             print(request_line, flush=True)
             if path != "/api/v1/media/admin/logs":
-                append_admin_log(log_line)
                 append_admin_log(request_line)
 
 

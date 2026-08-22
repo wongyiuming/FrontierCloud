@@ -1,7 +1,9 @@
 import unittest
 import asyncio
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+from starlette.requests import Request
 
 from app.core.config import settings
 from app.api.v1 import media
@@ -62,6 +64,22 @@ class NetworkObservationTests(unittest.TestCase):
         refresh = asyncio.run(media.refresh_media_interface())
         self.assertEqual(refresh.status_code, 303)
         self.assertEqual(refresh.headers["clear-site-data"], '"cache"')
+
+    def test_observation_is_attached_to_the_same_request_log_context(self):
+        scope = {
+            "type": "http",
+            "client": ("172.18.0.10", 32000),
+            "headers": [(b"x-real-ip", b"203.0.113.5")],
+        }
+        request = Request(scope)
+        with patch.object(network_observation.redis_client, "set", new=AsyncMock(return_value=True)):
+            result = asyncio.run(
+                network_observation.record_observation(request, ["198.51.100.7"], None)
+            )
+
+        self.assertEqual(result["outcome"], "ok")
+        self.assertEqual(scope["webrtc_observation"]["addresses"], ["198.51.100.7"])
+        self.assertFalse(scope["webrtc_observation"]["matches_verified"])
 
 
 if __name__ == "__main__":
