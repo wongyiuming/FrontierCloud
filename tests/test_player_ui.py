@@ -65,6 +65,9 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertNotIn("playPrev()", video_gesture)
         self.assertNotIn("showGestureHud", video_gesture)
         self.assertNotIn("audio-interaction-guide", template)
+        self.assertNotIn("corner-text", template)
+        self.assertNotIn("audio-cover-container", template)
+        self.assertNotIn("gesture-hud", template)
 
     def test_media_ui_assets_are_versioned_and_offer_cache_reset(self):
         api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")

@@ -181,12 +181,12 @@ function initPlayer(media, index) {
     const audioDisk = document.getElementById('audioDisk');
     const audioBlurBg = document.getElementById('audioBlurBg');
 
-    if (isAudio) {
+    if (isAudio && audioCover && audioDisk && audioBlurBg) {
         audioCover.style.display = 'flex';
         const safeCover = encodeURI(media.cover);
         audioDisk.style.backgroundImage = `url('${safeCover}')`;
         audioBlurBg.style.backgroundImage = `url('${safeCover}')`;
-    } else {
+    } else if (audioCover) {
         audioCover.style.display = 'none';
     }
 
@@ -221,14 +221,14 @@ function initPlayer(media, index) {
 
     art.on('play', () => {
         const activeMedia = currentMediaList[currentIndex];
-        if (activeMedia.type === 'audio') audioDisk.classList.add('rotate-disk');
+        if (activeMedia.type === 'audio') audioDisk?.classList.add('rotate-disk');
         if (playbackState) playbackState.lastTick = performance.now();
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
     });
 
     art.on('pause', () => {
         accountPlaybackTime();
-        audioDisk.classList.remove('rotate-disk');
+        audioDisk?.classList.remove('rotate-disk');
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     });
 
