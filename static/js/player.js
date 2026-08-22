@@ -387,83 +387,75 @@ function initAudioGestureControl() {
     }, true);
 }
 
-function initLegacyGestureControl() {
+function initVideoGestureControl() {
     const playerSection = document.getElementById('playerSection');
-    const gestureHud = document.getElementById('gestureHud');
-
-    let touchStartX = 0;
-    let touchStartY = 0;
+    let pointerId = null;
+    let pointerStartX = 0;
+    let pointerStartY = 0;
     let initialTime = 0;
     let targetTime = 0;
     let isDragging = false;
-    let touchStartedOnControl = false;
+    let suppressClickUntil = 0;
 
-    playerSection.addEventListener('touchstart', (e) => {
-        touchStartedOnControl = isGestureControl(e.target);
-        if (touchStartedOnControl || e.touches.length > 1 || !art) return;
+    playerSection.addEventListener('pointerdown', event => {
+        if (isGestureControl(event.target) || !art || verticalPlayerRatio(event, playerSection) >= DIRECT_SEEK_ZONE_START) return;
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
 
-        touchStartX = e.touches[0].clientX;
-        touchStartY = e.touches[0].clientY;
+        pointerId = event.pointerId;
+        pointerStartX = event.clientX;
+        pointerStartY = event.clientY;
         initialTime = art.currentTime;
         targetTime = initialTime;
         isDragging = false;
-    }, { passive: false });
+    });
 
-    playerSection.addEventListener('touchmove', (e) => {
-        if (touchStartedOnControl || e.touches.length > 1 || !art) return;
+    playerSection.addEventListener('pointermove', event => {
+        if (event.pointerId !== pointerId || !art) return;
 
-        const deltaX = e.touches[0].clientX - touchStartX;
-        const deltaY = e.touches[0].clientY - touchStartY;
-        if (!isDragging && Math.abs(deltaX) > 10 && Math.abs(deltaX) > Math.abs(deltaY)) isDragging = true;
+        const deltaX = event.clientX - pointerStartX;
+        const deltaY = event.clientY - pointerStartY;
+        if (!isDragging && Math.abs(deltaX) > 10 && Math.abs(deltaX) > Math.abs(deltaY)) {
+            isDragging = true;
+            playerSection.setPointerCapture?.(pointerId);
+        }
         if (!isDragging) return;
 
-        e.preventDefault();
+        event.preventDefault();
         const duration = art.duration || 1;
         const seekOffset = deltaX * 0.2;
         targetTime = Math.min(Math.max(0, initialTime + seekOffset), duration);
-        const sign = seekOffset >= 0 ? '+' : '';
-        gestureHud.innerText = `${sign}${Math.round(seekOffset)}s (${formatTime(targetTime)} / ${formatTime(duration)})`;
-        gestureHud.style.display = 'block';
-    }, { passive: false });
+    });
 
-    playerSection.addEventListener('touchend', (e) => {
+    const finishPointer = event => {
+        if (event.pointerId !== pointerId) return;
         if (isDragging) {
             if (art) art.currentTime = targetTime;
-            gestureHud.style.display = 'none';
             isDragging = false;
-            if (e.cancelable) e.preventDefault();
+            suppressClickUntil = Date.now() + 500;
+            if (event.cancelable) event.preventDefault();
         }
-        touchStartedOnControl = false;
+        pointerId = null;
+    };
+
+    playerSection.addEventListener('pointerup', finishPointer);
+    playerSection.addEventListener('pointercancel', event => {
+        if (event.pointerId !== pointerId) return;
+        isDragging = false;
+        pointerId = null;
     });
 
-    playerSection.addEventListener('touchcancel', () => {
-        if (isDragging) {
-            gestureHud.style.display = 'none';
-            isDragging = false;
+    playerSection.addEventListener('click', event => {
+        if (isGestureControl(event.target)) return;
+        if (Date.now() < suppressClickUntil) {
+            event.stopPropagation();
+            event.preventDefault();
+            return;
         }
-        touchStartedOnControl = false;
-    });
+        if (verticalPlayerRatio(event, playerSection) < DIRECT_SEEK_ZONE_START) return;
 
-    playerSection.addEventListener('dblclick', (e) => {
-        if (isGestureControl(e.target)) return;
-        e.stopPropagation();
-        e.preventDefault();
-    }, true);
-
-    playerSection.addEventListener('click', (e) => {
-        if (isGestureControl(e.target)) return;
-        e.stopPropagation();
-        e.preventDefault();
-        if (clickTimer) {
-            clearTimeout(clickTimer);
-            clickTimer = null;
-            playPrev();
-        } else {
-            clickTimer = setTimeout(() => {
-                clickTimer = null;
-                playNext();
-            }, 250);
-        }
+        event.stopPropagation();
+        event.preventDefault();
+        seekToHorizontalPosition(event.clientX, playerSection);
     }, true);
 }
 
@@ -471,7 +463,7 @@ function initGestureControl() {
     if (typeof PLAYER_KIND !== 'undefined' && PLAYER_KIND === 'audio') {
         initAudioGestureControl();
     } else {
-        initLegacyGestureControl();
+        initVideoGestureControl();
     }
 }
 

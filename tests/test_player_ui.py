@@ -35,8 +35,8 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn(".art-control-progress-inner { height: 8px", style)
         self.assertIn("function isGestureControl(target)", script)
         self.assertIn(".art-control-progress", script)
-        self.assertIn("touchStartedOnControl", script)
-        self.assertGreaterEqual(script.count("isGestureControl(e.target)"), 3)
+        self.assertIn("let pointerId = null", script)
+        self.assertGreaterEqual(script.count("isGestureControl(event.target)"), 5)
 
     def test_audio_player_has_visible_split_zone_and_persistent_progress(self):
         script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
@@ -53,6 +53,18 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn('class="interaction-boundary"', template)
         self.assertIn("top: 75%", style)
         self.assertIn(".audio-player-page .artplayer-app .art-bottom { opacity: 1", style)
+
+    def test_video_uses_split_seek_without_overlay_or_track_switch_gestures(self):
+        script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
+        template = (ROOT / "static" / "media" / "video-player.html").read_text(encoding="utf-8")
+        video_gesture = script.split("function initVideoGestureControl()", 1)[1].split("function initGestureControl()", 1)[0]
+
+        self.assertIn("verticalPlayerRatio(event, playerSection)", video_gesture)
+        self.assertIn("seekToHorizontalPosition(event.clientX, playerSection)", video_gesture)
+        self.assertNotIn("playNext()", video_gesture)
+        self.assertNotIn("playPrev()", video_gesture)
+        self.assertNotIn("showGestureHud", video_gesture)
+        self.assertNotIn("audio-interaction-guide", template)
 
 
 if __name__ == "__main__":
