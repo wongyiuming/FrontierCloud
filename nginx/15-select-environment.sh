@@ -4,8 +4,8 @@ set -eu
 environment=$(printf '%s' "${ENVIRONMENT:-production}" | tr '[:upper:]' '[:lower:]')
 
 case "$environment" in
-  development|test) nginx_mode=development ;;
-  production) nginx_mode=production ;;
+  development) nginx_mode=development ;;
+  test|production) nginx_mode=production ;;
   *)
     echo "ENVIRONMENT must be development, test, or production for nginx" >&2
     exit 1

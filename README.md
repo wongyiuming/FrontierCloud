@@ -221,7 +221,11 @@ docker compose up -d --remove-orphans
 
 
 
-CentOS 本地 HTTP-only 开发部署只修改 `.env`，不要改 Compose 文件：
+CentOS 环境只通过 `.env` 选择部署模式，不修改 Compose 文件。采集端 agent
+（Node Exporter、cAdvisor、Redis/MySQL/Nginx/Nginx-log Exporter 及日志限幅器）
+在 development、test、production 中都会启动，避免只在生产环境才发现采集链路问题。
+
+本地 HTTP-only 开发模式：
 ```dotenv
 ENVIRONMENT=development
 COMPOSE_PROFILES=
@@ -243,6 +247,35 @@ WEBRTC_STUN_URLS=
 不能绑定 1024 以下端口，因此本地示例使用 8080。启动命令为
 `podman compose up -d --build`；使用 Docker 时命令仍是
 `docker compose up -d --build`。
+
+测试模式尽量复用生产拓扑：使用 TLS、生产 Nginx 监听/跳转规则、全部采集
+agent 和 MySQL 备份 worker，仅证书和域名换成测试资源：
+
+```dotenv
+ENVIRONMENT=test
+COMPOSE_PROFILES=monitoring
+SERVER_NAME=test.example.internal
+HTTP_PORT=80
+HTTPS_PORT=443
+SSL_CERT_PATH=./certs/test-fullchain.pem
+SSL_KEY_PATH=./certs/test-privkey.pem
+ADMIN_COOKIE_SECURE=true
+ADMIN_COOKIE_SAMESITE=strict
+ADMIN_COOKIE_NAME=__Host-admin_session
+ADMIN_CSRF_COOKIE_NAME=__Host-admin-csrf
+```
+
+`test` 会选择与 `production` 相同的 Nginx TLS 模板。启动后必须确认所有
+agent 的 `/metrics` 可抓取，而不只是确认容器处于 Running。
+
+测试/生产首次启用备份前，把宿主机目录准备成仅 root 可写；Compose 的 `:z`
+挂载会在启用 Docker SELinux 支持时自动标记。若 CentOS 为 Enforcing、但
+`docker info` 的 Security Options 中没有 `selinux`，还需手工补一次标签：
+
+```bash
+sudo install -d -o root -g "$(id -gn)" -m 0750 backups
+sudo chcon -Rt container_file_t backups
+```
 
 
 

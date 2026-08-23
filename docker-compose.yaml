@@ -64,6 +64,7 @@ services:
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
     volumes:
       - mysql_data:/var/lib/mysql
+      - mysql_socket:/var/run/mysqld
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
       interval: 5s
@@ -74,6 +75,41 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  mysql_monitoring_init:
+    image: mysql:8.4
+    container_name: frontiercloud_mysql_monitoring_init
+    restart: "no"
+    user: mysql
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-office_automation}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
+      MYSQL_EXPORTER_USER: ${MYSQL_EXPORTER_USER:-frontiercloud_exporter}
+      MYSQL_EXPORTER_PASSWORD: ${MYSQL_EXPORTER_PASSWORD:?MYSQL_EXPORTER_PASSWORD must be set}
+      MYSQL_BACKUP_USER: ${MYSQL_BACKUP_USER:-frontiercloud_backup}
+      MYSQL_BACKUP_PASSWORD: ${MYSQL_BACKUP_PASSWORD:?MYSQL_BACKUP_PASSWORD must be set}
+    entrypoint:
+      - /bin/sh
+      - /opt/frontiercloud/mysql_monitoring_init.sh
+    volumes:
+      - ./monitoring/mysql_monitoring_init.sh:/opt/frontiercloud/mysql_monitoring_init.sh:ro
+      - mysql_socket:/var/run/mysqld
+    depends_on:
+      mysql:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 64m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
 
   nginx:
     build:
@@ -145,7 +181,6 @@ services:
         max-file: "2"
 
   node_exporter:
-    profiles: ["monitoring"]
     image: prom/node-exporter:v1.9.1
     container_name: frontiercloud_node_exporter
     restart: always
@@ -175,7 +210,6 @@ services:
         max-file: "2"
 
   cadvisor:
-    profiles: ["monitoring"]
     image: ghcr.io/google/cadvisor:0.56.2
     container_name: frontiercloud_cadvisor
     restart: always
@@ -201,7 +235,6 @@ services:
     logging: *exporter_logging
 
   redis_exporter:
-    profiles: ["monitoring"]
     image: oliver006/redis_exporter:v1.89.0-alpine
     container_name: frontiercloud_redis_exporter
     restart: always
@@ -221,7 +254,6 @@ services:
     logging: *exporter_logging
 
   mysql_exporter:
-    profiles: ["monitoring"]
     image: prom/mysqld-exporter:v0.19.0
     container_name: frontiercloud_mysql_exporter
     restart: always
@@ -233,8 +265,8 @@ services:
     expose:
       - "9104"
     depends_on:
-      mysql:
-        condition: service_healthy
+      mysql_monitoring_init:
+        condition: service_completed_successfully
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -244,7 +276,6 @@ services:
     logging: *exporter_logging
 
   nginx_exporter:
-    profiles: ["monitoring"]
     image: nginx/nginx-prometheus-exporter:1.5.1
     container_name: frontiercloud_nginx_exporter
     restart: always
@@ -263,7 +294,6 @@ services:
     logging: *exporter_logging
 
   nginxlog_exporter:
-    profiles: ["monitoring"]
     image: quay.io/martinhelmich/prometheus-nginxlog-exporter:v1.11.0
     container_name: frontiercloud_nginxlog_exporter
     restart: always
@@ -286,7 +316,6 @@ services:
     logging: *exporter_logging
 
   nginxlog_limiter:
-    profiles: ["monitoring"]
     image: busybox:1.37.0
     container_name: frontiercloud_nginxlog_limiter
     restart: always
@@ -321,11 +350,11 @@ services:
       - /opt/frontiercloud/mysql_backup.sh
     volumes:
       - ./monitoring/mysql_backup.sh:/opt/frontiercloud/mysql_backup.sh:ro
-      - ${BACKUP_DIR:-./backups}:/backups
+      - ${BACKUP_DIR:-./backups}:/backups:z
       - backup_metrics:/textfile
     depends_on:
-      mysql:
-        condition: service_healthy
+      mysql_monitoring_init:
+        condition: service_completed_successfully
     read_only: true
     tmpfs:
       - /tmp:size=32m,noexec,nosuid,nodev
@@ -340,5 +369,6 @@ volumes:
   web_tmp:
   redis_data:
   mysql_data:
+  mysql_socket:
   nginx_logs:
   backup_metrics:

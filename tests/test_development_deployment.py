@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -6,6 +7,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DevelopmentDeploymentTests(unittest.TestCase):
+    @staticmethod
+    def _service_block(compose: str, service: str) -> str:
+        match = re.search(
+            rf"(?ms)^  {service}:\n(.*?)(?=^  [a-zA-Z][a-zA-Z0-9_]*:\n|\Z)",
+            compose,
+        )
+        if match is None:
+            raise AssertionError(f"missing Compose service: {service}")
+        return match.group(1)
+
     def test_environment_is_never_hardcoded_by_compose(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
 
@@ -32,6 +43,46 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("listen 443 ssl", rendered_inputs)
         self.assertIn("ssl_certificate /etc/nginx/certs/fullchain.pem", rendered_inputs)
         self.assertIn("return 301 https://$host$request_uri", rendered_inputs)
+
+    def test_test_environment_uses_production_like_nginx(self):
+        selector = (ROOT / "nginx" / "15-select-environment.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("test|production) nginx_mode=production", selector)
+        self.assertNotIn("development|test) nginx_mode=development", selector)
+
+    def test_collection_agents_run_without_optional_profiles(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        for service in (
+            "node_exporter",
+            "cadvisor",
+            "redis_exporter",
+            "mysql_exporter",
+            "nginx_exporter",
+            "nginxlog_exporter",
+            "nginxlog_limiter",
+        ):
+            self.assertNotIn("profiles:", self._service_block(compose, service))
+
+        self.assertIn(
+            'profiles: ["monitoring"]', self._service_block(compose, "mysql_backup")
+        )
+        self.assertIn(":/backups:z", self._service_block(compose, "mysql_backup"))
+        mysql_init = self._service_block(compose, "mysql_monitoring_init")
+        self.assertIn("mysql_socket:/var/run/mysqld", mysql_init)
+        self.assertIn("condition: service_healthy", mysql_init)
+
+    def test_ci_runs_source_only_deployment_tests_on_the_host(self):
+        workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(workflow.count("tests/test_development_deployment.py"), 1)
+        self.assertIn("! -name 'test_development_deployment.py'", workflow)
+        self.assertIn("ENVIRONMENT=test", workflow)
+        self.assertIn("Test production-like collection agents", workflow)
+        self.assertIn("frontiercloud_backup_last_run_success 1", workflow)
 
 
 if __name__ == "__main__":
