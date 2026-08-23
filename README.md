@@ -219,6 +219,33 @@ docker compose up -d --remove-orphans
 
 
 
+
+
+CentOS 本地 HTTP-only 开发部署只修改 `.env`，不要改 Compose 文件：
+```dotenv
+ENVIRONMENT=development
+COMPOSE_PROFILES=
+SERVER_NAME=_
+HTTP_PORT=8080
+HTTPS_PORT=8443
+SSL_CERT_PATH=/dev/null
+SSL_KEY_PATH=/dev/null
+ADMIN_COOKIE_SECURE=false
+ADMIN_COOKIE_SAMESITE=lax
+ADMIN_COOKIE_NAME=admin_session
+ADMIN_CSRF_COOKIE_NAME=admin_csrf
+WEBRTC_STUN_HOST=localhost
+WEBRTC_STUN_URLS=
+```
+
+`development` 下 Nginx 只监听容器内 HTTP 端口，不加载证书；`HTTPS_PORT`
+只是保留的 Compose 端口映射，连接会被拒绝。CentOS 默认的 rootless Podman
+不能绑定 1024 以下端口，因此本地示例使用 8080。启动命令为
+`podman compose up -d --build`；使用 Docker 时命令仍是
+`docker compose up -d --build`。
+
+
+
 首次拉取：
 ```bash
 git clone https://github.com/wongyiuming/FrontierCloud.git

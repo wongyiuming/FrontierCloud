@@ -8,6 +8,8 @@ RUN rm /etc/nginx/conf.d/default.conf
 # 注入env必须用template
 COPY nginx/nginx.conf /etc/nginx/templates/nginx.conf.template
 COPY --chmod=0755 nginx/10-metrics-auth.sh /docker-entrypoint.d/10-metrics-auth.sh
+COPY --chmod=0755 nginx/15-select-environment.sh /docker-entrypoint.d/15-select-environment.sh
+COPY nginx/environments /etc/nginx/environments
 COPY static /app/static
 RUN chmod -R a+rX /app/static
 
