@@ -5,7 +5,6 @@ from sqlalchemy.exc import ArgumentError
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "Office-Automation"
     ENVIRONMENT: str = Field("production", validation_alias="ENVIRONMENT")
     REDIS_URL: str = Field(..., validation_alias="REDIS_URL")
     ADMIN_BOOTSTRAP_TOKEN: str = Field(..., validation_alias="ADMIN_BOOTSTRAP_TOKEN")

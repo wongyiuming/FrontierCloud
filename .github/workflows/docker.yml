@@ -24,10 +24,8 @@ jobs:
             -out certs/fullchain.pem \
             -subj "/C=CN/ST=CI/L=CI/O=FrontierCloud/CN=localhost"
           cat <<'EOF' > .env
-          PROJECT_NAME="Office-Automation-CI"
           ENVIRONMENT=test
           COMPOSE_PROFILES=monitoring
-          DEFAULT_TEXT="CONFIDENTIAL"
           REDIS_URL=redis://redis:6379/0
           ADMIN_BOOTSTRAP_TOKEN=ci_admin_bootstrap_token_please_do_not_use_in_production
           MYSQL_URL=mysql+asyncmy://media_admin:ci_mysql_password@mysql:3306/office_automation

@@ -208,11 +208,6 @@ def get_font_path():
     return None
 
 
-def calculate_center(page_w, page_h, text_w, text_h):
-    """计算居中坐标的辅助函数"""
-    return (page_w - text_w) / 2, (page_h - text_h) / 2
-
-
 # --- 1. 核心图片处理器 (全屏平铺 + EXIF 修正) ---
 def process_single_image(content: bytes, text: str) -> bytes:
     try:

@@ -451,11 +451,6 @@ async def list_security_history(
     }
 
 
-async def list_recent_security() -> dict[str, Any]:
-    """Compatibility wrapper for callers that only need the default recent page."""
-    return await list_security_history()
-
-
 def legal_api_count(app: Any) -> int:
     pairs = set()
     for route in app.routes:
