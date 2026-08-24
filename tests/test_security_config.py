@@ -32,6 +32,8 @@ class ProductionConfigurationTests(unittest.TestCase):
             MYSQL_PASSWORD=password,
             MYSQL_ROOT_PASSWORD="different-root-secret-987654321",
             ADMIN_COOKIE_SECURE=True,
+            ADMIN_COOKIE_NAME="__Host-admin_session",
+            ADMIN_CSRF_COOKIE_NAME="__Host-admin_csrf",
         )
         self.assertEqual(settings.ENVIRONMENT, "production")
 
