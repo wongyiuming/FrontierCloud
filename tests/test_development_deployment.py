@@ -24,6 +24,16 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("ENVIRONMENT: ${ENVIRONMENT:-production}", compose)
         self.assertIn("ENVIRONMENT=${ENVIRONMENT:-production}", compose)
 
+    def test_admin_bootstrap_token_is_validated_before_startup(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        web = self._service_block(compose, "web")
+
+        self.assertIn(
+            "ADMIN_BOOTSTRAP_TOKEN: "
+            "${ADMIN_BOOTSTRAP_TOKEN:?ADMIN_BOOTSTRAP_TOKEN must be set}",
+            web,
+        )
+
     def test_development_nginx_is_http_only(self):
         development = ROOT / "nginx" / "environments" / "development"
         rendered_inputs = "\n".join(

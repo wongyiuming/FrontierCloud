@@ -5,6 +5,7 @@ services:
     restart: always
     env_file: .env
     environment:
+      ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:?ADMIN_BOOTSTRAP_TOKEN must be set}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       PYTHONDONTWRITEBYTECODE: "1"
     read_only: true

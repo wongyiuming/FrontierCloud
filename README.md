@@ -294,11 +294,17 @@ Inspect incoming changes before rebuilding, especially changes to
 git fetch origin
 git log --oneline --decorate HEAD..origin/main
 git diff --stat HEAD..origin/main
+git diff HEAD..origin/main -- .env.example
 git pull --ff-only
 sudo docker compose config --quiet
 sudo docker compose up -d --build --wait --wait-timeout 240
 sudo docker compose ps
 ```
+
+Before pulling, reconcile additions or renamed variables shown in `.env.example`
+with the host's private `.env`. Git does not update `.env`; Compose validation is
+designed to stop before containers are recreated when a required variable is
+missing.
 
 Do not run `docker compose down --volumes` during an update; named MySQL and Redis
 volumes contain persistent state.
