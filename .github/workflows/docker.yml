@@ -29,8 +29,7 @@ jobs:
           COMPOSE_PROFILES=monitoring
           DEFAULT_TEXT="CONFIDENTIAL"
           REDIS_URL=redis://redis:6379/0
-          WALL_ADMIN_TOKEN=ci_wall_admin_token_please_do_not_use_in_production
-          WALL_TTL=240
+          ADMIN_BOOTSTRAP_TOKEN=ci_admin_bootstrap_token_please_do_not_use_in_production
           MYSQL_URL=mysql+asyncmy://media_admin:ci_mysql_password@mysql:3306/office_automation
           ADMIN_TOKEN_TTL=900
           ADMIN_TOKEN_ISSUE_INTERVAL=900
@@ -79,7 +78,6 @@ jobs:
           docker compose config --quiet
           node --check static/js/admin.js
           node --check static/js/player.js
-          node --check static/js/wall.js
           node tests/admin_ui_smoke.mjs
 
       - name: Build and start services
@@ -90,8 +88,7 @@ jobs:
           python3 -m unittest -v \
             tests/test_development_deployment.py \
             tests/test_exporter_config.py \
-            tests/test_monitoring_stack.py \
-            tests/test_wall_ui.py
+            tests/test_monitoring_stack.py
 
       - name: Run unit and runtime tests
         run: |
@@ -100,7 +97,6 @@ jobs:
               ! -name 'test_exporter_config.py' \
               ! -name 'test_development_deployment.py' \
               ! -name 'test_monitoring_stack.py' \
-              ! -name 'test_wall_ui.py' \
               -printf '/app/%p\n' | sort
           )
           docker compose exec -T web python -m unittest -v "${runtime_tests[@]}"
@@ -150,7 +146,7 @@ jobs:
           test "$(curl -ksS -o /dev/null -w '%{http_code}' https://localhost/api/v1/media/admin/)" = 401
 
           TOKEN_RESPONSE=$(curl -kfsS -X POST https://localhost/api/v1/media/admin/token/issue \
-            -H 'X-Token: ci_wall_admin_token_please_do_not_use_in_production')
+            -H 'X-Token: ci_admin_bootstrap_token_please_do_not_use_in_production')
           ADMIN_TOKEN=$(python -c 'import json,sys; print(json.load(sys.stdin)["token"])' <<<"$TOKEN_RESPONSE")
           curl -kfsS -c /tmp/admin-cookies.txt -X POST https://localhost/api/v1/media/admin/elevate \
             --data-urlencode "token=$ADMIN_TOKEN" | grep '"status":"ok"'

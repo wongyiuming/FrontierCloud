@@ -22,7 +22,7 @@
 
 Web 容器启动时会生成一枚 32-byte URL-safe Token，之后固定每 15 分钟再生成一枚。待领取 Token 在交接时保留 5 秒重叠，避免调度抖动产生真空；成功使用后，每枚 Token 都有独立的 15 分钟滑动 TTL。新 Token 不覆盖旧 Token，持续被 Admin Session 使用的旧 Token 会独立续期，因此可以比后生成但未使用的 Token 存活更久。MySQL 只保存 SHA-256 摘要；明文只输出到 web 容器 stdout，因此宿主机可以使用 `docker logs -f office_automation_web` 获取。
 
-也保留了 `/api/v1/media/admin/token/issue`，需要 `X-Token: WALL_ADMIN_TOKEN` 才能重新签发。
+也保留了 `/api/v1/media/admin/token/issue`，需要 `X-Token: ADMIN_BOOTSTRAP_TOKEN` 才能重新签发。
 
 生产环境必须修改 `.env` 中所有 `change_me` / `change_*` 默认值，并保持 `ADMIN_COOKIE_SECURE=true`。
 

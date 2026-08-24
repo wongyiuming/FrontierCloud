@@ -2,7 +2,6 @@ import io
 import tarfile
 import unittest
 import zipfile
-from pathlib import Path
 from unittest.mock import patch
 
 import py7zr
@@ -99,13 +98,6 @@ class WatermarkBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class XSSAndLogIntegrityTests(unittest.TestCase):
-    def test_wall_renders_untrusted_content_as_text(self):
-        source = Path("static/js/wall.js").read_text(encoding="utf-8")
-        self.assertIn("paragraph.textContent=decoder.decode", source)
-        self.assertNotIn("innerHTML", source)
-        html = Path("static/wall/index.html").read_text(encoding="utf-8")
-        self.assertNotIn("cdn.tailwindcss.com", html)
-
     def test_log_values_cannot_inject_new_records_or_terminal_controls(self):
         value = sanitize_log_value("safe\n[ADMIN] forged\x1b[2J")
         self.assertEqual(value, "safe\\n[ADMIN] forged\\u{1b}[2J")

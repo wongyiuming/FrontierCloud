@@ -10,12 +10,10 @@ from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 
 from app.api.v1.admin import router as admin_router
 from app.api.v1.media import router as media_router
-from app.api.v1.wall import router as wall_router
 from app.core import utils
 from app.core.config import settings
 
 router = APIRouter()
-router.include_router(wall_router, prefix="/wall", tags=["AnonymousWall"])
 router.include_router(media_router, prefix="/media", tags=["MediaCenter"])
 router.include_router(admin_router, prefix="/media/admin", tags=["MediaAdmin"])
 

@@ -8,10 +8,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Office-Automation"
     ENVIRONMENT: str = Field("production", validation_alias="ENVIRONMENT")
     REDIS_URL: str = Field(..., validation_alias="REDIS_URL")
-    WALL_ADMIN_TOKEN: str = Field(..., validation_alias="WALL_ADMIN_TOKEN")
-    WALL_TTL: int = Field(240, validation_alias="WALL_TTL")
-    WALL_SESSION_TTL: int = Field(900, ge=60, le=86400, validation_alias="WALL_SESSION_TTL")
-    WALL_MAX_IMAGE_SIZE: int = Field(20 * 1024 * 1024, ge=1, le=20 * 1024 * 1024, validation_alias="WALL_MAX_IMAGE_SIZE")
+    ADMIN_BOOTSTRAP_TOKEN: str = Field(..., validation_alias="ADMIN_BOOTSTRAP_TOKEN")
 
     MYSQL_URL: str = Field(..., validation_alias="MYSQL_URL")
     MYSQL_PASSWORD: str = Field(..., validation_alias="MYSQL_PASSWORD")
@@ -92,8 +89,8 @@ class Settings(BaseSettings):
             )
 
         errors = []
-        if is_weak(self.WALL_ADMIN_TOKEN, 32):
-            errors.append("WALL_ADMIN_TOKEN must be a unique random secret of at least 32 characters")
+        if is_weak(self.ADMIN_BOOTSTRAP_TOKEN, 32):
+            errors.append("ADMIN_BOOTSTRAP_TOKEN must be a unique random secret of at least 32 characters")
         if is_weak(self.MYSQL_PASSWORD, 16):
             errors.append("MYSQL_PASSWORD must be a unique secret of at least 16 characters")
         if is_weak(self.MYSQL_ROOT_PASSWORD, 16):

@@ -68,10 +68,10 @@ async def elevate(
 
 
 # ============================================================
-# 2. 生成新的临时 Admin Token
+# 2. Issue a temporary admin token
 #
-# 这个接口不是公共 UI 使用的。
-# 宿主机管理员可以使用现有 WALL_ADMIN_TOKEN 调用。
+# This endpoint is reserved for host administrators and is not used by the
+# public UI. Authenticate with ADMIN_BOOTSTRAP_TOKEN.
 # ============================================================
 
 @router.post("/token/issue")
@@ -82,7 +82,7 @@ async def issue_token(
 
     if (
         not supplied
-        or not secrets.compare_digest(supplied, settings.WALL_ADMIN_TOKEN)
+        or not secrets.compare_digest(supplied, settings.ADMIN_BOOTSTRAP_TOKEN)
     ):
         raise HTTPException(
             status_code=403,

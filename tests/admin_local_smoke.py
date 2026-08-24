@@ -89,7 +89,7 @@ def main() -> int:
 
     cookie_jar = http.cookiejar.CookieJar(policy=LoopbackCookiePolicy())
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-    wall_token = env_value("WALL_ADMIN_TOKEN")
+    bootstrap_token = env_value("ADMIN_BOOTSTRAP_TOKEN")
     suffix = uuid.uuid4().hex[:10]
     folder_dir = f"codex-smoke-folder-{suffix}"
     multiple_dir = f"codex-smoke-multiple-{suffix}"
@@ -101,7 +101,7 @@ def main() -> int:
             opener,
             "/api/v1/media/admin/token/issue",
             method="POST",
-            headers={"X-Token": wall_token},
+            headers={"X-Token": bootstrap_token},
         )
         elevate_body = urllib.parse.urlencode({"token": issued["token"]}).encode()
         request_json(
