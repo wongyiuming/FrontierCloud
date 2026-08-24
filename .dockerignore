@@ -1,21 +1,21 @@
-# 排除 Git 信息
+# Exclude Git metadata.
 .git
 .gitignore
 
-# 排除本地虚拟环境 (这是最占空间的，必须排除)
+# Exclude local virtual environments, which are typically the largest context entries.
 .venv
 venv
 ENV
 data
 
-# 排除 Python 字节码
+# Exclude Python bytecode.
 __pycache__
 *.pyc
 
-# 排除 IDE 配置文件
+# Exclude IDE configuration.
 .idea
 .vscode
 
-# 排除本地敏感数据
+# Exclude local sensitive data.
 .env
 certs/

@@ -32,7 +32,7 @@
         window.frontierCloudStunUrls = {{STUN_URLS_JSON}};
         const categories = {{CATEGORIES_JSON}};
 
-        // 防御 DOM XSS 核心：HTML 字符转义函数
+        // Escape HTML before inserting user-controlled values into the DOM.
         function escapeHTML(str) {
             if (typeof str !== 'string') return str;
             return str.replace(/[&<>'"]/g, tag => ({
@@ -51,7 +51,7 @@
                 return;
             }
 
-            // 使用 escapeHTML 清洗所有由用户控制的目录名与注入属性，防止 XSS 执行
+            // Sanitize every user-controlled directory name and attribute before rendering.
             grid.innerHTML = categories.map(cat => `
                 <a href="${escapeHTML(cat.url)}" class="card">
                     <div class="card-title">📁 ${escapeHTML(cat.name)}</div>

@@ -6,35 +6,36 @@ from tqdm import tqdm
 
 
 def process_single_file(old_path, root, name, source_base, target_base):
-    """处理单个文件的路径重命名与复制"""
+    """Sanitize one file name and copy it into the target tree."""
     base, ext = os.path.splitext(name)
 
-    # 1. 统一所有标点符号、特殊符号为下划线 _（保留中文字符、英文字母、数字、下划线）
+    # Replace punctuation with underscores while preserving letters, digits,
+    # underscores, and CJK characters.
     new_base = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fa5]', '_', base)
 
-    # 2. 把当前目录名称（父目录）如果在文件名中出现过，则去掉
+    # Remove a sanitized parent directory name duplicated in the file name.
     parent_dir_name = os.path.basename(root)
     if parent_dir_name:
-        # 对父目录名称本身也进行相同的符号清洗，以便准确匹配
+        # Apply the same normalization before comparing the parent name.
         cleaned_parent = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fa5]', '_', parent_dir_name)
         cleaned_parent = re.sub(r'_+', '_', cleaned_parent).strip('_')
         if cleaned_parent and cleaned_parent in new_base:
             new_base = new_base.replace(cleaned_parent, '')
 
-    # 把连续的下划线合并为一个，并去除首尾多余的下划线
+    # Collapse repeated underscores and trim them from both ends.
     new_base = re.sub(r'_+', '_', new_base)
     new_base = new_base.strip('_')
 
     new_name = new_base + ext
 
-    # 计算相对路径，保证子目录结构被继承
+    # Preserve the source directory structure below the target root.
     rel_path = os.path.relpath(root, source_base)
     if rel_path == '.':
         new_root = target_base
     else:
         new_root = os.path.join(target_base, rel_path)
 
-    # 确保目标文件夹存在
+    # Ensure the destination directory exists.
     os.makedirs(new_root, exist_ok=True)
 
     new_path = os.path.join(new_root, new_name)
@@ -49,7 +50,7 @@ def process_single_file(old_path, root, name, source_base, target_base):
 def sanitize_and_copy(source_path, target_path, max_workers=16):
     tasks = []
 
-    # 遍历获取所有需要处理的文件
+    # Collect every file that needs processing.
     for root, dirs, files in os.walk(source_path, topdown=False):
         for name in files:
             old_path = os.path.join(root, name)
@@ -60,14 +61,14 @@ def sanitize_and_copy(source_path, target_path, max_workers=16):
         print("未找到任何文件。")
         return
 
-    # 使用多线程池处理（文件拷贝 I/O 密集，释放 GIL 收益高）
+    # Copy files in a thread pool because the workload is I/O-bound.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(process_single_file, *task): task
             for task in tasks
         }
 
-        # 使用 tqdm 渲染整体进度条
+        # Render aggregate progress with tqdm.
         for future in tqdm(as_completed(futures), total=total_files, desc="复制并清理文件"):
             success, msg = future.result()
             if not success:
@@ -77,9 +78,9 @@ def sanitize_and_copy(source_path, target_path, max_workers=16):
 if __name__ == '__main__':
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    # 输入目录: ./data/media
+    # Source directory: ./data/media
     MEDIA_DIR = os.path.abspath(os.path.join(BASE_DIR, "data", "media"))
-    # 输出目录: ./data/clean
+    # Destination directory: ./data/clean
     TARGET_DIR = os.path.abspath(os.path.join(BASE_DIR, "data", "clean"))
 
     if os.path.isdir(MEDIA_DIR):

@@ -11,7 +11,7 @@ os.makedirs(MEDIA_DIR, exist_ok=True)
 
 
 def sanitize_filename(name):
-    """过滤文件名或文件夹名称中的非法字符（保留路径分隔符）"""
+    """Remove invalid name characters while preserving path separators."""
     return "".join(c for c in name if c not in r':*?"<>|')
 
 

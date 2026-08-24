@@ -6,7 +6,7 @@ let playbackState = null;
 let playbackReporter = null;
 const DIRECT_SEEK_ZONE_START = 0.75;
 
-// 防御 DOM XSS：全局 HTML 字符转义函数
+// Escape HTML globally to prevent DOM-based XSS.
 function escapeHTML(str) {
     if (typeof str !== 'string') return str;
     return str.replace(/[&<>'\"]/g, tag => ({

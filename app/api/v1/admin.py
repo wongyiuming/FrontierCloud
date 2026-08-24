@@ -41,7 +41,7 @@ def secure_admin_transport(request: Request) -> bool:
 
 
 # ============================================================
-# 1. 临时 Token -> Admin Session
+# 1. Temporary token to admin session
 # ============================================================
 
 @router.post("/elevate")
@@ -101,14 +101,13 @@ async def issue_token(
 
 
 # ============================================================
-# 3. Admin 页面
+# 3. Admin page
 #
-# 注意：
-# admin_router 已经被 endpoints.py 挂载到：
+# The admin router is already mounted by endpoints.py at:
 #
 # /api/v1/media/admin
 #
-# 因此这里不能再写 /admin。
+# Do not append another /admin segment here.
 # ============================================================
 
 @router.get(
@@ -149,7 +148,7 @@ async def admin_page(
 
 
 # ============================================================
-# 4. Admin Session 状态
+# 4. Admin session status
 # ============================================================
 
 @router.get("/status")
@@ -170,7 +169,7 @@ async def admin_status(
 
 
 # ============================================================
-# 5. Admin 文件树
+# 5. Admin file tree
 # ============================================================
 
 @router.get("/tree")
@@ -183,7 +182,8 @@ async def admin_tree(
 
 
 # ============================================================
-# 6. 单文件上传（多文件和文件夹由浏览器逐文件调用，便于精确显示进度）
+# 6. Single-file upload; browsers submit multi-file and folder jobs one file
+# at a time so progress remains accurate.
 # ============================================================
 
 @router.post("/upload/item")
@@ -342,7 +342,7 @@ async def security_whitelist_remove(
 
 
 # ============================================================
-# 7. 删除
+# 7. Delete
 # ============================================================
 
 @router.post("/delete")
@@ -388,7 +388,7 @@ async def delete_objects(
 
 
 # ============================================================
-# 8. 隐藏 / 恢复
+# 8. Hide or restore
 # ============================================================
 
 @router.post("/hide")
@@ -439,7 +439,7 @@ async def hide_objects(
 
 
 # ============================================================
-# 9. 下载
+# 9. Download
 # ============================================================
 
 @router.get("/download")
@@ -537,7 +537,7 @@ async def download_objects(
 
 
 # ============================================================
-# 10. Admin 退出
+# 10. Admin logout
 # ============================================================
 
 @router.post("/logout")

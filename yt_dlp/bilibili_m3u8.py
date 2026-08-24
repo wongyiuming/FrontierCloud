@@ -65,7 +65,7 @@ def main():
 
   playlists = []
   if 'entries' in info:
-    # 判断是否为多P列表或合集
+    # Detect multipart videos and collection playlists.
     for entry in info['entries']:
       if entry.get('_type') == 'playlist' or entry.get('extractor_key') in [
           'Bilibili',
@@ -74,12 +74,12 @@ def main():
       ]:
         playlists.append(entry)
 
-  # 如果本身就是合集或多P页面（info是playlist类型）
+  # Treat a playlist result as the collection when no nested playlists exist.
   if not playlists and info.get('_type') == 'playlist':
     playlists = [info]
 
   if not playlists:
-    # 单个视频降级处理
+    # Fall back to a single-video collection.
     playlists = [{
         'title': info.get('title') or 'Default_Collection',
         'url': channel_url,
@@ -109,18 +109,17 @@ def main():
         'ffmpeg_location': FFMPEG_PATH,
         'outtmpl': os.path.join(folder_name, '%(playlist_title)s/%(title)s.%(ext)s'),
 
-        # ⬇️ 核心修正点：移除错误的 codec 键和 Postprocessor 中的不兼容键
+        # Avoid codec options that are incompatible with this postprocessor.
         'postprocessors': [{
-            # 'FFmpegVideoConvertor' 只需要做简单的容器转换，如果需要强制编码，
-            # 它应该使用 'FFmpegVideoConvertor' 键，但不需要 codec 参数
+            # FFmpegVideoConvertor performs the required container conversion
+            # without a separate codec argument.
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4',
-            # 'preferredcodec' 是一个不合法的顶层参数，必须删除
         }],
         'ignoreerrors': True,
         'quiet': False,
         'external_downloader': 'ffmpeg',
-        'external_downloader_args': ['-threads', '4'],  # 示例：使用 4 个线程
+        'external_downloader_args': ['-threads', '4'],  # Use four download threads.
 
         'retries': 10,
         'fragment_retries': 10,

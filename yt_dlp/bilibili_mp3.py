@@ -41,7 +41,7 @@ os.makedirs(base_folder, exist_ok=True)
 
 
 def clean_filename(name):
-    """过滤文件名或文件夹名中的非法字符"""
+    """Remove characters that are invalid in file and directory names."""
     return "".join(c for c in name if c not in r'/:*?"<>|').strip()
 
 
@@ -62,7 +62,7 @@ def main():
 
     playlists = []
     if 'entries' in info:
-        # 判断是否为多P列表或合集
+        # Detect multipart videos and collection playlists.
         for entry in info['entries']:
             if entry.get('_type') == 'playlist' or entry.get('extractor_key') in [
                 'Bilibili',
@@ -71,12 +71,12 @@ def main():
             ]:
                 playlists.append(entry)
 
-    # 如果本身就是合集或多P页面（info是playlist类型）
+    # Treat a playlist result as the collection when no nested playlists exist.
     if not playlists and info.get('_type') == 'playlist':
         playlists = [info]
 
     if not playlists:
-        # 单个视频降级处理
+        # Fall back to a single-video collection.
         playlists = [{
             'title': info.get('title') or 'Default_Collection',
             'url': channel_url,
@@ -104,7 +104,7 @@ def main():
             'http_headers': RAW_REQUEST_DATA['headers'],
             'ffmpeg_location': FFMPEG_PATH,
             'outtmpl': os.path.join(playlist_folder, '%(title)s.%(ext)s'),
-            'download_archive': archive_file,  # 开启增量去重记录文件
+            'download_archive': archive_file,  # Persist IDs for incremental deduplication.
             'noplaylist': False,
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',

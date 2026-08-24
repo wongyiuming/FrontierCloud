@@ -194,24 +194,24 @@ def _validate_docx_container(content: bytes) -> None:
 
 
 def get_font_path():
-    # 优先读取环境变量 (Docker 会传)
+    # Prefer the path supplied by the container environment.
     env_path = os.getenv("WATERMARK_FONT_PATH")
     if env_path and pathlib.Path(env_path).exists():
         return env_path
 
-    # Windows 兜底路径
+    # Fall back to the standard Windows font location for local execution.
     win_path = "C:\\Windows\\Fonts\\simhei.ttf"
     if pathlib.Path(win_path).exists():
         return win_path
 
-    # 如果都找不到，Pillow 会自动回退到默认字体（虽不支持中文但不会崩）
+    # Pillow falls back to its default font when neither path is available.
     return None
 
 
-# --- 1. 核心图片处理器 (全屏平铺 + EXIF 修正) ---
+# --- 1. Image processor: full-frame tiling and EXIF orientation ---
 def process_single_image(content: bytes, text: str) -> bytes:
     try:
-        # 1. 打开图片并修正 EXIF 转向 (解决压缩包图片尺寸偏差的关键)
+        # Normalize EXIF orientation before calculating the output dimensions.
         raw_img = Image.open(io.BytesIO(content))
         raw_width, raw_height = raw_img.size
         if (
@@ -223,44 +223,44 @@ def process_single_image(content: bytes, text: str) -> bytes:
         img = ImageOps.exif_transpose(raw_img).convert("RGBA")
         width, height = img.size
 
-        # 2. 准备水印文字
+        # Include a minute-level timestamp in the watermark text.
         full_text = f"{text} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
-        # 3. 动态计算字号：长边的 1/50
+        # Scale the font against the longer image edge.
         base_side = max(width, height)
         font_size = int(base_side / 50)
         font_size = max(font_size, 15)
 
         try:
             font = ImageFont.truetype(get_font_path(), font_size)
-        except:
+        except Exception:
             font = ImageFont.load_default()
 
-        # 4. 精准计算文字宽高以设定步进
+        # Measure the rendered text before selecting the tile spacing.
         draw_temp = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
         bbox = draw_temp.textbbox((0, 0), full_text, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-        # 步进：横向留 1.5 倍宽度，纵向留 3 倍高度
+        # Leave horizontal and vertical space between adjacent tiles.
         step_x = int(tw * 1.5)
         step_y = int(th * 4)
 
-        # 5. 创建覆盖层 (双倍画布以防旋转留白)
+        # Use a double-sized canvas so rotation does not expose empty corners.
         overlay = Image.new("RGBA", (width * 2, height * 2), (255, 255, 255, 0))
         draw = ImageDraw.Draw(overlay)
 
-        # 6. 平铺绘制 (使用金黄色，透明度加强至 160)
+        # Tile the text in semi-transparent gold.
         for x in range(0, width * 2, step_x):
             for y in range(0, height * 2, step_y):
                 draw.text((x, y), full_text, fill=(255, 215, 0, 160), font=font)
 
-        # 7. 旋转 45 度并裁剪回原图大小
+        # Rotate by 45 degrees and crop back to the source dimensions.
         overlay = overlay.rotate(45, resample=Image.BICUBIC)
         left = (overlay.width - width) // 2
         top = (overlay.height - height) // 2
         txt_layer = overlay.crop((left, top, left + width, top + height))
 
-        # 8. 合并图层
+        # Composite the watermark with the normalized source image.
         combined = Image.alpha_composite(img, txt_layer)
         out = io.BytesIO()
         combined.convert("RGB").save(out, format="JPEG", quality=90)
@@ -273,34 +273,32 @@ def process_single_image(content: bytes, text: str) -> bytes:
 
 
 def create_watermark_layer(width, height, text):
-    """
-    生成一个与 PDF 页面同尺寸的透明水印层
-    """
-    # 逻辑同你之前的代码，生成 45 度平铺水印
+    """Create a transparent watermark layer matching a PDF page."""
+    # Build the same 45-degree tiled watermark used for images.
     # full_text = f"{text} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     full_text = text
 
-    # 为了覆盖全页面且支持旋转，创建 2 倍大小画布
+    # Use a double-sized square canvas to cover the page after rotation.
     overlay_size = max(width, height) * 2
     overlay = Image.new("RGBA", (overlay_size, overlay_size), (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # 计算字号和步进 (参考你之前的逻辑)
+    # Scale the font and tile spacing to the canvas.
     font_size = max(int(overlay_size / 80), 15)
     try:
-        font = ImageFont.truetype("arial.ttf", font_size)  # 确保路径正确
-    except:
+        font = ImageFont.truetype("arial.ttf", font_size)
+    except Exception:
         font = ImageFont.load_default()
 
-    # 简单平铺绘制
+    # Draw the repeating watermark grid.
     for x in range(0, overlay_size, font_size * 10):
         for y in range(0, overlay_size, font_size * 5):
             draw.text((x, y), full_text, fill=(255, 215, 0, 100), font=font)
 
-    # 旋转并裁剪
+    # Rotate the grid before cropping it to the PDF page.
     overlay = overlay.rotate(45, resample=Image.BICUBIC)
 
-    # 截取中心部分以匹配 PDF 页面
+    # Select the centered region matching the target page.
     left = (overlay_size - width) // 2
     top = (overlay_size - height) // 2
     return overlay.crop((left, top, left + width, top + height))
@@ -314,20 +312,20 @@ def process_single_pdf(pdf_bytes: bytes, text: str) -> bytes:
             raise ProcessingLimitError("PDF contains too many pages")
 
         for page in doc:
-            # 获取 PDF 页面宽高 (Point 单位)
+            # PDF page dimensions are expressed in points.
             rect = page.rect
             w, h = int(rect.width), int(rect.height)
             if w <= 0 or h <= 0 or w * h > settings.WATERMARK_MAX_IMAGE_PIXELS:
                 raise ProcessingLimitError("PDF page dimensions exceed the processing limit")
 
-            # 1. 生成旋转后的水印图
+            # Generate the rotated watermark layer.
             watermark_img = create_watermark_layer(w, h, text)
 
-            # 2. 转为 bytes 供 PDF 插入
+            # Encode the layer as PNG bytes for PDF insertion.
             img_byte_arr = io.BytesIO()
             watermark_img.save(img_byte_arr, format="PNG")
 
-            # 3. 插入到 PDF 页面 (overlay=True 表示在文字上方)
+            # Insert above existing page content.
             page.insert_image(rect, stream=img_byte_arr.getvalue(), overlay=True)
 
         return doc.write()
@@ -341,7 +339,7 @@ def process_single_pdf(pdf_bytes: bytes, text: str) -> bytes:
             doc.close()
 
 
-# --- 3. Word 处理器 ---
+# --- 3. Word processor ---
 def process_single_word(content: bytes, text: str) -> bytes:
     try:
         _validate_docx_container(content)
@@ -361,19 +359,19 @@ def process_single_word(content: bytes, text: str) -> bytes:
         return content
 
 
-# --- 4. 任务调度与过滤 ---
+# --- 4. Task dispatch and filtering ---
 def dispatch_task(item, text):
     name, content = item
     path_obj = pathlib.Path(name)
     ext = path_obj.suffix.lower()
 
-    # 过滤隐藏文件和系统垃圾
+    # Ignore hidden metadata and operating-system artifacts.
     if name.startswith('__MACOSX') or path_obj.name.startswith('._') or ext == '.db':
         return name, content
 
     try:
         if ext in ['.jpg', '.jpeg', '.png']:
-            # 过滤掉极小的缩略图 (小于 5KB)
+            # Ignore thumbnail-sized images smaller than 5 KiB.
             if len(content) < 5120: return name, content
             return name, process_single_image(content, text)
         elif ext == '.pdf':
@@ -389,17 +387,17 @@ def dispatch_task(item, text):
 
 
 def run_batch_task(files_data: list, text: str):
-    """利用多线程池进行保序处理"""
+    """Process a batch concurrently while preserving input order."""
     if not files_data:
         return []
     workers = max(1, min(settings.WATERMARK_MAX_WORKERS, len(files_data)))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        # map 保证了结果顺序与 files_data 顺序完全一致
+        # Executor.map preserves the same order as files_data.
         results = list(executor.map(lambda x: dispatch_task(x, text), files_data))
     return results
 
 
-# --- 5. 通用压缩包处理器 (使用 TemporaryDirectory 以确保兼容性) ---
+# --- 5. Generic archive processor ---
 def process_any_archive(archive_bytes: bytes, text: str, archive_ext: str) -> bytes:
     archive_io = io.BytesIO(archive_bytes)
     try:

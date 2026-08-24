@@ -81,6 +81,7 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertEqual(workflow.count("tests/test_development_deployment.py"), 1)
         self.assertIn("! -name 'test_development_deployment.py'", workflow)
         self.assertIn("ENVIRONMENT=test", workflow)
+        self.assertIn("python3 scripts/check_english_comments.py", workflow)
         self.assertIn("Test production-like collection agents", workflow)
         self.assertIn("frontiercloud_backup_last_run_success 1", workflow)
 
