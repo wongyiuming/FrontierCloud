@@ -76,7 +76,6 @@ jobs:
           docker compose config --quiet
           python3 scripts/check_english_comments.py
           node --check static/js/admin.js
-          node --check static/js/karaoke.js
           node --check static/js/player.js
           node tests/admin_ui_smoke.mjs
 

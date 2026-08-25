@@ -12,7 +12,6 @@ Docker Compose and is designed for CentOS hosts with SELinux enabled.
 - MySQL 8.4 for persistent application and audit data
 - Redis for admin sessions, catalog caching, rate limits, and IP security state
 - A STUN-only coturn service for client network observation
-- An isolated browser microphone and local-audio karaoke capability probe
 - Collection agents in every environment:
   - Node Exporter
   - cAdvisor
@@ -377,19 +376,6 @@ state-changing operations.
 FastAPI documentation is not public. `/docs`, `/redoc`, and `/openapi.json`
 require an existing admin session.
 
-## Experimental car karaoke probe
-
-Open `/api/v1/media/karaoke` over the production HTTPS domain. The page requests
-an audio input through the standard browser media-capture API, shows the exposed
-device and track settings, provides an input meter and opt-in low-latency local
-monitoring, and keeps at most three ten-second recording segments in page memory
-for playback. It can also play a local accompaniment file without uploading it.
-
-The page has no server-side audio ingestion endpoint and cannot bypass an
-infotainment browser's microphone policy. If the vehicle browser does not expose
-its voice-command microphone to web content, the diagnostics identify the API,
-permission, device, or track stage that rejected capture.
-
 ## Validation and CI
 
 Create a local Python environment and run the source checks:
@@ -399,7 +385,6 @@ uv sync
 .venv/bin/python scripts/check_english_comments.py
 .venv/bin/python -m unittest discover -v tests
 node --check static/js/admin.js
-node --check static/js/karaoke.js
 node --check static/js/player.js
 node tests/admin_ui_smoke.mjs
 ```
