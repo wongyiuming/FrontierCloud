@@ -1,4 +1,4 @@
-"""在 CentOS 上增量下载 Bilibili 收藏夹/合集并转换为 MP3。"""
+"""Incrementally download Bilibili collections as MP3 files on CentOS."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ BILIBILI_HEADERS = {
 
 
 def load_yt_dlp() -> ModuleType:
-    """加载第三方 yt-dlp，并对项目内同名目录给出明确提示。"""
+    """Load third-party yt-dlp and detect the same-named project directory."""
     try:
         module = importlib.import_module("yt_dlp")
     except ImportError as exc:
@@ -46,7 +46,7 @@ def load_yt_dlp() -> ModuleType:
 
 
 def resolve_executable(command: str, configured_path: str | None) -> str:
-    """优先使用参数/环境变量，否则从 CentOS 的 PATH 中查找。"""
+    """Prefer the configured executable and otherwise search the CentOS PATH."""
     if configured_path:
         candidate = Path(configured_path).expanduser()
         if candidate.is_dir():
@@ -65,7 +65,7 @@ def resolve_executable(command: str, configured_path: str | None) -> str:
 
 
 def clean_filename(name: str) -> str:
-    """过滤会改变 Linux 路径含义或妨碍跨平台复制的字符。"""
+    """Remove characters that alter Linux paths or prevent portable copies."""
     return "".join(c for c in name if c not in r'/\:*?"<>|' and c != "\0").strip()
 
 

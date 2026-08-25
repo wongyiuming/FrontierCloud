@@ -1,4 +1,4 @@
-"""在 CentOS 上增量下载 YouTube 播放列表并转换为 MP3。"""
+"""Incrementally download YouTube playlists as MP3 files on CentOS."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ DEFAULT_MEDIA_DIR = BASE_DIR / "data" / "media"
 
 
 def load_yt_dlp() -> ModuleType:
-    """加载第三方 yt-dlp，并对项目内同名目录给出明确提示。"""
+    """Load third-party yt-dlp and detect the same-named project directory."""
     try:
         module = importlib.import_module("yt_dlp")
     except ImportError as exc:
@@ -39,7 +39,7 @@ def load_yt_dlp() -> ModuleType:
 def resolve_executable(
     command: str, configured_path: str | None, environment_name: str
 ) -> str:
-    """优先使用参数/环境变量，否则从 CentOS 的 PATH 中查找。"""
+    """Prefer the configured executable and otherwise search the CentOS PATH."""
     if configured_path:
         candidate = Path(configured_path).expanduser()
         if candidate.is_dir():
@@ -58,7 +58,7 @@ def resolve_executable(
 
 
 def require_supported_node(node_path: str) -> str:
-    """当前 yt-dlp EJS 要求 Node.js 22 或更高版本。"""
+    """Require the Node.js version needed by the current yt-dlp EJS runtime."""
     try:
         result = subprocess.run(
             [node_path, "--version"],
@@ -80,7 +80,7 @@ def require_supported_node(node_path: str) -> str:
 
 
 def resolve_node(configured_path: str | None) -> tuple[str, str]:
-    """查找可运行的 Node，兼容服务环境未包含 ~/.local/bin 的情况。"""
+    """Find a supported Node binary even when service PATH omits local bins."""
     if configured_path:
         node_path = resolve_executable("node", configured_path, "NODE_PATH")
         return node_path, require_supported_node(node_path)
