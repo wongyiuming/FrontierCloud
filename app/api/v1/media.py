@@ -60,6 +60,8 @@ def inject_page_runtime(html: str) -> str:
     replacements = {
         "{{STUN_URLS_JSON}}": safe_json_dumps(settings.webrtc_stun_urls()),
         "{{NETWORK_OBSERVATION_JS_URL}}": html_escape.escape(static_asset_url("js/network-observation.js"), quote=True),
+        "{{KARAOKE_JS_URL}}": html_escape.escape(static_asset_url("js/karaoke.js"), quote=True),
+        "{{KARAOKE_CSS_URL}}": html_escape.escape(static_asset_url("css/karaoke.css"), quote=True),
         "{{PLAYER_JS_URL}}": html_escape.escape(static_asset_url("js/player.js"), quote=True),
         "{{PLAYER_CSS_URL}}": html_escape.escape(static_asset_url("css/player.css"), quote=True),
     }
@@ -212,6 +214,19 @@ async def get_media_index_page():
     return HTMLResponse(
         inject_page_runtime(load_html_template("index.html")),
         headers=NO_STORE_HEADERS,
+    )
+
+
+@router.get("/karaoke", response_class=HTMLResponse)
+async def get_karaoke_page():
+    headers = {
+        **NO_STORE_HEADERS,
+        "Permissions-Policy": "microphone=(self), camera=()",
+        "Feature-Policy": "microphone 'self'; camera 'none'",
+    }
+    return HTMLResponse(
+        inject_page_runtime(load_html_template("karaoke.html")),
+        headers=headers,
     )
 
 
