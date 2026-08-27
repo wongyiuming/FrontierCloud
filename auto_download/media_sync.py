@@ -165,6 +165,7 @@ class MediaSynchronizer:
 
         self._remove_untracked(
             planned,
+            previous,
             report,
             ignored_paths=stale_paths,
             dry_run=dry_run,
@@ -226,6 +227,7 @@ class MediaSynchronizer:
     def _remove_untracked(
         self,
         planned: dict[str, ManifestItem],
+        previous: dict[str, ManifestItem],
         report: SyncReport,
         *,
         ignored_paths: set[str],
@@ -236,7 +238,8 @@ class MediaSynchronizer:
         }
         protected_paths = self._other_manifest_paths()
         playlist_dirs = {
-            self.media_dir / item.clean_playlist for item in planned.values()
+            self.media_dir / item.clean_playlist
+            for item in (*planned.values(), *previous.values())
         }
         for playlist_dir in sorted(playlist_dirs):
             if not playlist_dir.is_dir():

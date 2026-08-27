@@ -98,6 +98,22 @@ class MediaSyncTests(unittest.TestCase):
             self.assertFalse(extra.exists())
             self.assertIn("播放列表_一/远端不存在.mp3", report.deleted)
 
+    def test_sync_cleans_extras_when_entire_playlist_disappears(self):
+        with TemporaryDirectory() as temporary:
+            synchronizer = MediaSynchronizer(PROFILE, Path(temporary))
+
+            def downloader(item, target):
+                target.write_bytes(b"media")
+                return True
+
+            synchronizer.synchronize([remote("one", "曾经存在")], downloader)
+            extra = Path(temporary) / "播放列表_一" / "额外文件.mp3"
+            extra.write_bytes(b"extra")
+            report = synchronizer.synchronize([], downloader)
+
+            self.assertFalse(extra.exists())
+            self.assertIn("播放列表_一/额外文件.mp3", report.deleted)
+
 
 if __name__ == "__main__":
     unittest.main()
