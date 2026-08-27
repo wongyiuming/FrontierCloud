@@ -31,7 +31,7 @@ static/                  Media and admin browser interfaces
 nginx/                   Public gateway image and environment configurations
 monitoring/              Agents, backups, and the separate monitoring-server stack
 tests/                   Unit, configuration, security, UI, and deployment tests
-yt_dlp/                  Standalone media acquisition and file-cleanup utilities
+auto_download/           Playlist synchronization and filename-cleaning utilities
 docker-compose.yaml      Application stack and host-side collection agents
 .env.example             Complete application deployment configuration template
 ```
@@ -47,6 +47,7 @@ database backups are intentionally excluded from Git.
 - OpenSSL
 - Python 3.12 or newer for host-side tests and monitoring configuration rendering
 - Node.js for frontend syntax and smoke checks
+- FFmpeg for automatic media synchronization
 
 Run Docker commands with root privileges on hosts where the deployment account
 does not have access to the Docker socket. The Compose volume labels already use
@@ -381,7 +382,8 @@ require an existing admin session.
 Create a local Python environment and run the source checks:
 
 ```bash
-uv sync
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
 .venv/bin/python scripts/check_english_comments.py
 .venv/bin/python -m unittest discover -v tests
 node --check static/js/admin.js
@@ -408,6 +410,39 @@ git log --oneline origin/main..HEAD
 
 After pushing, wait for the complete workflow result and inspect failed job logs
 before considering the deployment ready.
+
+## Automatic media synchronization
+
+The scripts under `auto_download/` synchronize YouTube or Bilibili playlists
+directly into `data/media`. `nama_clean.py` is an imported dependency rather than
+a standalone copy job: downloaded filenames and playlist directories are cleaned
+before they become final media paths. There is no separate `data/clean` stage.
+
+Each source and output type stores a JSON manifest under `data/media/.sync`. The
+manifest records the remote media ID, original title, original playlist name,
+clean title, and final relative path. A normal run downloads missing items,
+reports existing items as skipped, and removes managed local files that no longer
+exist in the remote playlist. Back up `data/media` before the first migration run.
+
+Use the project `.venv` as the PyCharm interpreter. Check dependencies without
+network access or downloads:
+
+```bash
+.venv/bin/python auto_download/yt_mp3.py --check
+```
+
+Read remote metadata and preview the synchronization plan without downloading,
+deleting, or writing a manifest:
+
+```bash
+.venv/bin/python auto_download/yt_mp3.py --dry-run
+```
+
+The Windows entry points are `yt_mp3.py`, `yt_m3u8.py`, `bilibili_mp3.py`, and
+`bilibili_m3u8.py`. The two `_centos.py` entry points share the same manifests and
+logic while resolving FFmpeg and Node.js from the CentOS environment. Routine
+yt-dlp chatter is suppressed; normal output contains synchronization stages,
+warnings or errors, transfer speed, and the final skipped/added/deleted summary.
 
 ## Operations
 
