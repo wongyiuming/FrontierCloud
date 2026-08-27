@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from urllib.parse import urlsplit, urlunsplit
 
 from .media_sync import SyncProfile
 
 
-YOUTUBE_URL = "https://www.youtube.com/@%E7%BE%BD%E6%B1%9F-f4k/playlists"
+def youtube_public_playlists_url(source_url: str) -> str:
+    """Convert a YouTube channel root URL to its public playlists tab."""
+    parsed = urlsplit(source_url.strip())
+    path = parsed.path.rstrip("/")
+    is_channel_root = path.startswith("/@") or path.startswith("/channel/")
+    if is_channel_root and path.count("/") <= 2:
+        path = f"{path}/playlists"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, parsed.fragment))
+
+
+YOUTUBE_URL = youtube_public_playlists_url("https://www.youtube.com/@wyium")
 BILIBILI_AUDIO_URL = (
     "https://space.bilibili.com/50687441/favlist?fid=4086690941&ftype=create"
 )
@@ -73,4 +84,6 @@ BILIBILI_MP4 = SyncProfile(
 
 def with_source_url(profile: SyncProfile, source_url: str) -> SyncProfile:
     """Return a profile using a command-line URL override."""
+    if profile.name.startswith("youtube_"):
+        source_url = youtube_public_playlists_url(source_url)
     return replace(profile, source_url=source_url)

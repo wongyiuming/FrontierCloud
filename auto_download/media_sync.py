@@ -395,12 +395,11 @@ def _expand_remote_info(ydl, root: dict | None, fallback_url: str) -> list[Remot
 
 
 def _needs_detailed_metadata(entry: dict, extractor_key: str) -> bool:
-    """Detect flat Bilibili entries whose title is only their BV identifier."""
-    if "bilibili" not in extractor_key.casefold():
-        return False
+    """Detect flat entries whose title is missing or only the media identifier."""
     media_id = str(entry.get("id") or "").casefold()
     title = str(entry.get("title") or "").casefold()
-    return not title or title == media_id or title.startswith("bv")
+    is_bilibili_id = "bilibili" in extractor_key.casefold() and title.startswith("bv")
+    return not title or title == media_id or is_bilibili_id
 
 
 def build_yt_dlp_downloader(

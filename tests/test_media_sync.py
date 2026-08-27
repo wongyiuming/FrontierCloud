@@ -9,6 +9,7 @@ from auto_download.media_sync import (
     SyncProfile,
     _expand_remote_info,
 )
+from auto_download.profiles import youtube_public_playlists_url
 
 
 PROFILE = SyncProfile(
@@ -32,6 +33,14 @@ def remote(media_id: str, title: str) -> RemoteItem:
 
 
 class MediaSyncTests(unittest.TestCase):
+    def test_youtube_channel_root_is_normalized_to_public_playlists(self):
+        self.assertEqual(
+            youtube_public_playlists_url("https://www.youtube.com/@wyium"),
+            "https://www.youtube.com/@wyium/playlists",
+        )
+        playlist = "https://www.youtube.com/playlist?list=PL123"
+        self.assertEqual(youtube_public_playlists_url(playlist), playlist)
+
     def test_bilibili_flat_entries_are_hydrated_with_original_titles(self):
         class FakeYdl:
             def extract_info(self, url, download):
