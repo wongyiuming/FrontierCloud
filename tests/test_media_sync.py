@@ -3,7 +3,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from auto_download.media_sync import MediaSynchronizer, RemoteItem, SyncProfile
+from auto_download.media_sync import (
+    MediaSynchronizer,
+    RemoteItem,
+    SyncProfile,
+    _expand_remote_info,
+)
 
 
 PROFILE = SyncProfile(
@@ -27,6 +32,33 @@ def remote(media_id: str, title: str) -> RemoteItem:
 
 
 class MediaSyncTests(unittest.TestCase):
+    def test_bilibili_flat_entries_are_hydrated_with_original_titles(self):
+        class FakeYdl:
+            def extract_info(self, url, download):
+                self.requested_url = url
+                return {
+                    "id": "BV123",
+                    "title": "真正的标题",
+                    "extractor_key": "BiliBili",
+                    "webpage_url": url,
+                }
+
+        ydl = FakeYdl()
+        root = {
+            "title": "收藏夹",
+            "entries": [
+                {
+                    "id": "BV123",
+                    "title": "BV123",
+                    "ie_key": "BiliBili",
+                    "url": "https://www.bilibili.com/video/BV123",
+                }
+            ],
+        }
+        items = _expand_remote_info(ydl, root, "https://example.invalid")
+        self.assertEqual(items[0].original_title, "真正的标题")
+        self.assertEqual(items[0].original_playlist, "收藏夹")
+
     def test_sync_downloads_clean_names_and_records_original_names(self):
         with TemporaryDirectory() as temporary:
             synchronizer = MediaSynchronizer(PROFILE, Path(temporary))
@@ -82,6 +114,23 @@ class MediaSyncTests(unittest.TestCase):
             self.assertTrue(stale.exists())
             self.assertEqual(report.deleted, ["播放列表：一 / 旧歌"])
             self.assertEqual(report.added, ["播放列表：一 / 新歌"])
+
+    def test_dry_run_does_not_report_adopted_legacy_name_as_deleted(self):
+        with TemporaryDirectory() as temporary:
+            synchronizer = MediaSynchronizer(PROFILE, Path(temporary))
+            legacy = Path(temporary) / "播放列表_一" / "旧：标题.mp3"
+            legacy.parent.mkdir()
+            legacy.write_bytes(b"media")
+
+            report = synchronizer.synchronize(
+                [remote("one", "旧：标题")],
+                lambda item, target: False,
+                dry_run=True,
+            )
+
+            self.assertEqual(report.skipped, ["播放列表：一 / 旧：标题"])
+            self.assertEqual(report.deleted, [])
+            self.assertTrue(legacy.exists())
 
     def test_sync_deletes_untracked_media_from_managed_playlist(self):
         with TemporaryDirectory() as temporary:

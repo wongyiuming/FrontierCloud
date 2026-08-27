@@ -139,10 +139,20 @@ class MediaSynchronizer:
         stale_paths = self._remove_stale(previous, planned, report, dry_run=dry_run)
 
         completed: dict[str, ManifestItem] = {}
+        adopted_paths: set[str] = set()
         for media_id, manifest_item in planned.items():
             target = self.media_dir / manifest_item.relative_path
             previous_item = previous.get(media_id)
-            if self._adopt_existing(previous_item, manifest_item, target, dry_run=dry_run):
+            adopted_path = self._adopt_existing(
+                previous_item,
+                manifest_item,
+                target,
+                dry_run=dry_run,
+            )
+            if adopted_path:
+                adopted_paths.add(
+                    adopted_path.relative_to(self.media_dir).as_posix().casefold()
+                )
                 report.skipped.append(self._display_name(manifest_item))
                 completed[media_id] = manifest_item
                 continue
@@ -167,7 +177,7 @@ class MediaSynchronizer:
             planned,
             previous,
             report,
-            ignored_paths=stale_paths,
+            ignored_paths=stale_paths | adopted_paths,
             dry_run=dry_run,
         )
         if not dry_run:
@@ -181,9 +191,9 @@ class MediaSynchronizer:
         target: Path,
         *,
         dry_run: bool,
-    ) -> bool:
+    ) -> Path | None:
         if target.is_file():
-            return True
+            return target
 
         candidates: list[Path] = []
         if previous:
@@ -201,8 +211,8 @@ class MediaSynchronizer:
             if not dry_run:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 candidate.replace(target)
-            return True
-        return False
+            return candidate if dry_run else target
+        return None
 
     def _remove_stale(
         self,
@@ -342,6 +352,14 @@ def _expand_remote_info(ydl, root: dict | None, fallback_url: str) -> list[Remot
                     if nested:
                         visit(nested, entry.get("title") or current_playlist)
                     continue
+                if _needs_detailed_metadata(entry, entry_key):
+                    detailed = ydl.extract_info(
+                        entry.get("webpage_url") or entry.get("url"),
+                        download=False,
+                    )
+                    if detailed:
+                        visit(detailed, current_playlist)
+                        continue
                 add_entry(entry, current_playlist)
             return
         add_entry(info, playlist_title or current_playlist)
@@ -365,6 +383,15 @@ def _expand_remote_info(ydl, root: dict | None, fallback_url: str) -> list[Remot
 
     visit(root)
     return list(discovered.values())
+
+
+def _needs_detailed_metadata(entry: dict, extractor_key: str) -> bool:
+    """Detect flat Bilibili entries whose title is only their BV identifier."""
+    if "bilibili" not in extractor_key.casefold():
+        return False
+    media_id = str(entry.get("id") or "").casefold()
+    title = str(entry.get("title") or "").casefold()
+    return not title or title == media_id or title.startswith("bv")
 
 
 def build_yt_dlp_downloader(
