@@ -288,6 +288,7 @@ def discover_remote_items(
     yt_dlp,
     profile: SyncProfile,
     *,
+    ffmpeg_path: str | None = None,
     node_path: str | None = None,
     debug: bool = False,
 ) -> list[RemoteItem]:
@@ -301,6 +302,8 @@ def discover_remote_items(
         "logger": logger,
         "http_headers": profile.headers,
     }
+    if ffmpeg_path:
+        options["ffmpeg_location"] = ffmpeg_path
     if node_path:
         options.update(
             {

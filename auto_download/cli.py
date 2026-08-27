@@ -82,6 +82,7 @@ def run_profile(profile: SyncProfile, *, needs_node: bool) -> int:
         remote_items = discover_remote_items(
             yt_dlp,
             effective_profile,
+            ffmpeg_path=ffmpeg_path,
             node_path=node_path,
             debug=args.debug,
         )
