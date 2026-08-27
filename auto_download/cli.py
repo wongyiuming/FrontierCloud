@@ -6,6 +6,7 @@ import argparse
 import os
 from pathlib import Path
 import sys
+import traceback
 
 from .download_support import load_yt_dlp, resolve_executable
 from .media_sync import (
@@ -109,3 +110,7 @@ def run_profile(profile: SyncProfile, *, needs_node: bool) -> int:
     except RuntimeError as exc:
         print(f"[错误] {exc}", file=sys.stderr)
         return 2
+    except Exception:
+        print("[错误详情] 自动同步发生未处理异常：", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        return 3

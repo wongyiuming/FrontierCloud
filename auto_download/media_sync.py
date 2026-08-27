@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 import hashlib
 import json
 from pathlib import Path
+import sys
+import traceback
 from typing import Callable, Iterable
 from urllib.parse import parse_qs, urlsplit
 
@@ -57,6 +59,79 @@ class ManifestItem:
 
 
 DownloadCallback = Callable[[RemoteItem, Path], bool]
+
+
+def describe_resource_quality(info: dict, media_kind: str) -> tuple[str, str]:
+    """Describe available qualities and the formats selected by yt-dlp."""
+    formats = info.get("formats") or []
+    selected = info.get("requested_formats") or [info]
+    if media_kind == "video":
+        video_formats = [
+            item
+            for item in formats
+            if item.get("height") and item.get("vcodec") not in {None, "none"}
+        ]
+        available = sorted(
+            {_video_quality_label(item) for item in video_formats},
+            key=lambda label: _quality_sort_key(label),
+        )
+        selected_parts = [
+            _selected_format_label(item)
+            for item in selected
+            if item.get("vcodec") not in {None, "none"}
+            or item.get("acodec") not in {None, "none"}
+        ]
+        return ", ".join(available) or "未知", " + ".join(selected_parts) or "未知"
+
+    audio_rates = sorted(
+        {
+            round(float(item.get("abr") or item.get("tbr")))
+            for item in formats
+            if item.get("acodec") not in {None, "none"}
+            and (item.get("abr") or item.get("tbr"))
+        }
+    )
+    selected_audio = next(
+        (
+            item
+            for item in reversed(selected)
+            if item.get("acodec") not in {None, "none"}
+        ),
+        info,
+    )
+    return (
+        ", ".join(f"{rate} kbps" for rate in audio_rates) or "未知",
+        _selected_format_label(selected_audio),
+    )
+
+
+def _video_quality_label(item: dict) -> str:
+    height = int(item.get("height") or 0)
+    fps = round(float(item.get("fps") or 0))
+    alias = {2160: "4K", 4320: "8K"}.get(height)
+    label = f"{height}p"
+    if fps > 30:
+        label += str(fps)
+    if alias:
+        label += f" ({alias})"
+    return label
+
+
+def _quality_sort_key(label: str) -> tuple[int, int]:
+    height_text, _, remainder = label.partition("p")
+    fps_token = (remainder.split() or [""])[0]
+    fps_text = "".join(character for character in fps_token if character.isdigit())
+    return int(height_text or 0), int(fps_text or 0)
+
+
+def _selected_format_label(item: dict) -> str:
+    format_id = item.get("format_id") or "?"
+    if item.get("height"):
+        return f"{_video_quality_label(item)} [format {format_id}]"
+    bitrate = item.get("abr") or item.get("tbr")
+    if bitrate:
+        return f"音频 {float(bitrate):.0f} kbps [format {format_id}]"
+    return f"format {format_id}"
 
 
 class MediaSynchronizer:
@@ -488,7 +563,37 @@ def build_yt_dlp_downloader(
                     "js_runtimes": {"node": {"path": node_path}},
                 }
             )
-        with yt_dlp.YoutubeDL(options) as ydl:
-            return (ydl.download([item.webpage_url]) or 0) == 0
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(item.webpage_url, download=False)
+                available, selected = describe_resource_quality(
+                    info,
+                    profile.media_kind,
+                )
+                resource_type = "视频" if profile.media_kind == "video" else "音频"
+                print(f"[质量] 可用{resource_type}质量：{available}")
+                print(f"[质量] 选择参数：{profile.format_selector}")
+                print(f"[质量] 最终选择：{selected}")
+                return (ydl.download([item.webpage_url]) or 0) == 0
+        except Exception:
+            print(
+                f"[错误详情] {item.original_playlist} / {item.original_title}",
+                file=sys.stderr,
+            )
+            traceback.print_exc(file=sys.stderr)
+            diagnostic_options = {
+                **options,
+                "logger": ConciseYtdlpLogger(debug=True),
+                "verbose": True,
+                "quiet": False,
+                "no_warnings": False,
+                "skip_download": True,
+            }
+            try:
+                with yt_dlp.YoutubeDL(diagnostic_options) as diagnostic_ydl:
+                    diagnostic_ydl.extract_info(item.webpage_url, download=False)
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+            return False
 
     return download

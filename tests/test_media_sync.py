@@ -1,4 +1,6 @@
 import json
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -8,6 +10,8 @@ from auto_download.media_sync import (
     RemoteItem,
     SyncProfile,
     _expand_remote_info,
+    build_yt_dlp_downloader,
+    describe_resource_quality,
     discover_remote_items,
 )
 from auto_download.profiles import youtube_public_playlists_url
@@ -34,6 +38,55 @@ def remote(media_id: str, title: str) -> RemoteItem:
 
 
 class MediaSyncTests(unittest.TestCase):
+    def test_download_failure_emits_traceback_and_returns_false(self):
+        class FailingYoutubeDL:
+            def __init__(self, options):
+                self.options = options
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def extract_info(self, url, download):
+                raise ValueError("format failure")
+
+        fake_module = type("FakeModule", (), {"YoutubeDL": FailingYoutubeDL})
+        downloader = build_yt_dlp_downloader(
+            fake_module,
+            PROFILE,
+            ffmpeg_path="ffmpeg",
+        )
+        output = StringIO()
+        errors = StringIO()
+        with TemporaryDirectory() as temporary:
+            with redirect_stdout(output), redirect_stderr(errors):
+                succeeded = downloader(remote("one", "失败资源"), Path(temporary) / "x.mp3")
+
+        self.assertFalse(succeeded)
+        self.assertIn("[错误详情]", errors.getvalue())
+        self.assertIn("Traceback", errors.getvalue())
+
+    def test_video_quality_summary_lists_available_and_selected_formats(self):
+        info = {
+            "formats": [
+                {"format_id": "720", "height": 720, "fps": 30, "vcodec": "avc"},
+                {"format_id": "1080", "height": 1080, "fps": 60, "vcodec": "avc"},
+                {"format_id": "2160", "height": 2160, "fps": 60, "vcodec": "vp9"},
+            ],
+            "requested_formats": [
+                {"format_id": "2160", "height": 2160, "fps": 60, "vcodec": "vp9"},
+                {"format_id": "251", "abr": 141, "acodec": "opus"},
+            ],
+        }
+        available, selected = describe_resource_quality(info, "video")
+        self.assertEqual(available, "720p, 1080p60, 2160p60 (4K)")
+        self.assertEqual(
+            selected,
+            "2160p60 (4K) [format 2160] + 音频 141 kbps [format 251]",
+        )
+
     def test_multi_source_profile_polls_every_collection_and_keeps_duplicates(self):
         roots = {
             "https://example.invalid/?fid=one": {
