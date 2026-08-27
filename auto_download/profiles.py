@@ -19,11 +19,12 @@ def youtube_public_playlists_url(source_url: str) -> str:
 
 
 YOUTUBE_URL = youtube_public_playlists_url("https://www.youtube.com/@wyium")
-BILIBILI_AUDIO_URL = (
-    "https://space.bilibili.com/50687441/favlist?fid=4086690941&ftype=create"
-)
-BILIBILI_VIDEO_URL = (
-    "https://space.bilibili.com/50687441/favlist?fid=4077706241&ftype=create"
+BILIBILI_URLS = (
+    "https://space.bilibili.com/50687441/favlist?fid=4032917841&ftype=create",
+    "https://space.bilibili.com/50687441/favlist?fid=4041747841&ftype=create",
+    "https://space.bilibili.com/50687441/favlist?fid=4077706241&ftype=create",
+    "https://space.bilibili.com/50687441/favlist?fid=4086690941&ftype=create",
+    "https://space.bilibili.com/50687441/favlist?fid=4113601541&ftype=create",
 )
 
 YOUTUBE_HEADERS = {
@@ -62,23 +63,25 @@ YOUTUBE_MP4 = SyncProfile(
 )
 BILIBILI_MP3 = SyncProfile(
     name="bilibili_audio",
-    source_url=BILIBILI_AUDIO_URL,
+    source_url=BILIBILI_URLS[0],
     media_kind="audio",
     extension="mp3",
     format_selector="bestaudio/best",
     headers=BILIBILI_HEADERS,
     retries=10,
     peer_profiles=("youtube_audio",),
+    additional_source_urls=BILIBILI_URLS[1:],
 )
 BILIBILI_MP4 = SyncProfile(
     name="bilibili_video",
-    source_url=BILIBILI_VIDEO_URL,
+    source_url=BILIBILI_URLS[0],
     media_kind="video",
     extension="mp4",
     format_selector="bestvideo+bestaudio/best",
     headers=BILIBILI_HEADERS,
     retries=10,
     peer_profiles=("youtube_video",),
+    additional_source_urls=BILIBILI_URLS[1:],
 )
 
 
@@ -86,4 +89,4 @@ def with_source_url(profile: SyncProfile, source_url: str) -> SyncProfile:
     """Return a profile using a command-line URL override."""
     if profile.name.startswith("youtube_"):
         source_url = youtube_public_playlists_url(source_url)
-    return replace(profile, source_url=source_url)
+    return replace(profile, source_url=source_url, additional_source_urls=())

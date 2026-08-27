@@ -8,6 +8,7 @@ from auto_download.media_sync import (
     RemoteItem,
     SyncProfile,
     _expand_remote_info,
+    discover_remote_items,
 )
 from auto_download.profiles import youtube_public_playlists_url
 
@@ -33,6 +34,44 @@ def remote(media_id: str, title: str) -> RemoteItem:
 
 
 class MediaSyncTests(unittest.TestCase):
+    def test_multi_source_profile_polls_every_collection_and_keeps_duplicates(self):
+        roots = {
+            "https://example.invalid/?fid=one": {
+                "title": "分类一",
+                "entries": [{"id": "same", "title": "歌", "ie_key": "Test"}],
+            },
+            "https://example.invalid/?fid=two": {
+                "title": "分类二",
+                "entries": [{"id": "same", "title": "歌", "ie_key": "Test"}],
+            },
+        }
+
+        class FakeYoutubeDL:
+            def __init__(self, options):
+                self.options = options
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def extract_info(self, url, download):
+                return roots[url]
+
+        fake_module = type("FakeModule", (), {"YoutubeDL": FakeYoutubeDL})
+        profile = SyncProfile(
+            **{
+                **PROFILE.__dict__,
+                "source_url": "https://example.invalid/?fid=one",
+                "additional_source_urls": ("https://example.invalid/?fid=two",),
+            }
+        )
+        items = discover_remote_items(fake_module, profile)
+
+        self.assertEqual([item.original_playlist for item in items], ["分类一", "分类二"])
+        self.assertEqual(len({item.media_id for item in items}), 2)
+
     def test_youtube_channel_root_is_normalized_to_public_playlists(self):
         self.assertEqual(
             youtube_public_playlists_url("https://www.youtube.com/@wyium"),

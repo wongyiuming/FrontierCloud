@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 from pathlib import Path
 from typing import Callable, Iterable
+from urllib.parse import parse_qs, urlsplit
 
 from .download_support import ConciseYtdlpLogger, DownloadProgress, SyncReport
 from .nama_clean import allocate_unique_stem, sanitize_component
@@ -23,6 +25,11 @@ class SyncProfile:
     headers: dict[str, str]
     retries: int = 3
     peer_profiles: tuple[str, ...] = ()
+    additional_source_urls: tuple[str, ...] = ()
+
+    def source_urls(self) -> tuple[str, ...]:
+        """Return every remote collection polled by this profile."""
+        return (self.source_url, *self.additional_source_urls)
 
 
 @dataclass(frozen=True)
@@ -79,6 +86,7 @@ class MediaSynchronizer:
             "version": 1,
             "profile": self.profile.name,
             "source_url": self.profile.source_url,
+            "source_urls": self.profile.source_urls(),
             "media_kind": self.profile.media_kind,
             "items": {
                 media_id: asdict(item)
@@ -335,8 +343,34 @@ def discover_remote_items(
             }
         )
     with yt_dlp.YoutubeDL(options) as ydl:
-        root = ydl.extract_info(profile.source_url, download=False)
-        return _expand_remote_info(ydl, root, profile.source_url)
+        discovered: list[RemoteItem] = []
+        source_urls = profile.source_urls()
+        multiple_sources = len(source_urls) > 1
+        for source_url in source_urls:
+            root = ydl.extract_info(source_url, download=False)
+            source_items = _expand_remote_info(ydl, root, source_url)
+            if multiple_sources:
+                source_key = _source_key(source_url)
+                source_items = [
+                    RemoteItem(
+                        media_id=f"{source_key}|{item.media_id}",
+                        extractor=item.extractor,
+                        original_title=item.original_title,
+                        original_playlist=item.original_playlist,
+                        webpage_url=item.webpage_url,
+                    )
+                    for item in source_items
+                ]
+            discovered.extend(source_items)
+        return discovered
+
+
+def _source_key(source_url: str) -> str:
+    """Build a stable collection identity for multi-source manifests."""
+    parsed = urlsplit(source_url)
+    if favorite_id := parse_qs(parsed.query).get("fid"):
+        return f"fid-{favorite_id[0]}"
+    return hashlib.sha1(source_url.encode("utf-8")).hexdigest()[:12]
 
 
 def _expand_remote_info(ydl, root: dict | None, fallback_url: str) -> list[RemoteItem]:
