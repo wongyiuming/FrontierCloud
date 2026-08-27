@@ -136,7 +136,7 @@ class MediaSynchronizer:
         if not dry_run:
             self.media_dir.mkdir(parents=True, exist_ok=True)
 
-        self._remove_stale(previous, planned, report, dry_run=dry_run)
+        stale_paths = self._remove_stale(previous, planned, report, dry_run=dry_run)
 
         completed: dict[str, ManifestItem] = {}
         for media_id, manifest_item in planned.items():
@@ -163,7 +163,12 @@ class MediaSynchronizer:
             else:
                 report.failed.append(self._display_name(manifest_item))
 
-        self._remove_untracked(planned, report, dry_run=dry_run)
+        self._remove_untracked(
+            planned,
+            report,
+            ignored_paths=stale_paths,
+            dry_run=dry_run,
+        )
         if not dry_run:
             self.save_manifest(completed)
         return report
@@ -205,21 +210,25 @@ class MediaSynchronizer:
         report: SyncReport,
         *,
         dry_run: bool,
-    ) -> None:
+    ) -> set[str]:
+        stale_paths: set[str] = set()
         for media_id in sorted(previous.keys() - planned.keys()):
             item = previous[media_id]
             path = self.media_dir / item.relative_path
             if path.is_file():
+                stale_paths.add(Path(item.relative_path).as_posix().casefold())
                 if not dry_run:
                     path.unlink()
                     self._remove_empty_parents(path.parent)
                 report.deleted.append(self._display_name(item))
+        return stale_paths
 
     def _remove_untracked(
         self,
         planned: dict[str, ManifestItem],
         report: SyncReport,
         *,
+        ignored_paths: set[str],
         dry_run: bool,
     ) -> None:
         desired_paths = {
@@ -235,7 +244,11 @@ class MediaSynchronizer:
             for path in sorted(playlist_dir.glob(f"*.{self.profile.extension}")):
                 relative = path.relative_to(self.media_dir).as_posix()
                 normalized = relative.casefold()
-                if normalized in desired_paths or normalized in protected_paths:
+                if (
+                    normalized in desired_paths
+                    or normalized in protected_paths
+                    or normalized in ignored_paths
+                ):
                     continue
                 if not dry_run:
                     path.unlink()
