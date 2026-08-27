@@ -284,7 +284,13 @@ class MediaSynchronizer:
         return f"{item.original_playlist} / {item.original_title}"
 
 
-def discover_remote_items(yt_dlp, profile: SyncProfile, *, debug: bool = False) -> list[RemoteItem]:
+def discover_remote_items(
+    yt_dlp,
+    profile: SyncProfile,
+    *,
+    node_path: str | None = None,
+    debug: bool = False,
+) -> list[RemoteItem]:
     """Expand a channel or playlist URL into a stable list of remote items."""
     logger = ConciseYtdlpLogger(debug=debug)
     options = {
@@ -295,6 +301,14 @@ def discover_remote_items(yt_dlp, profile: SyncProfile, *, debug: bool = False) 
         "logger": logger,
         "http_headers": profile.headers,
     }
+    if node_path:
+        options.update(
+            {
+                "no_plugins": True,
+                "remote_components": {"ejs:github"},
+                "js_runtimes": {"node": {"path": node_path}},
+            }
+        )
     with yt_dlp.YoutubeDL(options) as ydl:
         root = ydl.extract_info(profile.source_url, download=False)
         return _expand_remote_info(ydl, root, profile.source_url)
