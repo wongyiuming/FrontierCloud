@@ -38,6 +38,7 @@ YOUTUBE_MP3 = SyncProfile(
     extension="mp3",
     format_selector="bestaudio/best",
     headers=YOUTUBE_HEADERS,
+    peer_profiles=("bilibili_audio",),
 )
 YOUTUBE_MP4 = SyncProfile(
     name="youtube_video",
@@ -46,6 +47,7 @@ YOUTUBE_MP4 = SyncProfile(
     extension="mp4",
     format_selector="bestvideo+bestaudio/best",
     headers=YOUTUBE_HEADERS,
+    peer_profiles=("bilibili_video",),
 )
 BILIBILI_MP3 = SyncProfile(
     name="bilibili_audio",
@@ -55,6 +57,7 @@ BILIBILI_MP3 = SyncProfile(
     format_selector="bestaudio/best",
     headers=BILIBILI_HEADERS,
     retries=10,
+    peer_profiles=("youtube_audio",),
 )
 BILIBILI_MP4 = SyncProfile(
     name="bilibili_video",
@@ -64,6 +67,7 @@ BILIBILI_MP4 = SyncProfile(
     format_selector="bestvideo+bestaudio/best",
     headers=BILIBILI_HEADERS,
     retries=10,
+    peer_profiles=("youtube_video",),
 )
 
 

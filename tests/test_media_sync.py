@@ -163,6 +163,25 @@ class MediaSyncTests(unittest.TestCase):
             self.assertFalse(extra.exists())
             self.assertIn("播放列表_一/额外文件.mp3", report.deleted)
 
+    def test_untracked_pruning_waits_for_peer_manifest(self):
+        with TemporaryDirectory() as temporary:
+            profile = SyncProfile(
+                **{
+                    **PROFILE.__dict__,
+                    "name": "source_one",
+                    "peer_profiles": ("source_two",),
+                }
+            )
+            synchronizer = MediaSynchronizer(profile, Path(temporary))
+            extra = Path(temporary) / "播放列表_一" / "其他来源.mp3"
+            extra.parent.mkdir()
+            extra.write_bytes(b"peer")
+
+            report = synchronizer.synchronize([], lambda item, target: False)
+
+            self.assertTrue(extra.exists())
+            self.assertEqual(report.deleted, [])
+
 
 if __name__ == "__main__":
     unittest.main()

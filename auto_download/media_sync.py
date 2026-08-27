@@ -22,6 +22,7 @@ class SyncProfile:
     format_selector: str
     headers: dict[str, str]
     retries: int = 3
+    peer_profiles: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -243,6 +244,8 @@ class MediaSynchronizer:
         ignored_paths: set[str],
         dry_run: bool,
     ) -> None:
+        if not self._peer_manifests_ready():
+            return
         desired_paths = {
             Path(item.relative_path).as_posix().casefold() for item in planned.values()
         }
@@ -283,6 +286,12 @@ class MediaSynchronizer:
             except (OSError, ValueError, TypeError):
                 continue
         return protected
+
+    def _peer_manifests_ready(self) -> bool:
+        return all(
+            (self.metadata_dir / f"{profile_name}.json").is_file()
+            for profile_name in self.profile.peer_profiles
+        )
 
     def _remove_empty_parents(self, directory: Path) -> None:
         while directory != self.media_dir and directory.is_dir():
