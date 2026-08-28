@@ -55,6 +55,10 @@ class _Engine:
 
 
 class PlaybackPolicyTests(unittest.TestCase):
+    def test_preference_range_extends_from_negative_two_through_seven(self):
+        self.assertEqual(playback.MIN_PREFERENCE, -2)
+        self.assertEqual(playback.MAX_PREFERENCE, 7)
+
     def test_threshold_uses_half_duration_with_five_and_thirty_second_bounds(self):
         self.assertEqual(playback.valid_playback_threshold(6), 5)
         self.assertEqual(playback.valid_playback_threshold(40), 20)
@@ -94,6 +98,15 @@ class PlaybackPolicyTests(unittest.TestCase):
         self.assertEqual(value, "d8088f10-4238-4a62-96f8-f5dd9c981fc1")
         with self.assertRaises(ValueError):
             playback.normalize_session_id("not-a-session")
+
+    def test_database_constraint_migration_preserves_rows_and_expands_the_ceiling(self):
+        source = (Path(__file__).resolve().parents[1] / "app" / "core" / "db.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("CHECK (preference BETWEEN -2 AND 7)", source)
+        self.assertIn("DROP CHECK chk_media_preference", source)
+        self.assertNotIn("UPDATE media_playback_stats", source)
 
 
 class PlaybackIdempotencyTests(unittest.IsolatedAsyncioTestCase):

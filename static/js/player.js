@@ -5,6 +5,8 @@ let clickTimer = null;
 let playbackState = null;
 let playbackReporter = null;
 const DIRECT_SEEK_ZONE_START = 0.75;
+const MIN_PREFERENCE = -2;
+const MAX_PREFERENCE = 7;
 
 // Escape HTML globally to prevent DOM-based XSS.
 function escapeHTML(str) {
@@ -73,7 +75,8 @@ function updateTrackStats(media) {
     if (score) score.textContent = `播放 ${media.play_score}`;
     for (const button of row.querySelectorAll('.preference-btn')) {
         const delta = Number(button.dataset.delta);
-        button.disabled = (delta > 0 && media.preference >= 2) || (delta < 0 && media.preference <= -2);
+        button.disabled = (delta > 0 && media.preference >= MAX_PREFERENCE)
+            || (delta < 0 && media.preference <= MIN_PREFERENCE);
     }
 }
 
@@ -462,8 +465,8 @@ window.addEventListener('DOMContentLoaded', () => {
                 <div class="media-stats"><span class="media-preference">喜好 ${item.preference > 0 ? '+' : ''}${item.preference}</span><span class="media-score">播放 ${item.play_score}</span></div>
             </div>
             <div class="preference-controls">
-                <button type="button" class="preference-btn" data-index="${index}" data-delta="-1" aria-label="降低喜好" ${item.preference <= -2 ? 'disabled' : ''}>−</button>
-                <button type="button" class="preference-btn" data-index="${index}" data-delta="1" aria-label="提高喜好" ${item.preference >= 2 ? 'disabled' : ''}>＋</button>
+                <button type="button" class="preference-btn preference-down" data-index="${index}" data-delta="-1" aria-label="降低喜好" ${item.preference <= MIN_PREFERENCE ? 'disabled' : ''}>💔</button>
+                <button type="button" class="preference-btn preference-up" data-index="${index}" data-delta="1" aria-label="提高喜好" ${item.preference >= MAX_PREFERENCE ? 'disabled' : ''}>❤️</button>
             </div>
         </li>
     `).join('');

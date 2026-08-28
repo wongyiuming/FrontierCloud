@@ -13,7 +13,7 @@ from app.core.db import engine
 
 PLAYBACK_EVENT_TTL_DAYS = 7
 MIN_PREFERENCE = -2
-MAX_PREFERENCE = 2
+MAX_PREFERENCE = 7
 
 
 def _utcnow() -> datetime:

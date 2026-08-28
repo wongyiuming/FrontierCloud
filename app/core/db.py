@@ -1,3 +1,5 @@
+import re
+
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from app.core.config import settings
 
@@ -111,9 +113,26 @@ async def init_db() -> None:
                 created_at DATETIME(6) NOT NULL,
                 updated_at DATETIME(6) NOT NULL,
                 INDEX idx_playback_sort (preference, play_score),
-                CONSTRAINT chk_media_preference CHECK (preference BETWEEN -2 AND 2)
+                CONSTRAINT chk_media_preference CHECK (preference BETWEEN -2 AND 7)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """))
+        preference_check = await conn.scalar(text("""
+            SELECT CHECK_CLAUSE
+            FROM information_schema.CHECK_CONSTRAINTS
+            WHERE CONSTRAINT_SCHEMA=DATABASE()
+              AND CONSTRAINT_NAME='chk_media_preference'
+        """))
+        normalized_check = re.sub(r"[`\s()]", "", str(preference_check or ""))
+        if not normalized_check.endswith("7"):
+            if preference_check:
+                await conn.execute(text(
+                    "ALTER TABLE media_playback_stats DROP CHECK chk_media_preference"
+                ))
+            await conn.execute(text("""
+                ALTER TABLE media_playback_stats
+                ADD CONSTRAINT chk_media_preference
+                CHECK (preference BETWEEN -2 AND 7)
+            """))
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS media_playback_events (
                 playback_session_id CHAR(36) NOT NULL,
