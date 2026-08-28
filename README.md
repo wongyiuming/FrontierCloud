@@ -1,12 +1,49 @@
 # FrontierCloud
 
-FrontierCloud 是一个以 Docker Compose 部署的 FastAPI 媒体管理服务，包含
-Nginx、MySQL、Redis、监控组件及 YouTube/Bilibili 自动同步脚本。
+FrontierCloud is a FastAPI media service deployed with Docker Compose. The
+business stack includes Nginx, MySQL, Redis, a STUN-only coturn service, and
+resource-bounded exporters. A separate monitoring stack provides Prometheus,
+Grafana, Alertmanager, and Blackbox Exporter.
 
-## 首次部署
+## Environment model
 
-要求：Git、Docker Engine、Docker Compose v2。生产服务器建议使用 CentOS，
-并保持 SELinux 开启。
+The repository uses two long-lived branches:
+
+- `dev` supplies both the private development host (`192.168.6.x`) and the RN
+  preproduction host.
+- `main` supplies the DMIT production host.
+
+Private development is HTTP-only and proves functional correctness. NAT444
+means it cannot prove public routing, certificates, DNS, or internet-facing
+behavior.
+
+RN is a production-shaped deployment. It must use the same public ports,
+TLS behavior, container topology, security controls, and operational checks as
+DMIT. A release candidate must pass business validation on RN and remain stable
+for more than 36 hours before a `dev` to `main` pull request is opened.
+
+Only stable, meaningful releases and critical production fixes belong in a
+promotion pull request. The repository owner decides whether to merge. DMIT is
+updated from `main` only after that merge.
+
+Use focused commits while developing, then push a coherent batch after the
+candidate reaches a useful checkpoint. Do not open a release pull request for
+incidental edits.
+
+## Language policy
+
+Comments, docstrings, explanatory documents, and operational documentation are
+written in native US English. User-facing product copy may remain localized.
+Run the policy check before committing:
+
+```bash
+python scripts/check_english_comments.py
+```
+
+## Business deployment
+
+Requirements: Git, Docker Engine, and Docker Compose v2. Keep SELinux enabled
+on production hosts.
 
 ```bash
 git clone https://github.com/wongyiuming/FrontierCloud.git
@@ -15,51 +52,44 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-编辑 `.env`，至少完成以下事项：
+Replace every placeholder in `.env` with an independent secret. The password
+inside `MYSQL_URL` must be URL-encoded and must match `MYSQL_PASSWORD`.
 
-- 把所有 `REPLACE_WITH_...` 替换为独立强密码或随机密钥。
-- 保证 `MYSQL_URL` 中的密码与 `MYSQL_PASSWORD` 一致并经过 URL 编码。
-- 设置 `ENVIRONMENT=development`、`test` 或 `production`。
-- 生产环境填写域名、TLS 证书路径，并保持安全 Cookie 配置开启。
-- 测试或生产环境建议设置 `COMPOSE_PROFILES=monitoring`。
+Use these environment values:
 
-创建持久目录并启动：
+- `ENVIRONMENT=development` for the private HTTP deployment.
+- `ENVIRONMENT=test` for RN. This selects the production Nginx and TLS path.
+- `ENVIRONMENT=production` for DMIT.
+
+Prepare persistent paths and validate the deployment:
 
 ```bash
-sudo install -d -m 0755 data data/media backups certs
+sudo install -d -m 0755 data data/media backups certs certs/acme
 sudo chown -R 10001:10001 data
 sudo chmod 0700 certs
-
 sudo docker compose config --quiet
 sudo docker compose pull
 sudo docker compose up -d --build --wait --wait-timeout 240
 sudo docker compose ps
-```
-
-开发环境默认使用 HTTP；生产环境应通过配置域名访问 HTTPS。部署后检查：
-
-```bash
 sudo docker compose exec -T nginx nginx -t
-sudo docker compose exec -T redis redis-cli ping
-sudo docker compose exec -T mysql \
-  sh -c 'mysqladmin ping -h 127.0.0.1 -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" --silent'
-curl --fail https://你的域名/api/v1/health
 ```
 
-## 更新部署
+The public Nginx service owns host ports 80 and 443 on RN and DMIT. The
+production configuration redirects HTTP to HTTPS, rejects unknown hostnames,
+and serves ACME HTTP-01 files from `ACME_WEBROOT` before redirecting other
+requests.
 
-更新前先看远端改动以及 `.env.example` 是否增加了变量：
+Never run `docker compose down --volumes` on a persistent deployment.
+
+## Updating a host
+
+Review the incoming change and any new environment variables before updating:
 
 ```bash
 git fetch origin
 git log --oneline HEAD..origin/main
 git diff --stat HEAD..origin/main
-git diff HEAD..origin/main -- .env.example
-```
-
-补齐本机私有 `.env` 后再更新：
-
-```bash
+git diff HEAD..origin/main -- .env.example monitoring/.env.example
 git pull --ff-only
 sudo docker compose config --quiet
 sudo docker compose pull
@@ -67,52 +97,52 @@ sudo docker compose up -d --build --wait --wait-timeout 240
 sudo docker compose ps
 ```
 
-不要执行 `docker compose down --volumes`，MySQL 和 Redis 的持久数据位于卷中。
+RN follows `origin/dev`; DMIT follows `origin/main`.
 
-## 查看管理员 Token
+## Monitoring deployment
 
-服务会定期签发临时管理员 Token。直接查看 Web 容器日志：
+The monitoring stack does not own the standard public web ports. Its defaults
+are HTTP 8080 and HTTPS 8443 so the RN business deployment can use 80 and 443.
+Set `MONITORING_HTTP_PORT` and `MONITORING_HTTPS_PORT` explicitly in
+`monitoring/.env` when host policy requires different dedicated ports.
+
+```bash
+cd monitoring
+cp .env.example .env
+chmod 600 .env
+python render_config.py
+docker compose config --quiet
+docker compose up -d --wait
+```
+
+With the defaults, Grafana remains available at
+`https://MONITORING_SERVER_NAME:8443/grafana/`. Prometheus and Alertmanager use
+the corresponding `/prometheus/` and `/alertmanager/` paths.
+
+## Standalone download tools
+
+`auto_download/` is a collection of operator-owned tools stored in this
+repository for history and convenience. It is not application code, is not
+copied into the business image, is not exposed by the FastAPI router, and is not
+part of CI or the business test suite.
+
+Install tool-only dependencies on an operator workstation when needed:
+
+```bash
+python -m venv .venv
+.venv/Scripts/python -m pip install -e ".[tools]"
+```
+
+Tool behavior and release cadence are independent from the business service.
+
+## Administrator access
+
+The web service periodically issues short-lived administrator tokens. Read the
+current token from the web container log:
 
 ```bash
 sudo docker compose logs -f web | grep ADMIN_TOKEN
 ```
 
-需要立即签发时，使用 `.env` 中的 `ADMIN_BOOTSTRAP_TOKEN`，避免把密钥写入
-Shell 历史：
-
-```bash
-read -r -s -p 'Bootstrap token: ' bootstrap_token
-printf '\n'
-curl --fail --request POST \
-  --header "X-Token: ${bootstrap_token}" \
-  https://你的域名/api/v1/media/admin/token/issue
-unset bootstrap_token
-```
-
-Token 有有效期；过期后重新查看日志或再次签发。
-
-## 自动同步媒体
-
-本地或 PyCharm 使用项目 `.venv`：
-
-```bash
-python -m venv .venv
-.venv/Scripts/python -m pip install -e .        # Windows
-# .venv/bin/python -m pip install -e .          # CentOS
-```
-
-先检查依赖或只预览远端差异：
-
-```bash
-.venv/Scripts/python auto_download/yt_mp3.py --check
-.venv/Scripts/python auto_download/yt_mp3.py --dry-run
-.venv/Scripts/python auto_download/bilibili_mp3.py --dry-run
-```
-
-去掉 `--dry-run` 执行真实同步。YouTube 会读取 `@wyium` 的全部公开播放列表；
-Bilibili 每次轮询配置的五个收藏夹，并以远端收藏夹名称创建 `data/media`
-子目录。同步会下载缺失项、跳过已有项，并在同组来源清单齐全后删除远端已无的
-本地媒体。运行前应备份 `data/media`。
-
-成功日志只显示关键阶段、可用/最终选择质量、下载速度和汇总；失败会输出完整
-traceback 与 yt-dlp debug 诊断。
+Never place deployment secrets in commands, documentation, source files, or
+Git history.

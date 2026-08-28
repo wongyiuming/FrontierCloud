@@ -20,6 +20,7 @@ HASH_COMMENT_SUFFIXES = {
     ".yml",
 }
 SLASH_COMMENT_SUFFIXES = {".css", ".html", ".htm", ".js", ".mjs", ".ts"}
+EXPLANATORY_SUFFIXES = {".md"}
 
 
 def tracked_files() -> list[Path]:
@@ -63,6 +64,14 @@ def comment_markers(path: Path) -> tuple[tuple[str, ...], tuple[tuple[str, str],
 
 
 def text_violations(path: Path) -> list[tuple[int, str]]:
+    if path.suffix in EXPLANATORY_SUFFIXES:
+        return [
+            (line_number, line.strip())
+            for line_number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1
+            )
+            if CJK.search(line)
+        ]
     line_markers, block_markers = comment_markers(path)
     if not line_markers and not block_markers:
         return []
@@ -133,7 +142,10 @@ def main() -> int:
             violations.append(f"{relative}:{line_number}: {comment}")
 
     if violations:
-        print("Comments and docstrings must be written in English:", file=sys.stderr)
+        print(
+            "Comments, docstrings, and explanatory documents must use English:",
+            file=sys.stderr,
+        )
         print("\n".join(violations), file=sys.stderr)
         return 1
     print("English comment check passed")
