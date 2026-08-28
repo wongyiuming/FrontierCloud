@@ -123,6 +123,20 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertNotIn("test_media_sync.py", workflow)
         self.assertNotIn("test_download_support.py", workflow)
 
+    def test_office_document_processing_is_not_shipped(self):
+        endpoints = (ROOT / "app" / "api" / "v1" / "endpoints.py").read_text(
+            encoding="utf-8"
+        )
+        dependencies = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+
+        self.assertNotIn("/watermark", endpoints)
+        self.assertNotIn("/watermark", nginx)
+        for dependency in ("Pillow", "pymupdf", "python-docx", "py7zr"):
+            self.assertNotIn(dependency, dependencies)
+        self.assertNotIn("WATERMARK_FONT_PATH", dockerfile)
+
     def test_ci_runs_source_only_deployment_tests_on_the_host(self):
         workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(
             encoding="utf-8"
