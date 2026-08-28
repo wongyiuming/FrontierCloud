@@ -19,10 +19,14 @@ from app.core.config import settings
 from app.core.client_ip import client_ip
 from app.core.db import init_db
 from app.core.metrics import PrometheusMetricsMiddleware
+from app.core.upload_lifecycle import install_upload_lifecycle_guard
 from app.middleware.ip_security import IPSecurityMiddleware
 from app.services import admin_service
 from app.services.admin_service import issue_admin_token, run_admin_token_issuer
 from app.services.ip_security import initialize_ip_security_cache
+
+
+install_upload_lifecycle_guard()
 
 
 @asynccontextmanager

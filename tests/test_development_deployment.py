@@ -34,6 +34,21 @@ class DevelopmentDeploymentTests(unittest.TestCase):
             web,
         )
 
+    def test_upload_inactivity_timeout_is_consistent_across_app_and_proxy(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+        config = (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8")
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "UPLOAD_INACTIVITY_TIMEOUT=${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}",
+            compose,
+        )
+        self.assertIn("client_body_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
+        self.assertIn("proxy_send_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
+        self.assertIn("ADMIN_UPLOAD_INACTIVITY_TIMEOUT: int = Field(", config)
+        self.assertIn("# ADMIN_UPLOAD_INACTIVITY_TIMEOUT=300", env_example)
+
     def test_environment_example_keeps_defaults_as_optional_overrides(self):
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
         active_names = {

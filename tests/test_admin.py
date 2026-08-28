@@ -241,6 +241,7 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_folder_upload_accepts_empty_root_target_and_preserves_relative_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir).resolve()
+            upload = UploadFile(filename="一.wav", file=io.BytesIO(self._wav_bytes(b"one")))
             with (
                 patch.object(media_manager, "MEDIA_ROOT", root),
                 patch.object(admin.admin_service, "audit", new=AsyncMock()),
@@ -248,7 +249,7 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
             ):
                 result = await admin.upload_item(
                     request=self._request(),
-                    file=UploadFile(filename="一.wav", file=io.BytesIO(self._wav_bytes(b"one"))),
+                    file=upload,
                     target_dir="",
                     relative_path="测试目录/一.wav",
                     session_hash="test-session",
@@ -258,6 +259,24 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
             uploaded = root / "测试目录" / "一.wav"
             self.assertTrue(uploaded.is_file())
             self.assertTrue(uploaded.stat().st_mode & stat.S_IROTH)
+            self.assertTrue(upload.file.closed)
+
+    async def test_upload_closes_file_when_destination_validation_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            upload = UploadFile(filename="one.wav", file=io.BytesIO(self._wav_bytes(b"one")))
+            with patch.object(media_manager, "MEDIA_ROOT", root):
+                with self.assertRaises(HTTPException) as raised:
+                    await admin.upload_item(
+                        request=self._request(),
+                        file=upload,
+                        target_dir="missing",
+                        relative_path=None,
+                        session_hash="test-session",
+                    )
+
+            self.assertEqual(raised.exception.status_code, 404)
+            self.assertTrue(upload.file.closed)
 
     async def test_multiple_files_use_independent_scalar_upload_requests(self):
         with tempfile.TemporaryDirectory() as temp_dir:

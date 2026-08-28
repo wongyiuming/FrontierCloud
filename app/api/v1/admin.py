@@ -203,23 +203,26 @@ async def upload_item(
     ] = None,
     session_hash: str = Depends(require_session),
 ):
-    if relative_path:
-        target, upload_name = MediaManager.folder_upload_target(target_dir, relative_path)
-        file.filename = upload_name
-        source = relative_path
-    else:
-        target = MediaManager.validate_destination_dir(target_dir)
-        source = file.filename or ""
-
     try:
-        saved_path = await MediaManager.upload_one(file, target)
-    except HTTPException as exc:
-        await admin_service.audit(session_hash, "upload_item", 1, source, "failed", str(exc.detail), request)
-        raise
+        if relative_path:
+            target, upload_name = MediaManager.folder_upload_target(target_dir, relative_path)
+            file.filename = upload_name
+            source = relative_path
+        else:
+            target = MediaManager.validate_destination_dir(target_dir)
+            source = file.filename or ""
 
-    await invalidate_media_catalog()
-    await admin_service.audit(session_hash, "upload_item", 1, source, "success", saved_path, request)
-    return {"path": saved_path}
+        try:
+            saved_path = await MediaManager.upload_one(file, target)
+        except HTTPException as exc:
+            await admin_service.audit(session_hash, "upload_item", 1, source, "failed", str(exc.detail), request)
+            raise
+
+        await invalidate_media_catalog()
+        await admin_service.audit(session_hash, "upload_item", 1, source, "success", saved_path, request)
+        return {"path": saved_path}
+    finally:
+        await file.close()
 
 
 @router.get("/logs")
