@@ -1,3 +1,5 @@
+from urllib.parse import quote
+
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
@@ -6,12 +8,15 @@ from sqlalchemy.exc import ArgumentError
 
 class Settings(BaseSettings):
     ENVIRONMENT: str = Field("production", validation_alias="ENVIRONMENT")
-    REDIS_URL: str = Field(..., validation_alias="REDIS_URL")
+    REDIS_URL: str = Field("redis://redis:6379/0", validation_alias="REDIS_URL")
     ADMIN_BOOTSTRAP_TOKEN: str = Field(..., validation_alias="ADMIN_BOOTSTRAP_TOKEN")
 
-    MYSQL_URL: str = Field(..., validation_alias="MYSQL_URL")
+    MYSQL_URL: str | None = Field(None, validation_alias="MYSQL_URL")
+    MYSQL_DATABASE: str = Field("office_automation", validation_alias="MYSQL_DATABASE")
+    MYSQL_USER: str = Field("media_admin", validation_alias="MYSQL_USER")
     MYSQL_PASSWORD: str = Field(..., validation_alias="MYSQL_PASSWORD")
     MYSQL_ROOT_PASSWORD: str = Field(..., validation_alias="MYSQL_ROOT_PASSWORD")
+    SERVER_NAME: str = Field("localhost", validation_alias="SERVER_NAME")
 
     ADMIN_TOKEN_TTL: int = Field(900, ge=1, validation_alias="ADMIN_TOKEN_TTL")
     ADMIN_TOKEN_ISSUE_INTERVAL: int = Field(900, ge=1, validation_alias="ADMIN_TOKEN_ISSUE_INTERVAL")
@@ -61,6 +66,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_security_settings(self):
+        if not self.MYSQL_URL:
+            encoded_user = quote(self.MYSQL_USER, safe="")
+            encoded_password = quote(self.MYSQL_PASSWORD, safe="")
+            encoded_database = quote(self.MYSQL_DATABASE, safe="")
+            self.MYSQL_URL = (
+                f"mysql+asyncmy://{encoded_user}:{encoded_password}"
+                f"@mysql:3306/{encoded_database}"
+            )
+        if not self.WEBRTC_STUN_URLS:
+            self.WEBRTC_STUN_URLS = f"stun:{self.SERVER_NAME}:3478"
+
         environment = self.ENVIRONMENT.strip().lower()
         if environment not in {"development", "test", "production"}:
             raise ValueError("ENVIRONMENT must be development, test, or production")

@@ -120,7 +120,7 @@ services:
     restart: always
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-production}
-      - SERVER_NAME=${SERVER_NAME}
+      - SERVER_NAME=${SERVER_NAME:?SERVER_NAME must be set}
       - MONITORING_ALLOW_CIDR=${MONITORING_ALLOW_CIDR:?MONITORING_ALLOW_CIDR must be set}
       - METRICS_BASIC_USER=${METRICS_BASIC_USER:?METRICS_BASIC_USER must be set}
       - METRICS_BASIC_PASSWORD=${METRICS_BASIC_PASSWORD:?METRICS_BASIC_PASSWORD must be set}
@@ -132,8 +132,8 @@ services:
     volumes:
       - ./data:/app/data:ro,z
       - nginx_logs:/var/log/nginx
-      - ${SSL_CERT_PATH}:/etc/nginx/certs/fullchain.pem:ro
-      - ${SSL_KEY_PATH}:/etc/nginx/certs/privkey.pem:ro
+      - ${SSL_CERT_PATH:-./certs/fullchain.pem}:/etc/nginx/certs/fullchain.pem:ro
+      - ${SSL_KEY_PATH:-./certs/privkey.pem}:/etc/nginx/certs/privkey.pem:ro
       - ${ACME_WEBROOT:-./certs/acme}:/var/www/certbot:ro
     depends_on:
       web:
@@ -161,8 +161,8 @@ services:
       - --simple-log
       - --listening-port=3478
     ports:
-      - "${WEBRTC_STUN_PORT:?WEBRTC_STUN_PORT must be set}:3478/tcp"
-      - "${WEBRTC_STUN_PORT:?WEBRTC_STUN_PORT must be set}:3478/udp"
+      - "${WEBRTC_STUN_PORT:-3478}:3478/tcp"
+      - "${WEBRTC_STUN_PORT:-3478}:3478/udp"
     read_only: true
     tmpfs:
       - /tmp:size=4m,mode=1777
