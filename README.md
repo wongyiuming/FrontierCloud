@@ -52,8 +52,14 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Replace every placeholder in `.env` with an independent secret. The password
-inside `MYSQL_URL` must be URL-encoded and must match `MYSQL_PASSWORD`.
+Replace every placeholder in `.env` with an independent secret. Required values
+stay at the top of each example file. Supported optional overrides are commented
+at the bottom; copy or uncomment only the values that the deployment must change.
+Defaults belong to the application and Compose files, not to the active `.env`.
+
+`MYSQL_URL` is generated from `MYSQL_USER`, `MYSQL_PASSWORD`, and
+`MYSQL_DATABASE`. Set the optional `MYSQL_URL` override only for a nonstandard
+database endpoint; its password must be URL-encoded and match `MYSQL_PASSWORD`.
 
 Use these environment values:
 

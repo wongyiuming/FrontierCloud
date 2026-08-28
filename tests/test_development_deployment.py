@@ -34,6 +34,32 @@ class DevelopmentDeploymentTests(unittest.TestCase):
             web,
         )
 
+    def test_environment_example_keeps_defaults_as_optional_overrides(self):
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        active_names = {
+            line.split("=", 1)[0]
+            for line in env_example.splitlines()
+            if line and not line.startswith("#") and "=" in line
+        }
+
+        self.assertEqual(
+            active_names,
+            {
+                "ENVIRONMENT",
+                "SERVER_NAME",
+                "ADMIN_BOOTSTRAP_TOKEN",
+                "MYSQL_PASSWORD",
+                "MYSQL_ROOT_PASSWORD",
+                "INTERNAL_METRICS_TOKEN",
+                "MONITORING_ALLOW_CIDR",
+                "METRICS_BASIC_PASSWORD",
+                "MYSQL_EXPORTER_PASSWORD",
+                "MYSQL_BACKUP_PASSWORD",
+            },
+        )
+        self.assertIn("# REDIS_URL=redis://redis:6379/0", env_example)
+        self.assertIn("# HTTP_PORT=80", env_example)
+
     def test_development_nginx_is_http_only(self):
         development = ROOT / "nginx" / "environments" / "development"
         rendered_inputs = "\n".join(

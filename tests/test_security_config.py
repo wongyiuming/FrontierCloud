@@ -37,6 +37,27 @@ class ProductionConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(settings.ENVIRONMENT, "production")
 
+    def test_internal_urls_are_derived_from_minimal_deployment_values(self):
+        password = "database secret+with@reserved/chars"
+        settings = Settings(
+            _env_file=None,
+            ENVIRONMENT="test",
+            SERVER_NAME="preproduction.example.com",
+            ADMIN_BOOTSTRAP_TOKEN="test-token",
+            MYSQL_PASSWORD=password,
+            MYSQL_ROOT_PASSWORD="test-root-password",
+        )
+
+        self.assertEqual(settings.REDIS_URL, "redis://redis:6379/0")
+        self.assertEqual(
+            settings.MYSQL_URL,
+            "mysql+asyncmy://media_admin:database%20secret%2Bwith%40reserved%2Fchars@mysql:3306/office_automation",
+        )
+        self.assertEqual(
+            settings.WEBRTC_STUN_URLS,
+            "stun:preproduction.example.com:3478",
+        )
+
     def test_token_issue_interval_cannot_create_a_lifecycle_gap(self):
         with self.assertRaises(ValidationError):
             Settings(
