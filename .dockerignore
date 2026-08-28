@@ -7,6 +7,7 @@
 venv
 ENV
 data
+auto_download
 
 # Exclude Python bytecode.
 __pycache__

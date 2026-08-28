@@ -21,13 +21,12 @@ COPY --chmod=0644 pyproject.toml .
 # runtime user must always be able to import the application entry point.
 COPY --chmod=0644 main.py .
 COPY app ./app
-COPY auto_download ./auto_download
 COPY static ./static
 COPY tests ./tests
 
 # Runtime code is immutable inside the image. Normalize permissions after COPY
 # so a restrictive host umask cannot make source files unreadable by UID 10001.
-RUN chmod -R a+rX /app/app /app/auto_download /app/static /app/tests
+RUN chmod -R a+rX /app/app /app/static /app/tests
 
 # Install Python dependencies with a pip release that includes the archive and
 # entry-point security fixes required by this image.

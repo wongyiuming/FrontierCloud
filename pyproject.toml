@@ -1,7 +1,7 @@
 [project]
 name = "office-automation"
 version = "1.1.0"
-description = "自动化办公与媒体管理接口"
+description = "Media management and office automation service"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -20,8 +20,10 @@ dependencies = [
     "cryptography",
     "prometheus-client>=0.23,<1.0",
     "zipstream-ng==1.9.2",
-    "yt-dlp[default]",
 ]
+
+[project.optional-dependencies]
+tools = ["yt-dlp[default]"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
