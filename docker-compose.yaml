@@ -134,6 +134,7 @@ services:
       - nginx_logs:/var/log/nginx
       - ${SSL_CERT_PATH}:/etc/nginx/certs/fullchain.pem:ro
       - ${SSL_KEY_PATH}:/etc/nginx/certs/privkey.pem:ro
+      - ${ACME_WEBROOT:-./certs/acme}:/var/www/certbot:ro
     depends_on:
       web:
         condition: service_healthy

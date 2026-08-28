@@ -10,7 +10,7 @@ services:
       - --storage.tsdb.retention.size=6GB
       - --web.listen-address=0.0.0.0:9090
       - --web.enable-lifecycle
-      - --web.external-url=https://${MONITORING_SERVER_NAME:?MONITORING_SERVER_NAME must be set}/prometheus/
+      - --web.external-url=https://${MONITORING_SERVER_NAME:?MONITORING_SERVER_NAME must be set}:${MONITORING_HTTPS_PORT:-8443}/prometheus/
       - --web.config.file=/etc/prometheus/web.yml
     expose:
       - "9090"
@@ -48,7 +48,7 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_SERVER_HTTP_ADDR: 0.0.0.0
-      GF_SERVER_ROOT_URL: https://${MONITORING_SERVER_NAME:?MONITORING_SERVER_NAME must be set}/grafana/
+      GF_SERVER_ROOT_URL: https://${MONITORING_SERVER_NAME:?MONITORING_SERVER_NAME must be set}:${MONITORING_HTTPS_PORT:-8443}/grafana/
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
       GF_SECURITY_COOKIE_SECURE: "true"
       GF_SECURITY_COOKIE_SAMESITE: strict
@@ -84,7 +84,7 @@ services:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
       - --web.listen-address=0.0.0.0:9093
-      - --web.external-url=https://${MONITORING_SERVER_NAME:?MONITORING_SERVER_NAME must be set}/alertmanager/
+      - --web.external-url=https://${MONITORING_SERVER_NAME:?MONITORING_SERVER_NAME must be set}:${MONITORING_HTTPS_PORT:-8443}/alertmanager/
       - --web.route-prefix=/alertmanager
       - --web.config.file=/etc/alertmanager/web.yml
     expose:
@@ -109,8 +109,8 @@ services:
     container_name: frontiercloud_monitoring_gateway
     restart: always
     ports:
-      - "80:8080"
-      - "443:8443"
+      - "${MONITORING_HTTP_PORT:-8080}:8080"
+      - "${MONITORING_HTTPS_PORT:-8443}:8443"
     volumes:
       - ./generated/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./secrets/tls_fullchain.pem:/run/tls/fullchain.pem:ro

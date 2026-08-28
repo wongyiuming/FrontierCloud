@@ -53,6 +53,7 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("listen 443 ssl", rendered_inputs)
         self.assertIn("ssl_certificate /etc/nginx/certs/fullchain.pem", rendered_inputs)
         self.assertIn("return 301 https://$host$request_uri", rendered_inputs)
+        self.assertIn("/.well-known/acme-challenge/", rendered_inputs)
 
     def test_test_environment_uses_production_like_nginx(self):
         selector = (ROOT / "nginx" / "15-select-environment.sh").read_text(
@@ -82,6 +83,19 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         mysql_init = self._service_block(compose, "mysql_monitoring_init")
         self.assertIn("mysql_socket:/var/run/mysqld", mysql_init)
         self.assertIn("condition: service_healthy", mysql_init)
+
+    def test_business_image_excludes_standalone_download_tools(self):
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("COPY auto_download", dockerfile)
+        self.assertNotIn("/app/auto_download", dockerfile)
+        self.assertIn("auto_download", dockerignore.splitlines())
+        self.assertNotIn("test_media_sync.py", workflow)
+        self.assertNotIn("test_download_support.py", workflow)
 
     def test_ci_runs_source_only_deployment_tests_on_the_host(self):
         workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(

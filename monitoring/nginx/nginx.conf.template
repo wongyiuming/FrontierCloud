@@ -31,7 +31,7 @@ http {
             try_files $uri =404;
         }
 
-        location / { return 301 https://$host$request_uri; }
+        location / { return 301 https://$host:__MONITORING_HTTPS_PORT__$request_uri; }
     }
 
     server {

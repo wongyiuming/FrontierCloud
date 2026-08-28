@@ -85,6 +85,7 @@ def main() -> None:
     monitoring_password = require(values, "MONITORING_BASIC_PASSWORD")
     monitoring_password_hash = require(values, "MONITORING_BASIC_PASSWORD_HASH")
     monitoring_server_name = require(values, "MONITORING_SERVER_NAME")
+    monitoring_https_port = values.get("MONITORING_HTTPS_PORT", "8443")
     chat_id = require(values, "TG_CHAT_ID")
     if not re.fullmatch(r"[A-Za-z0-9.-]+(?::\d+)?", host):
         raise SystemExit("PRODUCTION_METRICS_HOST is invalid")
@@ -98,6 +99,8 @@ def main() -> None:
         raise SystemExit("MONITORING_BASIC_PASSWORD_HASH must be a bcrypt hash")
     if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", monitoring_server_name):
         raise SystemExit("MONITORING_SERVER_NAME is invalid")
+    if not monitoring_https_port.isdigit() or not 1 <= int(monitoring_https_port) <= 65535:
+        raise SystemExit("MONITORING_HTTPS_PORT must be a valid TCP port")
     if not re.fullmatch(r"-?\d{1,20}", chat_id):
         raise SystemExit("TG_CHAT_ID is invalid")
 
@@ -170,7 +173,10 @@ def main() -> None:
     render(
         "../nginx/nginx.conf.template",
         "nginx.conf",
-        {"MONITORING_SERVER_NAME": monitoring_server_name},
+        {
+            "MONITORING_SERVER_NAME": monitoring_server_name,
+            "MONITORING_HTTPS_PORT": monitoring_https_port,
+        },
         uid=NGINX_UID,
         gid=NGINX_GID,
     )

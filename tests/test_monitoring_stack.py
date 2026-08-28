@@ -9,7 +9,7 @@ MONITORING = ROOT / "monitoring"
 
 
 class MonitoringStackTests(unittest.TestCase):
-    def test_only_tls_gateway_publishes_ports_and_resources_are_bounded(self):
+    def test_gateway_uses_dedicated_ports_and_resources_are_bounded(self):
         compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
         expected_limits = {
             "prometheus": "768m",
@@ -28,8 +28,10 @@ class MonitoringStackTests(unittest.TestCase):
             self.assertIn(f"mem_limit: {limit}", block)
             if service != "gateway":
                 self.assertNotIn("ports:", block)
-        self.assertIn('"80:8080"', compose)
-        self.assertIn('"443:8443"', compose)
+        self.assertIn('"${MONITORING_HTTP_PORT:-8080}:8080"', compose)
+        self.assertIn('"${MONITORING_HTTPS_PORT:-8443}:8443"', compose)
+        self.assertNotIn('"80:8080"', compose)
+        self.assertNotIn('"443:8443"', compose)
 
     def test_prometheus_retention_is_time_and_size_bounded(self):
         compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
@@ -55,6 +57,7 @@ class MonitoringStackTests(unittest.TestCase):
         self.assertIn("location /alertmanager/", config)
         self.assertIn("Strict-Transport-Security", config)
         self.assertIn("/.well-known/acme-challenge/", config)
+        self.assertIn("https://$host:__MONITORING_HTTPS_PORT__", config)
 
     def test_login_limiter_does_not_throttle_grafana_assets(self):
         config = (MONITORING / "nginx" / "nginx.conf.template").read_text(encoding="utf-8")
