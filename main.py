@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Office Automation Service",
+    title="FrontierCloud Media Service",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,

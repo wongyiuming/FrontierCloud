@@ -38,18 +38,6 @@ class Settings(BaseSettings):
     WEBRTC_REPORT_COOLDOWN: int = Field(60, ge=10, le=3600, validation_alias="WEBRTC_REPORT_COOLDOWN")
     INTERNAL_METRICS_TOKEN: str = Field("", validation_alias="INTERNAL_METRICS_TOKEN")
 
-    WATERMARK_MAX_FILES: int = Field(20, ge=1, validation_alias="WATERMARK_MAX_FILES")
-    WATERMARK_MAX_UPLOAD_FILE_SIZE: int = Field(64 * 1024 * 1024, ge=1, validation_alias="WATERMARK_MAX_UPLOAD_FILE_SIZE")
-    WATERMARK_MAX_UPLOAD_TOTAL_SIZE: int = Field(64 * 1024 * 1024, ge=1, validation_alias="WATERMARK_MAX_UPLOAD_TOTAL_SIZE")
-    WATERMARK_MAX_ARCHIVE_FILES: int = Field(200, ge=1, validation_alias="WATERMARK_MAX_ARCHIVE_FILES")
-    WATERMARK_MAX_ARCHIVE_FILE_SIZE: int = Field(64 * 1024 * 1024, ge=1, validation_alias="WATERMARK_MAX_ARCHIVE_FILE_SIZE")
-    WATERMARK_MAX_ARCHIVE_TOTAL_SIZE: int = Field(128 * 1024 * 1024, ge=1, validation_alias="WATERMARK_MAX_ARCHIVE_TOTAL_SIZE")
-    WATERMARK_MAX_IMAGE_PIXELS: int = Field(8_000_000, ge=1, validation_alias="WATERMARK_MAX_IMAGE_PIXELS")
-    WATERMARK_MAX_PDF_PAGES: int = Field(200, ge=1, validation_alias="WATERMARK_MAX_PDF_PAGES")
-    WATERMARK_MAX_TEXT_LENGTH: int = Field(200, ge=1, validation_alias="WATERMARK_MAX_TEXT_LENGTH")
-    WATERMARK_MAX_CONCURRENT_JOBS: int = Field(1, ge=1, validation_alias="WATERMARK_MAX_CONCURRENT_JOBS")
-    WATERMARK_MAX_WORKERS: int = Field(2, ge=1, validation_alias="WATERMARK_MAX_WORKERS")
-
     TRUSTED_PROXY_NETWORKS: str = Field("172.16.0.0/12", validation_alias="TRUSTED_PROXY_NETWORKS")
     SECURITY_EXEMPT_NETWORKS: str = Field("127.0.0.0/8,::1/128", validation_alias="SECURITY_EXEMPT_NETWORKS")
     SECURITY_INVALID_API_LIMIT: int = Field(5, validation_alias="SECURITY_INVALID_API_LIMIT")
