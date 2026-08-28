@@ -1,6 +1,7 @@
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pydantic import ValidationError
 
@@ -39,14 +40,15 @@ class ProductionConfigurationTests(unittest.TestCase):
 
     def test_internal_urls_are_derived_from_minimal_deployment_values(self):
         password = "database secret+with@reserved/chars"
-        settings = Settings(
-            _env_file=None,
-            ENVIRONMENT="test",
-            SERVER_NAME="preproduction.example.com",
-            ADMIN_BOOTSTRAP_TOKEN="test-token",
-            MYSQL_PASSWORD=password,
-            MYSQL_ROOT_PASSWORD="test-root-password",
-        )
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings(
+                _env_file=None,
+                ENVIRONMENT="test",
+                SERVER_NAME="preproduction.example.com",
+                ADMIN_BOOTSTRAP_TOKEN="test-token",
+                MYSQL_PASSWORD=password,
+                MYSQL_ROOT_PASSWORD="test-root-password",
+            )
 
         self.assertEqual(settings.REDIS_URL, "redis://redis:6379/0")
         self.assertEqual(
