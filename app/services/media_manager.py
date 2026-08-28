@@ -116,7 +116,13 @@ class MediaManager:
             # different unprivileged UID and must be able to read media after
             # FastAPI authorizes an X-Accel-Redirect download.
             tmp.chmod(0o644)
-            os.replace(tmp, destination)
+            try:
+                os.link(tmp, destination)
+            except FileExistsError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="上传失败，目标位置已存在同名文件",
+                ) from exc
             return str(destination.relative_to(MEDIA_ROOT).as_posix())
         finally:
             tmp.unlink(missing_ok=True)

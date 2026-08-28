@@ -278,6 +278,23 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(raised.exception.status_code, 404)
             self.assertTrue(upload.file.closed)
 
+    async def test_upload_does_not_overwrite_a_concurrently_published_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            destination = root / "media"
+            destination.mkdir()
+            upload = UploadFile(filename="one.wav", file=io.BytesIO(self._wav_bytes(b"one")))
+            with (
+                patch.object(media_manager, "MEDIA_ROOT", root),
+                patch.object(media_manager.os, "link", side_effect=FileExistsError()),
+            ):
+                with self.assertRaises(HTTPException) as raised:
+                    await media_manager.MediaManager.upload_one(upload, destination)
+
+            await upload.close()
+            self.assertEqual(raised.exception.status_code, 409)
+            self.assertEqual(list(destination.glob(".upload-*.part")), [])
+
     async def test_multiple_files_use_independent_scalar_upload_requests(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir).resolve()
