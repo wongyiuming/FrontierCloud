@@ -22,6 +22,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_MEDIA_DIR = BASE_DIR / "data" / "media"
 
 
+def configure_console_streams() -> None:
+    """Use UTF-8 for media metadata emitted by Windows console sessions."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def build_parser(profile: SyncProfile, *, needs_node: bool) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="将远端播放列表强一致同步到清洗后的 media 目录。"
@@ -63,6 +71,7 @@ def build_parser(profile: SyncProfile, *, needs_node: bool) -> argparse.Argument
 
 
 def run_profile(profile: SyncProfile, *, needs_node: bool) -> int:
+    configure_console_streams()
     args = build_parser(profile, needs_node=needs_node).parse_args()
     try:
         yt_dlp = load_yt_dlp()

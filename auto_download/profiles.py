@@ -13,7 +13,7 @@ def youtube_public_playlists_url(source_url: str) -> str:
     parsed = urlsplit(source_url.strip())
     path = parsed.path.rstrip("/")
     is_channel_root = path.startswith("/@") or path.startswith("/channel/")
-    if is_channel_root and path.count("/") <= 2:
+    if is_channel_root and not path.endswith("/playlists") and path.count("/") <= 2:
         path = f"{path}/playlists"
     return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, parsed.fragment))
 
