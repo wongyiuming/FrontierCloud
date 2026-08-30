@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import html as html_escape
 import json
-import os
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -19,8 +18,11 @@ from app.core.config import settings
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parents[3]
 MEDIA_ROOT = (BASE_DIR / "data" / "media").resolve()
+MUSIC_ROOT = (MEDIA_ROOT / "music").resolve()
+VIDEO_ROOT = (MEDIA_ROOT / "vido").resolve()
 STATIC_MEDIA_DIR = BASE_DIR / "static" / "media"
-MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+MUSIC_ROOT.mkdir(parents=True, exist_ok=True)
+VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
 
 AUDIO_EXTS = (".mp3", ".m4a", ".flac", ".wav")
 VIDEO_EXTS = (".mp4", ".webm", ".mkv")
@@ -96,27 +98,44 @@ def _is_publicly_hidden(relative_path: str, hidden: set[str]) -> bool:
     return False
 
 
+def _typed_media_root(media_type: str) -> Path:
+    return MUSIC_ROOT if media_type == "music" else VIDEO_ROOT
+
+
+def _bounded_category_files(category_dir: Path, valid_exts) -> list[Path]:
+    """Return media at category depth or one child depth, never deeper."""
+    direct = [
+        path
+        for path in category_dir.iterdir()
+        if path.is_file() and not path.is_symlink() and path.suffix.lower() in valid_exts
+    ]
+    nested = [
+        path
+        for child in category_dir.iterdir()
+        if child.is_dir() and not child.is_symlink()
+        for path in child.iterdir()
+        if path.is_file() and not path.is_symlink() and path.suffix.lower() in valid_exts
+    ]
+    # Upload validation prevents mixed layouts. For legacy/manual files, prefer
+    # the child-folder layout so the category never exposes both shapes.
+    return nested if nested else direct
+
+
 def _get_media_categories_sync(media_type, valid_exts, hidden: set[str]):
     categories = []
-    if not MEDIA_ROOT.exists():
+    type_root = _typed_media_root(media_type)
+    if not type_root.exists():
         return categories
-    for entry in sorted(MEDIA_ROOT.iterdir(), key=lambda p: p.name.casefold()):
+    for entry in sorted(type_root.iterdir(), key=lambda p: p.name.casefold()):
         if not entry.is_dir() or entry.is_symlink():
             continue
         rel_entry = entry.relative_to(MEDIA_ROOT).as_posix()
         if _is_publicly_hidden(rel_entry, hidden):
             continue
-        has_files = False
-        for root, dirs, files in os.walk(entry, followlinks=False):
-            dirs[:] = [d for d in dirs if not (Path(root) / d).is_symlink()]
-            for f in files:
-                p = Path(root) / f
-                rel = p.relative_to(MEDIA_ROOT).as_posix()
-                if f.lower().endswith(valid_exts) and not _is_publicly_hidden(rel, hidden):
-                    has_files = True
-                    break
-            if has_files:
-                break
+        has_files = any(
+            not _is_publicly_hidden(path.relative_to(MEDIA_ROOT).as_posix(), hidden)
+            for path in _bounded_category_files(entry, valid_exts)
+        )
         if has_files:
             categories.append({"name": entry.name, "url": f"/api/v1/media/{media_type}/category?path={urllib.parse.quote(rel_entry)}"})
     return categories
@@ -137,29 +156,28 @@ def _scan_media_files_by_category_sync(category_subpath, valid_exts, media_type,
         target_dir = resolve_safe_path(MEDIA_ROOT, category_subpath)
     except ValueError:
         return []
-    if not target_dir.exists() or not target_dir.is_dir() or target_dir.is_symlink():
+    expected_root = MUSIC_ROOT if media_type == "audio" else VIDEO_ROOT
+    if (
+        not target_dir.exists()
+        or not target_dir.is_dir()
+        or target_dir.is_symlink()
+        or target_dir.parent != expected_root
+    ):
         return []
     result = []
-    for root, dirs, files in os.walk(target_dir, followlinks=False):
-        dirs[:] = [d for d in dirs if not (Path(root) / d).is_symlink()]
-        for file in files:
-            if not file.lower().endswith(valid_exts):
-                continue
-            file_path = Path(root) / file
-            if file_path.is_symlink():
-                continue
-            rel = file_path.relative_to(MEDIA_ROOT).as_posix()
-            if _is_publicly_hidden(rel, hidden):
-                continue
-            result.append({
-                "media_id": playback.media_id_for_path(rel),
-                "media_path": rel,
-                "title": file_path.stem,
-                "artist": "前沿视界",
-                "type": media_type,
-                "url": f"/api/v1/media/stream?file_path={urllib.parse.quote(rel)}",
-                "cover": "/favicon.ico",
-            })
+    for file_path in _bounded_category_files(target_dir, valid_exts):
+        rel = file_path.relative_to(MEDIA_ROOT).as_posix()
+        if _is_publicly_hidden(rel, hidden):
+            continue
+        result.append({
+            "media_id": playback.media_id_for_path(rel),
+            "media_path": rel,
+            "title": file_path.stem,
+            "artist": "前沿视界",
+            "type": media_type,
+            "url": f"/api/v1/media/stream?file_path={urllib.parse.quote(rel)}",
+            "cover": "/favicon.ico",
+        })
     return result
 
 
@@ -193,11 +211,13 @@ async def stream_media_file(file_path: str = Query(...)):
         safe_path = resolve_safe_path(MEDIA_ROOT, file_path)
     except ValueError:
         raise HTTPException(status_code=403, detail="Forbidden path access")
-    if safe_path.parent == MEDIA_ROOT:
-        raise HTTPException(status_code=403, detail="媒体文件禁止直接存放在 data/media 根目录")
     if safe_path.is_symlink() or not safe_path.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
-    if safe_path.suffix.lower() not in AUDIO_EXTS + VIDEO_EXTS:
+    rel_parts = safe_path.relative_to(MEDIA_ROOT).parts
+    if len(rel_parts) not in {3, 4} or rel_parts[0] not in {"music", "vido"}:
+        raise HTTPException(status_code=403, detail="Forbidden media layout")
+    allowed_exts = AUDIO_EXTS if rel_parts[0] == "music" else VIDEO_EXTS
+    if safe_path.suffix.lower() not in allowed_exts:
         raise HTTPException(status_code=403, detail="Forbidden media type")
     hidden = await _hidden_set()
     rel = safe_path.relative_to(MEDIA_ROOT).as_posix()

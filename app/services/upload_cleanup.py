@@ -33,7 +33,8 @@ def cleanup_stale_upload_parts(
 
     for current, directories, filenames in os.walk(media_root, followlinks=False):
         current_path = Path(current)
-        directories[:] = [
+        depth = len(current_path.relative_to(media_root).parts)
+        directories[:] = [] if depth >= 3 else [
             name
             for name in directories
             if not (current_path / name).is_symlink()

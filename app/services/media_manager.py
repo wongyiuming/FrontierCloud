@@ -17,6 +17,10 @@ MEDIA_ROOT = (BASE_DIR / "data" / "media").resolve()
 AUDIO_EXTS = (".mp3", ".m4a", ".flac", ".wav")
 VIDEO_EXTS = (".mp4", ".webm", ".mkv")
 ALLOWED_EXTS = set(AUDIO_EXTS + VIDEO_EXTS)
+MEDIA_TYPE_EXTS = {
+    "music": set(AUDIO_EXTS),
+    "vido": set(VIDEO_EXTS),
+}
 
 def resolve_safe_path(base_dir: Path, sub_path: str) -> Path:
     clean = str(sub_path or "").replace("\\", "/").lstrip("/\\")
@@ -37,6 +41,49 @@ SIGNATURES = {
 
 
 class MediaManager:
+    @staticmethod
+    def _layout_parts(path: Path) -> tuple[str, ...]:
+        try:
+            return path.resolve().relative_to(MEDIA_ROOT).parts
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="非法媒体路径") from exc
+
+    @staticmethod
+    def _validate_upload_directory(path: Path) -> tuple[str, ...]:
+        parts = MediaManager._layout_parts(path)
+        if len(parts) not in {2, 3} or parts[0] not in MEDIA_TYPE_EXTS:
+            raise HTTPException(
+                status_code=400,
+                detail="上传目录必须是 music/vido 下的分类目录或其一层子目录",
+            )
+        return parts
+
+    @staticmethod
+    def _validate_media_destination(destination: Path) -> None:
+        parts = MediaManager._layout_parts(destination)
+        if len(parts) not in {3, 4} or parts[0] not in MEDIA_TYPE_EXTS:
+            raise HTTPException(status_code=400, detail="媒体文件目录层级无效")
+        if destination.suffix.lower() not in MEDIA_TYPE_EXTS[parts[0]]:
+            expected = "音频" if parts[0] == "music" else "视频"
+            raise HTTPException(status_code=400, detail=f"{parts[0]} 目录只允许上传{expected}文件")
+
+        category_dir = MEDIA_ROOT / parts[0] / parts[1]
+        allowed_exts = MEDIA_TYPE_EXTS[parts[0]]
+        direct_media = any(
+            child.is_file() and not child.is_symlink() and child.suffix.lower() in allowed_exts
+            for child in category_dir.iterdir()
+        ) if category_dir.is_dir() else False
+        nested_media = any(
+            nested.is_file() and not nested.is_symlink() and nested.suffix.lower() in allowed_exts
+            for child in category_dir.iterdir()
+            if child.is_dir() and not child.is_symlink()
+            for nested in child.iterdir()
+        ) if category_dir.is_dir() else False
+        if len(parts) == 3 and nested_media:
+            raise HTTPException(status_code=409, detail="该分类已使用子目录，禁止在分类目录直接上传媒体")
+        if len(parts) == 4 and direct_media:
+            raise HTTPException(status_code=409, detail="该分类已有直接媒体，禁止再使用子目录存放媒体")
+
     @staticmethod
     def normalize_relative(value: str) -> str:
         value = (value or "").replace("\\", "/").strip()
@@ -68,6 +115,7 @@ class MediaManager:
         path = resolve_safe_path(MEDIA_ROOT, rel)
         if not path.exists() or not path.is_dir():
             raise HTTPException(status_code=404, detail="目标目录不存在")
+        MediaManager._validate_upload_directory(path)
         return path
 
     @staticmethod
@@ -90,6 +138,7 @@ class MediaManager:
             raise HTTPException(status_code=400, detail="非法目标路径")
         if destination.exists():
             raise HTTPException(status_code=409, detail="上传失败，目标位置已存在同名文件")
+        MediaManager._validate_media_destination(destination)
 
         fd, tmp_name = tempfile.mkstemp(prefix=".upload-", suffix=".part", dir=str(target_dir))
         os.close(fd)
@@ -150,8 +199,8 @@ class MediaManager:
             raise HTTPException(status_code=404, detail="目标目录不存在")
 
         destination_dir = (base / nested).resolve() if nested else base.resolve()
-        if not destination_dir.is_relative_to(MEDIA_ROOT) or destination_dir == MEDIA_ROOT:
-            raise HTTPException(status_code=400, detail="禁止直接向 data/media 根目录上传媒体文件")
+        MediaManager._validate_upload_directory(destination_dir)
+        MediaManager._validate_media_destination(destination_dir / name)
         destination_dir.mkdir(parents=True, exist_ok=True)
         return destination_dir, name
 
@@ -161,10 +210,17 @@ class MediaManager:
         current = resolve_safe_path(MEDIA_ROOT, rel)
         if not current.exists() or not current.is_dir():
             raise HTTPException(status_code=404, detail="目录不存在")
+        parts = current.relative_to(MEDIA_ROOT).parts
+        if parts and (parts[0] not in MEDIA_TYPE_EXTS or len(parts) > 3):
+            raise HTTPException(status_code=400, detail="目录不在受支持的媒体层级内")
         hidden = await MediaManager.hidden_paths()
         items = []
         for entry in sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.casefold())):
-            if entry.is_symlink():
+            if entry.is_symlink() or entry.name.startswith("."):
+                continue
+            if not parts and (not entry.is_dir() or entry.name not in MEDIA_TYPE_EXTS):
+                continue
+            if len(parts) == 3 and entry.is_dir():
                 continue
             rel_path = entry.relative_to(MEDIA_ROOT).as_posix()
             items.append({
@@ -248,20 +304,36 @@ class MediaManager:
             seen_names.add(archive_name)
             archive.add_path(path, arcname=archive_name)
 
+        def bounded_files(path: Path):
+            if path.is_file():
+                yield path
+                return
+            parts = path.relative_to(MEDIA_ROOT).parts
+            if not parts or parts[0] not in MEDIA_TYPE_EXTS:
+                return
+            allowed_exts = MEDIA_TYPE_EXTS[parts[0]]
+            max_file_parts = 4
+            pending = [path]
+            while pending:
+                current = pending.pop()
+                for child in current.iterdir():
+                    if child.is_symlink():
+                        continue
+                    child_parts = child.relative_to(MEDIA_ROOT).parts
+                    if child.is_dir() and len(child_parts) < max_file_parts:
+                        pending.append(child)
+                    elif (
+                        child.is_file()
+                        and len(child_parts) in {3, 4}
+                        and child.suffix.lower() in allowed_exts
+                    ):
+                        yield child
+
         for rel, path in objects:
             if path.is_file():
                 add_file(path, rel)
                 continue
-
-            for current, directories, filenames in os.walk(path, followlinks=False):
-                current_path = Path(current)
-                directories[:] = [
-                    name
-                    for name in directories
-                    if not (current_path / name).is_symlink()
-                ]
-                for filename in filenames:
-                    child = current_path / filename
-                    add_file(child, child.relative_to(MEDIA_ROOT).as_posix())
+            for child in bounded_files(path):
+                add_file(child, child.relative_to(MEDIA_ROOT).as_posix())
 
         return archive

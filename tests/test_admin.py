@@ -251,12 +251,12 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
                     request=self._request(),
                     file=upload,
                     target_dir="",
-                    relative_path="测试目录/一.wav",
+                    relative_path="music/测试目录/一.wav",
                     session_hash="test-session",
                 )
 
-            self.assertEqual(result["path"], "测试目录/一.wav")
-            uploaded = root / "测试目录" / "一.wav"
+            self.assertEqual(result["path"], "music/测试目录/一.wav")
+            uploaded = root / "music" / "测试目录" / "一.wav"
             self.assertTrue(uploaded.is_file())
             self.assertTrue(uploaded.stat().st_mode & stat.S_IROTH)
             self.assertTrue(upload.file.closed)
@@ -281,8 +281,8 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_upload_does_not_overwrite_a_concurrently_published_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir).resolve()
-            destination = root / "media"
-            destination.mkdir()
+            destination = root / "music" / "media"
+            destination.mkdir(parents=True)
             upload = UploadFile(filename="one.wav", file=io.BytesIO(self._wav_bytes(b"one")))
             with (
                 patch.object(media_manager, "MEDIA_ROOT", root),
@@ -298,8 +298,8 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_multiple_files_use_independent_scalar_upload_requests(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir).resolve()
-            destination = root / "批量目录"
-            destination.mkdir()
+            destination = root / "music" / "批量目录"
+            destination.mkdir(parents=True)
             with (
                 patch.object(media_manager, "MEDIA_ROOT", root),
                 patch.object(admin.admin_service, "audit", new=AsyncMock()),
@@ -309,14 +309,14 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
                     await admin.upload_item(
                         request=self._request(),
                         file=UploadFile(filename=name, file=io.BytesIO(self._wav_bytes(name.encode()))),
-                        target_dir="批量目录",
+                        target_dir="music/批量目录",
                         relative_path=None,
                         session_hash="test-session",
                     )
                     for name in ("一.wav", "二.wav")
                 ]
 
-            self.assertEqual([result["path"] for result in results], ["批量目录/一.wav", "批量目录/二.wav"])
+            self.assertEqual([result["path"] for result in results], ["music/批量目录/一.wav", "music/批量目录/二.wav"])
             self.assertTrue((destination / "一.wav").is_file())
             self.assertTrue((destination / "二.wav").is_file())
 
@@ -325,8 +325,8 @@ class AdminDownloadContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_single_file_download_is_delegated_to_protected_nginx_location(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir).resolve()
-            folder = root / "测试目录"
-            folder.mkdir()
+            folder = root / "music" / "测试目录"
+            folder.mkdir(parents=True)
             media_file = folder / "一 首.wav"
             media_file.write_bytes(b"RIFF0000WAVEfmt ")
             media_file.chmod(0o600)
@@ -344,7 +344,7 @@ class AdminDownloadContractTests(unittest.IsolatedAsyncioTestCase):
             ):
                 response = await admin.download_objects(
                     request=request,
-                    paths=json.dumps(["测试目录/一 首.wav"], ensure_ascii=False),
+                    paths=json.dumps(["music/测试目录/一 首.wav"], ensure_ascii=False),
                     session_hash="test-session",
                 )
 
@@ -352,15 +352,15 @@ class AdminDownloadContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(media_file.stat().st_mode & stat.S_IROTH)
             self.assertEqual(
                 response.headers["x-accel-redirect"],
-                "/_protected_media/%E6%B5%8B%E8%AF%95%E7%9B%AE%E5%BD%95/%E4%B8%80%20%E9%A6%96.wav",
+                "/_protected_media/music/%E6%B5%8B%E8%AF%95%E7%9B%AE%E5%BD%95/%E4%B8%80%20%E9%A6%96.wav",
             )
             self.assertIn("filename*=UTF-8''", response.headers["content-disposition"])
 
     async def test_folder_download_streams_a_valid_zip_without_a_temporary_archive(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir).resolve()
-            folder = root / "测试目录"
-            folder.mkdir()
+            folder = root / "music" / "测试目录"
+            folder.mkdir(parents=True)
             (folder / "一.wav").write_bytes(b"RIFF0000WAVEfmt ")
             (folder / "二.mp3").write_bytes(b"ID3test")
 
@@ -372,22 +372,22 @@ class AdminDownloadContractTests(unittest.IsolatedAsyncioTestCase):
                     side_effect=AssertionError("download must not create a temporary archive"),
                 ),
             ):
-                stream = await media_manager.MediaManager.build_zip_stream(["测试目录"])
+                stream = await media_manager.MediaManager.build_zip_stream(["music/测试目录"])
                 payload = b"".join(stream)
 
             with zipfile.ZipFile(io.BytesIO(payload)) as archive:
                 self.assertEqual(
                     set(archive.namelist()),
-                    {"测试目录/一.wav", "测试目录/二.mp3"},
+                    {"music/测试目录/一.wav", "music/测试目录/二.mp3"},
                 )
-                self.assertEqual(archive.read("测试目录/一.wav"), b"RIFF0000WAVEfmt ")
+                self.assertEqual(archive.read("music/测试目录/一.wav"), b"RIFF0000WAVEfmt ")
 
     async def test_folder_download_does_not_follow_directory_symlinks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir).resolve()
-            folder = root / "folder"
+            folder = root / "music" / "folder"
             outside = root / "outside"
-            folder.mkdir()
+            folder.mkdir(parents=True)
             outside.mkdir()
             (folder / "inside.mp3").write_bytes(b"ID3inside")
             (outside / "secret.mp3").write_bytes(b"ID3secret")
@@ -398,11 +398,11 @@ class AdminDownloadContractTests(unittest.IsolatedAsyncioTestCase):
                 self.skipTest("directory symlinks require additional privileges")
 
             with patch.object(media_manager, "MEDIA_ROOT", root):
-                stream = await media_manager.MediaManager.build_zip_stream(["folder"])
+                stream = await media_manager.MediaManager.build_zip_stream(["music/folder"])
                 payload = b"".join(stream)
 
             with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-                self.assertEqual(archive.namelist(), ["folder/inside.mp3"])
+                self.assertEqual(archive.namelist(), ["music/folder/inside.mp3"])
 
 
 if __name__ == "__main__":

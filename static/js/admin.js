@@ -241,7 +241,7 @@ async function runUploadTask(fileList, relativePaths = null) {
         return;
     }
     if (!relativePaths && !currentPath) {
-        alert('上传文件前请先进入 data/media 下的子目录');
+        alert('上传文件前请先进入 data/media/music 或 data/media/vido 下的分类目录');
         return;
     }
 
