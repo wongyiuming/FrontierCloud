@@ -62,6 +62,7 @@ class ExporterConfigurationTests(unittest.TestCase):
     def test_allowlist_and_secrets_are_environment_substitutions(self):
         nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
         self.assertIn("allow ${MONITORING_ALLOW_CIDR};", nginx)
+        self.assertIn("allow ${MONITORING_SELF_ALLOW_CIDR};", nginx)
         self.assertIn("auth_basic_user_file", nginx)
         self.assertIn('${INTERNAL_METRICS_TOKEN}', nginx)
         self.assertIsNone(re.search(r"allow\s+(?:\d{1,3}\.){3}\d{1,3}", nginx))
@@ -76,6 +77,7 @@ class ExporterConfigurationTests(unittest.TestCase):
             self.assertIsNotNone(location)
             block = location.group(1)
             self.assertIn("allow ${MONITORING_ALLOW_CIDR};", block)
+            self.assertIn("allow ${MONITORING_SELF_ALLOW_CIDR};", block)
             self.assertIn("deny all;", block)
             self.assertIn("auth_basic_user_file", block)
             self.assertIn("access_log off;", block)
