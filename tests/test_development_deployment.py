@@ -182,6 +182,8 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn('test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"', deploy)
         deploy_script = (ROOT / "scripts" / "deploy_rn.sh").read_text(encoding="utf-8")
         self.assertIn('health_attempt" -ge 30', deploy_script)
+        self.assertIn('--resolve "$server_name:443:127.0.0.1"', deploy_script)
+        self.assertNotIn("https://localhost/api/v1/health", deploy_script)
         self.assertNotIn("workflow_dispatch", workflow)
 
 
