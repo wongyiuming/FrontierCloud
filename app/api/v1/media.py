@@ -102,23 +102,25 @@ def _typed_media_root(media_type: str) -> Path:
     return MUSIC_ROOT if media_type == "music" else VIDEO_ROOT
 
 
-def _bounded_category_files(category_dir: Path, valid_exts) -> list[Path]:
-    """Return media at category depth or one child depth, never deeper."""
-    direct = [
+def _direct_media_files(directory: Path, valid_exts) -> list[Path]:
+    """Return supported media directly inside one directory."""
+    return [
         path
-        for path in category_dir.iterdir()
+        for path in directory.iterdir()
         if path.is_file() and not path.is_symlink() and path.suffix.lower() in valid_exts
     ]
-    nested = [
-        path
-        for child in category_dir.iterdir()
-        if child.is_dir() and not child.is_symlink()
-        for path in child.iterdir()
-        if path.is_file() and not path.is_symlink() and path.suffix.lower() in valid_exts
-    ]
-    # Upload validation prevents mixed layouts. For legacy/manual files, prefer
-    # the child-folder layout so the category never exposes both shapes.
-    return nested if nested else direct
+
+
+def _category_url(media_type: str, relative_path: str) -> str:
+    query = urllib.parse.urlencode({"path": relative_path})
+    return f"/api/v1/media/{media_type}/category?{query}"
+
+
+def _has_visible_direct_media(directory: Path, valid_exts, hidden: set[str]) -> bool:
+    return any(
+        not _is_publicly_hidden(path.relative_to(MEDIA_ROOT).as_posix(), hidden)
+        for path in _direct_media_files(directory, valid_exts)
+    )
 
 
 def _get_media_categories_sync(media_type, valid_exts, hidden: set[str]):
@@ -132,12 +134,15 @@ def _get_media_categories_sync(media_type, valid_exts, hidden: set[str]):
         rel_entry = entry.relative_to(MEDIA_ROOT).as_posix()
         if _is_publicly_hidden(rel_entry, hidden):
             continue
-        has_files = any(
-            not _is_publicly_hidden(path.relative_to(MEDIA_ROOT).as_posix(), hidden)
-            for path in _bounded_category_files(entry, valid_exts)
+        has_direct_media = _has_visible_direct_media(entry, valid_exts, hidden)
+        has_child_media = any(
+            not _is_publicly_hidden(child.relative_to(MEDIA_ROOT).as_posix(), hidden)
+            and _has_visible_direct_media(child, valid_exts, hidden)
+            for child in entry.iterdir()
+            if child.is_dir() and not child.is_symlink()
         )
-        if has_files:
-            categories.append({"name": entry.name, "url": f"/api/v1/media/{media_type}/category?path={urllib.parse.quote(rel_entry)}"})
+        if has_direct_media or has_child_media:
+            categories.append({"name": entry.name, "url": _category_url(media_type, rel_entry)})
     return categories
 
 
@@ -151,21 +156,69 @@ async def get_media_categories(media_type, valid_exts):
     return categories
 
 
+def _get_media_subcategories_sync(media_type, category_subpath, valid_exts, hidden):
+    try:
+        category_dir = resolve_safe_path(MEDIA_ROOT, category_subpath)
+    except ValueError:
+        return []
+    expected_root = _typed_media_root(media_type)
+    if (
+        not category_dir.exists()
+        or not category_dir.is_dir()
+        or category_dir.is_symlink()
+        or category_dir.parent != expected_root
+    ):
+        return []
+
+    subcategories = []
+    for child in sorted(category_dir.iterdir(), key=lambda path: path.name.casefold()):
+        if not child.is_dir() or child.is_symlink():
+            continue
+        rel_child = child.relative_to(MEDIA_ROOT).as_posix()
+        if _is_publicly_hidden(rel_child, hidden):
+            continue
+        if _has_visible_direct_media(child, valid_exts, hidden):
+            subcategories.append({
+                "name": child.name,
+                "url": _category_url(media_type, rel_child),
+            })
+    return subcategories
+
+
+async def get_media_subcategories(media_type, category_subpath, valid_exts):
+    identity = f"{media_type}:{category_subpath}"
+    generation, cached = await load_media_catalog("subcategories", identity)
+    if cached is not None:
+        return cached
+    hidden = await _hidden_set()
+    subcategories = await asyncio.to_thread(
+        _get_media_subcategories_sync,
+        media_type,
+        category_subpath,
+        valid_exts,
+        hidden,
+    )
+    await store_media_catalog(generation, "subcategories", identity, subcategories)
+    return subcategories
+
+
 def _scan_media_files_by_category_sync(category_subpath, valid_exts, media_type, hidden):
     try:
         target_dir = resolve_safe_path(MEDIA_ROOT, category_subpath)
     except ValueError:
         return []
     expected_root = MUSIC_ROOT if media_type == "audio" else VIDEO_ROOT
+    rel_parts = target_dir.relative_to(MEDIA_ROOT).parts if target_dir.exists() else ()
     if (
         not target_dir.exists()
         or not target_dir.is_dir()
         or target_dir.is_symlink()
-        or target_dir.parent != expected_root
+        or len(rel_parts) not in {2, 3}
+        or rel_parts[0] != expected_root.name
     ):
         return []
     result = []
-    for file_path in _bounded_category_files(target_dir, valid_exts):
+    for file_path in _direct_media_files(target_dir, valid_exts):
         rel = file_path.relative_to(MEDIA_ROOT).as_posix()
         if _is_publicly_hidden(rel, hidden):
             continue
@@ -247,7 +300,7 @@ async def refresh_media_interface():
 @router.get("/music", response_class=HTMLResponse)
 async def get_music_categories_page():
     html = load_html_template("category.html")
-    html = html.replace("{{PAGE_TITLE}}", html_escape.escape("前沿媒体"))
+    html = html.replace("{{PAGE_TITLE}}", html_escape.escape("前沿音乐"))
     html = html.replace("{{BACK_URL}}", html_escape.escape("/api/v1/media"))
     html = html.replace("{{CATEGORIES_JSON}}", safe_json_dumps(await get_media_categories("music", AUDIO_EXTS)))
     html = inject_page_runtime(html)
@@ -264,36 +317,91 @@ async def get_video_categories_page():
     return HTMLResponse(html, headers=NO_STORE_HEADERS)
 
 
-@router.get("/music/category", response_class=HTMLResponse)
-async def get_music_player_page(path: str = Query(...)):
+def _validated_public_directory(path: str, media_type: str) -> tuple[Path, tuple[str, ...]]:
+    try:
+        directory = resolve_safe_path(MEDIA_ROOT, path)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Media category not found") from exc
+    parts = directory.relative_to(MEDIA_ROOT).parts if directory.exists() else ()
+    expected_root = _typed_media_root(media_type)
+    if (
+        not directory.is_dir()
+        or directory.is_symlink()
+        or len(parts) not in {2, 3}
+        or parts[0] != expected_root.name
+    ):
+        raise HTTPException(status_code=404, detail="Media category not found")
+    return directory, parts
+
+
+def _render_subcategory_page(page_title: str, back_url: str, categories) -> HTMLResponse:
+    html = load_html_template("category.html")
+    html = html.replace("{{PAGE_TITLE}}", html_escape.escape(page_title))
+    html = html.replace("{{BACK_URL}}", html_escape.escape(back_url, quote=True))
+    html = html.replace("{{CATEGORIES_JSON}}", safe_json_dumps(categories))
+    return HTMLResponse(inject_page_runtime(html), headers=NO_STORE_HEADERS)
+
+
+async def _get_player_or_subcategories(
+    path: str,
+    media_type: str,
+    playback_type: str,
+    valid_exts,
+    player_template: str,
+    title_prefix: str,
+) -> HTMLResponse:
+    _, parts = _validated_public_directory(path, media_type)
+    type_list_url = f"/api/v1/media/{media_type}"
+    display_path = "/".join(parts[1:])
+    if len(parts) == 2:
+        subcategories = await get_media_subcategories(media_type, path, valid_exts)
+        if subcategories:
+            return _render_subcategory_page(
+                f"{title_prefix} - {display_path}",
+                type_list_url,
+                subcategories,
+            )
+        back_url = type_list_url
+    else:
+        parent_path = "/".join(parts[:2])
+        back_url = _category_url(media_type, parent_path)
+
     session_id = str(uuid.uuid4())
     media_list = await playback.attach_stats_and_sort(
-        await scan_media_files_by_category(path, AUDIO_EXTS, "audio"),
+        await scan_media_files_by_category(path, valid_exts, playback_type),
         session_id,
     )
-    html = load_html_template("audio-player.html")
-    html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"前沿音乐 - {path}"))
-    html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/music"))
+    html = load_html_template(player_template)
+    html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"{title_prefix} - {display_path}"))
+    html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape(back_url, quote=True))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
     html = html.replace("{{PLAYBACK_SESSION_ID}}", safe_json_dumps(session_id))
     html = inject_page_runtime(html)
     return HTMLResponse(html, headers=NO_STORE_HEADERS)
+
+
+@router.get("/music/category", response_class=HTMLResponse)
+async def get_music_player_page(path: str = Query(...)):
+    return await _get_player_or_subcategories(
+        path,
+        "music",
+        "audio",
+        AUDIO_EXTS,
+        "audio-player.html",
+        "前沿音乐",
+    )
 
 
 @router.get("/video/category", response_class=HTMLResponse)
 async def get_video_player_page(path: str = Query(...)):
-    session_id = str(uuid.uuid4())
-    media_list = await playback.attach_stats_and_sort(
-        await scan_media_files_by_category(path, VIDEO_EXTS, "video"),
-        session_id,
+    return await _get_player_or_subcategories(
+        path,
+        "video",
+        "video",
+        VIDEO_EXTS,
+        "video-player.html",
+        "前沿视讯",
     )
-    html = load_html_template("video-player.html")
-    html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"前沿视讯 - {path}"))
-    html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape("/api/v1/media/video"))
-    html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
-    html = html.replace("{{PLAYBACK_SESSION_ID}}", safe_json_dumps(session_id))
-    html = inject_page_runtime(html)
-    return HTMLResponse(html, headers=NO_STORE_HEADERS)
 
 
 @router.post("/playback")
