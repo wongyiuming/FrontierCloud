@@ -242,8 +242,8 @@ jobs:
           cd "$RN_DEPLOY_PATH"
           test "$(git branch --show-current)" = dev
           test -z "$(git status --porcelain --untracked-files=no)"
-          git fetch --prune origin dev:refs/remotes/origin/dev
-          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
+          git fetch --no-tags origin dev
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
           git merge --ff-only "$GITHUB_SHA"
           sh scripts/deploy_rn.sh
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
