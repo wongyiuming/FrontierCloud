@@ -12,7 +12,15 @@ fi
 docker compose config --quiet
 docker compose up -d --build --wait --wait-timeout 240
 docker compose exec -T nginx nginx -t
-curl -kfsS https://localhost/api/v1/health | grep '"status":"healthy"'
+health_attempt=0
+until curl -kfsS https://localhost/api/v1/health | grep '"status":"healthy"'; do
+    health_attempt=$((health_attempt + 1))
+    if [ "$health_attempt" -ge 30 ]; then
+        echo "RN deployment failed: HTTPS health check did not stabilize" >&2
+        exit 1
+    fi
+    sleep 2
+done
 
 monitoring_root="$repo_root/monitoring"
 production_env="$monitoring_root/.env"

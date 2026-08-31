@@ -180,6 +180,8 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn('test "$GITHUB_REF" = refs/heads/dev', deploy)
         self.assertIn("dev:refs/remotes/origin/dev", deploy)
         self.assertIn('test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"', deploy)
+        deploy_script = (ROOT / "scripts" / "deploy_rn.sh").read_text(encoding="utf-8")
+        self.assertIn('health_attempt" -ge 30', deploy_script)
         self.assertNotIn("workflow_dispatch", workflow)
 
 
