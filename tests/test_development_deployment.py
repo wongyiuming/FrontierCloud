@@ -34,6 +34,47 @@ class DevelopmentDeploymentTests(unittest.TestCase):
             web,
         )
 
+    def test_upload_inactivity_timeout_is_consistent_across_app_and_proxy(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+        config = (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8")
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "UPLOAD_INACTIVITY_TIMEOUT=${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}",
+            compose,
+        )
+        self.assertIn("client_body_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
+        self.assertIn("proxy_send_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
+        self.assertIn("ADMIN_UPLOAD_INACTIVITY_TIMEOUT: int = Field(", config)
+        self.assertIn("# ADMIN_UPLOAD_INACTIVITY_TIMEOUT=300", env_example)
+
+    def test_environment_example_keeps_defaults_as_optional_overrides(self):
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        active_names = {
+            line.split("=", 1)[0]
+            for line in env_example.splitlines()
+            if line and not line.startswith("#") and "=" in line
+        }
+
+        self.assertEqual(
+            active_names,
+            {
+                "ENVIRONMENT",
+                "SERVER_NAME",
+                "ADMIN_BOOTSTRAP_TOKEN",
+                "MYSQL_PASSWORD",
+                "MYSQL_ROOT_PASSWORD",
+                "INTERNAL_METRICS_TOKEN",
+                "MONITORING_ALLOW_CIDR",
+                "METRICS_BASIC_PASSWORD",
+                "MYSQL_EXPORTER_PASSWORD",
+                "MYSQL_BACKUP_PASSWORD",
+            },
+        )
+        self.assertIn("# REDIS_URL=redis://redis:6379/0", env_example)
+        self.assertIn("# HTTP_PORT=80", env_example)
+
     def test_development_nginx_is_http_only(self):
         development = ROOT / "nginx" / "environments" / "development"
         rendered_inputs = "\n".join(
@@ -96,6 +137,20 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("auto_download", dockerignore.splitlines())
         self.assertNotIn("test_media_sync.py", workflow)
         self.assertNotIn("test_download_support.py", workflow)
+
+    def test_office_document_processing_is_not_shipped(self):
+        endpoints = (ROOT / "app" / "api" / "v1" / "endpoints.py").read_text(
+            encoding="utf-8"
+        )
+        dependencies = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+
+        self.assertNotIn("/watermark", endpoints)
+        self.assertNotIn("/watermark", nginx)
+        for dependency in ("Pillow", "pymupdf", "python-docx", "py7zr"):
+            self.assertNotIn(dependency, dependencies)
+        self.assertNotIn("WATERMARK_FONT_PATH", dockerfile)
 
     def test_ci_runs_source_only_deployment_tests_on_the_host(self):
         workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(

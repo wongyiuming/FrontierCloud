@@ -52,8 +52,14 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Replace every placeholder in `.env` with an independent secret. The password
-inside `MYSQL_URL` must be URL-encoded and must match `MYSQL_PASSWORD`.
+Replace every placeholder in `.env` with an independent secret. Required values
+stay at the top of each example file. Supported optional overrides are commented
+at the bottom; copy or uncomment only the values that the deployment must change.
+Defaults belong to the application and Compose files, not to the active `.env`.
+
+`MYSQL_URL` is generated from `MYSQL_USER`, `MYSQL_PASSWORD`, and
+`MYSQL_DATABASE`. Set the optional `MYSQL_URL` override only for a nonstandard
+database endpoint; its password must be URL-encoded and match `MYSQL_PASSWORD`.
 
 Use these environment values:
 
@@ -64,7 +70,7 @@ Use these environment values:
 Prepare persistent paths and validate the deployment:
 
 ```bash
-sudo install -d -m 0755 data data/media backups certs certs/acme
+sudo install -d -m 0755 data data/media data/media/music data/media/vido backups certs certs/acme
 sudo chown -R 10001:10001 data
 sudo chmod 0700 certs
 sudo docker compose config --quiet
@@ -134,6 +140,20 @@ python -m venv .venv
 ```
 
 Tool behavior and release cadence are independent from the business service.
+
+Audio and video storage are separated by ownership, not inferred from filename
+extensions. Audio belongs under `data/media/music` and video under
+`data/media/vido`. Each media type supports either files directly in a category
+or files in one additional child folder, but never both layouts in the same
+category. Deeper media paths are intentionally ignored by the public catalog.
+
+Before the first deployment of this layout, inspect and apply the legacy data
+migration from the application image:
+
+```bash
+sudo docker compose run --rm web python -m app.services.migrate_media_layout
+sudo docker compose run --rm web python -m app.services.migrate_media_layout --apply
+```
 
 ## Administrator access
 

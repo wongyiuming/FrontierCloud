@@ -22,6 +22,20 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_MEDIA_DIR = BASE_DIR / "data" / "media"
 
 
+def profile_media_dir(media_root: Path, profile: SyncProfile) -> Path:
+    """Select the type-owned storage root without inspecting file suffixes."""
+    type_directory = "music" if profile.media_kind == "audio" else "vido"
+    return media_root.expanduser().resolve() / type_directory
+
+
+def configure_console_streams() -> None:
+    """Use UTF-8 for media metadata emitted by Windows console sessions."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def build_parser(profile: SyncProfile, *, needs_node: bool) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="将远端播放列表强一致同步到清洗后的 media 目录。"
@@ -63,6 +77,7 @@ def build_parser(profile: SyncProfile, *, needs_node: bool) -> argparse.Argument
 
 
 def run_profile(profile: SyncProfile, *, needs_node: bool) -> int:
+    configure_console_streams()
     args = build_parser(profile, needs_node=needs_node).parse_args()
     try:
         yt_dlp = load_yt_dlp()
@@ -76,7 +91,7 @@ def run_profile(profile: SyncProfile, *, needs_node: bool) -> int:
             print(f"ffmpeg: {ffmpeg_path}")
             if node_path:
                 print(f"node: {node_path}")
-            print(f"media: {args.media_dir.expanduser().resolve()}")
+            print(f"media: {profile_media_dir(args.media_dir, effective_profile)}")
             return 0
 
         print(f"[元数据] 正在读取：{effective_profile.source_url}")
@@ -92,7 +107,10 @@ def run_profile(profile: SyncProfile, *, needs_node: bool) -> int:
             return 1
         print(f"[元数据] 共发现 {len(remote_items)} 项")
 
-        synchronizer = MediaSynchronizer(effective_profile, args.media_dir)
+        synchronizer = MediaSynchronizer(
+            effective_profile,
+            profile_media_dir(args.media_dir, effective_profile),
+        )
         downloader = build_yt_dlp_downloader(
             yt_dlp,
             effective_profile,

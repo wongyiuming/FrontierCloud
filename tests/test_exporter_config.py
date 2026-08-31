@@ -23,11 +23,11 @@ class ExporterConfigurationTests(unittest.TestCase):
         self.assertIn("coturn/coturn:4.17.2-r0-alpine", block)
         self.assertIn("--stun-only", block)
         self.assertIn("--no-auth", block)
-        self.assertIn("${WEBRTC_STUN_PORT:?WEBRTC_STUN_PORT must be set}", block)
+        self.assertIn("${WEBRTC_STUN_PORT:-3478}", block)
         self.assertIn("mem_limit: 32m", block)
         self.assertIn("cpus:", block)
         self.assertIn("cap_add:\n      - NET_BIND_SERVICE", block)
-        self.assertIn("WEBRTC_STUN_URLS=stun:${WEBRTC_STUN_HOST}:${WEBRTC_STUN_PORT}", env_example)
+        self.assertIn("# WEBRTC_STUN_URLS=stun:example.com:3478", env_example)
         self.assertIn("WEBRTC_STUN_PORT=3478", workflow)
 
     def test_media_ui_entrypoint_assets_bypass_static_cache(self):

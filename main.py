@@ -19,10 +19,15 @@ from app.core.config import settings
 from app.core.client_ip import client_ip
 from app.core.db import init_db
 from app.core.metrics import PrometheusMetricsMiddleware
+from app.core.upload_lifecycle import install_upload_lifecycle_guard
 from app.middleware.ip_security import IPSecurityMiddleware
 from app.services import admin_service
 from app.services.admin_service import issue_admin_token, run_admin_token_issuer
 from app.services.ip_security import initialize_ip_security_cache
+from app.services.upload_cleanup import cleanup_stale_upload_parts, run_stale_upload_cleanup
+
+
+install_upload_lifecycle_guard()
 
 
 @asynccontextmanager
@@ -30,20 +35,27 @@ async def lifespan(app: FastAPI):
     await init_db()
     await initialize_ip_security_cache()
     await issue_admin_token()
+    await asyncio.to_thread(cleanup_stale_upload_parts)
     token_issuer_task = asyncio.create_task(
         run_admin_token_issuer(),
         name="admin-token-issuer",
     )
+    upload_cleanup_task = asyncio.create_task(
+        run_stale_upload_cleanup(),
+        name="stale-upload-cleanup",
+    )
     try:
         yield
     finally:
-        token_issuer_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await token_issuer_task
+        for task in (token_issuer_task, upload_cleanup_task):
+            task.cancel()
+        for task in (token_issuer_task, upload_cleanup_task):
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 app = FastAPI(
-    title="Office Automation Service",
+    title="FrontierCloud Media Service",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,

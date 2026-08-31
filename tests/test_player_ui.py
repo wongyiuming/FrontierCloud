@@ -27,8 +27,9 @@ class PlayerUIContractTests(unittest.TestCase):
     def test_audio_and_video_players_use_independent_templates(self):
         api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")
 
-        self.assertIn('load_html_template("audio-player.html")', api)
-        self.assertIn('load_html_template("video-player.html")', api)
+        self.assertIn('"audio-player.html"', api)
+        self.assertIn('"video-player.html"', api)
+        self.assertIn("html = load_html_template(player_template)", api)
         self.assertFalse((ROOT / "static" / "media" / "player.html").exists())
 
     def test_progress_hit_area_is_large_and_excluded_from_page_gestures(self):

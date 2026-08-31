@@ -80,8 +80,8 @@ def render(
 def main() -> None:
     values = load_env(ROOT / ".env")
     host = require(values, "PRODUCTION_METRICS_HOST")
-    username = require(values, "METRICS_BASIC_USER")
-    monitoring_user = require(values, "MONITORING_BASIC_USER")
+    username = values.get("METRICS_BASIC_USER", "frontiercloud_monitor")
+    monitoring_user = values.get("MONITORING_BASIC_USER", "frontier_observer")
     monitoring_password = require(values, "MONITORING_BASIC_PASSWORD")
     monitoring_password_hash = require(values, "MONITORING_BASIC_PASSWORD_HASH")
     monitoring_server_name = require(values, "MONITORING_SERVER_NAME")
