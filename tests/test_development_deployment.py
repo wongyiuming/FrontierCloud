@@ -178,6 +178,7 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("runs-on: [self-hosted, Linux, X64, rn-preproduction]", deploy)
         self.assertIn("name: rn-preproduction", deploy)
         self.assertIn('test "$GITHUB_REF" = refs/heads/dev', deploy)
+        self.assertIn("dev:refs/remotes/origin/dev", deploy)
         self.assertIn('test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"', deploy)
         self.assertNotIn("workflow_dispatch", workflow)
 
