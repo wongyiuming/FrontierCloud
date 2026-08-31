@@ -85,12 +85,23 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("hashlib.sha256", api)
         self.assertIn('"Clear-Site-Data": \'"cache"\'', api)
         self.assertIn('"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"', api)
+        self.assertIn("/api/v1/media/refresh", templates[0])
+        for template in templates[1:]:
+            self.assertNotIn("/api/v1/media/refresh", template)
+            self.assertNotIn("刷新界面", template)
         for template in templates:
-            self.assertIn("/api/v1/media/refresh", template)
             self.assertIn("{{NETWORK_OBSERVATION_JS_URL}}", template)
         for template in templates[-2:]:
             self.assertIn("{{PLAYER_CSS_URL}}", template)
             self.assertIn("{{PLAYER_JS_URL}}", template)
+
+    def test_public_home_keeps_elevation_and_the_only_refresh_action(self):
+        template = (ROOT / "static" / "media" / "index.html").read_text(encoding="utf-8")
+
+        self.assertEqual(template.count('/api/v1/media/refresh'), 1)
+        self.assertIn('id="elevate"', template)
+        self.assertIn("/api/v1/media/admin/elevate", template)
+        self.assertIn("提权", template)
 
     def test_android_portrait_layout_stacks_player_above_sidebar(self):
         style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
