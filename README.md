@@ -105,6 +105,11 @@ sudo docker compose ps
 
 RN follows `origin/dev`; DMIT follows `origin/main`.
 
+RN normally updates through the `deploy-rn` job after a `dev` push passes the
+complete `test-compose` job. The deployment job has three independent guards:
+the push event, the exact `refs/heads/dev` ref, and the `rn-preproduction`
+environment branch policy. A `main` push can run CI but cannot enter CD.
+
 ## Monitoring deployment
 
 The monitoring stack does not own the standard public web ports. Its defaults
@@ -124,6 +129,19 @@ docker compose up -d --wait
 With the defaults, Grafana remains available at
 `https://MONITORING_SERVER_NAME:8443/grafana/`. Prometheus and Alertmanager use
 the corresponding `/prometheus/` and `/alertmanager/` paths.
+
+RN owns two isolated monitoring Compose projects. Project `monitoring` observes
+production and retains eight days for weekly aggregation. Project
+`frontiercloud-rn-self-monitoring` uses `monitoring/rn-self.env`, separate
+runtime files, credentials, ports 9080/9443, networks, and data volumes to
+observe RN itself. `scripts/deploy_rn.sh` renders and updates both projects.
+
+The `reporting` profile exists only in the production-observer project. It
+incrementally reads the two bounded Nginx logs, queries the already collected
+Prometheus series and weekly ban summaries, and sends a Monday 09:00
+Asia/Shanghai report to Telegram. IP-to-city processing runs locally on RN
+with the monthly DB-IP City Lite database; no client address is sent to a
+geolocation API.
 
 ## Standalone download tools
 

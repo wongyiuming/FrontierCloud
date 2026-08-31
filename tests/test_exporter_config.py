@@ -66,6 +66,21 @@ class ExporterConfigurationTests(unittest.TestCase):
         self.assertIn('${INTERNAL_METRICS_TOKEN}', nginx)
         self.assertIsNone(re.search(r"allow\s+(?:\d{1,3}\.){3}\d{1,3}", nginx))
 
+    def test_weekly_report_sources_are_read_only_and_monitoring_only(self):
+        nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+        for path in ("/internal/report/security", "/internal/report/access-log"):
+            location = re.search(
+                rf"(?ms)location = {re.escape(path)} \{{(.*?)^        \}}",
+                nginx,
+            )
+            self.assertIsNotNone(location)
+            block = location.group(1)
+            self.assertIn("allow ${MONITORING_ALLOW_CIDR};", block)
+            self.assertIn("deny all;", block)
+            self.assertIn("auth_basic_user_file", block)
+            self.assertIn("access_log off;", block)
+        self.assertIn("alias /var/log/nginx/access_log.log;", nginx)
+
     def test_nginx_worker_can_read_metrics_credentials(self):
         entrypoint = (ROOT / "nginx" / "10-metrics-auth.sh").read_text(encoding="utf-8")
         self.assertIn("install -d -o root -g nginx -m 0750 /run/frontiercloud", entrypoint)

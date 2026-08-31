@@ -1,13 +1,12 @@
 services:
   prometheus:
     image: prom/prometheus:v3.12.0
-    container_name: frontiercloud_prometheus
     restart: always
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=24h
-      - --storage.tsdb.retention.size=6GB
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-8d}
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-3GB}
       - --web.listen-address=0.0.0.0:9090
       - --web.enable-lifecycle
       - --web.external-url=https://${MONITORING_SERVER_NAME:?MONITORING_SERVER_NAME must be set}:${MONITORING_HTTPS_PORT:-8443}/prometheus/
@@ -15,11 +14,11 @@ services:
     expose:
       - "9090"
     volumes:
-      - ./generated/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./generated/prometheus-web.yml:/etc/prometheus/web.yml:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/generated/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/generated/prometheus-web.yml:/etc/prometheus/web.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
-      - ./secrets/metrics_password:/run/secrets/metrics_password:ro
-      - ./secrets/monitoring_password:/run/secrets/monitoring_password:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/metrics_password:/run/secrets/metrics_password:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/monitoring_password:/run/secrets/monitoring_password:ro
       - prometheus_data:/prometheus
     read_only: true
     tmpfs:
@@ -28,7 +27,7 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    mem_limit: 768m
+    mem_limit: ${PROMETHEUS_MEMORY_LIMIT:-768m}
     logging: &monitoring_logging
       driver: json-file
       options:
@@ -40,7 +39,6 @@ services:
 
   grafana:
     image: grafana/grafana:13.1.0
-    container_name: frontiercloud_grafana
     restart: always
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-frontier_admin}
@@ -60,9 +58,9 @@ services:
       - "3000"
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./secrets/grafana_admin_password:/run/secrets/grafana_admin_password:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/grafana_admin_password:/run/secrets/grafana_admin_password:ro
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./generated/grafana-prometheus.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/generated/grafana-prometheus.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     read_only: true
     tmpfs:
@@ -71,14 +69,13 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    mem_limit: 384m
+    mem_limit: ${GRAFANA_MEMORY_LIMIT:-384m}
     logging: *monitoring_logging
     depends_on:
       - prometheus
 
   alertmanager:
     image: prom/alertmanager:v0.32.1
-    container_name: frontiercloud_alertmanager
     restart: always
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
@@ -90,9 +87,9 @@ services:
     expose:
       - "9093"
     volumes:
-      - ./generated/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      - ./generated/alertmanager-web.yml:/etc/alertmanager/web.yml:ro
-      - ./secrets/tg_bot_token:/run/secrets/tg_bot_token:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/generated/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/generated/alertmanager-web.yml:/etc/alertmanager/web.yml:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/tg_bot_token:/run/secrets/tg_bot_token:ro
       - alertmanager_data:/alertmanager
     read_only: true
     tmpfs:
@@ -106,15 +103,15 @@ services:
 
   gateway:
     image: nginxinc/nginx-unprivileged:1.26-alpine
-    container_name: frontiercloud_monitoring_gateway
     restart: always
     ports:
       - "${MONITORING_HTTP_PORT:-8080}:8080"
       - "${MONITORING_HTTPS_PORT:-8443}:8443"
     volumes:
-      - ./generated/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./secrets/tls_fullchain.pem:/run/tls/fullchain.pem:ro
-      - ./secrets/tls_privkey.pem:/run/tls/privkey.pem:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/generated/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${MONITORING_EXTRA_CONFIG_DIR:-./nginx/server.d}:/etc/nginx/server.d:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/tls_fullchain.pem:/run/tls/fullchain.pem:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/tls_privkey.pem:/run/tls/privkey.pem:ro
       - ${MONITORING_ACME_WEBROOT:-/var/www/certbot}:/var/www/certbot:ro
     read_only: true
     tmpfs:
@@ -132,7 +129,6 @@ services:
 
   blackbox:
     image: prom/blackbox-exporter:v0.28.0
-    container_name: frontiercloud_blackbox
     restart: always
     command:
       - --config.file=/etc/blackbox/blackbox.yml
@@ -150,7 +146,54 @@ services:
     mem_limit: 128m
     logging: *monitoring_logging
 
+  weekly_reporter:
+    profiles: ["reporting"]
+    build:
+      context: ..
+      dockerfile: monitoring/reporting/Dockerfile
+    restart: always
+    environment:
+      REPORT_DATABASE_PATH: /var/lib/frontiercloud-report/report.sqlite3
+      REPORT_TIMEZONE: ${REPORT_TIMEZONE:-Asia/Shanghai}
+      CITY_DATABASE_PATH: /var/lib/frontiercloud-report/dbip-city-lite.mmdb
+      TG_BOT_TOKEN_FILE: /run/secrets/tg_bot_token
+      TG_CHAT_ID: ${TG_CHAT_ID:-}
+      REPORT_METRICS_USER: ${METRICS_BASIC_USER:-frontiercloud_monitor}
+      PRODUCTION_PROMETHEUS_URL: http://prometheus:9090/prometheus
+      PRODUCTION_PROMETHEUS_USER: ${MONITORING_BASIC_USER:-frontier_observer}
+      PRODUCTION_PROMETHEUS_PASSWORD_FILE: /run/secrets/production_monitoring_password
+      PRODUCTION_SECURITY_URL: ${REPORT_PRODUCTION_SECURITY_URL:-}
+      PRODUCTION_ACCESS_LOG_URL: ${REPORT_PRODUCTION_ACCESS_LOG_URL:-}
+      PRODUCTION_METRICS_PASSWORD_FILE: /run/secrets/production_metrics_password
+      PREPRODUCTION_PROMETHEUS_URL: ${REPORT_PREPRODUCTION_PROMETHEUS_URL:-}
+      PREPRODUCTION_PROMETHEUS_USER: ${REPORT_PREPRODUCTION_MONITORING_USER:-frontier_observer}
+      PREPRODUCTION_PROMETHEUS_PASSWORD_FILE: /run/secrets/preproduction_monitoring_password
+      PREPRODUCTION_SECURITY_URL: ${REPORT_PREPRODUCTION_SECURITY_URL:-}
+      PREPRODUCTION_ACCESS_LOG_URL: ${REPORT_PREPRODUCTION_ACCESS_LOG_URL:-}
+      PREPRODUCTION_METRICS_PASSWORD_FILE: /run/secrets/preproduction_metrics_password
+      GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-wongyiuming/FrontierCloud}
+    volumes:
+      - weekly_report_data:/var/lib/frontiercloud-report
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/tg_bot_token:/run/secrets/tg_bot_token:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/monitoring_password:/run/secrets/production_monitoring_password:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/metrics_password:/run/secrets/production_metrics_password:ro
+      - ${REPORT_SELF_RUNTIME_DIR:-./instances/rn-self}/secrets/monitoring_password:/run/secrets/preproduction_monitoring_password:ro
+      - ${REPORT_SELF_RUNTIME_DIR:-./instances/rn-self}/secrets/metrics_password:/run/secrets/preproduction_metrics_password:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 128m
+    pids_limit: 64
+    logging: *monitoring_logging
+    depends_on:
+      - prometheus
+
 volumes:
   prometheus_data:
   grafana_data:
   alertmanager_data:
+  weekly_report_data:

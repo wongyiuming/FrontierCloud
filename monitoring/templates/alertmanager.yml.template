@@ -24,6 +24,7 @@ receivers:
           {{ if eq .Status "firing" }}🔥 FIRING{{ else }}✅ RESOLVED{{ end }} · FrontierCloud
           {{ range .Alerts }}
           <b>{{ .Labels.alertname }}</b> [{{ .Labels.severity }}]
+          环境: {{ .Labels.environment }}
           服务: {{ .Labels.service }}
           实例: {{ .Labels.instance }}
           {{ .Annotations.summary }}

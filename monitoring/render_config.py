@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import re
 from pathlib import Path
@@ -12,6 +13,7 @@ GRAFANA_UID = 472
 GRAFANA_GID = 0
 NGINX_UID = 101
 NGINX_GID = 101
+REPORTER_GID = 10002
 
 
 def load_env(path: Path) -> dict[str, str]:
@@ -34,12 +36,19 @@ def require(values: dict[str, str], name: str) -> str:
     return value
 
 
-def write_runtime_file(path: Path, value: str, *, uid: int, gid: int) -> None:
+def write_runtime_file(
+    path: Path,
+    value: str,
+    *,
+    uid: int,
+    gid: int,
+    mode: int = 0o400,
+) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     with temporary.open("w", encoding="utf-8", newline="\n") as stream:
         stream.write(value + "\n")
     os.chown(temporary, uid, gid)
-    os.chmod(temporary, 0o400)
+    os.chmod(temporary, mode)
     temporary.replace(path)
 
 
@@ -60,6 +69,7 @@ def render(
     output_name: str,
     replacements: dict[str, str],
     *,
+    runtime_root: Path,
     uid: int = PROMETHEUS_UID,
     gid: int = PROMETHEUS_GID,
 ) -> None:
@@ -68,7 +78,7 @@ def render(
         value = value.replace(f"__{key}__", replacement)
     if re.search(r"__[A-Z0-9_]+__", value):
         raise SystemExit(f"unresolved placeholder in {template_name}")
-    output = ROOT / "generated" / output_name
+    output = runtime_root / "generated" / output_name
     temporary = output.with_suffix(output.suffix + ".tmp")
     with temporary.open("w", encoding="utf-8", newline="\n") as stream:
         stream.write(value)
@@ -77,9 +87,22 @@ def render(
     temporary.replace(output)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Render one isolated monitoring instance")
+    parser.add_argument("--env-file", type=Path, default=ROOT / ".env")
+    parser.add_argument("--runtime-dir", type=Path, default=ROOT)
+    return parser.parse_args()
+
+
 def main() -> None:
-    values = load_env(ROOT / ".env")
+    args = parse_args()
+    env_file = args.env_file.expanduser().resolve()
+    runtime_root = args.runtime_dir.expanduser().resolve()
+    values = load_env(env_file)
     host = require(values, "PRODUCTION_METRICS_HOST")
+    monitored_environment = require(values, "MONITORED_ENVIRONMENT")
+    monitoring_role = require(values, "MONITORING_ROLE")
+    target_job_prefix = require(values, "TARGET_JOB_PREFIX")
     username = values.get("METRICS_BASIC_USER", "frontiercloud_monitor")
     monitoring_user = values.get("MONITORING_BASIC_USER", "frontier_observer")
     monitoring_password = require(values, "MONITORING_BASIC_PASSWORD")
@@ -89,6 +112,13 @@ def main() -> None:
     chat_id = require(values, "TG_CHAT_ID")
     if not re.fullmatch(r"[A-Za-z0-9.-]+(?::\d+)?", host):
         raise SystemExit("PRODUCTION_METRICS_HOST is invalid")
+    for name, value in (
+        ("MONITORED_ENVIRONMENT", monitored_environment),
+        ("MONITORING_ROLE", monitoring_role),
+        ("TARGET_JOB_PREFIX", target_job_prefix),
+    ):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
+            raise SystemExit(f"{name} is invalid")
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", username):
         raise SystemExit("METRICS_BASIC_USER is invalid")
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", monitoring_user):
@@ -104,43 +134,47 @@ def main() -> None:
     if not re.fullmatch(r"-?\d{1,20}", chat_id):
         raise SystemExit("TG_CHAT_ID is invalid")
 
-    (ROOT / "generated").mkdir(mode=0o711, exist_ok=True)
-    (ROOT / "secrets").mkdir(mode=0o711, exist_ok=True)
-    os.chmod(ROOT / "generated", 0o711)
-    os.chmod(ROOT / "secrets", 0o711)
+    (runtime_root / "generated").mkdir(parents=True, mode=0o711, exist_ok=True)
+    (runtime_root / "secrets").mkdir(parents=True, mode=0o711, exist_ok=True)
+    (runtime_root / "server.d").mkdir(parents=True, mode=0o755, exist_ok=True)
+    os.chmod(runtime_root / "generated", 0o711)
+    os.chmod(runtime_root / "secrets", 0o711)
     write_runtime_file(
-        ROOT / "secrets" / "metrics_password",
+        runtime_root / "secrets" / "metrics_password",
         require(values, "METRICS_BASIC_PASSWORD"),
         uid=PROMETHEUS_UID,
-        gid=PROMETHEUS_GID,
+        gid=REPORTER_GID,
+        mode=0o440,
     )
     write_runtime_file(
-        ROOT / "secrets" / "tg_bot_token",
+        runtime_root / "secrets" / "tg_bot_token",
         require(values, "TG_BOT_TOKEN"),
         uid=PROMETHEUS_UID,
-        gid=PROMETHEUS_GID,
+        gid=REPORTER_GID,
+        mode=0o440,
     )
     write_runtime_file(
-        ROOT / "secrets" / "grafana_admin_password",
+        runtime_root / "secrets" / "grafana_admin_password",
         require(values, "GRAFANA_ADMIN_PASSWORD"),
         uid=GRAFANA_UID,
         gid=GRAFANA_GID,
     )
     write_runtime_file(
-        ROOT / "secrets" / "monitoring_password",
+        runtime_root / "secrets" / "monitoring_password",
         monitoring_password,
         uid=PROMETHEUS_UID,
-        gid=PROMETHEUS_GID,
+        gid=REPORTER_GID,
+        mode=0o440,
     )
     copy_runtime_file(
         Path(require(values, "MONITORING_TLS_CERT_PATH")),
-        ROOT / "secrets" / "tls_fullchain.pem",
+        runtime_root / "secrets" / "tls_fullchain.pem",
         uid=NGINX_UID,
         gid=NGINX_GID,
     )
     copy_runtime_file(
         Path(require(values, "MONITORING_TLS_KEY_PATH")),
-        ROOT / "secrets" / "tls_privkey.pem",
+        runtime_root / "secrets" / "tls_privkey.pem",
         uid=NGINX_UID,
         gid=NGINX_GID,
     )
@@ -151,15 +185,24 @@ def main() -> None:
             "PRODUCTION_METRICS_HOST": host,
             "METRICS_BASIC_USER": username,
             "MONITORING_BASIC_USER": monitoring_user,
+            "MONITORED_ENVIRONMENT": monitored_environment,
+            "MONITORING_ROLE": monitoring_role,
+            "TARGET_JOB_PREFIX": target_job_prefix,
         },
+        runtime_root=runtime_root,
     )
-    render("alertmanager.yml.template", "alertmanager.yml", {"TG_CHAT_ID": chat_id})
+    render(
+        "alertmanager.yml.template",
+        "alertmanager.yml",
+        {"TG_CHAT_ID": chat_id},
+        runtime_root=runtime_root,
+    )
     web_replacements = {
         "MONITORING_BASIC_USER": monitoring_user,
         "MONITORING_BASIC_PASSWORD_HASH": monitoring_password_hash,
     }
-    render("web.yml.template", "prometheus-web.yml", web_replacements)
-    render("web.yml.template", "alertmanager-web.yml", web_replacements)
+    render("web.yml.template", "prometheus-web.yml", web_replacements, runtime_root=runtime_root)
+    render("web.yml.template", "alertmanager-web.yml", web_replacements, runtime_root=runtime_root)
     render(
         "grafana-prometheus.yml.template",
         "grafana-prometheus.yml",
@@ -167,6 +210,7 @@ def main() -> None:
             "MONITORING_BASIC_USER": monitoring_user,
             "MONITORING_BASIC_PASSWORD": monitoring_password,
         },
+        runtime_root=runtime_root,
         uid=GRAFANA_UID,
         gid=GRAFANA_GID,
     )
@@ -177,10 +221,11 @@ def main() -> None:
             "MONITORING_SERVER_NAME": monitoring_server_name,
             "MONITORING_HTTPS_PORT": monitoring_https_port,
         },
+        runtime_root=runtime_root,
         uid=NGINX_UID,
         gid=NGINX_GID,
     )
-    print("monitoring configuration rendered without printing secrets")
+    print(f"monitoring configuration rendered for {monitored_environment} without printing secrets")
 
 
 if __name__ == "__main__":

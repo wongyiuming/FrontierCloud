@@ -23,7 +23,7 @@ from app.core.upload_lifecycle import install_upload_lifecycle_guard
 from app.middleware.ip_security import IPSecurityMiddleware
 from app.services import admin_service
 from app.services.admin_service import issue_admin_token, run_admin_token_issuer
-from app.services.ip_security import initialize_ip_security_cache
+from app.services.ip_security import initialize_ip_security_cache, weekly_security_summary
 from app.services.upload_cleanup import cleanup_stale_upload_parts, run_stale_upload_cleanup
 
 
@@ -66,6 +66,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 QUIET_REQUEST_PATHS = frozenset({
     "/api/v1/health",
     "/internal/metrics",
+    "/internal/report/security",
     "/api/v1/media/admin/logs",
 })
 
@@ -146,6 +147,17 @@ async def internal_metrics(x_metrics_token: str | None = Header(None)):
     if not configured or not x_metrics_token or not secrets.compare_digest(configured, x_metrics_token):
         raise HTTPException(status_code=404, detail="Not found")
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/internal/report/security", include_in_schema=False)
+async def internal_security_report(
+    days: int = 7,
+    x_metrics_token: str | None = Header(None),
+):
+    configured = settings.INTERNAL_METRICS_TOKEN
+    if not configured or not x_metrics_token or not secrets.compare_digest(configured, x_metrics_token):
+        raise HTTPException(status_code=404, detail="Not found")
+    return await weekly_security_summary(days)
 
 
 @app.get("/openapi.json", include_in_schema=False)

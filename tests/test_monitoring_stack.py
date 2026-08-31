@@ -12,11 +12,12 @@ class MonitoringStackTests(unittest.TestCase):
     def test_gateway_uses_dedicated_ports_and_resources_are_bounded(self):
         compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
         expected_limits = {
-            "prometheus": "768m",
-            "grafana": "384m",
+            "prometheus": "${PROMETHEUS_MEMORY_LIMIT:-768m}",
+            "grafana": "${GRAFANA_MEMORY_LIMIT:-384m}",
             "alertmanager": "128m",
             "blackbox": "128m",
             "gateway": "64m",
+            "weekly_reporter": "128m",
         }
         for service, limit in expected_limits.items():
             match = re.search(
@@ -35,8 +36,34 @@ class MonitoringStackTests(unittest.TestCase):
 
     def test_prometheus_retention_is_time_and_size_bounded(self):
         compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
-        self.assertIn("--storage.tsdb.retention.time=24h", compose)
-        self.assertIn("--storage.tsdb.retention.size=6GB", compose)
+        self.assertIn("--storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-8d}", compose)
+        self.assertIn("--storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-3GB}", compose)
+
+    def test_rn_self_monitoring_is_an_independent_compose_project(self):
+        compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
+        deploy = (ROOT / "scripts" / "deploy_rn.sh").read_text(encoding="utf-8")
+        self_env = (MONITORING / "rn-self.env.example").read_text(encoding="utf-8")
+
+        self.assertNotIn("container_name:", compose)
+        self.assertIn("-p monitoring", deploy)
+        self.assertIn("-p frontiercloud-rn-self-monitoring", deploy)
+        self.assertIn("MONITORING_RUNTIME_DIR=./instances/rn-self", self_env)
+        self.assertIn("MONITORING_EXTRA_CONFIG_DIR=./instances/rn-self/server.d", self_env)
+        self.assertIn("MONITORING_HTTPS_PORT=9443", self_env)
+        self.assertIn("PROMETHEUS_RETENTION_SIZE=1GB", self_env)
+
+    def test_weekly_reporter_runs_only_in_the_production_observer_stack(self):
+        compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
+        deploy = (ROOT / "scripts" / "deploy_rn.sh").read_text(encoding="utf-8")
+        reporter = (MONITORING / "reporting" / "weekly_report.py").read_text(encoding="utf-8")
+
+        self.assertIn('profiles: ["reporting"]', compose)
+        self.assertEqual(deploy.count("COMPOSE_PROFILES=reporting"), 2)
+        self.assertIn("dbip-city-lite-", reporter)
+        self.assertIn("IP Geolocation by DB-IP", reporter)
+        self.assertIn("time.sleep(60)", reporter)
+        self.assertIn("weekly_security_summary", (ROOT / "app" / "services" / "ip_security.py").read_text(encoding="utf-8"))
+        compile(reporter, "weekly_report.py", "exec")
 
     def test_management_services_use_native_authentication(self):
         compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
@@ -58,6 +85,7 @@ class MonitoringStackTests(unittest.TestCase):
         self.assertIn("Strict-Transport-Security", config)
         self.assertIn("/.well-known/acme-challenge/", config)
         self.assertIn("https://$host:__MONITORING_HTTPS_PORT__", config)
+        self.assertIn("include /etc/nginx/server.d/*.conf;", config)
 
     def test_login_limiter_does_not_throttle_grafana_assets(self):
         config = (MONITORING / "nginx" / "nginx.conf.template").read_text(encoding="utf-8")
@@ -77,7 +105,8 @@ class MonitoringStackTests(unittest.TestCase):
         self.assertIn("PROMETHEUS_UID = 65534", renderer)
         self.assertIn("GRAFANA_UID = 472", renderer)
         self.assertIn("os.chown(temporary, uid, gid)", renderer)
-        self.assertIn("os.chmod(temporary, 0o400)", renderer)
+        self.assertIn("os.chmod(temporary, mode)", renderer)
+        self.assertIn("mode=0o440", renderer)
 
     def test_alertmanager_is_telegram_only_and_sends_resolved(self):
         template = (MONITORING / "templates" / "alertmanager.yml.template").read_text(encoding="utf-8")

@@ -1,5 +1,9 @@
 name: Build and Test Docker Compose
 
+permissions:
+  contents: read
+  deployments: write
+
 on:
   push:
     branches: ["dev", "main"]
@@ -74,6 +78,10 @@ jobs:
       - name: Validate configuration and frontend syntax
         run: |
           docker compose config --quiet
+          MONITORING_SERVER_NAME=localhost \
+            docker compose -f monitoring/docker-compose.yaml config --quiet
+          docker build --file monitoring/reporting/Dockerfile \
+            --tag frontiercloud-weekly-reporter:ci .
           python3 scripts/check_english_comments.py
           node --check static/js/admin.js
           node --check static/js/player.js
@@ -199,3 +207,43 @@ jobs:
       - name: Stop and clean CI services
         if: always()
         run: docker compose down --volumes --remove-orphans
+
+  deploy-rn:
+    name: deploy-rn
+    needs: test-compose
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/dev' &&
+      github.repository == 'wongyiuming/FrontierCloud'
+    runs-on: [self-hosted, Linux, X64, rn-preproduction]
+    timeout-minutes: 20
+    concurrency:
+      group: rn-preproduction
+      cancel-in-progress: false
+    environment:
+      name: rn-preproduction
+    env:
+      RN_DEPLOY_PATH: ${{ vars.RN_DEPLOY_PATH }}
+    steps:
+      - name: Verify immutable deployment boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/dev
+          test "$GITHUB_REPOSITORY" = wongyiuming/FrontierCloud
+          test -n "$RN_DEPLOY_PATH"
+          test -d "$RN_DEPLOY_PATH/.git"
+
+      - name: Fast-forward RN to the tested dev commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RN_DEPLOY_PATH"
+          test "$(git branch --show-current)" = dev
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git fetch --prune origin dev
+          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
+          git merge --ff-only "$GITHUB_SHA"
+          sh scripts/deploy_rn.sh
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"

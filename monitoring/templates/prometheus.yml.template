@@ -2,8 +2,8 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    environment: production
-    monitoring_role: monitoring-vps
+    environment: __MONITORED_ENVIRONMENT__
+    monitoring_role: __MONITORING_ROLE__
 
 rule_files:
   - /etc/prometheus/alerts.yml
@@ -38,7 +38,7 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox:9115
 
-  - job_name: frontiercloud-app
+  - job_name: __TARGET_JOB_PREFIX__-app
     scheme: https
     metrics_path: /internal/metrics/app
     basic_auth: &production_auth
@@ -47,42 +47,42 @@ scrape_configs:
     static_configs:
       - targets: [__PRODUCTION_METRICS_HOST__]
 
-  - job_name: production-node
+  - job_name: __TARGET_JOB_PREFIX__-node
     scheme: https
     metrics_path: /internal/metrics/node
     basic_auth: *production_auth
     static_configs:
       - targets: [__PRODUCTION_METRICS_HOST__]
 
-  - job_name: production-containers
+  - job_name: __TARGET_JOB_PREFIX__-containers
     scheme: https
     metrics_path: /internal/metrics/cadvisor
     basic_auth: *production_auth
     static_configs:
       - targets: [__PRODUCTION_METRICS_HOST__]
 
-  - job_name: production-redis
+  - job_name: __TARGET_JOB_PREFIX__-redis
     scheme: https
     metrics_path: /internal/metrics/redis
     basic_auth: *production_auth
     static_configs:
       - targets: [__PRODUCTION_METRICS_HOST__]
 
-  - job_name: production-mysql
+  - job_name: __TARGET_JOB_PREFIX__-mysql
     scheme: https
     metrics_path: /internal/metrics/mysql
     basic_auth: *production_auth
     static_configs:
       - targets: [__PRODUCTION_METRICS_HOST__]
 
-  - job_name: production-nginx
+  - job_name: __TARGET_JOB_PREFIX__-nginx
     scheme: https
     metrics_path: /internal/metrics/nginx
     basic_auth: *production_auth
     static_configs:
       - targets: [__PRODUCTION_METRICS_HOST__]
 
-  - job_name: production-nginx-logs
+  - job_name: __TARGET_JOB_PREFIX__-nginx-logs
     scheme: https
     metrics_path: /internal/metrics/nginxlog
     basic_auth: *production_auth

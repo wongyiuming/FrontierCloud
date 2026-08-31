@@ -40,7 +40,7 @@ groups:
         for: 5m
         labels: {severity: warning, service: host}
         annotations:
-          summary: "生产主机 CPU 持续高于 90%"
+          summary: "受监控主机 CPU 持续高于 90%"
           description: "当前 CPU 使用率约 {{ $value | printf \"%.1f\" }}%。"
 
       - alert: HostMemoryHigh
@@ -48,7 +48,7 @@ groups:
         for: 5m
         labels: {severity: warning, service: host}
         annotations:
-          summary: "生产主机内存持续高于 90%"
+          summary: "受监控主机内存持续高于 90%"
           description: "当前内存使用率约 {{ $value | printf \"%.1f\" }}%。"
 
       - alert: HostDiskLow
@@ -56,7 +56,7 @@ groups:
         for: 2m
         labels: {severity: critical, service: filesystem}
         annotations:
-          summary: "生产主机磁盘可用空间低于 8%"
+          summary: "受监控主机磁盘可用空间低于 8%"
           description: "{{ $labels.mountpoint }} 当前仅余 {{ $value | printf \"%.1f\" }}%。"
 
       - alert: HostNetworkReceiveHigh
@@ -64,7 +64,7 @@ groups:
         for: 10m
         labels: {severity: warning, service: network}
         annotations:
-          summary: "生产主机入站带宽连续 10 分钟超过 50 MB/s"
+          summary: "受监控主机入站带宽连续 10 分钟超过 50 MB/s"
           description: "当前入站速率约 {{ $value | humanize1024 }}B/s。"
 
       - alert: HostNetworkTransmitHigh
@@ -72,7 +72,7 @@ groups:
         for: 10m
         labels: {severity: warning, service: network}
         annotations:
-          summary: "生产主机出站带宽连续 10 分钟超过 50 MB/s"
+          summary: "受监控主机出站带宽连续 10 分钟超过 50 MB/s"
           description: "当前出站速率约 {{ $value | humanize1024 }}B/s。"
 
   - name: frontiercloud-application

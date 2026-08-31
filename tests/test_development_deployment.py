@@ -161,8 +161,25 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("! -name 'test_development_deployment.py'", workflow)
         self.assertIn("ENVIRONMENT=test", workflow)
         self.assertIn("python3 scripts/check_english_comments.py", workflow)
+        self.assertIn("monitoring/reporting/Dockerfile", workflow)
         self.assertIn("Test production-like collection agents", workflow)
         self.assertIn("frontiercloud_backup_last_run_success 1", workflow)
+
+    def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
+        workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(
+            encoding="utf-8"
+        )
+        deploy = workflow.split("  deploy-rn:", 1)[1]
+
+        self.assertIn("needs: test-compose", deploy)
+        self.assertIn("github.event_name == 'push'", deploy)
+        self.assertIn("github.ref == 'refs/heads/dev'", deploy)
+        self.assertNotIn("refs/heads/main", deploy)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, rn-preproduction]", deploy)
+        self.assertIn("name: rn-preproduction", deploy)
+        self.assertIn('test "$GITHUB_REF" = refs/heads/dev', deploy)
+        self.assertIn('test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"', deploy)
+        self.assertNotIn("workflow_dispatch", workflow)
 
 
 if __name__ == "__main__":
