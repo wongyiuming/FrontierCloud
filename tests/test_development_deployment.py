@@ -17,12 +17,16 @@ class DevelopmentDeploymentTests(unittest.TestCase):
             raise AssertionError(f"missing Compose service: {service}")
         return match.group(1)
 
-    def test_environment_is_never_hardcoded_by_compose(self):
+    def test_transport_mode_is_a_direct_technical_capability(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        config = (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8")
+        main = (ROOT / "main.py").read_text(encoding="utf-8")
 
-        self.assertNotIn("ENVIRONMENT: production", compose)
-        self.assertIn("ENVIRONMENT: ${ENVIRONMENT:-production}", compose)
-        self.assertIn("ENVIRONMENT=${ENVIRONMENT:-production}", compose)
+        self.assertNotIn("ENVIRONMENT", compose)
+        self.assertNotIn("ENVIRONMENT", config)
+        self.assertNotIn('os.getenv("ENVIRONMENT"', main)
+        self.assertIn("TLS_ENABLED: ${TLS_ENABLED:-true}", compose)
+        self.assertIn("TLS_ENABLED=${TLS_ENABLED:-true}", compose)
 
     def test_admin_bootstrap_token_is_validated_before_startup(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
@@ -49,8 +53,13 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("ADMIN_UPLOAD_INACTIVITY_TIMEOUT: int = Field(", config)
         self.assertIn("# ADMIN_UPLOAD_INACTIVITY_TIMEOUT=300", env_example)
 
-    def test_environment_example_keeps_defaults_as_optional_overrides(self):
+    def test_environment_example_is_the_complete_public_contract(self):
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        config = (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8")
+        listed_names = re.findall(
+            r"(?m)^#? ?([A-Z][A-Z0-9_]*)=",
+            env_example,
+        )
         active_names = {
             line.split("=", 1)[0]
             for line in env_example.splitlines()
@@ -60,20 +69,38 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertEqual(
             active_names,
             {
-                "ENVIRONMENT",
-                "SERVER_NAME",
                 "ADMIN_BOOTSTRAP_TOKEN",
                 "MYSQL_PASSWORD",
                 "MYSQL_ROOT_PASSWORD",
-                "INTERNAL_METRICS_TOKEN",
-                "MONITORING_ALLOW_CIDR",
-                "METRICS_BASIC_PASSWORD",
-                "MYSQL_EXPORTER_PASSWORD",
-                "MYSQL_BACKUP_PASSWORD",
             },
         )
-        self.assertIn("# REDIS_URL=redis://redis:6379/0", env_example)
-        self.assertIn("# HTTP_PORT=80", env_example)
+        self.assertEqual(len(listed_names), len(set(listed_names)))
+
+        app_names = set(re.findall(r'validation_alias="([A-Z][A-Z0-9_]*)"', config))
+        compose_names = {
+            "HTTP_PORT",
+            "HTTPS_PORT",
+            "SSL_CERT_PATH",
+            "SSL_KEY_PATH",
+            "ACME_WEBROOT",
+        }
+        self.assertEqual(set(listed_names), app_names | compose_names)
+
+        for private_name in (
+            "PROMETHEUS_URL",
+            "GRAFANA_URL",
+            "ELASTICSEARCH_URL",
+            "RN_HOST",
+            "DMIT_HOST",
+            "WG_ENDPOINT",
+            "PRODUCTION_HOST",
+            "STAGING_HOST",
+            "MONITORING_ALLOW_CIDR",
+            "METRICS_BASIC_PASSWORD",
+            "MYSQL_EXPORTER_PASSWORD",
+            "MYSQL_BACKUP_PASSWORD",
+        ):
+            self.assertNotIn(f"{private_name}=", env_example)
 
     def test_development_nginx_is_http_only(self):
         development = ROOT / "nginx" / "environments" / "development"
@@ -96,15 +123,16 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("return 301 https://$host$request_uri", rendered_inputs)
         self.assertIn("/.well-known/acme-challenge/", rendered_inputs)
 
-    def test_test_environment_uses_production_like_nginx(self):
-        selector = (ROOT / "nginx" / "15-select-environment.sh").read_text(
+    def test_tls_switch_selects_https_without_environment_names(self):
+        selector = (ROOT / "nginx" / "15-select-tls.sh").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn("test|production) nginx_mode=production", selector)
-        self.assertNotIn("development|test) nginx_mode=development", selector)
+        self.assertIn("true|1|yes|on) nginx_mode=production", selector)
+        self.assertIn("false|0|no|off) nginx_mode=development", selector)
+        self.assertNotIn("ENVIRONMENT", selector)
 
-    def test_collection_agents_run_without_optional_profiles(self):
+    def test_collection_agents_are_isolated_behind_optional_profile(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         for service in (
             "node_exporter",
@@ -115,13 +143,17 @@ class DevelopmentDeploymentTests(unittest.TestCase):
             "nginxlog_exporter",
             "nginxlog_limiter",
         ):
-            self.assertNotIn("profiles:", self._service_block(compose, service))
+            self.assertIn(
+                'profiles: ["monitoring"]',
+                self._service_block(compose, service),
+            )
 
         self.assertIn(
             'profiles: ["monitoring"]', self._service_block(compose, "mysql_backup")
         )
         self.assertIn(":/backups:z", self._service_block(compose, "mysql_backup"))
         mysql_init = self._service_block(compose, "mysql_monitoring_init")
+        self.assertIn('profiles: ["monitoring"]', mysql_init)
         self.assertIn("mysql_socket:/var/run/mysqld", mysql_init)
         self.assertIn("condition: service_healthy", mysql_init)
 
@@ -159,10 +191,10 @@ class DevelopmentDeploymentTests(unittest.TestCase):
 
         self.assertEqual(workflow.count("tests/test_development_deployment.py"), 1)
         self.assertIn("! -name 'test_development_deployment.py'", workflow)
-        self.assertIn("ENVIRONMENT=test", workflow)
+        self.assertIn("TLS_ENABLED=true", workflow)
         self.assertIn("python3 scripts/check_english_comments.py", workflow)
         self.assertIn("monitoring/reporting/Dockerfile", workflow)
-        self.assertIn("Test production-like collection agents", workflow)
+        self.assertIn("Test optional collection agents", workflow)
         self.assertIn("frontiercloud_backup_last_run_success 1", workflow)
 
     def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):

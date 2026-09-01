@@ -8,46 +8,50 @@ from pydantic import ValidationError
 from app.core.config import Settings
 
 
-class ProductionConfigurationTests(unittest.TestCase):
-    def test_production_rejects_known_weak_secrets_and_insecure_cookie(self):
+class SecurityConfigurationTests(unittest.TestCase):
+    def test_weak_secrets_are_rejected_in_every_transport_mode(self):
         with self.assertRaises(ValidationError):
             Settings(
                 _env_file=None,
-                ENVIRONMENT="production",
+                TLS_ENABLED=False,
                 REDIS_URL="redis://redis:6379/0",
                 ADMIN_BOOTSTRAP_TOKEN="short-token",
                 MYSQL_URL="mysql+asyncmy://media_admin:Huawei%40123@mysql/db",
                 MYSQL_PASSWORD="Huawei@123",
                 MYSQL_ROOT_PASSWORD="Huawei@123",
-                ADMIN_COOKIE_SECURE=False,
             )
 
-    def test_production_accepts_independent_strong_secrets(self):
+    def test_transport_switch_derives_safe_cookie_behavior(self):
         password = "database-secret-123456789"
-        settings = Settings(
+        secure = Settings(
             _env_file=None,
-            ENVIRONMENT="production",
+            TLS_ENABLED=True,
             REDIS_URL="redis://redis:6379/0",
             ADMIN_BOOTSTRAP_TOKEN="bootstrap-token-0123456789abcdef0123456789abcdef",
             MYSQL_URL=f"mysql+asyncmy://media_admin:{password}@mysql/db",
             MYSQL_PASSWORD=password,
             MYSQL_ROOT_PASSWORD="different-root-secret-987654321",
-            ADMIN_COOKIE_SECURE=True,
-            ADMIN_COOKIE_NAME="__Host-admin_session",
-            ADMIN_CSRF_COOKIE_NAME="__Host-admin_csrf",
         )
-        self.assertEqual(settings.ENVIRONMENT, "production")
+        plain = secure.model_copy(update={"TLS_ENABLED": False})
+
+        self.assertTrue(secure.ADMIN_COOKIE_SECURE)
+        self.assertEqual(secure.ADMIN_COOKIE_NAME, "__Host-admin_session")
+        self.assertEqual(secure.ADMIN_CSRF_COOKIE_NAME, "__Host-admin-csrf")
+        self.assertFalse(plain.ADMIN_COOKIE_SECURE)
+        self.assertEqual(plain.ADMIN_COOKIE_NAME, "admin_session")
+        self.assertEqual(plain.ADMIN_CSRF_COOKIE_NAME, "admin_csrf")
 
     def test_internal_urls_are_derived_from_minimal_deployment_values(self):
         password = "database secret+with@reserved/chars"
         with patch.dict(os.environ, {}, clear=True):
             settings = Settings(
                 _env_file=None,
-                ENVIRONMENT="test",
+                TLS_ENABLED=False,
                 SERVER_NAME="preproduction.example.com",
-                ADMIN_BOOTSTRAP_TOKEN="test-token",
+                WEBRTC_STUN_PORT=5349,
+                ADMIN_BOOTSTRAP_TOKEN="test-token-0123456789abcdef0123456789abcdef",
                 MYSQL_PASSWORD=password,
-                MYSQL_ROOT_PASSWORD="test-root-password",
+                MYSQL_ROOT_PASSWORD="test-root-password-0123456789",
             )
 
         self.assertEqual(settings.REDIS_URL, "redis://redis:6379/0")
@@ -57,19 +61,18 @@ class ProductionConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(
             settings.WEBRTC_STUN_URLS,
-            "stun:preproduction.example.com:3478",
+            "stun:preproduction.example.com:5349",
         )
 
     def test_token_issue_interval_cannot_create_a_lifecycle_gap(self):
         with self.assertRaises(ValidationError):
             Settings(
                 _env_file=None,
-                ENVIRONMENT="test",
                 REDIS_URL="redis://redis:6379/0",
-                ADMIN_BOOTSTRAP_TOKEN="test-token",
-                MYSQL_URL="mysql+asyncmy://media_admin:test@mysql/db",
-                MYSQL_PASSWORD="test",
-                MYSQL_ROOT_PASSWORD="test",
+                ADMIN_BOOTSTRAP_TOKEN="test-token-0123456789abcdef0123456789abcdef",
+                MYSQL_URL="mysql+asyncmy://media_admin:test-password-012345@mysql/db",
+                MYSQL_PASSWORD="test-password-012345",
+                MYSQL_ROOT_PASSWORD="test-root-password-012345",
                 ADMIN_TOKEN_TTL=900,
                 ADMIN_TOKEN_ISSUE_INTERVAL=901,
             )

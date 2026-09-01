@@ -28,7 +28,7 @@ jobs:
             -out certs/fullchain.pem \
             -subj "/C=CN/ST=CI/L=CI/O=FrontierCloud/CN=localhost"
           cat <<'EOF' > .env
-          ENVIRONMENT=test
+          TLS_ENABLED=true
           COMPOSE_PROFILES=monitoring
           REDIS_URL=redis://redis:6379/0
           ADMIN_BOOTSTRAP_TOKEN=ci_admin_bootstrap_token_please_do_not_use_in_production
@@ -51,10 +51,7 @@ jobs:
           SECURITY_INVALID_API_WINDOW=3600
           SECURITY_AUTO_BAN_TTL=86400
           SECURITY_RECENT_BAN_HOURS=24
-          ADMIN_COOKIE_SECURE=true
           ADMIN_COOKIE_SAMESITE=strict
-          ADMIN_COOKIE_NAME=__Host-admin_session
-          ADMIN_CSRF_COOKIE_NAME=__Host-admin-csrf
           MYSQL_DATABASE=office_automation
           MYSQL_USER=media_admin
           MYSQL_PASSWORD=ci_mysql_password
@@ -65,7 +62,6 @@ jobs:
           METRICS_BASIC_PASSWORD=ci_metrics_password_0123456789abcdef
           MYSQL_EXPORTER_PASSWORD=ci_exporter_password_0123456789abcdef
           MYSQL_BACKUP_PASSWORD=ci_backup_password_0123456789abcdef
-          WEBRTC_STUN_HOST=localhost
           WEBRTC_STUN_PORT=3478
           WEBRTC_STUN_URLS=stun:localhost:3478
           SERVER_NAME=localhost
@@ -118,9 +114,9 @@ jobs:
           docker compose exec -T redis redis-cli ping | grep PONG
           docker compose exec -T mysql mysqladmin ping -h 127.0.0.1 -umedia_admin -pci_mysql_password --silent
 
-      - name: Test production-like collection agents
+      - name: Test optional collection agents
         run: |
-          docker compose logs nginx | grep 'selected production configuration for ENVIRONMENT=test'
+          docker compose logs nginx | grep 'selected production configuration for TLS_ENABLED=true'
           docker compose ps -a mysql_monitoring_init | grep 'Exited (0)'
           docker compose ps mysql_backup | grep 'Up'
           docker compose exec -T web python - <<'PY'

@@ -27,7 +27,7 @@ class ExporterConfigurationTests(unittest.TestCase):
         self.assertIn("mem_limit: 32m", block)
         self.assertIn("cpus:", block)
         self.assertIn("cap_add:\n      - NET_BIND_SERVICE", block)
-        self.assertIn("# WEBRTC_STUN_URLS=stun:example.com:3478", env_example)
+        self.assertIn("# WEBRTC_STUN_URLS=stun:localhost:3478", env_example)
         self.assertIn("WEBRTC_STUN_PORT=3478", workflow)
 
     def test_media_ui_entrypoint_assets_bypass_static_cache(self):

@@ -12,6 +12,11 @@ fi
 docker compose config --quiet
 docker compose up -d --build --wait --wait-timeout 240
 docker compose exec -T nginx nginx -t
+tls_enabled="$(docker compose exec -T nginx printenv TLS_ENABLED)"
+if [ "$tls_enabled" != "true" ]; then
+    echo "RN deployment failed: TLS_ENABLED must be true" >&2
+    exit 1
+fi
 server_name="$(docker compose exec -T nginx printenv SERVER_NAME)"
 health_attempt=0
 until curl -kfsS --resolve "$server_name:443:127.0.0.1" \

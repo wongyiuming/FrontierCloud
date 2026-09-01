@@ -1,9 +1,9 @@
 # FrontierCloud
 
 FrontierCloud is a FastAPI media service deployed with Docker Compose. The
-business stack includes Nginx, MySQL, Redis, a STUN-only coturn service, and
-resource-bounded exporters. A separate monitoring stack provides Prometheus,
-Grafana, Alertmanager, and Blackbox Exporter.
+business stack includes Nginx, MySQL, Redis, and a STUN-only coturn service.
+Resource-bounded collectors are opt-in, and a separate monitoring stack
+provides Prometheus, Grafana, Alertmanager, and Blackbox Exporter.
 
 ## Environment model
 
@@ -57,15 +57,26 @@ stay at the top of each example file. Supported optional overrides are commented
 at the bottom; copy or uncomment only the values that the deployment must change.
 Defaults belong to the application and Compose files, not to the active `.env`.
 
+The root `.env.example` is the authoritative FrontierCloud configuration
+contract. It lists every supported application and business-stack setting,
+enables only values without a safe default, and excludes hostnames, addresses,
+credentials, and topology that belong to an operator's monitoring or deployment
+environment. Changes to a supported setting must update configuration code,
+this template, documentation, and contract tests in the same commit.
+
 `MYSQL_URL` is generated from `MYSQL_USER`, `MYSQL_PASSWORD`, and
 `MYSQL_DATABASE`. Set the optional `MYSQL_URL` override only for a nonstandard
 database endpoint; its password must be URL-encoded and match `MYSQL_PASSWORD`.
 
-Use these environment values:
+Transport behavior is selected directly instead of being inferred from an
+environment name:
 
-- `ENVIRONMENT=development` for the private HTTP deployment.
-- `ENVIRONMENT=test` for RN. This selects the production Nginx and TLS path.
-- `ENVIRONMENT=production` for DMIT.
+- Set `TLS_ENABLED=false` for the private HTTP deployment.
+- Keep the default `TLS_ENABLED=true` for RN and DMIT HTTPS deployments.
+
+The same secret-strength checks apply in both modes. Cookie security and names
+are derived from `TLS_ENABLED`, so HTTP deployments use unprefixed non-secure
+cookies while HTTPS deployments use secure `__Host-` cookies.
 
 Prepare persistent paths and validate the deployment:
 
@@ -111,6 +122,12 @@ the push event, the exact `refs/heads/dev` ref, and the `rn-preproduction`
 environment branch policy. A `main` push can run CI but cannot enter CD.
 
 ## Monitoring deployment
+
+Monitoring, ELK, reporting, concrete target hosts, and their credentials are
+operator infrastructure rather than standard FrontierCloud configuration. They
+remain in the independent `monitoring/` deployment and its private runtime
+files; they must not be added to the root `.env.example`. Per-instance collector
+sidecars are enabled explicitly with the `monitoring` Compose profile.
 
 The monitoring stack does not own the standard public web ports. Its defaults
 are HTTP 8080 and HTTPS 8443 so the RN business deployment can use 80 and 443.

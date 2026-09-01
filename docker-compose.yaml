@@ -6,7 +6,7 @@ services:
     env_file: .env
     environment:
       ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:?ADMIN_BOOTSTRAP_TOKEN must be set}
-      ENVIRONMENT: ${ENVIRONMENT:-production}
+      TLS_ENABLED: ${TLS_ENABLED:-true}
       PYTHONDONTWRITEBYTECODE: "1"
     read_only: true
     security_opt:
@@ -78,6 +78,7 @@ services:
         max-file: "3"
 
   mysql_monitoring_init:
+    profiles: ["monitoring"]
     image: mysql:8.4
     container_name: frontiercloud_mysql_monitoring_init
     restart: "no"
@@ -86,9 +87,9 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-office_automation}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
       MYSQL_EXPORTER_USER: ${MYSQL_EXPORTER_USER:-frontiercloud_exporter}
-      MYSQL_EXPORTER_PASSWORD: ${MYSQL_EXPORTER_PASSWORD:?MYSQL_EXPORTER_PASSWORD must be set}
+      MYSQL_EXPORTER_PASSWORD: ${MYSQL_EXPORTER_PASSWORD:-}
       MYSQL_BACKUP_USER: ${MYSQL_BACKUP_USER:-frontiercloud_backup}
-      MYSQL_BACKUP_PASSWORD: ${MYSQL_BACKUP_PASSWORD:?MYSQL_BACKUP_PASSWORD must be set}
+      MYSQL_BACKUP_PASSWORD: ${MYSQL_BACKUP_PASSWORD:-}
     entrypoint:
       - /bin/sh
       - /opt/frontiercloud/mysql_monitoring_init.sh
@@ -119,13 +120,13 @@ services:
     container_name: office_automation_nginx
     restart: always
     environment:
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - SERVER_NAME=${SERVER_NAME:?SERVER_NAME must be set}
-      - MONITORING_ALLOW_CIDR=${MONITORING_ALLOW_CIDR:?MONITORING_ALLOW_CIDR must be set}
+      - TLS_ENABLED=${TLS_ENABLED:-true}
+      - SERVER_NAME=${SERVER_NAME:-localhost}
+      - MONITORING_ALLOW_CIDR=${MONITORING_ALLOW_CIDR:-127.0.0.1/32}
       - MONITORING_SELF_ALLOW_CIDR=${MONITORING_SELF_ALLOW_CIDR:-127.0.0.1/32}
-      - METRICS_BASIC_USER=${METRICS_BASIC_USER:?METRICS_BASIC_USER must be set}
-      - METRICS_BASIC_PASSWORD=${METRICS_BASIC_PASSWORD:?METRICS_BASIC_PASSWORD must be set}
-      - INTERNAL_METRICS_TOKEN=${INTERNAL_METRICS_TOKEN:?INTERNAL_METRICS_TOKEN must be set}
+      - METRICS_BASIC_USER=${METRICS_BASIC_USER:-disabled}
+      - METRICS_BASIC_PASSWORD=${METRICS_BASIC_PASSWORD:-disabled}
+      - INTERNAL_METRICS_TOKEN=${INTERNAL_METRICS_TOKEN:-}
       - UPLOAD_INACTIVITY_TIMEOUT=${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}
       - NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx
     ports:
@@ -185,6 +186,7 @@ services:
         max-file: "2"
 
   node_exporter:
+    profiles: ["monitoring"]
     image: prom/node-exporter:v1.9.1
     container_name: frontiercloud_node_exporter
     restart: always
@@ -214,6 +216,7 @@ services:
         max-file: "2"
 
   cadvisor:
+    profiles: ["monitoring"]
     image: ghcr.io/google/cadvisor:0.56.2
     container_name: frontiercloud_cadvisor
     restart: always
@@ -239,6 +242,7 @@ services:
     logging: *exporter_logging
 
   redis_exporter:
+    profiles: ["monitoring"]
     image: oliver006/redis_exporter:v1.89.0-alpine
     container_name: frontiercloud_redis_exporter
     restart: always
@@ -258,11 +262,12 @@ services:
     logging: *exporter_logging
 
   mysql_exporter:
+    profiles: ["monitoring"]
     image: prom/mysqld-exporter:v0.19.0
     container_name: frontiercloud_mysql_exporter
     restart: always
     environment:
-      MYSQLD_EXPORTER_PASSWORD: ${MYSQL_EXPORTER_PASSWORD:?MYSQL_EXPORTER_PASSWORD must be set}
+      MYSQLD_EXPORTER_PASSWORD: ${MYSQL_EXPORTER_PASSWORD:-}
     command:
       - --mysqld.address=mysql:3306
       - --mysqld.username=${MYSQL_EXPORTER_USER:-frontiercloud_exporter}
@@ -280,6 +285,7 @@ services:
     logging: *exporter_logging
 
   nginx_exporter:
+    profiles: ["monitoring"]
     image: nginx/nginx-prometheus-exporter:1.5.1
     container_name: frontiercloud_nginx_exporter
     restart: always
@@ -298,6 +304,7 @@ services:
     logging: *exporter_logging
 
   nginxlog_exporter:
+    profiles: ["monitoring"]
     image: quay.io/martinhelmich/prometheus-nginxlog-exporter:v1.11.0
     container_name: frontiercloud_nginxlog_exporter
     restart: always
@@ -320,6 +327,7 @@ services:
     logging: *exporter_logging
 
   nginxlog_limiter:
+    profiles: ["monitoring"]
     image: busybox:1.37.0
     container_name: frontiercloud_nginxlog_limiter
     restart: always
@@ -347,7 +355,7 @@ services:
     container_name: frontiercloud_mysql_backup
     restart: always
     environment:
-      MYSQL_PWD: ${MYSQL_BACKUP_PASSWORD:?MYSQL_BACKUP_PASSWORD must be set}
+      MYSQL_PWD: ${MYSQL_BACKUP_PASSWORD:-}
       MYSQL_BACKUP_USER: ${MYSQL_BACKUP_USER:-frontiercloud_backup}
     entrypoint:
       - /bin/sh
