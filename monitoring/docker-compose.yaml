@@ -17,7 +17,8 @@ services:
       - ${MONITORING_RUNTIME_DIR:-.}/generated/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ${MONITORING_RUNTIME_DIR:-.}/generated/prometheus-web.yml:/etc/prometheus/web.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
-      - ${MONITORING_RUNTIME_DIR:-.}/secrets/metrics_password:/run/secrets/metrics_password:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/production_metrics_password:/run/secrets/production_metrics_password:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/preproduction_metrics_password:/run/secrets/preproduction_metrics_password:ro
       - ${MONITORING_RUNTIME_DIR:-.}/secrets/monitoring_password:/run/secrets/monitoring_password:ro
       - prometheus_data:/prometheus
     read_only: true
@@ -36,6 +37,9 @@ services:
     depends_on:
       - alertmanager
       - blackbox
+    extra_hosts:
+      - "520mall.cc:154.26.176.194"
+      - "www4399.sbs:10.77.0.1"
 
   grafana:
     image: grafana/grafana:13.1.0
@@ -46,7 +50,7 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_SERVER_HTTP_ADDR: 0.0.0.0
-      GF_SERVER_ROOT_URL: https://${MONITORING_SERVER_NAME:?MONITORING_SERVER_NAME must be set}:${MONITORING_HTTPS_PORT:-8443}/grafana/
+      GF_SERVER_ROOT_URL: https://${MONITORING_SERVER_NAME:?MONITORING_SERVER_NAME must be set}/monitoring/
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
       GF_SECURITY_COOKIE_SECURE: "true"
       GF_SECURITY_COOKIE_SAMESITE: strict
@@ -73,6 +77,89 @@ services:
     logging: *monitoring_logging
     depends_on:
       - prometheus
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.2
+    restart: always
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.ml.enabled: "false"
+      ES_JAVA_OPTS: -Xms768m -Xmx768m
+    expose: ["9200"]
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    mem_limit: 1280m
+    mem_reservation: 896m
+    ulimits:
+      memlock: {soft: -1, hard: -1}
+    logging: *monitoring_logging
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:9.5.2
+    restart: always
+    environment:
+      LS_JAVA_OPTS: -Xms192m -Xmx192m
+      XPACK_MONITORING_ENABLED: "false"
+      PIPELINE_WORKERS: "1"
+    expose: ["8080"]
+    volumes:
+      - ./elk/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+    mem_limit: 384m
+    logging: *monitoring_logging
+    depends_on: [elasticsearch]
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:9.5.2
+    restart: always
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      SERVER_BASEPATH: /elk
+      SERVER_REWRITEBASEPATH: "true"
+      SERVER_PUBLICBASEURL: https://${MONITORING_SERVER_NAME:?MONITORING_SERVER_NAME must be set}/elk
+      XPACK_REPORTING_ENABLED: "false"
+      XPACK_FLEET_AGENTS_ENABLED: "false"
+      NODE_OPTIONS: --max-old-space-size=768
+      XPACK_SECURITY_ENCRYPTIONKEY: ${KIBANA_SECURITY_ENCRYPTION_KEY:?KIBANA_SECURITY_ENCRYPTION_KEY must be set}
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${KIBANA_SAVED_OBJECTS_ENCRYPTION_KEY:?KIBANA_SAVED_OBJECTS_ENCRYPTION_KEY must be set}
+      XPACK_REPORTING_ENCRYPTIONKEY: ${KIBANA_REPORTING_ENCRYPTION_KEY:?KIBANA_REPORTING_ENCRYPTION_KEY must be set}
+      XPACK_SECURITY_SECURECOOKIES: "true"
+    expose: ["5601"]
+    mem_limit: 1152m
+    logging: *monitoring_logging
+    depends_on: [elasticsearch]
+    extra_hosts:
+      - "520mall.cc:154.26.176.194"
+      - "www4399.sbs:10.77.0.1"
+
+  log_collector:
+    build:
+      context: ..
+      dockerfile: monitoring/reporting/Dockerfile
+    restart: always
+    command: ["python", "elk_collector.py"]
+    environment:
+      COLLECTOR_DATABASE_PATH: /var/lib/frontiercloud-report/elk-offsets.sqlite3
+      LOGSTASH_URL: http://logstash:8080
+      REPORT_METRICS_USER: ${METRICS_BASIC_USER:-frontiercloud_monitor}
+      PRODUCTION_ACCESS_LOG_URL: ${REPORT_PRODUCTION_ACCESS_LOG_URL:?REPORT_PRODUCTION_ACCESS_LOG_URL must be set}
+      PRODUCTION_METRICS_PASSWORD_FILE: /run/secrets/production_metrics_password
+      PREPRODUCTION_ACCESS_LOG_URL: ${REPORT_PREPRODUCTION_ACCESS_LOG_URL:?REPORT_PREPRODUCTION_ACCESS_LOG_URL must be set}
+      PREPRODUCTION_METRICS_PASSWORD_FILE: /run/secrets/preproduction_metrics_password
+    volumes:
+      - weekly_report_data:/var/lib/frontiercloud-report
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/production_metrics_password:/run/secrets/production_metrics_password:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/preproduction_metrics_password:/run/secrets/preproduction_metrics_password:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    mem_limit: 128m
+    pids_limit: 64
+    logging: *monitoring_logging
+    depends_on: [logstash]
+    extra_hosts:
+      - "520mall.cc:154.26.176.194"
+      - "www4399.sbs:10.77.0.1"
 
   alertmanager:
     image: prom/alertmanager:v0.32.1
@@ -105,13 +192,14 @@ services:
     image: nginxinc/nginx-unprivileged:1.26-alpine
     restart: always
     ports:
-      - "${MONITORING_HTTP_PORT:-8080}:8080"
-      - "${MONITORING_HTTPS_PORT:-8443}:8443"
+      - "${MONITORING_BIND_ADDRESS:-127.0.0.1}:${MONITORING_HTTP_PORT:-8080}:8080"
+      - "${MONITORING_BIND_ADDRESS:-127.0.0.1}:${MONITORING_HTTPS_PORT:-8443}:8443"
     volumes:
       - ${MONITORING_RUNTIME_DIR:-.}/generated/nginx.conf:/etc/nginx/nginx.conf:ro
       - ${MONITORING_EXTRA_CONFIG_DIR:-./nginx/server.d}:/etc/nginx/server.d:ro
       - ${MONITORING_RUNTIME_DIR:-.}/secrets/tls_fullchain.pem:/run/tls/fullchain.pem:ro
       - ${MONITORING_RUNTIME_DIR:-.}/secrets/tls_privkey.pem:/run/tls/privkey.pem:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/monitoring.htpasswd:/run/secrets/monitoring.htpasswd:ro
       - ${MONITORING_ACME_WEBROOT:-/var/www/certbot}:/var/www/certbot:ro
     read_only: true
     tmpfs:
@@ -145,6 +233,9 @@ services:
       - ALL
     mem_limit: 128m
     logging: *monitoring_logging
+    extra_hosts:
+      - "520mall.cc:154.26.176.194"
+      - "www4399.sbs:10.77.0.1"
 
   weekly_reporter:
     profiles: ["reporting"]
@@ -176,9 +267,9 @@ services:
       - weekly_report_data:/var/lib/frontiercloud-report
       - ${MONITORING_RUNTIME_DIR:-.}/secrets/tg_bot_token:/run/secrets/tg_bot_token:ro
       - ${MONITORING_RUNTIME_DIR:-.}/secrets/monitoring_password:/run/secrets/production_monitoring_password:ro
-      - ${MONITORING_RUNTIME_DIR:-.}/secrets/metrics_password:/run/secrets/production_metrics_password:ro
-      - ${REPORT_SELF_RUNTIME_DIR:-./instances/rn-self}/secrets/monitoring_password:/run/secrets/preproduction_monitoring_password:ro
-      - ${REPORT_SELF_RUNTIME_DIR:-./instances/rn-self}/secrets/metrics_password:/run/secrets/preproduction_metrics_password:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/production_metrics_password:/run/secrets/production_metrics_password:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/monitoring_password:/run/secrets/preproduction_monitoring_password:ro
+      - ${MONITORING_RUNTIME_DIR:-.}/secrets/preproduction_metrics_password:/run/secrets/preproduction_metrics_password:ro
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid,nodev
@@ -191,9 +282,13 @@ services:
     logging: *monitoring_logging
     depends_on:
       - prometheus
+    extra_hosts:
+      - "520mall.cc:154.26.176.194"
+      - "www4399.sbs:10.77.0.1"
 
 volumes:
   prometheus_data:
   grafana_data:
   alertmanager_data:
   weekly_report_data:
+  elasticsearch_data:

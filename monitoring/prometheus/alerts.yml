@@ -36,7 +36,7 @@ groups:
   - name: frontiercloud-resources
     rules:
       - alert: HostCPUHigh
-        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        expr: 100 - (avg by(environment, environment_name, instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
         for: 5m
         labels: {severity: warning, service: host}
         annotations:
@@ -60,7 +60,7 @@ groups:
           description: "{{ $labels.mountpoint }} 当前仅余 {{ $value | printf \"%.1f\" }}%。"
 
       - alert: HostNetworkReceiveHigh
-        expr: sum by(instance) (rate(node_network_receive_bytes_total{device!~"lo|veth.*|docker.*|br-.*"}[5m])) > 50000000
+        expr: sum by(environment, environment_name, instance) (rate(node_network_receive_bytes_total{device!~"lo|veth.*|docker.*|br-.*"}[5m])) > 50000000
         for: 10m
         labels: {severity: warning, service: network}
         annotations:
@@ -68,7 +68,7 @@ groups:
           description: "当前入站速率约 {{ $value | humanize1024 }}B/s。"
 
       - alert: HostNetworkTransmitHigh
-        expr: sum by(instance) (rate(node_network_transmit_bytes_total{device!~"lo|veth.*|docker.*|br-.*"}[5m])) > 50000000
+        expr: sum by(environment, environment_name, instance) (rate(node_network_transmit_bytes_total{device!~"lo|veth.*|docker.*|br-.*"}[5m])) > 50000000
         for: 10m
         labels: {severity: warning, service: network}
         annotations:
@@ -78,7 +78,7 @@ groups:
   - name: frontiercloud-application
     rules:
       - alert: WebHTTP5xxHigh
-        expr: sum(rate(frontiercloud_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(frontiercloud_http_requests_total[5m])), 0.001) > 0.05
+        expr: sum by(environment, environment_name) (rate(frontiercloud_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum by(environment, environment_name) (rate(frontiercloud_http_requests_total[5m])), 0.001) > 0.05
         for: 5m
         labels: {severity: warning, service: web}
         annotations:
@@ -86,7 +86,7 @@ groups:
           description: "最近五分钟 5xx 比例约 {{ $value | humanizePercentage }}。"
 
       - alert: WebLatencyHigh
-        expr: histogram_quantile(0.95, sum by(le) (rate(frontiercloud_http_request_duration_seconds_bucket[5m]))) > 2
+        expr: histogram_quantile(0.95, sum by(environment, environment_name, le) (rate(frontiercloud_http_request_duration_seconds_bucket[5m]))) > 2
         for: 5m
         labels: {severity: warning, service: web}
         annotations:

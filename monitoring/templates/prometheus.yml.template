@@ -1,9 +1,8 @@
 global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
+  scrape_interval: 30s
+  evaluation_interval: 30s
   external_labels:
-    environment: __MONITORED_ENVIRONMENT__
-    monitoring_role: __MONITORING_ROLE__
+    monitoring_role: central-observer
 
 rule_files:
   - /etc/prometheus/alerts.yml
@@ -13,23 +12,28 @@ alerting:
     - static_configs:
         - targets: [alertmanager:9093]
       path_prefix: /alertmanager
-      basic_auth: &monitoring_auth
+      basic_auth:
         username: __MONITORING_BASIC_USER__
         password_file: /run/secrets/monitoring_password
 
 scrape_configs:
   - job_name: prometheus
     metrics_path: /prometheus/metrics
-    basic_auth: *monitoring_auth
+    basic_auth:
+      username: __MONITORING_BASIC_USER__
+      password_file: /run/secrets/monitoring_password
     static_configs:
       - targets: [localhost:9090]
+        labels: {environment: monitoring, environment_name: 集中监控}
 
   - job_name: blackbox-health
     metrics_path: /probe
-    params:
-      module: [http_2xx]
+    params: {module: [http_2xx]}
     static_configs:
       - targets: [https://__PRODUCTION_METRICS_HOST__/api/v1/health]
+        labels: {environment: production, environment_name: 生产环境}
+      - targets: [https://__PREPRODUCTION_METRICS_HOST__/api/v1/health]
+        labels: {environment: preproduction, environment_name: RN预发布}
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
@@ -38,53 +42,82 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox:9115
 
-  - job_name: __TARGET_JOB_PREFIX__-app
+  - job_name: production-app
     scheme: https
     metrics_path: /internal/metrics/app
     basic_auth: &production_auth
       username: __METRICS_BASIC_USER__
-      password_file: /run/secrets/metrics_password
+      password_file: /run/secrets/production_metrics_password
     static_configs:
       - targets: [__PRODUCTION_METRICS_HOST__]
-
-  - job_name: __TARGET_JOB_PREFIX__-node
+        labels: &production_labels {environment: production, environment_name: 生产环境}
+  - job_name: production-node
     scheme: https
     metrics_path: /internal/metrics/node
     basic_auth: *production_auth
-    static_configs:
-      - targets: [__PRODUCTION_METRICS_HOST__]
-
-  - job_name: __TARGET_JOB_PREFIX__-containers
+    static_configs: [{targets: [__PRODUCTION_METRICS_HOST__], labels: *production_labels}]
+  - job_name: production-containers
     scheme: https
     metrics_path: /internal/metrics/cadvisor
     basic_auth: *production_auth
-    static_configs:
-      - targets: [__PRODUCTION_METRICS_HOST__]
-
-  - job_name: __TARGET_JOB_PREFIX__-redis
+    static_configs: [{targets: [__PRODUCTION_METRICS_HOST__], labels: *production_labels}]
+  - job_name: production-redis
     scheme: https
     metrics_path: /internal/metrics/redis
     basic_auth: *production_auth
-    static_configs:
-      - targets: [__PRODUCTION_METRICS_HOST__]
-
-  - job_name: __TARGET_JOB_PREFIX__-mysql
+    static_configs: [{targets: [__PRODUCTION_METRICS_HOST__], labels: *production_labels}]
+  - job_name: production-mysql
     scheme: https
     metrics_path: /internal/metrics/mysql
     basic_auth: *production_auth
-    static_configs:
-      - targets: [__PRODUCTION_METRICS_HOST__]
-
-  - job_name: __TARGET_JOB_PREFIX__-nginx
+    static_configs: [{targets: [__PRODUCTION_METRICS_HOST__], labels: *production_labels}]
+  - job_name: production-nginx
     scheme: https
     metrics_path: /internal/metrics/nginx
     basic_auth: *production_auth
-    static_configs:
-      - targets: [__PRODUCTION_METRICS_HOST__]
-
-  - job_name: __TARGET_JOB_PREFIX__-nginx-logs
+    static_configs: [{targets: [__PRODUCTION_METRICS_HOST__], labels: *production_labels}]
+  - job_name: production-nginx-logs
     scheme: https
     metrics_path: /internal/metrics/nginxlog
     basic_auth: *production_auth
+    static_configs: [{targets: [__PRODUCTION_METRICS_HOST__], labels: *production_labels}]
+
+  - job_name: preproduction-app
+    scheme: https
+    metrics_path: /internal/metrics/app
+    basic_auth: &preproduction_auth
+      username: __METRICS_BASIC_USER__
+      password_file: /run/secrets/preproduction_metrics_password
     static_configs:
-      - targets: [__PRODUCTION_METRICS_HOST__]
+      - targets: [__PREPRODUCTION_METRICS_HOST__]
+        labels: &preproduction_labels {environment: preproduction, environment_name: RN预发布}
+  - job_name: preproduction-node
+    scheme: https
+    metrics_path: /internal/metrics/node
+    basic_auth: *preproduction_auth
+    static_configs: [{targets: [__PREPRODUCTION_METRICS_HOST__], labels: *preproduction_labels}]
+  - job_name: preproduction-containers
+    scheme: https
+    metrics_path: /internal/metrics/cadvisor
+    basic_auth: *preproduction_auth
+    static_configs: [{targets: [__PREPRODUCTION_METRICS_HOST__], labels: *preproduction_labels}]
+  - job_name: preproduction-redis
+    scheme: https
+    metrics_path: /internal/metrics/redis
+    basic_auth: *preproduction_auth
+    static_configs: [{targets: [__PREPRODUCTION_METRICS_HOST__], labels: *preproduction_labels}]
+  - job_name: preproduction-mysql
+    scheme: https
+    metrics_path: /internal/metrics/mysql
+    basic_auth: *preproduction_auth
+    static_configs: [{targets: [__PREPRODUCTION_METRICS_HOST__], labels: *preproduction_labels}]
+  - job_name: preproduction-nginx
+    scheme: https
+    metrics_path: /internal/metrics/nginx
+    basic_auth: *preproduction_auth
+    static_configs: [{targets: [__PREPRODUCTION_METRICS_HOST__], labels: *preproduction_labels}]
+  - job_name: preproduction-nginx-logs
+    scheme: https
+    metrics_path: /internal/metrics/nginxlog
+    basic_auth: *preproduction_auth
+    static_configs: [{targets: [__PREPRODUCTION_METRICS_HOST__], labels: *preproduction_labels}]

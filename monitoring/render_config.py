@@ -99,10 +99,8 @@ def main() -> None:
     env_file = args.env_file.expanduser().resolve()
     runtime_root = args.runtime_dir.expanduser().resolve()
     values = load_env(env_file)
-    host = require(values, "PRODUCTION_METRICS_HOST")
-    monitored_environment = require(values, "MONITORED_ENVIRONMENT")
-    monitoring_role = require(values, "MONITORING_ROLE")
-    target_job_prefix = require(values, "TARGET_JOB_PREFIX")
+    production_host = require(values, "PRODUCTION_METRICS_HOST")
+    preproduction_host = require(values, "PREPRODUCTION_METRICS_HOST")
     username = values.get("METRICS_BASIC_USER", "frontiercloud_monitor")
     monitoring_user = values.get("MONITORING_BASIC_USER", "frontier_observer")
     monitoring_password = require(values, "MONITORING_BASIC_PASSWORD")
@@ -110,14 +108,11 @@ def main() -> None:
     monitoring_server_name = require(values, "MONITORING_SERVER_NAME")
     monitoring_https_port = values.get("MONITORING_HTTPS_PORT", "8443")
     chat_id = require(values, "TG_CHAT_ID")
-    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::\d+)?", host):
-        raise SystemExit("PRODUCTION_METRICS_HOST is invalid")
-    for name, value in (
-        ("MONITORED_ENVIRONMENT", monitored_environment),
-        ("MONITORING_ROLE", monitoring_role),
-        ("TARGET_JOB_PREFIX", target_job_prefix),
+    for name, host in (
+        ("PRODUCTION_METRICS_HOST", production_host),
+        ("PREPRODUCTION_METRICS_HOST", preproduction_host),
     ):
-        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
+        if not re.fullmatch(r"[A-Za-z0-9.-]+(?::\d+)?", host):
             raise SystemExit(f"{name} is invalid")
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", username):
         raise SystemExit("METRICS_BASIC_USER is invalid")
@@ -140,8 +135,15 @@ def main() -> None:
     os.chmod(runtime_root / "generated", 0o711)
     os.chmod(runtime_root / "secrets", 0o711)
     write_runtime_file(
-        runtime_root / "secrets" / "metrics_password",
-        require(values, "METRICS_BASIC_PASSWORD"),
+        runtime_root / "secrets" / "production_metrics_password",
+        require(values, "PRODUCTION_METRICS_PASSWORD"),
+        uid=PROMETHEUS_UID,
+        gid=REPORTER_GID,
+        mode=0o440,
+    )
+    write_runtime_file(
+        runtime_root / "secrets" / "preproduction_metrics_password",
+        require(values, "PREPRODUCTION_METRICS_PASSWORD"),
         uid=PROMETHEUS_UID,
         gid=REPORTER_GID,
         mode=0o440,
@@ -166,6 +168,12 @@ def main() -> None:
         gid=REPORTER_GID,
         mode=0o440,
     )
+    write_runtime_file(
+        runtime_root / "secrets" / "monitoring.htpasswd",
+        f"{monitoring_user}:{monitoring_password_hash}",
+        uid=NGINX_UID,
+        gid=NGINX_GID,
+    )
     copy_runtime_file(
         Path(require(values, "MONITORING_TLS_CERT_PATH")),
         runtime_root / "secrets" / "tls_fullchain.pem",
@@ -182,12 +190,10 @@ def main() -> None:
         "prometheus.yml.template",
         "prometheus.yml",
         {
-            "PRODUCTION_METRICS_HOST": host,
+            "PRODUCTION_METRICS_HOST": production_host,
+            "PREPRODUCTION_METRICS_HOST": preproduction_host,
             "METRICS_BASIC_USER": username,
             "MONITORING_BASIC_USER": monitoring_user,
-            "MONITORED_ENVIRONMENT": monitored_environment,
-            "MONITORING_ROLE": monitoring_role,
-            "TARGET_JOB_PREFIX": target_job_prefix,
         },
         runtime_root=runtime_root,
     )
@@ -225,7 +231,7 @@ def main() -> None:
         uid=NGINX_UID,
         gid=NGINX_GID,
     )
-    print(f"monitoring configuration rendered for {monitored_environment} without printing secrets")
+    print("central monitoring configuration rendered without printing secrets")
 
 
 if __name__ == "__main__":

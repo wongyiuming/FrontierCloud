@@ -79,6 +79,13 @@ jobs:
         run: |
           docker compose config --quiet
           MONITORING_SERVER_NAME=localhost \
+            PRODUCTION_METRICS_HOST=production.example.com \
+            PREPRODUCTION_METRICS_HOST=preproduction.example.com \
+            REPORT_PRODUCTION_ACCESS_LOG_URL=https://production.example.com/internal/report/access-log \
+            REPORT_PREPRODUCTION_ACCESS_LOG_URL=https://preproduction.example.com/internal/report/access-log \
+            KIBANA_SECURITY_ENCRYPTION_KEY=ci_kibana_security_encryption_key_123 \
+            KIBANA_SAVED_OBJECTS_ENCRYPTION_KEY=ci_kibana_objects_encryption_key_1234 \
+            KIBANA_REPORTING_ENCRYPTION_KEY=ci_kibana_reporting_encryption_key_123 \
             docker compose -f monitoring/docker-compose.yaml config --quiet
           docker build --file monitoring/reporting/Dockerfile \
             --tag frontiercloud-weekly-reporter:ci .

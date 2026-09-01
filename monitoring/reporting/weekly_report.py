@@ -408,24 +408,24 @@ def environment_report(config: Config, store: Store, reader: Any, source: Source
     )
     request_rate = prometheus_range(
         source,
-        "sum(rate(frontiercloud_http_requests_total[5m]))",
+        f'sum(rate(frontiercloud_http_requests_total{{job="{source.job_prefix}-app"}}[5m]))',
         start,
         end,
     )
     web_start_time = prometheus_range(
         source,
-        'max(container_start_time_seconds{container_label_com_docker_compose_service="web"})',
+        f'max(container_start_time_seconds{{job="{source.job_prefix}-containers",container_label_com_docker_compose_service="web"}})',
         start,
         end,
     )
     cpu_avg, cpu_peak = summarize_series(cpu)
     memory_avg, memory_peak = summarize_series(memory)
-    requests = prometheus_query(source, f"sum(increase(frontiercloud_http_requests_total[{period}]))", end)
-    errors = prometheus_query(source, f'sum(increase(frontiercloud_http_requests_total{{status=~"5.."}}[{period}]))', end)
-    availability = prometheus_query(source, f"avg(avg_over_time(probe_success[{period}]))*100", end)
+    requests = prometheus_query(source, f'sum(increase(frontiercloud_http_requests_total{{job="{source.job_prefix}-app"}}[{period}]))', end)
+    errors = prometheus_query(source, f'sum(increase(frontiercloud_http_requests_total{{job="{source.job_prefix}-app",status=~"5.."}}[{period}]))', end)
+    availability = prometheus_query(source, f'avg(avg_over_time(probe_success{{environment="{source.job_prefix}"}}[{period}]))*100', end)
     p95 = prometheus_query(
         source,
-        f"histogram_quantile(0.95,sum by(le)(rate(frontiercloud_http_request_duration_seconds_bucket[{period}])))",
+        f'histogram_quantile(0.95,sum by(le)(rate(frontiercloud_http_request_duration_seconds_bucket{{job="{source.job_prefix}-app"}}[{period}])))',
         end,
     )
     received = prometheus_query(

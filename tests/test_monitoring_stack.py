@@ -29,8 +29,8 @@ class MonitoringStackTests(unittest.TestCase):
             self.assertIn(f"mem_limit: {limit}", block)
             if service != "gateway":
                 self.assertNotIn("ports:", block)
-        self.assertIn('"${MONITORING_HTTP_PORT:-8080}:8080"', compose)
-        self.assertIn('"${MONITORING_HTTPS_PORT:-8443}:8443"', compose)
+        self.assertIn('"${MONITORING_BIND_ADDRESS:-127.0.0.1}:${MONITORING_HTTP_PORT:-8080}:8080"', compose)
+        self.assertIn('"${MONITORING_BIND_ADDRESS:-127.0.0.1}:${MONITORING_HTTPS_PORT:-8443}:8443"', compose)
         self.assertNotIn('"80:8080"', compose)
         self.assertNotIn('"443:8443"', compose)
 
@@ -79,7 +79,9 @@ class MonitoringStackTests(unittest.TestCase):
 
     def test_gateway_uses_https_subpaths_and_security_headers(self):
         config = (MONITORING / "nginx" / "nginx.conf.template").read_text(encoding="utf-8")
-        self.assertIn("location /grafana/", config)
+        self.assertIn("location /monitoring/", config)
+        self.assertIn("location /elk/", config)
+        self.assertIn('auth_basic "FrontierCloud ELK"', config)
         self.assertIn("location /prometheus/", config)
         self.assertIn("location /alertmanager/", config)
         self.assertIn("Strict-Transport-Security", config)
@@ -90,10 +92,34 @@ class MonitoringStackTests(unittest.TestCase):
     def test_login_limiter_does_not_throttle_grafana_assets(self):
         config = (MONITORING / "nginx" / "nginx.conf.template").read_text(encoding="utf-8")
         self.assertIn("limit_req_status 429;", config)
-        self.assertIn("location = /grafana/login {", config)
-        grafana_location = config.split("location /grafana/ {", 1)[1].split("}", 1)[0]
+        self.assertIn("location = /monitoring/login {", config)
+        grafana_location = config.split("location /monitoring/ {", 1)[1].split("}", 1)[0]
         self.assertNotIn("limit_req", grafana_location)
         self.assertEqual(config.count("limit_req zone=monitoring_login"), 1)
+
+    def test_one_stack_separates_production_and_preproduction_by_labels(self):
+        prometheus = (MONITORING / "templates" / "prometheus.yml.template").read_text(
+            encoding="utf-8"
+        )
+        alertmanager = (MONITORING / "templates" / "alertmanager.yml.template").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("__PRODUCTION_METRICS_HOST__", prometheus)
+        self.assertIn("__PREPRODUCTION_METRICS_HOST__", prometheus)
+        self.assertIn("environment_name: 生产环境", prometheus)
+        self.assertIn("environment_name: RN预发布", prometheus)
+        self.assertIn(".Labels.environment_name", alertmanager)
+
+    def test_elk_is_internal_and_resource_bounded(self):
+        compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
+        self.assertIn("elasticsearch:9.5.2", compose)
+        self.assertIn("logstash:9.5.2", compose)
+        self.assertIn("kibana:9.5.2", compose)
+        self.assertNotIn('"9200:9200"', compose)
+        self.assertNotIn('"5601:5601"', compose)
+        self.assertIn("mem_limit: 1280m", compose)
+        self.assertIn('"www4399.sbs:10.77.0.1"', compose)
+        self.assertIn("SERVER_BASEPATH: /elk", compose)
 
     def test_renderer_uses_python39_compatible_file_writes(self):
         renderer = (MONITORING / "render_config.py").read_text(encoding="utf-8")
@@ -144,6 +170,12 @@ class MonitoringStackTests(unittest.TestCase):
         self.assertIn("frontiercloud_backup_last_success_timestamp_seconds", script)
         self.assertIn("-mtime +7 -delete", script)
         self.assertIn("alert: MySQLBackupStale", rules)
+
+    def test_nginx_worker_can_serve_the_allowlisted_access_log(self):
+        script = (ROOT / "nginx" / "12-log-permissions.sh").read_text(encoding="utf-8")
+        dockerfile = (ROOT / "nginx" / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("chown nginx:nginx /var/log/nginx/access_log.log", script)
+        self.assertIn("12-log-permissions.sh", dockerfile)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ global:
 
 route:
   receiver: telegram
-  group_by: [alertname, service, instance]
+  group_by: [environment, alertname, service, instance]
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 4h
@@ -21,10 +21,10 @@ receivers:
         send_resolved: true
         parse_mode: HTML
         message: |-
-          {{ if eq .Status "firing" }}🔥 FIRING{{ else }}✅ RESOLVED{{ end }} · FrontierCloud
+          {{ if eq .Status "firing" }}🔥 FIRING{{ else }}✅ RESOLVED{{ end }} · {{ (index .Alerts 0).Labels.environment_name }}
           {{ range .Alerts }}
           <b>{{ .Labels.alertname }}</b> [{{ .Labels.severity }}]
-          环境: {{ .Labels.environment }}
+          环境: {{ .Labels.environment_name }} ({{ .Labels.environment }})
           服务: {{ .Labels.service }}
           实例: {{ .Labels.instance }}
           {{ .Annotations.summary }}
