@@ -1,7 +1,8 @@
 """Manual local-only Admin integration smoke test.
 
-Run from the repository root after starting the IDE server:
-    python tests/admin_local_smoke.py
+Run from the repository root after starting the IDE server, passing a current
+dynamically issued token:
+    python tests/admin_local_smoke.py ADMIN_TOKEN
 
 The script refuses non-loopback targets and removes its uniquely named test
 directories through the Admin API before exiting.
@@ -16,7 +17,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from pathlib import Path
 
 
 BASE_URL = "http://127.0.0.1:8000"
@@ -31,13 +31,6 @@ class LoopbackCookiePolicy(http.cookiejar.DefaultCookiePolicy):
         if urllib.parse.urlsplit(request.full_url).hostname in {"127.0.0.1", "localhost", "::1"}:
             return True
         return super().return_ok_secure(cookie, request)
-
-
-def env_value(name: str) -> str:
-    for line in Path(".env").read_text(encoding="utf-8").splitlines():
-        if line.startswith(f"{name}="):
-            return line.split("=", 1)[1].strip().strip('"').strip("'")
-    raise RuntimeError(f".env 缺少 {name}")
 
 
 def multipart(fields: dict[str, str], filename: str, content: bytes) -> tuple[bytes, str]:
@@ -89,7 +82,9 @@ def main() -> int:
 
     cookie_jar = http.cookiejar.CookieJar(policy=LoopbackCookiePolicy())
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-    bootstrap_token = env_value("ADMIN_BOOTSTRAP_TOKEN")
+    if len(sys.argv) != 2 or not sys.argv[1].strip():
+        raise RuntimeError("请把当前动态管理员令牌作为唯一参数传入")
+    admin_token = sys.argv[1].strip()
     suffix = uuid.uuid4().hex[:10]
     folder_dir = f"codex-smoke-folder-{suffix}"
     multiple_dir = f"codex-smoke-multiple-{suffix}"
@@ -97,13 +92,7 @@ def main() -> int:
     csrf_token = ""
 
     try:
-        issued = request_json(
-            opener,
-            "/api/v1/media/admin/token/issue",
-            method="POST",
-            headers={"X-Token": bootstrap_token},
-        )
-        elevate_body = urllib.parse.urlencode({"token": issued["token"]}).encode()
+        elevate_body = urllib.parse.urlencode({"token": admin_token}).encode()
         request_json(
             opener,
             "/api/v1/media/admin/elevate",

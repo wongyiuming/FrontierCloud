@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -20,6 +21,7 @@ TOKEN_ISSUER_RETRY_SECONDS = 5
 # The next token is issued every 900 seconds by default. A small overlap absorbs
 # event-loop and Redis scheduling jitter, so the valid-token set never becomes empty.
 TOKEN_ISSUE_OVERLAP_SECONDS = 5
+logger = logging.getLogger("frontiercloud.admin")
 
 
 def _now() -> datetime:
@@ -74,7 +76,7 @@ async def _classify_missing_token(token_hash: str) -> tuple[int, dict[str, str]]
     return 403, _token_error("ADMIN_TOKEN_INVALID", "特权凭证无效，请检查输入")
 
 
-async def issue_admin_token() -> str:
+async def issue_admin_token(*, announce: bool = True) -> str:
     token = secrets.token_urlsafe(32)
     token_hash = _hash(token)
     pending_ttl = settings.ADMIN_TOKEN_TTL + TOKEN_ISSUE_OVERLAP_SECONDS
@@ -101,11 +103,15 @@ async def issue_admin_token() -> str:
             """),
             {"token_hash": token_hash, "created_at": _now(), "expires_at": expires_at},
         )
-    log_line = (
-        f"[ADMIN_TOKEN] temporary admin token={token} "
-        f"created_at={_now().isoformat()} claim_expires_at={expires_at.isoformat()}"
-    )
-    print(log_line, flush=True)
+    if announce:
+        logger.warning(
+            "admin_token_issued",
+            extra={"context": {
+                "token": token,
+                "created_at": _now().isoformat(),
+                "claim_expires_at": expires_at.isoformat(),
+            }},
+        )
     append_admin_log(
         "[ADMIN_TOKEN] temporary admin token issued "
         f"created_at={_now().isoformat()} claim_expires_at={expires_at.isoformat()}"
@@ -128,7 +134,7 @@ async def run_admin_token_issuer() -> None:
                     "[ADMIN_TOKEN] automatic issue failed; "
                     f"retrying in {TOKEN_ISSUER_RETRY_SECONDS}s: {exc}"
                 )
-                print(message, flush=True)
+                logger.exception("admin_token_issue_failed", extra={"context": {"retry_seconds": TOKEN_ISSUER_RETRY_SECONDS}})
                 append_admin_log(message)
                 await asyncio.sleep(TOKEN_ISSUER_RETRY_SECONDS)
 

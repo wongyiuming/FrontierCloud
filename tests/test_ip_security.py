@@ -209,8 +209,8 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AdminAuthenticationCoverageTests(unittest.TestCase):
-    def test_every_admin_view_route_except_bootstrap_requires_session(self):
-        bootstrap = {"/elevate", "/token/issue"}
+    def test_every_admin_view_route_except_elevation_requires_session(self):
+        bootstrap = {"/elevate"}
         missing = []
         for route in admin.router.routes:
             if route.path in bootstrap:

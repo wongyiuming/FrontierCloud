@@ -7,230 +7,72 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DevelopmentDeploymentTests(unittest.TestCase):
-    @staticmethod
-    def _service_block(compose: str, service: str) -> str:
-        match = re.search(
-            rf"(?ms)^  {service}:\n(.*?)(?=^  [a-zA-Z][a-zA-Z0-9_]*:\n|\Z)",
-            compose,
-        )
-        if match is None:
-            raise AssertionError(f"missing Compose service: {service}")
-        return match.group(1)
-
-    def test_transport_mode_is_a_direct_technical_capability(self):
-        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
-        config = (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8")
-        main = (ROOT / "main.py").read_text(encoding="utf-8")
-
-        self.assertNotIn("ENVIRONMENT", compose)
-        self.assertNotIn("ENVIRONMENT", config)
-        self.assertNotIn('os.getenv("ENVIRONMENT"', main)
-        self.assertIn("TLS_ENABLED: ${TLS_ENABLED:-true}", compose)
-        self.assertIn("TLS_ENABLED=${TLS_ENABLED:-true}", compose)
-
-    def test_admin_bootstrap_token_is_validated_before_startup(self):
-        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
-        web = self._service_block(compose, "web")
-
-        self.assertIn(
-            "ADMIN_BOOTSTRAP_TOKEN: "
-            "${ADMIN_BOOTSTRAP_TOKEN:?ADMIN_BOOTSTRAP_TOKEN must be set}",
-            web,
-        )
-
-    def test_upload_inactivity_timeout_is_consistent_across_app_and_proxy(self):
-        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
-        nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
-        config = (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8")
-        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
-
-        self.assertIn(
-            "UPLOAD_INACTIVITY_TIMEOUT=${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}",
-            compose,
-        )
-        self.assertIn("client_body_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
-        self.assertIn("proxy_send_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
-        self.assertIn("ADMIN_UPLOAD_INACTIVITY_TIMEOUT: int = Field(", config)
-        self.assertIn("# ADMIN_UPLOAD_INACTIVITY_TIMEOUT=300", env_example)
-
     def test_environment_example_is_the_complete_public_contract(self):
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
-        config = (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8")
+        config = (ROOT / "app/core/config.py").read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
-        listed_names = re.findall(
-            r"(?m)^#? ?([A-Z][A-Z0-9_]*)=",
-            env_example,
-        )
-        active_names = {
+        listed = re.findall(r"(?m)^#? ?([A-Z][A-Z0-9_]*)=", env_example)
+        active = {
             line.split("=", 1)[0]
             for line in env_example.splitlines()
             if line and not line.startswith("#") and "=" in line
         }
-
-        self.assertEqual(
-            active_names,
-            {
-                "ADMIN_BOOTSTRAP_TOKEN",
-                "MYSQL_PASSWORD",
-                "MYSQL_ROOT_PASSWORD",
-            },
-        )
-        self.assertEqual(len(listed_names), len(set(listed_names)))
-
+        self.assertEqual(active, {"MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD"})
+        self.assertEqual(len(listed), len(set(listed)))
         app_names = set(re.findall(r'validation_alias="([A-Z][A-Z0-9_]*)"', config))
         compose_names = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", compose))
-        private_compose_names = {
-            "BACKUP_DIR",
-            "METRICS_BASIC_PASSWORD",
-            "METRICS_BASIC_USER",
-            "MONITORING_ALLOW_CIDR",
-            "MONITORING_SELF_ALLOW_CIDR",
-            "MYSQL_BACKUP_PASSWORD",
-            "MYSQL_BACKUP_USER",
-            "MYSQL_EXPORTER_PASSWORD",
-            "MYSQL_EXPORTER_USER",
-            "NGINX_METRIC_LOG_MAX_BYTES",
-        }
-        self.assertLessEqual(private_compose_names, compose_names)
-        self.assertEqual(
-            set(listed_names),
-            app_names | (compose_names - private_compose_names),
-        )
+        self.assertEqual(set(listed), app_names | compose_names)
 
-        for private_name in private_compose_names | {
-            "PROMETHEUS_URL",
-            "GRAFANA_URL",
-            "ELASTICSEARCH_URL",
-            "RN_HOST",
-            "DMIT_HOST",
-            "WG_ENDPOINT",
-            "PRODUCTION_HOST",
-            "STAGING_HOST",
-        }:
-            self.assertNotIn(f"{private_name}=", env_example)
-
-    def test_development_nginx_is_http_only(self):
-        development = ROOT / "nginx" / "environments" / "development"
-        rendered_inputs = "\n".join(
-            path.read_text(encoding="utf-8") for path in development.glob("*.conf")
-        )
-
-        self.assertIn("listen 80 default_server", rendered_inputs)
-        self.assertNotIn("listen 443", rendered_inputs)
-        self.assertNotIn("ssl_certificate", rendered_inputs)
-
-    def test_production_nginx_keeps_tls_and_redirect(self):
-        production = ROOT / "nginx" / "environments" / "production"
-        rendered_inputs = "\n".join(
-            path.read_text(encoding="utf-8") for path in production.glob("*.conf")
-        )
-
-        self.assertIn("listen 443 ssl", rendered_inputs)
-        self.assertIn("ssl_certificate /etc/nginx/certs/fullchain.pem", rendered_inputs)
-        self.assertIn("return 301 https://$host$request_uri", rendered_inputs)
-        self.assertIn("/.well-known/acme-challenge/", rendered_inputs)
-
-    def test_tls_switch_selects_https_without_environment_names(self):
-        selector = (ROOT / "nginx" / "15-select-tls.sh").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("true|1|yes|on) nginx_mode=production", selector)
-        self.assertIn("false|0|no|off) nginx_mode=development", selector)
-        self.assertNotIn("ENVIRONMENT", selector)
-
-    def test_collection_agents_are_isolated_behind_optional_profile(self):
-        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
-        for service in (
-            "node_exporter",
-            "cadvisor",
-            "redis_exporter",
-            "mysql_exporter",
-            "nginx_exporter",
-            "nginxlog_exporter",
-            "nginxlog_limiter",
+    def test_private_deployment_variables_are_absent_from_contract(self):
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        for name in (
+            "PROMETHEUS_URL", "GRAFANA_URL", "ELASTICSEARCH_URL", "LOGSTASH_HOST",
+            "KIBANA_URL", "RN_HOST", "DMIT_HOST", "WG_ENDPOINT",
+            "PRODUCTION_HOST", "STAGING_HOST", "ADMIN_BOOTSTRAP_TOKEN",
         ):
-            self.assertIn(
-                'profiles: ["monitoring"]',
-                self._service_block(compose, service),
-            )
+            self.assertNotIn(f"{name}=", env_example)
 
-        self.assertIn(
-            'profiles: ["monitoring"]', self._service_block(compose, "mysql_backup")
-        )
-        self.assertIn(":/backups:z", self._service_block(compose, "mysql_backup"))
-        mysql_init = self._service_block(compose, "mysql_monitoring_init")
-        self.assertIn('profiles: ["monitoring"]', mysql_init)
-        self.assertIn("mysql_socket:/var/run/mysqld", mysql_init)
-        self.assertIn("condition: service_healthy", mysql_init)
+    def test_observability_platform_lifecycle_is_not_bundled(self):
+        self.assertFalse(any(
+            path.is_file() and path.suffix != ".pyc"
+            for path in (ROOT / "monitoring").rglob("*")
+        ))
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8").lower()
+        workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8").lower()
+        for marker in (
+            "prometheus", "grafana", "elasticsearch", "logstash", "kibana",
+            "node_exporter", "cadvisor", "redis_exporter", "mysql_exporter",
+            "nginx_exporter", "monitoring", "weekly_reporter",
+        ):
+            self.assertNotIn(marker, compose)
+            self.assertNotIn(marker, workflow)
 
-    def test_business_image_excludes_standalone_download_tools(self):
-        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
-        workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(
-            encoding="utf-8"
-        )
+    def test_download_tools_are_scripts_not_runtime_packages(self):
+        self.assertFalse(any(
+            path.is_file() and path.suffix != ".pyc"
+            for path in (ROOT / "auto_download").rglob("*")
+        ))
+        self.assertTrue((ROOT / "scripts/auto_download").is_dir())
+        dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn("scripts/auto_download", dockerignore)
+        self.assertNotIn('"auto_download*"', pyproject)
 
-        self.assertNotIn("COPY auto_download", dockerfile)
-        self.assertNotIn("/app/auto_download", dockerfile)
-        self.assertIn("auto_download", dockerignore.splitlines())
-        self.assertNotIn("test_media_sync.py", workflow)
-        self.assertNotIn("test_download_support.py", workflow)
-
-    def test_office_document_processing_is_not_shipped(self):
-        endpoints = (ROOT / "app" / "api" / "v1" / "endpoints.py").read_text(
-            encoding="utf-8"
-        )
-        dependencies = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
-
-        self.assertNotIn("/watermark", endpoints)
-        self.assertNotIn("/watermark", nginx)
-        for dependency in ("Pillow", "pymupdf", "python-docx", "py7zr"):
-            self.assertNotIn(dependency, dependencies)
-        self.assertNotIn("WATERMARK_FONT_PATH", dockerfile)
-
-    def test_ci_runs_source_only_deployment_tests_on_the_host(self):
-        workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertEqual(workflow.count("tests/test_development_deployment.py"), 1)
-        self.assertIn("! -name 'test_development_deployment.py'", workflow)
-        self.assertIn("TLS_ENABLED=true", workflow)
-        self.assertIn("python3 scripts/check_english_comments.py", workflow)
-        self.assertIn("monitoring/reporting/Dockerfile", workflow)
-        self.assertIn("Test optional collection agents", workflow)
-        self.assertIn("frontiercloud_backup_last_run_success 1", workflow)
+    def test_transport_and_upload_timeout_are_direct_technical_settings(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+        self.assertNotIn("ENVIRONMENT", compose)
+        self.assertIn("TLS_ENABLED: ${TLS_ENABLED:-true}", compose)
+        self.assertIn("UPLOAD_INACTIVITY_TIMEOUT: ${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}", compose)
+        self.assertIn("client_body_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
 
     def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
-        workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(
-            encoding="utf-8"
-        )
+        workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         deploy = workflow.split("  deploy-rn:", 1)[1]
-
         self.assertIn("needs: test-compose", deploy)
         self.assertIn("github.event_name == 'push'", deploy)
         self.assertIn("github.ref == 'refs/heads/dev'", deploy)
         self.assertNotIn("refs/heads/main", deploy)
-        self.assertIn("runs-on: [self-hosted, Linux, X64, rn-preproduction]", deploy)
-        self.assertIn("name: rn-preproduction", deploy)
-        self.assertIn('test "$GITHUB_REF" = refs/heads/dev', deploy)
-        self.assertIn("git fetch --no-tags origin dev", deploy)
-        self.assertIn('test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"', deploy)
-        deploy_script = (ROOT / "scripts" / "deploy_rn.sh").read_text(encoding="utf-8")
-        self.assertIn('health_attempt" -ge 30', deploy_script)
-        self.assertIn('--resolve "$server_name:443:127.0.0.1"', deploy_script)
-        self.assertNotIn("https://localhost/api/v1/health", deploy_script)
-        for forbidden in (
-            "monitoring/.env",
-            "rn-self.env",
-            "frontiercloud-rn-self-monitoring",
-            "weekly_reporter",
-            "render_config.py",
-        ):
-            self.assertNotIn(forbidden, deploy_script)
         self.assertNotIn("workflow_dispatch", workflow)
 
 

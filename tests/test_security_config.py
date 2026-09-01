@@ -15,7 +15,6 @@ class SecurityConfigurationTests(unittest.TestCase):
                 _env_file=None,
                 TLS_ENABLED=False,
                 REDIS_URL="redis://redis:6379/0",
-                ADMIN_BOOTSTRAP_TOKEN="short-token",
                 MYSQL_URL="mysql+asyncmy://media_admin:Huawei%40123@mysql/db",
                 MYSQL_PASSWORD="Huawei@123",
                 MYSQL_ROOT_PASSWORD="Huawei@123",
@@ -27,7 +26,6 @@ class SecurityConfigurationTests(unittest.TestCase):
             _env_file=None,
             TLS_ENABLED=True,
             REDIS_URL="redis://redis:6379/0",
-            ADMIN_BOOTSTRAP_TOKEN="bootstrap-token-0123456789abcdef0123456789abcdef",
             MYSQL_URL=f"mysql+asyncmy://media_admin:{password}@mysql/db",
             MYSQL_PASSWORD=password,
             MYSQL_ROOT_PASSWORD="different-root-secret-987654321",
@@ -49,7 +47,6 @@ class SecurityConfigurationTests(unittest.TestCase):
                 TLS_ENABLED=False,
                 SERVER_NAME="preproduction.example.com",
                 WEBRTC_STUN_PORT=5349,
-                ADMIN_BOOTSTRAP_TOKEN="test-token-0123456789abcdef0123456789abcdef",
                 MYSQL_PASSWORD=password,
                 MYSQL_ROOT_PASSWORD="test-root-password-0123456789",
             )
@@ -69,7 +66,6 @@ class SecurityConfigurationTests(unittest.TestCase):
             Settings(
                 _env_file=None,
                 REDIS_URL="redis://redis:6379/0",
-                ADMIN_BOOTSTRAP_TOKEN="test-token-0123456789abcdef0123456789abcdef",
                 MYSQL_URL="mysql+asyncmy://media_admin:test-password-012345@mysql/db",
                 MYSQL_PASSWORD="test-password-012345",
                 MYSQL_ROOT_PASSWORD="test-root-password-012345",

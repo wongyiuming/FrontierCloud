@@ -1,2 +1,0 @@
-basic_auth_users:
-  __MONITORING_BASIC_USER__: __MONITORING_BASIC_PASSWORD_HASH__

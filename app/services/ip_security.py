@@ -451,63 +451,6 @@ async def list_security_history(
     }
 
 
-async def weekly_security_summary(days: int = 7) -> dict[str, Any]:
-    """Return a bounded, read-only ban summary for the external weekly reporter."""
-    days = max(1, min(int(days), 31))
-    now = _utcnow()
-    cutoff = now - timedelta(days=days)
-    async with engine.connect() as conn:
-        rows = await conn.execute(text("""
-            SELECT
-                event.ip_address,
-                COUNT(*) AS event_count,
-                MIN(event.banned_at) AS first_banned_at,
-                MAX(event.banned_at) AS last_banned_at,
-                SUM(event.trigger_count) AS trigger_count,
-                SUM(event.ban_kind='auto') AS automatic_count,
-                SUM(event.ban_kind='manual') AS manual_count,
-                MAX(event.status='active' AND event.expires_at > :now) AS active,
-                NOT EXISTS (
-                    SELECT 1
-                    FROM ip_auto_ban_events previous
-                    WHERE previous.ip_address=event.ip_address
-                      AND previous.banned_at < :cutoff
-                ) AS is_new
-            FROM ip_auto_ban_events event
-            WHERE event.banned_at >= :cutoff
-            GROUP BY event.ip_address
-            ORDER BY last_banned_at DESC
-            LIMIT 500
-        """), {"now": now, "cutoff": cutoff})
-        active_count = await conn.scalar(text("""
-            SELECT COUNT(DISTINCT ip_address)
-            FROM ip_auto_ban_events
-            WHERE status='active' AND expires_at > :now
-        """), {"now": now})
-
-    addresses = []
-    for row in rows.mappings().all():
-        addresses.append({
-            "ip": str(row["ip_address"]),
-            "event_count": int(row["event_count"]),
-            "trigger_count": int(row["trigger_count"] or 0),
-            "automatic_count": int(row["automatic_count"] or 0),
-            "manual_count": int(row["manual_count"] or 0),
-            "active": bool(row["active"]),
-            "is_new": bool(row["is_new"]),
-            "first_banned_at": row["first_banned_at"].isoformat(),
-            "last_banned_at": row["last_banned_at"].isoformat(),
-        })
-    return {
-        "period_start": cutoff.isoformat(),
-        "period_end": now.isoformat(),
-        "active_ban_count": int(active_count or 0),
-        "event_count": sum(item["event_count"] for item in addresses),
-        "unique_ip_count": len(addresses),
-        "addresses": addresses,
-    }
-
-
 def legal_api_count(app: Any) -> int:
     pairs = set()
     for route in app.routes:

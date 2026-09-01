@@ -1,6 +1,6 @@
 from urllib.parse import quote
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -9,7 +9,6 @@ from sqlalchemy.exc import ArgumentError
 class Settings(BaseSettings):
     TLS_ENABLED: bool = Field(True, validation_alias="TLS_ENABLED")
     REDIS_URL: str = Field("redis://redis:6379/0", validation_alias="REDIS_URL")
-    ADMIN_BOOTSTRAP_TOKEN: str = Field(..., validation_alias="ADMIN_BOOTSTRAP_TOKEN")
 
     MYSQL_URL: str | None = Field(None, validation_alias="MYSQL_URL")
     MYSQL_DATABASE: str = Field("office_automation", validation_alias="MYSQL_DATABASE")
@@ -39,7 +38,10 @@ class Settings(BaseSettings):
     WEBRTC_STUN_PORT: int = Field(3478, ge=1, le=65535, validation_alias="WEBRTC_STUN_PORT")
     WEBRTC_STUN_URLS: str = Field("", validation_alias="WEBRTC_STUN_URLS")
     WEBRTC_REPORT_COOLDOWN: int = Field(60, ge=10, le=3600, validation_alias="WEBRTC_REPORT_COOLDOWN")
-    INTERNAL_METRICS_TOKEN: str = Field("", validation_alias="INTERNAL_METRICS_TOKEN")
+    METRICS_TOKEN: str = Field("", validation_alias="METRICS_TOKEN")
+    LOG_LEVEL: str = Field("INFO", validation_alias="LOG_LEVEL")
+    LOG_FORMAT: str = Field("json", validation_alias="LOG_FORMAT")
+    INSTANCE_NAME: str = Field("frontiercloud", validation_alias="INSTANCE_NAME")
 
     TRUSTED_PROXY_NETWORKS: str = Field("172.16.0.0/12", validation_alias="TRUSTED_PROXY_NETWORKS")
     SECURITY_EXEMPT_NETWORKS: str = Field("127.0.0.0/8,::1/128", validation_alias="SECURITY_EXEMPT_NETWORKS")
@@ -87,8 +89,6 @@ class Settings(BaseSettings):
             )
 
         errors = []
-        if is_weak(self.ADMIN_BOOTSTRAP_TOKEN, 32):
-            errors.append("ADMIN_BOOTSTRAP_TOKEN must be a unique random secret of at least 32 characters")
         if is_weak(self.MYSQL_PASSWORD, 16):
             errors.append("MYSQL_PASSWORD must be a unique secret of at least 16 characters")
         if is_weak(self.MYSQL_ROOT_PASSWORD, 16):
@@ -108,6 +108,22 @@ class Settings(BaseSettings):
         if errors:
             raise ValueError("; ".join(errors))
         return self
+
+    @field_validator("LOG_LEVEL")
+    @classmethod
+    def validate_log_level(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+        return normalized
+
+    @field_validator("LOG_FORMAT")
+    @classmethod
+    def validate_log_format(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"json", "text"}:
+            raise ValueError("LOG_FORMAT must be json or text")
+        return normalized
 
     @property
     def ADMIN_COOKIE_SECURE(self) -> bool:

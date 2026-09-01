@@ -1,5 +1,4 @@
 import json
-import secrets
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
@@ -68,40 +67,7 @@ async def elevate(
 
 
 # ============================================================
-# 2. Issue a temporary admin token
-#
-# This endpoint is reserved for host administrators and is not used by the
-# public UI. Authenticate with ADMIN_BOOTSTRAP_TOKEN.
-# ============================================================
-
-@router.post("/token/issue")
-async def issue_token(
-    request: Request,
-):
-    supplied = request.headers.get("X-Token")
-
-    if (
-        not supplied
-        or not secrets.compare_digest(supplied, settings.ADMIN_BOOTSTRAP_TOKEN)
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="无权操作",
-        )
-
-    token = await admin_service.issue_admin_token()
-
-    return {
-        "status": "issued",
-        "expires_in": settings.ADMIN_TOKEN_TTL + admin_service.TOKEN_ISSUE_OVERLAP_SECONDS,
-        "active_ttl": settings.ADMIN_TOKEN_TTL,
-        "automatic_issue_interval": settings.ADMIN_TOKEN_ISSUE_INTERVAL,
-        "token": token,
-    }
-
-
-# ============================================================
-# 3. Admin page
+# 2. Admin page
 #
 # The admin router is already mounted by endpoints.py at:
 #
@@ -148,7 +114,7 @@ async def admin_page(
 
 
 # ============================================================
-# 4. Admin session status
+# 3. Admin session status
 # ============================================================
 
 @router.get("/status")
@@ -169,7 +135,7 @@ async def admin_status(
 
 
 # ============================================================
-# 5. Admin file tree
+# 4. Admin file tree
 # ============================================================
 
 @router.get("/tree")
@@ -182,7 +148,7 @@ async def admin_tree(
 
 
 # ============================================================
-# 6. Single-file upload; browsers submit multi-file and folder jobs one file
+# 5. Single-file upload; browsers submit multi-file and folder jobs one file
 # at a time so progress remains accurate.
 # ============================================================
 
@@ -345,7 +311,7 @@ async def security_whitelist_remove(
 
 
 # ============================================================
-# 7. Delete
+# 6. Delete
 # ============================================================
 
 @router.post("/delete")
@@ -391,7 +357,7 @@ async def delete_objects(
 
 
 # ============================================================
-# 8. Hide or restore
+# 7. Hide or restore
 # ============================================================
 
 @router.post("/hide")
@@ -442,7 +408,7 @@ async def hide_objects(
 
 
 # ============================================================
-# 9. Download
+# 8. Download
 # ============================================================
 
 @router.get("/download")
@@ -540,7 +506,7 @@ async def download_objects(
 
 
 # ============================================================
-# 10. Admin logout
+# 9. Admin logout
 # ============================================================
 
 @router.post("/logout")

@@ -1,8 +1,10 @@
 import asyncio
+import logging
 import os
 import secrets
 import time
 import urllib.parse
+import uuid
 from contextlib import asynccontextmanager
 from contextlib import suppress
 
@@ -18,16 +20,20 @@ from app.core.admin_log import append_admin_log, sanitize_log_value
 from app.core.config import settings
 from app.core.client_ip import client_ip
 from app.core.db import init_db
-from app.core.metrics import PrometheusMetricsMiddleware
+from app.core.logging_config import bind_request_context, configure_logging, reset_request_context
+from app.core.metrics import MetricsMiddleware
 from app.core.upload_lifecycle import install_upload_lifecycle_guard
 from app.middleware.ip_security import IPSecurityMiddleware
 from app.services import admin_service
 from app.services.admin_service import issue_admin_token, run_admin_token_issuer
-from app.services.ip_security import initialize_ip_security_cache, weekly_security_summary
+from app.services.health import live_status, readiness_response
+from app.services.ip_security import initialize_ip_security_cache
 from app.services.upload_cleanup import cleanup_stale_upload_parts, run_stale_upload_cleanup
 
 
 install_upload_lifecycle_guard()
+configure_logging()
+logger = logging.getLogger("frontiercloud.http")
 
 
 @asynccontextmanager
@@ -64,9 +70,11 @@ app = FastAPI(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 QUIET_REQUEST_PATHS = frozenset({
+    "/health",
+    "/health/live",
+    "/health/ready",
+    "/metrics",
     "/api/v1/health",
-    "/internal/metrics",
-    "/internal/report/security",
     "/api/v1/media/admin/logs",
 })
 
@@ -83,6 +91,19 @@ class RealIPLogMiddleware:
             return
 
         start = time.perf_counter()
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        supplied_request_id = headers.get(b"x-request-id", b"").decode("ascii", errors="ignore")
+        request_id = supplied_request_id[:128] if supplied_request_id else uuid.uuid4().hex
+        traceparent = headers.get(b"traceparent", b"").decode("ascii", errors="ignore")[:256]
+        trace_parts = traceparent.split("-")
+        trace_id = (
+            trace_parts[1]
+            if len(trace_parts) >= 4
+            and len(trace_parts[1]) == 32
+            and all(character in "0123456789abcdef" for character in trace_parts[1])
+            else ""
+        )
+        context_tokens = bind_request_context(request_id, trace_id)
         verified_client_ip = scope.get("verified_client_ip") or client_ip(scope)
         proxy_ip = scope.get("client")[0] if scope.get("client") else "127.0.0.1"
         status_code = 500
@@ -91,6 +112,7 @@ class RealIPLogMiddleware:
             nonlocal status_code
             if message["type"] == "http.response.start":
                 status_code = message["status"]
+                message.setdefault("headers", []).append((b"x-request-id", request_id.encode("ascii")))
             await send(message)
 
         try:
@@ -115,8 +137,20 @@ class RealIPLogMiddleware:
                         f" | WEBRTC_MATCH: {str(bool(observation.get('matches_verified'))).lower()}"
                         f" | WEBRTC_OUTCOME: {sanitize_log_value(observation.get('outcome', '-'), 32)}"
                     )
-                print(request_line, flush=True)
+                logger.info(
+                    "request_completed",
+                    extra={"context": {
+                        "method": method,
+                        "path": path,
+                        "status": status_code,
+                        "duration_ms": round(elapsed, 2),
+                        "client_ip": verified_client_ip,
+                        "proxy_ip": proxy_ip,
+                        "webrtc_ip": webrtc_ip,
+                    }},
+                )
                 append_admin_log(request_line)
+            reset_request_context(context_tokens)
 
 
 def render_query_log(target: str) -> str:
@@ -137,27 +171,29 @@ def render_query_log(target: str) -> str:
 
 app.add_middleware(RealIPLogMiddleware)
 app.add_middleware(IPSecurityMiddleware)
-app.add_middleware(PrometheusMetricsMiddleware)
+app.add_middleware(MetricsMiddleware)
 app.include_router(api_v1_router, prefix="/api/v1")
 
 
-@app.get("/internal/metrics", include_in_schema=False)
-async def internal_metrics(x_metrics_token: str | None = Header(None)):
-    configured = settings.INTERNAL_METRICS_TOKEN
-    if not configured or not x_metrics_token or not secrets.compare_digest(configured, x_metrics_token):
+@app.get("/metrics", include_in_schema=False)
+async def metrics(authorization: str | None = Header(None)):
+    configured = settings.METRICS_TOKEN
+    prefix = "Bearer "
+    supplied = authorization[len(prefix):] if authorization and authorization.startswith(prefix) else ""
+    if not configured or not supplied or not secrets.compare_digest(configured, supplied):
         raise HTTPException(status_code=404, detail="Not found")
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-@app.get("/internal/report/security", include_in_schema=False)
-async def internal_security_report(
-    days: int = 7,
-    x_metrics_token: str | None = Header(None),
-):
-    configured = settings.INTERNAL_METRICS_TOKEN
-    if not configured or not x_metrics_token or not secrets.compare_digest(configured, x_metrics_token):
-        raise HTTPException(status_code=404, detail="Not found")
-    return await weekly_security_summary(days)
+@app.get("/health/live", include_in_schema=False)
+async def health_live():
+    return live_status()
+
+
+@app.get("/health/ready", include_in_schema=False)
+@app.get("/health", include_in_schema=False)
+async def health_ready():
+    return await readiness_response()
 
 
 @app.get("/openapi.json", include_in_schema=False)

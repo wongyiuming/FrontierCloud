@@ -6,8 +6,8 @@ import sys
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from auto_download.cli import run_profile
-from auto_download.profiles import BILIBILI_MP4
+from .cli import run_profile
+from .profiles import BILIBILI_MP4
 
 
 if __name__ == "__main__":
