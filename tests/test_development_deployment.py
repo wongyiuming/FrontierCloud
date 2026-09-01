@@ -66,6 +66,15 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("UPLOAD_INACTIVITY_TIMEOUT: ${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}", compose)
         self.assertIn("client_body_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
 
+    def test_nginx_emits_structured_logs_without_a_log_directory(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+        self.assertIn("access_log /dev/stdout structured", nginx)
+        self.assertIn("error_log /dev/stderr warn", nginx)
+        self.assertIn('"request_id"', nginx)
+        self.assertIn('"trace_id"', nginx)
+        self.assertNotIn("/var/log/nginx", nginx + compose)
+
     def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         deploy = workflow.split("  deploy-rn:", 1)[1]
