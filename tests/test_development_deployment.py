@@ -184,6 +184,14 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn('health_attempt" -ge 30', deploy_script)
         self.assertIn('--resolve "$server_name:443:127.0.0.1"', deploy_script)
         self.assertNotIn("https://localhost/api/v1/health", deploy_script)
+        for forbidden in (
+            "monitoring/.env",
+            "rn-self.env",
+            "frontiercloud-rn-self-monitoring",
+            "weekly_reporter",
+            "render_config.py",
+        ):
+            self.assertNotIn(forbidden, deploy_script)
         self.assertNotIn("workflow_dispatch", workflow)
 
 

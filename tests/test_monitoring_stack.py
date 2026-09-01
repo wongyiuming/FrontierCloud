@@ -39,26 +39,26 @@ class MonitoringStackTests(unittest.TestCase):
         self.assertIn("--storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-8d}", compose)
         self.assertIn("--storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-3GB}", compose)
 
-    def test_rn_self_monitoring_is_an_independent_compose_project(self):
+    def test_rn_cd_does_not_deploy_a_monitoring_compose_project(self):
         compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
         deploy = (ROOT / "scripts" / "deploy_rn.sh").read_text(encoding="utf-8")
         self_env = (MONITORING / "rn-self.env.example").read_text(encoding="utf-8")
 
         self.assertNotIn("container_name:", compose)
-        self.assertIn("-p monitoring", deploy)
-        self.assertIn("-p frontiercloud-rn-self-monitoring", deploy)
+        self.assertNotIn("-p monitoring", deploy)
+        self.assertNotIn("-p frontiercloud-rn-self-monitoring", deploy)
         self.assertIn("MONITORING_RUNTIME_DIR=./instances/rn-self", self_env)
         self.assertIn("MONITORING_EXTRA_CONFIG_DIR=./instances/rn-self/server.d", self_env)
         self.assertIn("MONITORING_HTTPS_PORT=9443", self_env)
         self.assertIn("PROMETHEUS_RETENTION_SIZE=1GB", self_env)
 
-    def test_weekly_reporter_runs_only_in_the_production_observer_stack(self):
+    def test_weekly_reporter_is_available_but_not_started_by_rn_cd(self):
         compose = (MONITORING / "docker-compose.yaml").read_text(encoding="utf-8")
         deploy = (ROOT / "scripts" / "deploy_rn.sh").read_text(encoding="utf-8")
         reporter = (MONITORING / "reporting" / "weekly_report.py").read_text(encoding="utf-8")
 
         self.assertIn('profiles: ["reporting"]', compose)
-        self.assertEqual(deploy.count("COMPOSE_PROFILES=reporting"), 2)
+        self.assertNotIn("COMPOSE_PROFILES=reporting", deploy)
         self.assertIn("dbip-city-lite-", reporter)
         self.assertIn("IP Geolocation by DB-IP", reporter)
         self.assertIn("time.sleep(60)", reporter)
