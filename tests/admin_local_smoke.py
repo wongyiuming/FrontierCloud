@@ -1,8 +1,8 @@
 """Manual local-only Admin integration smoke test.
 
-Run from the repository root after starting the IDE server, passing a current
-dynamically issued token:
-    python tests/admin_local_smoke.py ADMIN_TOKEN
+Run from the repository root after starting the IDE server, passing the current
+Admin Key:
+    python tests/admin_local_smoke.py ADMIN_KEY
 
 The script refuses non-loopback targets and removes its uniquely named test
 directories through the Admin API before exiting.
@@ -83,8 +83,8 @@ def main() -> int:
     cookie_jar = http.cookiejar.CookieJar(policy=LoopbackCookiePolicy())
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
     if len(sys.argv) != 2 or not sys.argv[1].strip():
-        raise RuntimeError("请把当前动态管理员令牌作为唯一参数传入")
-    admin_token = sys.argv[1].strip()
+        raise RuntimeError("请把当前 Admin Key 作为唯一参数传入")
+    admin_key = sys.argv[1].strip()
     suffix = uuid.uuid4().hex[:10]
     folder_dir = f"codex-smoke-folder-{suffix}"
     multiple_dir = f"codex-smoke-multiple-{suffix}"
@@ -92,7 +92,7 @@ def main() -> int:
     csrf_token = ""
 
     try:
-        elevate_body = urllib.parse.urlencode({"token": admin_token}).encode()
+        elevate_body = urllib.parse.urlencode({"token": admin_key}).encode()
         request_json(
             opener,
             "/api/v1/media/admin/elevate",
@@ -121,10 +121,7 @@ def main() -> int:
             )
             print(f"UPLOAD_OK {result['path']}")
 
-        logs = request_json(opener, "/api/v1/media/admin/logs?after=0&limit=20")
-        if not logs.get("entries"):
-            raise RuntimeError("日志控制台没有返回任何日志")
-        print(f"LOGS_OK entries={len(logs['entries'])} secure={logs['secure_transport']}")
+        print("ADMIN_KEY_LOGIN_OK")
         return 0
     finally:
         if csrf_token:

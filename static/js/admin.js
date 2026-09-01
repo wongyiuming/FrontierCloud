@@ -3,9 +3,6 @@ let selectionKind = null;
 let currentPath = '';
 let csrfCookieName = '__Host-admin-csrf';
 let uploadRunning = false;
-let lastLogId = 0;
-let logPolling = false;
-let logTimer = null;
 let securityTimer = null;
 let securityLoading = false;
 let securityPage = 1;
@@ -53,7 +50,6 @@ function formatErrorDetail(detail) {
 async function api(url, options = {}) {
     const response = await fetch(url, options);
     if (response.status === 401) {
-        if (logTimer) clearInterval(logTimer);
         if (securityTimer) clearInterval(securityTimer);
         alert('特权模式已失效，请重新提权');
         location.href = '/api/v1/media';
@@ -308,32 +304,6 @@ async function runUploadTask(fileList, relativePaths = null) {
     }
 }
 
-async function pollLogs() {
-    if (logPolling || document.hidden) return;
-    logPolling = true;
-    try {
-        const data = await api(`/api/v1/media/admin/logs?after=${lastLogId}&limit=200`);
-        const output = $('logOutput');
-        const nearBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 80;
-        if (lastLogId === 0) output.textContent = '';
-        for (const entry of data.entries) {
-            output.textContent += `${entry.timestamp} ${entry.line}\n`;
-            lastLogId = Math.max(lastLogId, entry.id);
-        }
-        const lines = output.textContent.split('\n');
-        if (lines.length > 501) output.textContent = lines.slice(-501).join('\n');
-        if (nearBottom) output.scrollTop = output.scrollHeight;
-
-        const badge = $('transportBadge');
-        badge.textContent = location.protocol === 'https:' ? 'HTTPS 加密传输' : '本机回环调试';
-        badge.classList.toggle('secure', data.secure_transport);
-    } catch (error) {
-        $('logOutput').textContent += `日志读取失败：${error.message}\n`;
-    } finally {
-        logPolling = false;
-    }
-}
-
 function securityDate(value) {
     if (!value) return '-';
     const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : `${value}Z`;
@@ -364,7 +334,7 @@ function renderSecurityList(data) {
     $('legalApiCount').textContent = String(data.legal_api_count ?? 0);
     $('activeBanCount').textContent = String(data.active_ban_count ?? 0);
     $('whitelistCount').textContent = String(data.whitelist?.length ?? 0);
-    $('securitySummary').textContent = `1 小时内超过 ${data.threshold} 次非法 API，封禁 ${Math.round(data.ban_seconds / 3600)} 小时`;
+    $('securitySummary').textContent = `首次超过阈值封禁 24 小时；第二次触犯永久封禁`;
 
     const banList = $('banList');
     banList.innerHTML = '';
@@ -384,7 +354,8 @@ function renderSecurityList(data) {
         ip.textContent = event.ip;
         const meta = document.createElement('div');
         meta.className = 'security-meta';
-        meta.textContent = `${event.status} · ${event.ban_kind || 'auto'} · ${event.trigger_count} 次 · ${securityDate(event.banned_at)} → ${securityDate(event.expires_at)}`;
+        const expiry = event.ban_kind === 'permanent' ? '永久' : securityDate(event.expires_at);
+        meta.textContent = `${event.status} · ${event.ban_kind || 'auto'} · ${event.trigger_count} 次 · ${securityDate(event.banned_at)} → ${expiry}`;
         const path = document.createElement('div');
         path.className = 'security-path';
         path.textContent = [event.reason, `${event.last_method || ''} ${event.last_path || ''}`.trim()].filter(Boolean).join(' · ');
@@ -491,11 +462,6 @@ $('securityNext').onclick = () => {
         loadSecurityStatus(true);
     }
 };
-$('securityToggle').onclick = () => {
-    const collapsed = $('securityPanel').classList.toggle('collapsed');
-    $('securityToggle').textContent = collapsed ? '展开' : '收起';
-    $('securityToggle').setAttribute('aria-expanded', String(!collapsed));
-};
 $('whitelistForm').onsubmit = async event => {
     event.preventDefault();
     const ip = $('whitelistIp').value.trim();
@@ -512,6 +478,34 @@ $('whitelistForm').onsubmit = async event => {
     } catch (error) {
         alert(error.message);
     }
+};
+
+async function changeAdminKey(payload) {
+    const data = await api('/api/v1/media/admin/key/rotate', {
+        method: 'POST', headers: requestHeaders(), body: JSON.stringify(payload),
+    });
+    $('newKeyValue').textContent = data.admin_key;
+    $('newKeyResult').classList.remove('hidden');
+}
+
+$('randomKey').onclick = async () => {
+    if (!confirm('确认生成随机强 Key？其他已登录会话将立即失效。')) return;
+    try { await changeAdminKey({mode: 'random'}); } catch (error) { alert(error.message); }
+};
+$('customKeyForm').onsubmit = async event => {
+    event.preventDefault();
+    const key = $('customKey').value;
+    const confirmation = $('customKeyConfirm').value;
+    if (key !== confirmation) { alert('两次输入的 Admin Key 不一致'); return; }
+    if (!confirm('确认使用这个自定义 Key？其他已登录会话将立即失效。')) return;
+    try {
+        await changeAdminKey({mode: 'custom', key, confirmation});
+        $('customKeyForm').reset();
+    } catch (error) { alert(error.message); }
+};
+$('copyKey').onclick = async () => {
+    await navigator.clipboard.writeText($('newKeyValue').textContent);
+    $('copyKey').textContent = '已复制';
 };
 
 $('uploadFiles').onclick = () => $('fileInput').click();
@@ -585,9 +579,7 @@ $('logout').onclick = async () => {
         uploadLimits = {...uploadLimits, ...status.limits};
         csrfCookieName = status.csrf_cookie_name || csrfCookieName;
         await renderTree();
-        await pollLogs();
         await loadSecurityStatus(true);
-        logTimer = setInterval(pollLogs, 2000);
         securityTimer = setInterval(loadSecurityStatus, 15000);
     } catch (_error) {
         // api() handles expired sessions and navigation.

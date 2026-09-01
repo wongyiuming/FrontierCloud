@@ -16,7 +16,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.v1.endpoints import router as api_v1_router
-from app.core.admin_log import append_admin_log, sanitize_log_value
+from app.core.admin_log import sanitize_log_value
 from app.core.config import settings
 from app.core.client_ip import client_ip
 from app.core.db import init_db
@@ -25,9 +25,9 @@ from app.core.metrics import MetricsMiddleware
 from app.core.upload_lifecycle import install_upload_lifecycle_guard
 from app.middleware.ip_security import IPSecurityMiddleware
 from app.services import admin_service
-from app.services.admin_service import issue_admin_token, run_admin_token_issuer
 from app.services.health import live_status, readiness_response
 from app.services.ip_security import initialize_ip_security_cache
+from app.services.runtime_secrets import announce_initial_secrets_once
 from app.services.upload_cleanup import cleanup_stale_upload_parts, run_stale_upload_cleanup
 
 
@@ -40,12 +40,8 @@ logger = logging.getLogger("frontiercloud.http")
 async def lifespan(app: FastAPI):
     await init_db()
     await initialize_ip_security_cache()
-    await issue_admin_token()
+    announce_initial_secrets_once()
     await asyncio.to_thread(cleanup_stale_upload_parts)
-    token_issuer_task = asyncio.create_task(
-        run_admin_token_issuer(),
-        name="admin-token-issuer",
-    )
     upload_cleanup_task = asyncio.create_task(
         run_stale_upload_cleanup(),
         name="stale-upload-cleanup",
@@ -53,11 +49,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        for task in (token_issuer_task, upload_cleanup_task):
-            task.cancel()
-        for task in (token_issuer_task, upload_cleanup_task):
-            with suppress(asyncio.CancelledError):
-                await task
+        upload_cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await upload_cleanup_task
 
 
 app = FastAPI(
@@ -75,7 +69,6 @@ QUIET_REQUEST_PATHS = frozenset({
     "/health/ready",
     "/metrics",
     "/api/v1/health",
-    "/api/v1/media/admin/logs",
 })
 
 
@@ -105,7 +98,6 @@ class RealIPLogMiddleware:
         )
         context_tokens = bind_request_context(request_id, trace_id)
         verified_client_ip = scope.get("verified_client_ip") or client_ip(scope)
-        proxy_ip = scope.get("client")[0] if scope.get("client") else "127.0.0.1"
         status_code = 500
 
         async def send_wrapper(message):
@@ -127,16 +119,6 @@ class RealIPLogMiddleware:
                 observation = scope.get("webrtc_observation") or {}
                 observed_addresses = observation.get("addresses") or []
                 webrtc_ip = ",".join(observed_addresses) or "-"
-                request_line = (
-                    f"[REQUEST] REAL_IP: {verified_client_ip} | PROXY_IP: {proxy_ip} | "
-                    f"WEBRTC_IP: {webrtc_ip} | "
-                    f"{method} {render_query_log(raw_target)} - {status_code} ({elapsed:.2f}ms)"
-                )
-                if observation:
-                    request_line += (
-                        f" | WEBRTC_MATCH: {str(bool(observation.get('matches_verified'))).lower()}"
-                        f" | WEBRTC_OUTCOME: {sanitize_log_value(observation.get('outcome', '-'), 32)}"
-                    )
                 logger.info(
                     "request_completed",
                     extra={"context": {
@@ -145,11 +127,11 @@ class RealIPLogMiddleware:
                         "status": status_code,
                         "duration_ms": round(elapsed, 2),
                         "client_ip": verified_client_ip,
-                        "proxy_ip": proxy_ip,
                         "webrtc_ip": webrtc_ip,
+                        "webrtc_match": bool(observation.get("matches_verified")) if observation else None,
+                        "webrtc_outcome": sanitize_log_value(observation.get("outcome", "-"), 32) if observation else None,
                     }},
                 )
-                append_admin_log(request_line)
             reset_request_context(context_tokens)
 
 

@@ -55,7 +55,7 @@ async def record_observation(
         accepted = await redis_client.set(
             REPORT_PREFIX + identity.ip,
             "1",
-            ex=settings.WEBRTC_REPORT_COOLDOWN,
+            ex=max(1, settings.WEBRTC_REPORT_COOLDOWN - 1),
             nx=True,
         )
     except RedisError:

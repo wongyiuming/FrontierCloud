@@ -1,11 +1,10 @@
-import asyncio
 import hashlib
 import io
 import json
 import stat
+import zipfile
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -17,213 +16,83 @@ from app.services import admin_service
 from app.services import media_manager
 
 
-class _FakeResult:
-    def fetchall(self):
-        return []
-
-    def mappings(self):
-        return self
-
-    def first(self):
-        return None
-
-
-class _FakeConnection:
-    async def execute(self, *_args, **_kwargs):
-        return _FakeResult()
-
-
-class _FakeTransaction:
-    async def __aenter__(self):
-        return _FakeConnection()
-
-    async def __aexit__(self, *_args):
-        return False
-
-
-class _FakeEngine:
-    def begin(self):
-        return _FakeTransaction()
-
-
 class _FakeRedis:
     def __init__(self):
         self.values = {}
-        self.ttls = {}
+        self.hashes = {}
 
-    async def set(self, key, value, ex=None, **_kwargs):
-        self.values[key] = str(value)
-        self.ttls[key] = ex
-        return True
-
-    async def get(self, key):
-        return self.values.get(key)
-
+    async def get(self, key): return self.values.get(key)
     async def incr(self, key):
-        value = int(self.values.get(key, "0")) + 1
-        self.values[key] = str(value)
-        return value
-
-    async def expire(self, key, seconds):
-        if key not in self.values:
-            return False
-        self.ttls[key] = seconds
-        return True
-
+        self.values[key] = str(int(self.values.get(key, "0")) + 1)
+        return int(self.values[key])
+    async def expire(self, *_args): return True
     async def delete(self, key):
-        self.values.pop(key, None)
-        self.ttls.pop(key, None)
-        return 1
+        self.values.pop(key, None); self.hashes.pop(key, None); return 1
+    async def hset(self, key, mapping): self.hashes.setdefault(key, {}).update(mapping)
+    async def hgetall(self, key): return self.hashes.get(key, {})
+    async def scan_iter(self, match=None):
+        prefix = (match or "").rstrip("*")
+        for key in list(self.hashes):
+            if key.startswith(prefix): yield key
 
 
-class AdminTokenLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    async def test_each_token_starts_with_and_keeps_its_own_sliding_ttl(self):
-        fake_redis = _FakeRedis()
-        request = Request({
-            "type": "http",
-            "method": "POST",
-            "path": "/api/v1/media/admin/elevate",
-            "headers": [(b"user-agent", b"test")],
-            "client": ("203.0.113.8", 12345),
-        })
-        token = "test-admin-token"
-        token_key = admin_service.TOKEN_PREFIX + hashlib.sha256(token.encode()).hexdigest()
-        fail_key = admin_service.FAIL_PREFIX + "203.0.113.8"
+def _request(method="POST", cookies=None, headers=None):
+    raw_headers = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
+    scope = {"type": "http", "method": method, "path": "/api/v1/media/admin/elevate",
+             "headers": raw_headers, "client": ("203.0.113.8", 12345)}
+    request = Request(scope)
+    if cookies:
+        request._cookies = cookies
+    return request
 
-        with (
-            patch.object(admin_service, "redis_client", fake_redis),
-            patch.object(admin_service, "engine", _FakeEngine()),
-            patch.object(admin_service.secrets, "token_urlsafe", return_value=token),
-            patch.object(admin_service.settings, "ADMIN_TOKEN_TTL", 900),
-            patch.object(admin_service.logger, "warning") as warning_mock,
-            patch.object(admin_service, "append_admin_log") as append_log_mock,
-        ):
-            issued = await admin_service.issue_admin_token()
-            self.assertEqual(issued, token)
-            self.assertEqual(fake_redis.values[token_key], "pending")
-            self.assertEqual(
-                fake_redis.ttls[token_key],
-                900 + admin_service.TOKEN_ISSUE_OVERLAP_SECONDS,
-            )
-            self.assertEqual(
-                warning_mock.call_args.kwargs["extra"]["context"]["token"],
-                token,
-            )
-            self.assertNotIn(token, append_log_mock.call_args.args[0])
 
-            fake_redis.values[fail_key] = "3"
-            token_hash = await admin_service.verify_admin_token(token, request)
+class AdminKeyLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_persistent_key_has_no_redis_ttl_and_validates_directly(self):
+        fake = _FakeRedis()
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "admin_key"
+            key_file.write_text("stable-admin-key-123456789\n", encoding="utf-8")
+            with patch.object(admin_service, "ADMIN_KEY_FILE", key_file), patch.object(admin_service, "redis_client", fake):
+                digest = await admin_service.verify_admin_key("stable-admin-key-123456789", _request())
+        self.assertEqual(digest, hashlib.sha256(b"stable-admin-key-123456789").hexdigest())
+        self.assertFalse(any(key.startswith("admin:token:") for key in fake.values))
 
-        self.assertEqual(token_hash, hashlib.sha256(token.encode()).hexdigest())
-        self.assertEqual(fake_redis.values[token_key], "active")
-        self.assertEqual(fake_redis.ttls[token_key], 900)
-        self.assertNotIn(fail_key, fake_redis.values)
+    async def test_invalid_key_is_rejected_and_rate_counted(self):
+        fake = _FakeRedis()
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "admin_key"
+            key_file.write_text("stable-admin-key-123456789\n", encoding="utf-8")
+            with patch.object(admin_service, "ADMIN_KEY_FILE", key_file), patch.object(admin_service, "redis_client", fake):
+                with self.assertRaises(HTTPException) as raised:
+                    await admin_service.verify_admin_key("wrong", _request())
+        self.assertEqual(raised.exception.detail["code"], "ADMIN_KEY_INVALID")
+        self.assertEqual(fake.values[admin_service.FAIL_PREFIX + "203.0.113.8"], "1")
 
-    async def test_new_tokens_coexist_without_replacing_an_active_older_token(self):
-        fake_redis = _FakeRedis()
-        request = Request({
-            "type": "http",
-            "method": "POST",
-            "path": "/api/v1/media/admin/elevate",
-            "headers": [(b"user-agent", b"test")],
-            "client": ("203.0.113.8", 12345),
-        })
-        tokens = ["token-a", "token-b", "token-c"]
+    async def test_random_rotation_replaces_file_and_invalidates_other_sessions(self):
+        fake = _FakeRedis()
+        current = admin_service.SESSION_PREFIX + "current"
+        other = admin_service.SESSION_PREFIX + "other"
+        fake.hashes = {current: {"key_hash": "old"}, other: {"key_hash": "old"}}
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "admin_key"
+            key_file.write_text("stable-admin-key-123456789\n", encoding="utf-8")
+            with patch.object(admin_service, "ADMIN_KEY_FILE", key_file), patch.object(admin_service, "redis_client", fake), \
+                 patch.object(admin_service.secrets, "token_urlsafe", return_value="new-random-admin-key-123456789"):
+                new_key = await admin_service.rotate_admin_key("current", None, None)
+            self.assertEqual(key_file.read_text(encoding="utf-8").strip(), new_key)
+        self.assertNotIn(other, fake.hashes)
+        self.assertEqual(fake.hashes[current]["key_hash"], hashlib.sha256(new_key.encode()).hexdigest())
 
-        with (
-            patch.object(admin_service, "redis_client", fake_redis),
-            patch.object(admin_service, "engine", _FakeEngine()),
-            patch.object(admin_service.secrets, "token_urlsafe", side_effect=tokens),
-            patch.object(admin_service.settings, "ADMIN_TOKEN_TTL", 900),
-            patch.object(admin_service.logger, "warning"),
-            patch.object(admin_service, "append_admin_log"),
-        ):
-            for _token in tokens:
-                await admin_service.issue_admin_token()
-            await admin_service.verify_admin_token("token-a", request)
-
-        for token in tokens:
-            key = admin_service.TOKEN_PREFIX + hashlib.sha256(token.encode()).hexdigest()
-            self.assertIn(key, fake_redis.values)
-        active_key = admin_service.TOKEN_PREFIX + hashlib.sha256(b"token-a").hexdigest()
-        self.assertEqual(fake_redis.values[active_key], "active")
-        self.assertEqual(fake_redis.ttls[active_key], 900)
-        for token in ("token-b", "token-c"):
-            key = admin_service.TOKEN_PREFIX + hashlib.sha256(token.encode()).hexdigest()
-            self.assertEqual(
-                fake_redis.ttls[key],
-                900 + admin_service.TOKEN_ISSUE_OVERLAP_SECONDS,
-            )
-
-    async def test_periodic_issuer_generates_the_next_independent_token(self):
-        issue_mock = AsyncMock(side_effect=[None, asyncio.CancelledError])
-        sleep_mock = AsyncMock(return_value=None)
-        with (
-            patch.object(admin_service, "issue_admin_token", new=issue_mock),
-            patch.object(admin_service.asyncio, "sleep", new=sleep_mock),
-            patch.object(admin_service.settings, "ADMIN_TOKEN_ISSUE_INTERVAL", 900),
-        ):
-            with self.assertRaises(asyncio.CancelledError):
-                await admin_service.run_admin_token_issuer()
-
-        self.assertEqual(issue_mock.await_count, 2)
-        sleep_mock.assert_any_await(900)
-
-    async def test_unknown_token_has_specific_invalid_diagnostic(self):
-        fake_redis = _FakeRedis()
-        request = Request({
-            "type": "http", "method": "POST", "path": "/api/v1/media/admin/elevate",
-            "headers": [], "client": ("203.0.113.8", 12345),
-        })
-        with (
-            patch.object(admin_service, "redis_client", fake_redis),
-            patch.object(admin_service, "engine", _FakeEngine()),
-        ):
-            with self.assertRaises(HTTPException) as raised:
-                await admin_service.verify_admin_token("never-issued", request)
-
-        self.assertEqual(raised.exception.status_code, 403)
-        self.assertEqual(raised.exception.detail["code"], "ADMIN_TOKEN_INVALID")
-
-    async def test_expired_token_has_specific_expiry_diagnostic(self):
-        fake_redis = _FakeRedis()
-        request = Request({
-            "type": "http", "method": "POST", "path": "/api/v1/media/admin/elevate",
-            "headers": [], "client": ("203.0.113.8", 12345),
-        })
-        with (
-            patch.object(admin_service, "redis_client", fake_redis),
-            patch.object(
-                admin_service,
-                "_classify_missing_token",
-                new=AsyncMock(return_value=(
-                    401,
-                    {"code": "ADMIN_TOKEN_EXPIRED", "message": "该特权凭证已过期，请获取新凭证"},
-                )),
-            ),
-        ):
-            with self.assertRaises(HTTPException) as raised:
-                await admin_service.verify_admin_token("previously-valid", request)
-
-        self.assertEqual(raised.exception.status_code, 401)
-        self.assertEqual(raised.exception.detail["code"], "ADMIN_TOKEN_EXPIRED")
-
-    async def test_rate_limit_has_specific_diagnostic(self):
-        fake_redis = _FakeRedis()
-        fake_redis.values[admin_service.FAIL_PREFIX + "203.0.113.8"] = "10"
-        request = Request({
-            "type": "http", "method": "POST", "path": "/api/v1/media/admin/elevate",
-            "headers": [], "client": ("203.0.113.8", 12345),
-        })
-        with (
-            patch.object(admin_service, "redis_client", fake_redis),
-            patch.object(admin_service.settings, "ADMIN_MAX_FAILED_ATTEMPTS_PER_IP", 10),
-        ):
-            with self.assertRaises(HTTPException) as raised:
-                await admin_service.verify_admin_token("any-token", request)
-
-        self.assertEqual(raised.exception.status_code, 429)
-        self.assertEqual(raised.exception.detail["code"], "ADMIN_RATE_LIMITED")
+    async def test_custom_rotation_requires_confirmation_and_minimum_length(self):
+        fake = _FakeRedis()
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "admin_key"
+            key_file.write_text("stable-admin-key-123456789\n", encoding="utf-8")
+            with patch.object(admin_service, "ADMIN_KEY_FILE", key_file), patch.object(admin_service, "redis_client", fake):
+                with self.assertRaises(ValueError):
+                    await admin_service.rotate_admin_key("current", "short", "short")
+                with self.assertRaises(ValueError):
+                    await admin_service.rotate_admin_key("current", "custom-admin-key-1234", "different-key-123456")
 
 
 class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
@@ -406,6 +275,18 @@ class AdminDownloadContractTests(unittest.IsolatedAsyncioTestCase):
 
             with zipfile.ZipFile(io.BytesIO(payload)) as archive:
                 self.assertEqual(archive.namelist(), ["music/folder/inside.mp3"])
+
+
+class AdminAuthenticationCoverageTests(unittest.TestCase):
+    def test_every_admin_route_except_elevation_requires_session(self):
+        missing = []
+        for route in admin.router.routes:
+            if route.path == "/elevate":
+                continue
+            dependencies = {dependency.call for dependency in route.dependant.dependencies}
+            if admin.require_session not in dependencies:
+                missing.append(route.path)
+        self.assertEqual(missing, [])
 
 
 if __name__ == "__main__":

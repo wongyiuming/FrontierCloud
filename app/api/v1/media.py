@@ -61,6 +61,7 @@ def static_asset_url(relative_path: str) -> str:
 def inject_page_runtime(html: str) -> str:
     replacements = {
         "{{STUN_URLS_JSON}}": safe_json_dumps(settings.webrtc_stun_urls()),
+        "{{WEBRTC_INTERVAL_MS}}": str(settings.WEBRTC_REPORT_COOLDOWN * 1000),
         "{{NETWORK_OBSERVATION_JS_URL}}": html_escape.escape(static_asset_url("js/network-observation.js"), quote=True),
         "{{PLAYER_JS_URL}}": html_escape.escape(static_asset_url("js/player.js"), quote=True),
         "{{PLAYER_CSS_URL}}": html_escape.escape(static_asset_url("css/player.css"), quote=True),

@@ -17,8 +17,14 @@ class DevelopmentDeploymentTests(unittest.TestCase):
             for line in env_example.splitlines()
             if line and not line.startswith("#") and "=" in line
         }
-        self.assertEqual(active, {"MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD"})
+        self.assertEqual(active, set())
         self.assertEqual(len(listed), len(set(listed)))
+        lines = env_example.splitlines()
+        for index, line in enumerate(lines):
+            if re.match(r"^# [A-Z][A-Z0-9_]*=", line):
+                self.assertGreater(index, 0)
+                self.assertTrue(lines[index - 1].startswith("# "))
+                self.assertNotRegex(lines[index - 1], r"^# [A-Z][A-Z0-9_]*=")
         app_names = set(re.findall(r'validation_alias="([A-Z][A-Z0-9_]*)"', config))
         compose_names = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", compose))
         self.assertEqual(set(listed), app_names | compose_names)
@@ -62,14 +68,16 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
         self.assertNotIn("ENVIRONMENT", compose)
-        self.assertIn("TLS_ENABLED: ${TLS_ENABLED:-true}", compose)
+        self.assertIn("TLS_ENABLED: ${TLS_ENABLED:-false}", compose)
         self.assertIn("UPLOAD_INACTIVITY_TIMEOUT: ${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}", compose)
         self.assertIn("client_body_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
 
     def test_nginx_emits_structured_logs_without_a_log_directory(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
-        self.assertIn("access_log /dev/stdout structured", nginx)
+        self.assertIn("access_log /dev/stdout structured if=$access_loggable", nginx)
+        self.assertIn("~^/health(?:/|$) 0", nginx)
+        self.assertIn("=/metrics 0", nginx)
         self.assertIn("error_log /dev/stderr warn", nginx)
         self.assertIn('"request_id"', nginx)
         self.assertIn('"trace_id"', nginx)

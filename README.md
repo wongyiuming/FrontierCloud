@@ -1,104 +1,86 @@
 # FrontierCloud
 
-FrontierCloud is a FastAPI media service deployed with Docker Compose. Its
-business stack contains Nginx, MySQL, Redis, and a STUN-only coturn service.
+FrontierCloud is a self-hosted media browsing, playback, and administration service. The project bundles the Web/API application, Nginx, MySQL, Redis, and the mandatory WebRTC STUN service.
 
-## Configuration contract
+## Quick start
 
-`.env.example` is the authoritative list of supported FrontierCloud settings.
-Required settings are active entries; optional settings are commented and use
-the stable technical defaults shown. Operator-private hostnames, credentials,
-one-time values, and surrounding infrastructure settings do not belong there.
+An HTTP development deployment requires no environment values and no `.env` file:
 
 ```bash
-cp .env.example .env
-chmod 600 .env
+docker compose up -d --build --wait
+docker compose logs web
 ```
 
-Replace the required database placeholders with independent random secrets.
-`MYSQL_URL` is normally derived from `MYSQL_USER`, `MYSQL_PASSWORD`, and
-`MYSQL_DATABASE`; use its optional override only for a different endpoint.
-
-Transport is selected directly:
-
-- `TLS_ENABLED=false` runs the private development deployment over HTTP.
-- The default `TLS_ENABLED=true` runs the RN and DMIT deployments over HTTPS.
-
-Configuration changes must update the reader, `.env.example`, this document,
-and contract tests together.
-
-## Deployment
-
-Requirements are Git, Docker Engine, and Docker Compose v2. Keep SELinux
-enabled on production hosts.
+The first initialization generates three independent strong random values: the Admin Key, the MySQL application password, and the MySQL root password. They live in the Docker `runtime_secrets` volume and are never written to the repository or `.env`. The first successful Web startup prints them once in the structured `initial_runtime_secrets` log entry:
 
 ```bash
-sudo install -d -m 0755 data data/media data/media/music data/media/vido certs certs/acme
-sudo chown -R 10001:10001 data
-sudo chmod 0700 certs
-sudo docker compose config --quiet
-sudo docker compose pull
-sudo docker compose up -d --build --remove-orphans --wait --wait-timeout 240
-sudo docker compose exec -T nginx nginx -t
+docker compose logs web | grep initial_runtime_secrets
 ```
 
-Never run `docker compose down --volumes` on a persistent deployment. The `dev`
-branch supplies private development and RN preproduction; `main` supplies DMIT
-production. RN CD runs only after the complete `dev` CI job passes.
+Save these values immediately. Restarts neither rotate nor print them again. The Admin Key has no automatic expiration or scheduled rotation. A holder of the current key can enter Admin WebUI and either generate a new random strong key or enter and confirm a custom key. Rotation immediately invalidates every other admin session.
+
+## HTTPS
+
+HTTPS requires enabling TLS, setting the public hostname, and providing a certificate:
+
+```dotenv
+TLS_ENABLED=true
+SERVER_NAME=media.example.com
+```
+
+The default certificate paths are `./certs/fullchain.pem` and `./certs/privkey.pem`. Enable the corresponding optional entries in `.env.example` to change them. Startup fails when TLS is enabled without a valid `SERVER_NAME`. HTTP mode has no required variables.
+
+The complete formal configuration contract is [`.env.example`](.env.example). Every optional variable remains commented, and omission selects the documented technical default. Database passwords and the Admin Key are initialization-generated runtime secrets, not environment variables.
+
+## Admin WebUI
+
+Open the admin login from the media home page and enter the current Admin Key. The admin view provides:
+
+- Random or custom Admin Key rotation.
+- Media upload, download, visibility, and deletion controls.
+- An always-visible IP security view with audit history, manual release, and permanent allowlist management.
+
+The automatic security lifecycle is fixed: the first threshold violation blocks an IP for 24 hours, and the second violation permanently blacklists it. This timing is not configurable. An administrator may still explicitly release or allowlist an address in Admin WebUI.
+
+## WebRTC network observation
+
+WebRTC is a core FrontierCloud function, so Compose always starts the STUN service. The browser uses this derived address without a separate URL setting:
+
+```text
+stun:<SERVER_NAME>:<WEBRTC_STUN_PORT>
+```
+
+The first probe starts with the initial page connection and repeats every 30 seconds by default. `WEBRTC_STUN_PORT` changes the port, and `WEBRTC_REPORT_COOLDOWN` changes the probe period. There is no `WEBRTC_STUN_URLS` setting.
 
 ## Observability boundary
 
-FrontierCloud exposes consumer-neutral interfaces and does not deploy or manage
-an external monitoring, dashboard, alerting, or log-processing platform.
+FrontierCloud only exposes standard interfaces that an external system can consume:
 
-- `GET /health/live` reports process liveness.
-- `GET /health/ready` and `GET /health` verify MySQL and Redis readiness.
-- `GET /metrics` emits Prometheus-compatible application metrics when the
-  optional `METRICS_TOKEN` is configured. Send it as
-  `Authorization: Bearer TOKEN`; an unset token disables the endpoint.
-- Application and Nginx logs go to stdout/stderr. JSON is the default and
-  includes timestamp, level, component, request ID, trace ID, instance identity,
-  status, latency, and safe request context. `LOG_FORMAT=text` is available for
-  local use.
+- `/health/live` for process liveness.
+- `/health/ready` and `/health` for MySQL, Redis, and application readiness.
+- `/metrics` for Prometheus-compatible metrics; it is available only after configuring `METRICS_TOKEN` and requires its Bearer token.
+- stdout/stderr structured logs in JSON or text, with timestamp, level, component, request ID, trace ID, instance identity, and safe request context.
 
-Any standards-compatible external consumer may collect these interfaces.
-FrontierCloud does not know or control which consumer is used.
+The project does not deploy or manage Prometheus, Grafana, Elasticsearch, Logstash, Kibana, ELK, dashboards, scrape targets, or alert rules. It has no consumer-specific metrics or log coupling. Health and metrics probes are excluded from Nginx access logs, and Docker bridge peers are not repeated as business client fields.
 
-## Administrator access
+## Data lifecycle
 
-Administrator tokens have a short, dynamic lifecycle. No static bootstrap token
-is configured. The service periodically issues a token and writes the current
-token to the structured web-container log:
+- Media: host `./data` directory.
+- MySQL: Docker `mysql_data` volume.
+- Redis: Docker `redis_data` volume.
+- Generated secrets: Docker `runtime_secrets` volume.
+
+An ordinary `docker compose down` preserves these volumes. Only an explicit destructive operation with `--volumes` removes the databases and runtime secrets. The next startup then performs a fresh initialization and generates new values.
+
+## Development checks
 
 ```bash
-sudo docker compose logs -f web | grep admin_token_issued
-```
-
-An operator may generate another dynamic token on demand inside the running web
-container:
-
-```bash
-sudo docker compose exec -T web python -m app.services.admin_token_cli
-```
-
-## Standalone download tools
-
-Operator-owned download helpers live under `scripts/auto_download/`. They are
-not application packages, are excluded from the business image, and do not run
-in the service lifecycle. Install the optional workstation dependencies and run
-a tool as a module, for example:
-
-```bash
-python -m pip install -e ".[tools]"
-python -m scripts.auto_download.yt_mp3 --help
-```
-
-Audio belongs under `data/media/music` and video under `data/media/vido`.
-
-## Verification
-
-```bash
-python scripts/check_english_comments.py
-python -m unittest discover -s tests -p "test_*.py" -v
+python -m unittest discover -s tests -p 'test_*.py' -v
+node --check static/js/admin.js
+node --check static/js/network-observation.js
 docker compose config --quiet
+docker compose up -d --build --wait
+curl -fsS http://localhost/health/ready
 ```
+
+After CI passes on `dev`, the RN preproduction environment fast-forwards to that tested commit and runs HTTPS verification. `main` receives changes only through a reviewed pull request.

@@ -150,6 +150,9 @@ class _FakeConnection:
     async def execute(self, *_args, **_kwargs):
         return None
 
+    async def scalar(self, *_args, **_kwargs):
+        return 0
+
 
 class _FakeTransaction:
     async def __aenter__(self):
@@ -161,6 +164,9 @@ class _FakeTransaction:
 
 class _FakeEngine:
     def begin(self):
+        return _FakeTransaction()
+
+    def connect(self):
         return _FakeTransaction()
 
 
@@ -176,7 +182,6 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
             patch.object(ip_security, "redis_client", fake_redis),
             patch.object(ip_security, "engine", _FakeEngine()),
             patch.object(ip_security.settings, "SECURITY_INVALID_API_LIMIT", 5),
-            patch.object(ip_security.settings, "SECURITY_AUTO_BAN_TTL", 86400),
         ):
             count = await ip_security.record_invalid_api(
                 "203.0.113.10", "GET", "/etc/passwd", "scanner"
@@ -186,6 +191,29 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_redis.set.await_args.kwargs["ex"], 86400)
         self.assertTrue(fake_redis.set.await_args.kwargs["nx"])
         fake_redis.zadd.assert_awaited_once()
+
+    async def test_second_offense_creates_permanent_ban_without_redis_ttl(self):
+        now_ms = int(time.time() * 1000)
+        fake_redis = AsyncMock()
+        fake_redis.sismember.return_value = False
+        fake_redis.eval.return_value = [6, now_ms - 1000]
+        fake_redis.set.return_value = True
+
+        class PreviousBanConnection(_FakeConnection):
+            async def scalar(self, *_args, **_kwargs):
+                return 1
+        class PreviousBanTransaction(_FakeTransaction):
+            async def __aenter__(self): return PreviousBanConnection()
+        class PreviousBanEngine(_FakeEngine):
+            def connect(self): return PreviousBanTransaction()
+
+        with patch.object(ip_security, "redis_client", fake_redis), patch.object(ip_security, "engine", PreviousBanEngine()), \
+             patch.object(ip_security.settings, "SECURITY_INVALID_API_LIMIT", 5):
+            count = await ip_security.record_invalid_api("203.0.113.11", "GET", "/second", "scanner")
+
+        self.assertEqual(count, 6)
+        self.assertNotIn("ex", fake_redis.set.await_args.kwargs)
+        self.assertTrue(fake_redis.set.await_args.kwargs["nx"])
 
     def test_ban_runtime_never_deletes_audit_history(self):
         record_source = inspect.getsource(ip_security.record_invalid_api)

@@ -1,26 +1,22 @@
-import asyncio
+from __future__ import annotations
+
 import hashlib
 import logging
+import os
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, Request, Response
 from sqlalchemy import text
 
-from app.core.admin_log import append_admin_log
 from app.core.client_ip import client_ip
-from app.core.config import settings
+from app.core.config import ADMIN_KEY_FILE, settings
 from app.core.db import engine
 from app.core.redis import redis_client
 
-TOKEN_PREFIX = "admin:token:"
 SESSION_PREFIX = "admin:session:"
 FAIL_PREFIX = "admin:fail:"
-TOKEN_ISSUER_RETRY_SECONDS = 5
-# The next token is issued every 900 seconds by default. A small overlap absorbs
-# event-loop and Redis scheduling jitter, so the valid-token set never becomes empty.
-TOKEN_ISSUE_OVERLAP_SECONDS = 5
 logger = logging.getLogger("frontiercloud.admin")
 
 
@@ -32,6 +28,16 @@ def _hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _read_admin_key() -> str:
+    try:
+        key = ADMIN_KEY_FILE.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError("Admin key was not initialized") from exc
+    if not key:
+        raise RuntimeError("Admin key is empty")
+    return key
+
+
 def _client_ip(request: Request) -> str:
     return request.scope.get("verified_client_ip") or client_ip(request.scope)
 
@@ -40,234 +46,78 @@ def _ua(request: Request) -> str:
     return request.headers.get("User-Agent", "")[:512]
 
 
-def _token_error(code: str, message: str) -> dict[str, str]:
-    return {"code": code, "message": message}
-
-
-async def _classify_missing_token(token_hash: str) -> tuple[int, dict[str, str]]:
-    now = _now()
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text("""
-                SELECT status, expires_at
-                FROM admin_token_history
-                WHERE token_hash=:h
-                LIMIT 1
-            """),
-            {"h": token_hash},
-        )
-        row = result.mappings().first()
-        await conn.execute(
-            text("UPDATE admin_token_history SET failed_attempts = failed_attempts + 1 WHERE token_hash=:h"),
-            {"h": token_hash},
-        )
-        if row and (row["expires_at"] <= now or str(row["status"]) in {"expired", "revoked", "invalidated"}):
-            await conn.execute(
-                text("""
-                    UPDATE admin_token_history
-                    SET status='expired', invalidated_reason=COALESCE(invalidated_reason, 'ttl_expired')
-                    WHERE token_hash=:h
-                """),
-                {"h": token_hash},
-            )
-            return 401, _token_error("ADMIN_TOKEN_EXPIRED", "该特权凭证已过期，请获取新凭证")
-        if row:
-            return 403, _token_error("ADMIN_TOKEN_UNAVAILABLE", "该特权凭证已失效，请获取新凭证")
-    return 403, _token_error("ADMIN_TOKEN_INVALID", "特权凭证无效，请检查输入")
-
-
-async def issue_admin_token(*, announce: bool = True) -> str:
-    token = secrets.token_urlsafe(32)
-    token_hash = _hash(token)
-    pending_ttl = settings.ADMIN_TOKEN_TTL + TOKEN_ISSUE_OVERLAP_SECONDS
-    expires_at = _now() + timedelta(seconds=pending_ttl)
-    await redis_client.set(
-        TOKEN_PREFIX + token_hash,
-        "pending",
-        ex=pending_ttl,
-    )
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("""
-                UPDATE admin_token_history
-                SET status = 'expired'
-                WHERE status = 'active' AND expires_at <= :now
-            """),
-            {"now": _now()},
-        )
-        await conn.execute(
-            text("""
-                INSERT INTO admin_token_history
-                (token_hash, created_at, expires_at, status)
-                VALUES (:token_hash, :created_at, :expires_at, 'active')
-            """),
-            {"token_hash": token_hash, "created_at": _now(), "expires_at": expires_at},
-        )
-    if announce:
-        logger.warning(
-            "admin_token_issued",
-            extra={"context": {
-                "token": token,
-                "created_at": _now().isoformat(),
-                "claim_expires_at": expires_at.isoformat(),
-            }},
-        )
-    append_admin_log(
-        "[ADMIN_TOKEN] temporary admin token issued "
-        f"created_at={_now().isoformat()} claim_expires_at={expires_at.isoformat()}"
-    )
-    return token
-
-
-async def run_admin_token_issuer() -> None:
-    """Issue independent tokens forever; retry transient failures without waiting a full cycle."""
-    while True:
-        await asyncio.sleep(settings.ADMIN_TOKEN_ISSUE_INTERVAL)
-        while True:
-            try:
-                await issue_admin_token()
-                break
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                message = (
-                    "[ADMIN_TOKEN] automatic issue failed; "
-                    f"retrying in {TOKEN_ISSUER_RETRY_SECONDS}s: {exc}"
-                )
-                logger.exception("admin_token_issue_failed", extra={"context": {"retry_seconds": TOKEN_ISSUER_RETRY_SECONDS}})
-                append_admin_log(message)
-                await asyncio.sleep(TOKEN_ISSUER_RETRY_SECONDS)
-
-
-async def verify_admin_token(token: str, request: Request) -> str:
-    token = (token or "").strip()
-    if not token or len(token) > 256:
-        raise HTTPException(
-            status_code=403,
-            detail=_token_error("ADMIN_TOKEN_INVALID", "特权凭证无效，请检查输入"),
-        )
-
+async def verify_admin_key(key: str, request: Request) -> str:
+    key = (key or "").strip()
     ip = _client_ip(request)
     fail_key = FAIL_PREFIX + ip
     failed = await redis_client.get(fail_key)
     if failed and int(failed) >= settings.ADMIN_MAX_FAILED_ATTEMPTS_PER_IP:
-        raise HTTPException(
-            status_code=429,
-            detail=_token_error("ADMIN_RATE_LIMITED", "验证请求过于频繁，请稍后再试"),
-        )
-
-    token_hash = _hash(token)
-    key = TOKEN_PREFIX + token_hash
-    token_state = await redis_client.get(key)
-    if not token_state:
+        raise HTTPException(status_code=429, detail={"code": "ADMIN_RATE_LIMITED", "message": "验证请求过于频繁，请稍后再试"})
+    valid = 1 <= len(key) <= 512 and secrets.compare_digest(_hash(key), _hash(_read_admin_key()))
+    if not valid:
         count = await redis_client.incr(fail_key)
         if count == 1:
             await redis_client.expire(fail_key, settings.ADMIN_FAILED_WINDOW)
-        status_code, detail = await _classify_missing_token(token_hash)
-        raise HTTPException(status_code=status_code, detail=detail)
-
-    # Every token owns an independent sliding TTL. Verifying this token refreshes
-    # only this token and never invalidates or replaces other issued tokens.
-    await redis_client.set(key, "active", ex=settings.ADMIN_TOKEN_TTL)
+        raise HTTPException(status_code=403, detail={"code": "ADMIN_KEY_INVALID", "message": "Admin Key 无效，请检查输入"})
     await redis_client.delete(fail_key)
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("""
-                UPDATE admin_token_history
-                SET first_used_at = COALESCE(first_used_at, :now),
-                    last_used_at = :now,
-                    expires_at = :expires_at,
-                    use_count = use_count + 1,
-                    last_ip = :ip,
-                    last_user_agent = :ua,
-                    status = 'active'
-                WHERE token_hash = :h
-            """),
-            {
-                "h": token_hash,
-                "now": _now(),
-                "expires_at": _now() + timedelta(seconds=settings.ADMIN_TOKEN_TTL),
-                "ip": ip,
-                "ua": _ua(request),
-            },
-        )
-    return token_hash
+    return _hash(key)
 
 
-async def create_session(token_hash: str, request: Request, response: Response) -> None:
+async def create_session(key_hash: str, request: Request, response: Response) -> None:
     session = secrets.token_urlsafe(32)
     session_hash = _hash(session)
-    await redis_client.hset(
-        SESSION_PREFIX + session_hash,
-        mapping={"token_hash": token_hash, "created_at": _now().isoformat()},
-    )
+    await redis_client.hset(SESSION_PREFIX + session_hash, mapping={"key_hash": key_hash, "created_at": _now().isoformat()})
     await redis_client.expire(SESSION_PREFIX + session_hash, settings.ADMIN_SESSION_TTL)
-
     csrf = secrets.token_urlsafe(32)
-    response.set_cookie(
-        settings.ADMIN_COOKIE_NAME,
-        session,
-        max_age=settings.ADMIN_SESSION_TTL,
-        httponly=True,
-        secure=settings.ADMIN_COOKIE_SECURE,
-        samesite=settings.ADMIN_COOKIE_SAMESITE,
-        path="/",
-    )
-    response.set_cookie(
-        settings.ADMIN_CSRF_COOKIE_NAME,
-        csrf,
-        max_age=settings.ADMIN_SESSION_TTL,
-        httponly=False,
-        secure=settings.ADMIN_COOKIE_SECURE,
-        samesite=settings.ADMIN_COOKIE_SAMESITE,
-        path="/",
-    )
+    response.set_cookie(settings.ADMIN_COOKIE_NAME, session, max_age=settings.ADMIN_SESSION_TTL, httponly=True,
+                        secure=settings.ADMIN_COOKIE_SECURE, samesite=settings.ADMIN_COOKIE_SAMESITE, path="/")
+    response.set_cookie(settings.ADMIN_CSRF_COOKIE_NAME, csrf, max_age=settings.ADMIN_SESSION_TTL, httponly=False,
+                        secure=settings.ADMIN_COOKIE_SECURE, samesite=settings.ADMIN_COOKIE_SAMESITE, path="/")
 
 
 async def require_admin(request: Request) -> str:
     session = request.cookies.get(settings.ADMIN_COOKIE_NAME)
     if not session:
-        raise HTTPException(status_code=401, detail="特权模式已失效，请重新提权")
-
+        raise HTTPException(status_code=401, detail="特权模式已失效，请重新登录")
     session_hash = _hash(session)
-    key = SESSION_PREFIX + session_hash
-    data = await redis_client.hgetall(key)
+    redis_key = SESSION_PREFIX + session_hash
+    data = await redis_client.hgetall(redis_key)
     if not data:
-        raise HTTPException(status_code=401, detail="特权模式已失效，请重新提权")
-
-    csrf_cookie = request.cookies.get(settings.ADMIN_CSRF_COOKIE_NAME)
-    csrf_header = request.headers.get("X-CSRF-Token")
-    method = request.method.upper()
-    if method in {"POST", "PUT", "PATCH", "DELETE"} and (
-        not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header)
-    ):
-        raise HTTPException(status_code=403, detail="CSRF 校验失败")
-
-    token_hash = data.get("token_hash")
-    if not token_hash or not await redis_client.exists(TOKEN_PREFIX + token_hash):
-        await redis_client.delete(key)
-        raise HTTPException(status_code=401, detail="特权凭证已过期，请重新提权")
-
-    now = _now()
-    token_expires_at = now + timedelta(seconds=settings.ADMIN_TOKEN_TTL)
-    await redis_client.expire(key, settings.ADMIN_SESSION_TTL)
-    await redis_client.expire(TOKEN_PREFIX + token_hash, settings.ADMIN_TOKEN_TTL)
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("""
-                UPDATE admin_token_history
-                SET last_used_at = :now,
-                    expires_at = :expires_at,
-                    status = 'active'
-                WHERE token_hash = :token_hash
-            """),
-            {
-                "now": now,
-                "expires_at": token_expires_at,
-                "token_hash": token_hash,
-            },
-        )
+        raise HTTPException(status_code=401, detail="特权模式已失效，请重新登录")
+    if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+        csrf_cookie = request.cookies.get(settings.ADMIN_CSRF_COOKIE_NAME)
+        csrf_header = request.headers.get("X-CSRF-Token")
+        if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
+            raise HTTPException(status_code=403, detail="CSRF 校验失败")
+    if not secrets.compare_digest(data.get("key_hash", ""), _hash(_read_admin_key())):
+        await redis_client.delete(redis_key)
+        raise HTTPException(status_code=401, detail="Admin Key 已变更，请使用新 Key 重新登录")
+    await redis_client.expire(redis_key, settings.ADMIN_SESSION_TTL)
     return session_hash
+
+
+async def rotate_admin_key(session_hash: str, custom_key: str | None, confirmation: str | None) -> str:
+    if custom_key is None:
+        new_key = secrets.token_urlsafe(48)
+    else:
+        new_key = custom_key.strip()
+        if len(new_key) < 16 or len(new_key) > 512:
+            raise ValueError("自定义 Admin Key 长度必须为 16 到 512 个字符")
+        if not confirmation or not secrets.compare_digest(new_key, confirmation):
+            raise ValueError("两次输入的 Admin Key 不一致")
+    if secrets.compare_digest(_hash(new_key), _hash(_read_admin_key())):
+        raise ValueError("新 Admin Key 不能与当前 Key 相同")
+    temporary = ADMIN_KEY_FILE.with_suffix(".new")
+    temporary.write_text(new_key + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, ADMIN_KEY_FILE)
+    current_session_key = SESSION_PREFIX + session_hash
+    async for redis_key in redis_client.scan_iter(match=SESSION_PREFIX + "*"):
+        if redis_key != current_session_key:
+            await redis_client.delete(redis_key)
+    await redis_client.hset(current_session_key, mapping={"key_hash": _hash(new_key)})
+    logger.warning("admin_key_rotated", extra={"context": {"session_hash": session_hash}})
+    return new_key
 
 
 async def logout_admin(request: Request, response: Response) -> None:
@@ -281,21 +131,10 @@ async def logout_admin(request: Request, response: Response) -> None:
 async def audit(session_hash: Optional[str], action: str, target_count: int, source_summary: str,
                 result: str, detail: str, request: Request) -> None:
     async with engine.begin() as conn:
-        await conn.execute(
-            text("""
-                INSERT INTO admin_audit_log
-                (session_id_hash, action, target_count, source_summary, result, detail, client_ip, user_agent, created_at)
-                VALUES (:sid, :action, :count, :summary, :result, :detail, :ip, :ua, :created)
-            """),
-            {
-                "sid": session_hash,
-                "action": action[:64],
-                "count": target_count,
-                "summary": source_summary[:10000],
-                "result": result[:32],
-                "detail": detail[:10000],
-                "ip": _client_ip(request),
-                "ua": _ua(request),
-                "created": _now(),
-            },
-        )
+        await conn.execute(text("""
+            INSERT INTO admin_audit_log
+            (session_id_hash, action, target_count, source_summary, result, detail, client_ip, user_agent, created_at)
+            VALUES (:sid, :action, :count, :summary, :result, :detail, :ip, :ua, :created)
+        """), {"sid": session_hash, "action": action[:64], "count": target_count,
+                 "summary": source_summary[:10000], "result": result[:32], "detail": detail[:10000],
+                 "ip": _client_ip(request), "ua": _ua(request), "created": _now()})

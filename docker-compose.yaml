@@ -1,31 +1,50 @@
 services:
+  secrets-init:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    user: "0:0"
+    command: ["python", "-m", "app.services.runtime_secrets"]
+    restart: "no"
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    volumes: [runtime_secrets:/run/frontiercloud-secrets]
+    logging: &service_logging
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
   web:
     build: .
     container_name: office_automation_web
     restart: always
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
-      TLS_ENABLED: ${TLS_ENABLED:-true}
+      TLS_ENABLED: ${TLS_ENABLED:-false}
       PYTHONDONTWRITEBYTECODE: "1"
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     expose: ["8000"]
     depends_on:
+      secrets-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
       mysql: {condition: service_healthy}
     volumes:
       - ./data:/app/data:z
       - web_tmp:/tmp
+      - runtime_secrets:/run/frontiercloud-secrets
     healthcheck:
       test: ["CMD", "python", "-m", "app.services.health_probe"]
       interval: 30s
       timeout: 5s
       retries: 4
       start_period: 15s
-    logging: &service_logging
-      driver: json-file
-      options: {max-size: "10m", max-file: "3"}
+    logging: *service_logging
 
   redis:
     image: redis:7-alpine
@@ -47,27 +66,28 @@ services:
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-office_automation}
       MYSQL_USER: ${MYSQL_USER:-media_admin}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
+      MYSQL_PASSWORD_FILE: /run/frontiercloud-secrets/mysql_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/frontiercloud-secrets/mysql_root_password
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
     volumes:
       - mysql_data:/var/lib/mysql
       - mysql_socket:/var/run/mysqld
+      - runtime_secrets:/run/frontiercloud-secrets:ro
+    depends_on:
+      secrets-init: {condition: service_completed_successfully}
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      test: ["CMD-SHELL", "MYSQL_PWD=$$(cat /run/frontiercloud-secrets/mysql_password) mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} --silent"]
       interval: 5s
       timeout: 5s
       retries: 20
     logging: *service_logging
 
   nginx:
-    build:
-      context: .
-      dockerfile: nginx/Dockerfile
+    build: {context: ., dockerfile: nginx/Dockerfile}
     container_name: office_automation_nginx
     restart: always
     environment:
-      TLS_ENABLED: ${TLS_ENABLED:-true}
+      TLS_ENABLED: ${TLS_ENABLED:-false}
       SERVER_NAME: ${SERVER_NAME:-localhost}
       INSTANCE_NAME: ${INSTANCE_NAME:-frontiercloud}
       UPLOAD_INACTIVITY_TIMEOUT: ${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}
@@ -88,18 +108,7 @@ services:
     image: coturn/coturn:4.17.2-r0-alpine
     container_name: frontiercloud_stun
     restart: always
-    command:
-      - -n
-      - --stun-only
-      - --no-auth
-      - --no-cli
-      - --no-tls
-      - --no-dtls
-      - --fingerprint
-      - --no-multicast-peers
-      - --log-file=stdout
-      - --simple-log
-      - --listening-port=3478
+    command: [-n, --stun-only, --no-auth, --no-cli, --no-tls, --no-dtls, --fingerprint, --no-multicast-peers, --log-file=stdout, --simple-log, --listening-port=3478]
     ports:
       - "${WEBRTC_STUN_PORT:-3478}:3478/tcp"
       - "${WEBRTC_STUN_PORT:-3478}:3478/udp"
@@ -119,6 +128,7 @@ services:
 
 volumes:
   web_tmp:
+  runtime_secrets:
   redis_data:
   mysql_data:
   mysql_socket:

@@ -10,9 +10,11 @@ if [ "$(git branch --show-current)" != "dev" ]; then
 fi
 
 docker compose config --quiet
+# One release migration: seed the new secrets volume from an existing private
+# deployment before the obsolete password inputs are removed from that host.
+docker compose run --rm secrets-init
+sed -i '/^MYSQL_PASSWORD=/d; /^MYSQL_ROOT_PASSWORD=/d; /^MYSQL_URL=/d; /^ADMIN_TOKEN_TTL=/d; /^ADMIN_TOKEN_ISSUE_INTERVAL=/d; /^WEBRTC_STUN_URLS=/d; /^SECURITY_AUTO_BAN_TTL=/d' .env
 docker compose up -d --build --remove-orphans --wait --wait-timeout 240
-# One-time recovery for the client address blocked by the 2026-09-01 release probe.
-docker compose exec -T web python -c "import asyncio; from app.services.ip_security import unban_ip; asyncio.run(unban_ip('154.26.176.194', 'release-probe-recovery'))"
 docker compose exec -T nginx nginx -t
 tls_enabled="$(docker compose exec -T nginx printenv TLS_ENABLED)"
 if [ "$tls_enabled" != "true" ]; then

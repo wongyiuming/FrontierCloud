@@ -22,6 +22,8 @@ BAN_PREFIX = "security:auto-ban:"
 RECENT_BANS_KEY = "security:auto-bans:recent"
 WHITELIST_KEY = "security:ip-whitelist"
 CACHE_READY_KEY = "security:cache-ready"
+FIRST_BAN_SECONDS = 24 * 60 * 60
+PERMANENT_EXPIRES_AT = datetime(9999, 12, 31, 23, 59, 59)
 
 _SLIDING_WINDOW_SCRIPT = """
 local key = KEYS[1]
@@ -55,7 +57,7 @@ async def initialize_ip_security_cache() -> None:
         whitelist_rows = await conn.execute(text("SELECT ip_address FROM ip_permanent_whitelist"))
         ban_rows = await conn.execute(text("""
             SELECT ip_address, trigger_count, window_started_at, banned_at, expires_at,
-                   last_method, last_path, status
+                   last_method, last_path, status, ban_kind
             FROM ip_auto_ban_events
             WHERE status='active' AND expires_at > :now
             ORDER BY banned_at DESC
@@ -82,7 +84,8 @@ async def initialize_ip_security_cache() -> None:
         banned_timestamp = row["banned_at"].replace(tzinfo=timezone.utc).timestamp()
         pipe.zadd(RECENT_BANS_KEY, {str(row["ip_address"]): banned_timestamp})
     for ip, event in active_bans.items():
-        remaining = max(1, int((event["expires_at"] - now).total_seconds()))
+        permanent = str(event.get("ban_kind")) == "permanent"
+        remaining = None if permanent else max(1, int((event["expires_at"] - now).total_seconds()))
         payload = {
             "ip": ip,
             "trigger_count": int(event["trigger_count"]),
@@ -91,8 +94,13 @@ async def initialize_ip_security_cache() -> None:
             "expires_at": event["expires_at"].isoformat(),
             "last_method": event["last_method"],
             "last_path": event["last_path"],
+            "ban_kind": event["ban_kind"],
+            "permanent": permanent,
         }
-        pipe.set(_ban_key(ip), json.dumps(payload, ensure_ascii=False), ex=remaining)
+        if permanent:
+            pipe.set(_ban_key(ip), json.dumps(payload, ensure_ascii=False))
+        else:
+            pipe.set(_ban_key(ip), json.dumps(payload, ensure_ascii=False), ex=remaining)
     pipe.set(CACHE_READY_KEY, "1")
     await pipe.execute()
 
@@ -114,7 +122,7 @@ async def _mysql_block_fallback(ip: str) -> dict[str, Any] | None:
             return None
         result = await conn.execute(text("""
             SELECT ip_address, trigger_count, window_started_at, banned_at, expires_at,
-                   last_method, last_path
+                   last_method, last_path, ban_kind
             FROM ip_auto_ban_events
             WHERE ip_address=:ip AND status='active' AND expires_at > :now
             ORDER BY banned_at DESC LIMIT 1
@@ -130,6 +138,8 @@ async def _mysql_block_fallback(ip: str) -> dict[str, Any] | None:
         "expires_at": row["expires_at"].isoformat(),
         "last_method": row["last_method"],
         "last_path": row["last_path"],
+        "ban_kind": row["ban_kind"],
+        "permanent": str(row["ban_kind"]) == "permanent",
     }
 
 
@@ -182,7 +192,14 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
         return count
 
     now = _utcnow()
-    expires_at = now + timedelta(seconds=settings.SECURITY_AUTO_BAN_TTL)
+    async with engine.connect() as conn:
+        previous_bans = int(await conn.scalar(text("""
+            SELECT COUNT(*) FROM ip_auto_ban_events
+            WHERE ip_address=:ip AND ban_kind IN ('auto', 'permanent')
+        """), {"ip": ip}) or 0)
+    permanent = previous_bans >= 1
+    ban_kind = "permanent" if permanent else "auto"
+    expires_at = PERMANENT_EXPIRES_AT if permanent else now + timedelta(seconds=FIRST_BAN_SECONDS)
     payload = {
         "ip": ip,
         "trigger_count": count,
@@ -191,14 +208,16 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
         "expires_at": expires_at.isoformat(),
         "last_method": method[:16],
         "last_path": path[:2048],
+        "ban_kind": ban_kind,
+        "permanent": permanent,
     }
     try:
-        created = await redis_client.set(
-            _ban_key(ip),
-            json.dumps(payload, ensure_ascii=False),
-            ex=settings.SECURITY_AUTO_BAN_TTL,
-            nx=True,
-        )
+        if permanent:
+            created = await redis_client.set(_ban_key(ip), json.dumps(payload, ensure_ascii=False), nx=True)
+        else:
+            created = await redis_client.set(
+                _ban_key(ip), json.dumps(payload, ensure_ascii=False), ex=FIRST_BAN_SECONDS, nx=True,
+            )
         if not created:
             return count
         await redis_client.zadd(RECENT_BANS_KEY, {ip: now.timestamp()})
@@ -218,7 +237,7 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
                 (ip_address, trigger_count, window_started_at, banned_at, expires_at,
                  last_method, last_path, user_agent, ban_kind, status)
                 VALUES (:ip, :count, :window_start, :banned_at, :expires_at,
-                        :method, :path, :ua, 'auto', 'active')
+                        :method, :path, :ua, :ban_kind, 'active')
             """), {
                 "ip": ip,
                 "count": count,
@@ -228,13 +247,14 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
                 "method": method[:16],
                 "path": path[:2048],
                 "ua": user_agent[:512],
+                "ban_kind": ban_kind,
             })
     except SQLAlchemyError as exc:
         append_admin_log(f"[IP_SECURITY] ban active in Redis but MySQL audit failed for {ip}: {exc}")
 
     append_admin_log(
         f"[IP_SECURITY] auto-banned ip={ip} count={count} "
-        f"expires_at={expires_at.isoformat()} last={method[:16]} {path[:512]}"
+        f"kind={ban_kind} expires_at={expires_at.isoformat()} last={method[:16]} {path[:512]}"
     )
     return count
 
@@ -263,7 +283,7 @@ async def manual_ban_ip(ip_value: str, session_hash: str, reason: str) -> dict[s
     if is_security_exempt(ip):
         raise ValueError("Security exempt addresses cannot be banned")
     now = _utcnow()
-    expires_at = now + timedelta(seconds=settings.SECURITY_AUTO_BAN_TTL)
+    expires_at = now + timedelta(seconds=FIRST_BAN_SECONDS)
     payload = {
         "ip": ip,
         "trigger_count": 0,
@@ -306,7 +326,7 @@ async def manual_ban_ip(ip_value: str, session_hash: str, reason: str) -> dict[s
     await redis_client.set(
         _ban_key(ip),
         json.dumps(payload, ensure_ascii=False),
-        ex=settings.SECURITY_AUTO_BAN_TTL,
+        ex=FIRST_BAN_SECONDS,
     )
     await redis_client.zadd(RECENT_BANS_KEY, {ip: now.timestamp()})
     append_admin_log(
@@ -447,7 +467,8 @@ async def list_security_history(
         },
         "threshold": settings.SECURITY_INVALID_API_LIMIT,
         "window_seconds": settings.SECURITY_INVALID_API_WINDOW,
-        "ban_seconds": settings.SECURITY_AUTO_BAN_TTL,
+        "ban_seconds": FIRST_BAN_SECONDS,
+        "second_offense_permanent": True,
     }
 
 
