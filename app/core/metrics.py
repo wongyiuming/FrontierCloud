@@ -27,6 +27,11 @@ HTTP_EXCEPTIONS = Counter(
     "Unhandled FrontierCloud HTTP exceptions",
     ("method", "route"),
 )
+DEPENDENCY_READY = Gauge(
+    "frontiercloud_dependency_ready",
+    "Whether a required FrontierCloud dependency is ready",
+    ("dependency",),
+)
 
 
 def route_label(scope: Scope) -> str:
@@ -35,7 +40,7 @@ def route_label(scope: Scope) -> str:
     return str(path) if path else "unmatched"
 
 
-class PrometheusMetricsMiddleware:
+class MetricsMiddleware:
     def __init__(self, app: ASGIApp):
         self.app = app
 

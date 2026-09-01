@@ -1,76 +1,36 @@
-import io
 import unittest
-from contextlib import redirect_stdout
 from unittest.mock import patch
 
 import main
 
 
 class RequestLoggingTests(unittest.IsolatedAsyncioTestCase):
-    async def test_health_and_monitoring_polls_are_silent(self):
-        async def app(_scope, _receive, send):
-            await send({"type": "http.response.start", "status": 200, "headers": []})
-            await send({"type": "http.response.body", "body": b"{}"})
-
-        async def receive():
-            return {"type": "http.request", "body": b"", "more_body": False}
-
-        async def send(_message):
-            return None
-
-        for path in main.QUIET_REQUEST_PATHS:
-            scope = {
-                "type": "http",
-                "method": "GET",
-                "path": path,
-                "query_string": b"",
-                "client": ("127.0.0.1", 31000),
-                "verified_client_ip": "127.0.0.1",
-            }
-            output = io.StringIO()
-            with redirect_stdout(output), patch.object(main, "append_admin_log") as append_log:
-                await main.RealIPLogMiddleware(app)(scope, receive, send)
-            self.assertEqual(output.getvalue(), "")
-            append_log.assert_not_called()
-
-    async def test_webrtc_observation_is_merged_into_one_request_line(self):
-        async def app(scope, receive, send):
-            scope["webrtc_observation"] = {
-                "addresses": ["198.51.100.7", "2001:db8::7"],
-                "matches_verified": False,
-                "outcome": "ok",
-            }
+    async def test_request_log_contains_safe_structured_context(self):
+        async def app(scope, _receive, send):
+            scope["webrtc_observation"] = {"addresses": ["198.51.100.7"], "outcome": "ok"}
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b"{}"})
 
         scope = {
-            "type": "http",
-            "method": "POST",
-            "path": "/api/v1/media/network-observation",
-            "query_string": b"",
-            "client": ("172.18.0.10", 31000),
+            "type": "http", "method": "GET", "path": "/api/v1/media/",
+            "query_string": b"", "headers": [], "client": ("172.18.0.2", 1234),
             "verified_client_ip": "203.0.113.5",
         }
+        sent = []
 
         async def receive():
             return {"type": "http.request", "body": b"", "more_body": False}
 
-        async def send(_message):
-            return None
+        async def send(message):
+            sent.append(message)
 
-        output = io.StringIO()
-        with redirect_stdout(output), patch.object(main, "append_admin_log") as append_log:
+        with patch.object(main.logger, "info") as log, patch.object(main, "append_admin_log"):
             await main.RealIPLogMiddleware(app)(scope, receive, send)
-
-        lines = [line for line in output.getvalue().splitlines() if line]
-        self.assertEqual(len(lines), 1)
-        self.assertNotIn("[LOG]", lines[0])
-        self.assertNotIn("[WEBRTC_IP]", lines[0])
-        self.assertIn("[REQUEST] REAL_IP: 203.0.113.5", lines[0])
-        self.assertIn("PROXY_IP: 172.18.0.10", lines[0])
-        self.assertIn("WEBRTC_IP: 198.51.100.7,2001:db8::7", lines[0])
-        self.assertIn("WEBRTC_MATCH: false", lines[0])
-        append_log.assert_called_once_with(lines[0])
+        context = log.call_args.kwargs["extra"]["context"]
+        self.assertEqual(context["client_ip"], "203.0.113.5")
+        self.assertEqual(context["status"], 200)
+        response_headers = dict(sent[0]["headers"])
+        self.assertTrue(response_headers[b"x-request-id"])
 
 
 if __name__ == "__main__":

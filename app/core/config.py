@@ -1,15 +1,14 @@
 from urllib.parse import quote
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 
 class Settings(BaseSettings):
-    ENVIRONMENT: str = Field("production", validation_alias="ENVIRONMENT")
+    TLS_ENABLED: bool = Field(True, validation_alias="TLS_ENABLED")
     REDIS_URL: str = Field("redis://redis:6379/0", validation_alias="REDIS_URL")
-    ADMIN_BOOTSTRAP_TOKEN: str = Field(..., validation_alias="ADMIN_BOOTSTRAP_TOKEN")
 
     MYSQL_URL: str | None = Field(None, validation_alias="MYSQL_URL")
     MYSQL_DATABASE: str = Field("office_automation", validation_alias="MYSQL_DATABASE")
@@ -32,16 +31,17 @@ class Settings(BaseSettings):
     ADMIN_MAX_UPLOAD_TASK_FILES: int = Field(5000, validation_alias="ADMIN_MAX_UPLOAD_TASK_FILES")
     ADMIN_MAX_BATCH_FILES: int = Field(200, validation_alias="ADMIN_MAX_BATCH_FILES")
     ADMIN_MAX_DOWNLOAD_ITEMS: int = Field(100, validation_alias="ADMIN_MAX_DOWNLOAD_ITEMS")
-    ADMIN_COOKIE_SECURE: bool = Field(True, validation_alias="ADMIN_COOKIE_SECURE")
     ADMIN_COOKIE_SAMESITE: str = Field("strict", validation_alias="ADMIN_COOKIE_SAMESITE")
-    ADMIN_COOKIE_NAME: str = Field("__Host-admin_session", validation_alias="ADMIN_COOKIE_NAME")
-    ADMIN_CSRF_COOKIE_NAME: str = Field("__Host-admin_csrf", validation_alias="ADMIN_CSRF_COOKIE_NAME")
     ADMIN_MAX_FILENAME_LENGTH: int = Field(240, validation_alias="ADMIN_MAX_FILENAME_LENGTH")
     MEDIA_MAX_DEPTH: int = Field(32, validation_alias="MEDIA_MAX_DEPTH")
     MEDIA_CATALOG_CACHE_TTL: int = Field(300, validation_alias="MEDIA_CATALOG_CACHE_TTL")
+    WEBRTC_STUN_PORT: int = Field(3478, ge=1, le=65535, validation_alias="WEBRTC_STUN_PORT")
     WEBRTC_STUN_URLS: str = Field("", validation_alias="WEBRTC_STUN_URLS")
     WEBRTC_REPORT_COOLDOWN: int = Field(60, ge=10, le=3600, validation_alias="WEBRTC_REPORT_COOLDOWN")
-    INTERNAL_METRICS_TOKEN: str = Field("", validation_alias="INTERNAL_METRICS_TOKEN")
+    METRICS_TOKEN: str = Field("", validation_alias="METRICS_TOKEN")
+    LOG_LEVEL: str = Field("INFO", validation_alias="LOG_LEVEL")
+    LOG_FORMAT: str = Field("json", validation_alias="LOG_FORMAT")
+    INSTANCE_NAME: str = Field("frontiercloud", validation_alias="INSTANCE_NAME")
 
     TRUSTED_PROXY_NETWORKS: str = Field("172.16.0.0/12", validation_alias="TRUSTED_PROXY_NETWORKS")
     SECURITY_EXEMPT_NETWORKS: str = Field("127.0.0.0/8,::1/128", validation_alias="SECURITY_EXEMPT_NETWORKS")
@@ -68,18 +68,10 @@ class Settings(BaseSettings):
                 f"@mysql:3306/{encoded_database}"
             )
         if not self.WEBRTC_STUN_URLS:
-            self.WEBRTC_STUN_URLS = f"stun:{self.SERVER_NAME}:3478"
-
-        environment = self.ENVIRONMENT.strip().lower()
-        if environment not in {"development", "test", "production"}:
-            raise ValueError("ENVIRONMENT must be development, test, or production")
-        self.ENVIRONMENT = environment
+            self.WEBRTC_STUN_URLS = f"stun:{self.SERVER_NAME}:{self.WEBRTC_STUN_PORT}"
 
         if self.ADMIN_TOKEN_ISSUE_INTERVAL > self.ADMIN_TOKEN_TTL:
             raise ValueError("ADMIN_TOKEN_ISSUE_INTERVAL must not exceed ADMIN_TOKEN_TTL")
-
-        if environment != "production":
-            return self
 
         weak_values = {
             "change_me",
@@ -97,8 +89,6 @@ class Settings(BaseSettings):
             )
 
         errors = []
-        if is_weak(self.ADMIN_BOOTSTRAP_TOKEN, 32):
-            errors.append("ADMIN_BOOTSTRAP_TOKEN must be a unique random secret of at least 32 characters")
         if is_weak(self.MYSQL_PASSWORD, 16):
             errors.append("MYSQL_PASSWORD must be a unique secret of at least 16 characters")
         if is_weak(self.MYSQL_ROOT_PASSWORD, 16):
@@ -112,18 +102,40 @@ class Settings(BaseSettings):
             if url_password != self.MYSQL_PASSWORD:
                 errors.append("MYSQL_URL password must match MYSQL_PASSWORD")
 
-        if not self.ADMIN_COOKIE_SECURE:
-            errors.append("ADMIN_COOKIE_SECURE must be true in production")
         if self.ADMIN_COOKIE_SAMESITE.strip().lower() not in {"strict", "lax"}:
-            errors.append("ADMIN_COOKIE_SAMESITE must be strict or lax in production")
-        if not self.ADMIN_COOKIE_NAME.startswith("__Host-"):
-            errors.append("ADMIN_COOKIE_NAME must use the __Host- prefix in production")
-        if not self.ADMIN_CSRF_COOKIE_NAME.startswith("__Host-"):
-            errors.append("ADMIN_CSRF_COOKIE_NAME must use the __Host- prefix in production")
+            errors.append("ADMIN_COOKIE_SAMESITE must be strict or lax")
 
         if errors:
             raise ValueError("; ".join(errors))
         return self
+
+    @field_validator("LOG_LEVEL")
+    @classmethod
+    def validate_log_level(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+        return normalized
+
+    @field_validator("LOG_FORMAT")
+    @classmethod
+    def validate_log_format(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"json", "text"}:
+            raise ValueError("LOG_FORMAT must be json or text")
+        return normalized
+
+    @property
+    def ADMIN_COOKIE_SECURE(self) -> bool:
+        return self.TLS_ENABLED
+
+    @property
+    def ADMIN_COOKIE_NAME(self) -> str:
+        return "__Host-admin_session" if self.TLS_ENABLED else "admin_session"
+
+    @property
+    def ADMIN_CSRF_COOKIE_NAME(self) -> str:
+        return "__Host-admin-csrf" if self.TLS_ENABLED else "admin_csrf"
 
     def webrtc_stun_urls(self) -> list[str]:
         urls = [value.strip() for value in self.WEBRTC_STUN_URLS.split(",") if value.strip()]

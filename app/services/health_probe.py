@@ -9,7 +9,7 @@ import redis.asyncio as redis
 from app.core.config import settings
 
 
-HEALTH_URL = "http://127.0.0.1:8000/api/v1/health"
+HEALTH_URL = "http://127.0.0.1:8000/health/ready"
 ROLLING_KEY = "health:checks:120m"
 WINDOW_MINUTES = 120
 ROLLING_TTL_SECONDS = WINDOW_MINUTES * 60

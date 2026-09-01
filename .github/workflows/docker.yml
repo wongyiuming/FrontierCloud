@@ -1,5 +1,9 @@
 name: Build and Test Docker Compose
 
+permissions:
+  contents: read
+  deployments: write
+
 on:
   push:
     branches: ["dev", "main"]
@@ -24,10 +28,8 @@ jobs:
             -out certs/fullchain.pem \
             -subj "/C=CN/ST=CI/L=CI/O=FrontierCloud/CN=localhost"
           cat <<'EOF' > .env
-          ENVIRONMENT=test
-          COMPOSE_PROFILES=monitoring
+          TLS_ENABLED=true
           REDIS_URL=redis://redis:6379/0
-          ADMIN_BOOTSTRAP_TOKEN=ci_admin_bootstrap_token_please_do_not_use_in_production
           MYSQL_URL=mysql+asyncmy://media_admin:ci_mysql_password@mysql:3306/office_automation
           ADMIN_TOKEN_TTL=900
           ADMIN_TOKEN_ISSUE_INTERVAL=900
@@ -47,21 +49,15 @@ jobs:
           SECURITY_INVALID_API_WINDOW=3600
           SECURITY_AUTO_BAN_TTL=86400
           SECURITY_RECENT_BAN_HOURS=24
-          ADMIN_COOKIE_SECURE=true
           ADMIN_COOKIE_SAMESITE=strict
-          ADMIN_COOKIE_NAME=__Host-admin_session
-          ADMIN_CSRF_COOKIE_NAME=__Host-admin-csrf
           MYSQL_DATABASE=office_automation
           MYSQL_USER=media_admin
           MYSQL_PASSWORD=ci_mysql_password
           MYSQL_ROOT_PASSWORD=ci_mysql_root_password
-          INTERNAL_METRICS_TOKEN=ci_internal_metrics_token_0123456789abcdef
-          MONITORING_ALLOW_CIDR=192.0.2.1/32
-          METRICS_BASIC_USER=ci_frontiercloud_monitor
-          METRICS_BASIC_PASSWORD=ci_metrics_password_0123456789abcdef
-          MYSQL_EXPORTER_PASSWORD=ci_exporter_password_0123456789abcdef
-          MYSQL_BACKUP_PASSWORD=ci_backup_password_0123456789abcdef
-          WEBRTC_STUN_HOST=localhost
+          METRICS_TOKEN=ci_metrics_token_0123456789abcdef
+          LOG_LEVEL=INFO
+          LOG_FORMAT=json
+          INSTANCE_NAME=frontiercloud-ci
           WEBRTC_STUN_PORT=3478
           WEBRTC_STUN_URLS=stun:localhost:3478
           SERVER_NAME=localhost
@@ -80,22 +76,17 @@ jobs:
           node tests/admin_ui_smoke.mjs
 
       - name: Build and start services
-        run: docker compose up -d --build --wait --wait-timeout 180
+        run: docker compose up -d --build --remove-orphans --wait --wait-timeout 180
 
       - name: Run source configuration tests
         run: |
-          python3 -m unittest -v \
-            tests/test_development_deployment.py \
-            tests/test_exporter_config.py \
-            tests/test_monitoring_stack.py
+          python3 -m unittest -v tests/test_development_deployment.py
 
       - name: Run unit and runtime tests
         run: |
           mapfile -t runtime_tests < <(
             find tests -maxdepth 1 -type f -name 'test_*.py' \
-              ! -name 'test_exporter_config.py' \
               ! -name 'test_development_deployment.py' \
-              ! -name 'test_monitoring_stack.py' \
               -printf '/app/%p\n' | sort
           )
           docker compose exec -T web python -m unittest -v "${runtime_tests[@]}"
@@ -103,50 +94,17 @@ jobs:
           docker compose exec -T redis redis-cli ping | grep PONG
           docker compose exec -T mysql mysqladmin ping -h 127.0.0.1 -umedia_admin -pci_mysql_password --silent
 
-      - name: Test production-like collection agents
-        run: |
-          docker compose logs nginx | grep 'selected production configuration for ENVIRONMENT=test'
-          docker compose ps -a mysql_monitoring_init | grep 'Exited (0)'
-          docker compose ps mysql_backup | grep 'Up'
-          docker compose exec -T web python - <<'PY'
-          import time
-          from urllib.request import urlopen
-
-          targets = {
-              "node_exporter": ("http://node_exporter:9100/metrics", "node_exporter_build_info"),
-              "cadvisor": ("http://cadvisor:8080/metrics", "container_last_seen"),
-              "redis_exporter": ("http://redis_exporter:9121/metrics", "redis_up 1"),
-              "mysql_exporter": ("http://mysql_exporter:9104/metrics", "mysql_up 1"),
-              "nginx_exporter": ("http://nginx_exporter:9113/metrics", "nginx_up 1"),
-              "nginxlog_exporter": ("http://nginxlog_exporter:4040/metrics", "# HELP"),
-              "mysql_backup": ("http://node_exporter:9100/metrics", "frontiercloud_backup_last_run_success 1"),
-          }
-          for name, (url, marker) in targets.items():
-              error = None
-              for _ in range(30):
-                  try:
-                      payload = urlopen(url, timeout=3).read().decode("utf-8", "replace")
-                      if marker in payload:
-                          break
-                      error = f"missing marker {marker!r}"
-                  except Exception as exc:
-                      error = str(exc)
-                  time.sleep(1)
-              else:
-                  raise AssertionError(f"{name} is not scrapeable: {error}")
-              print(f"{name}=ok")
-          PY
-
       - name: Test public and admin flows
         run: |
           curl -kfsSL https://localhost/ | grep "前沿视界"
-          curl -kfsS https://localhost/api/v1/health | grep '"status":"healthy"'
+          curl -kfsS https://localhost/health/live | grep '"status":"healthy"'
+          curl -kfsS https://localhost/health/ready | grep '"status":"ready"'
+          curl -kfsS https://localhost/metrics \
+            -H 'Authorization: Bearer ci_metrics_token_0123456789abcdef' | grep 'frontiercloud_http_requests_total'
           curl -kfsS https://localhost/api/v1/media/ | grep "前沿视界"
           test "$(curl -ksS -o /dev/null -w '%{http_code}' https://localhost/api/v1/media/admin/)" = 401
 
-          TOKEN_RESPONSE=$(curl -kfsS -X POST https://localhost/api/v1/media/admin/token/issue \
-            -H 'X-Token: ci_admin_bootstrap_token_please_do_not_use_in_production')
-          ADMIN_TOKEN=$(python -c 'import json,sys; print(json.load(sys.stdin)["token"])' <<<"$TOKEN_RESPONSE")
+          ADMIN_TOKEN=$(docker compose exec -T web python -m app.services.admin_token_cli)
           curl -kfsS -c /tmp/admin-cookies.txt -X POST https://localhost/api/v1/media/admin/elevate \
             --data-urlencode "token=$ADMIN_TOKEN" | grep '"status":"ok"'
           CSRF_TOKEN=$(awk '$6 == "__Host-admin-csrf" {print $7}' /tmp/admin-cookies.txt)
@@ -199,3 +157,43 @@ jobs:
       - name: Stop and clean CI services
         if: always()
         run: docker compose down --volumes --remove-orphans
+
+  deploy-rn:
+    name: deploy-rn
+    needs: test-compose
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/dev' &&
+      github.repository == 'wongyiuming/FrontierCloud'
+    runs-on: [self-hosted, Linux, X64, rn-preproduction]
+    timeout-minutes: 20
+    concurrency:
+      group: rn-preproduction
+      cancel-in-progress: false
+    environment:
+      name: rn-preproduction
+    env:
+      RN_DEPLOY_PATH: ${{ vars.RN_DEPLOY_PATH }}
+    steps:
+      - name: Verify immutable deployment boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/dev
+          test "$GITHUB_REPOSITORY" = wongyiuming/FrontierCloud
+          test -n "$RN_DEPLOY_PATH"
+          test -d "$RN_DEPLOY_PATH/.git"
+
+      - name: Fast-forward RN to the tested dev commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RN_DEPLOY_PATH"
+          test "$(git branch --show-current)" = dev
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git fetch --no-tags origin dev
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          git merge --ff-only "$GITHUB_SHA"
+          sh scripts/deploy_rn.sh
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"

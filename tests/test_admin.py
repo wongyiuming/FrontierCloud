@@ -95,7 +95,7 @@ class AdminTokenLifecycleTests(unittest.IsolatedAsyncioTestCase):
             patch.object(admin_service, "engine", _FakeEngine()),
             patch.object(admin_service.secrets, "token_urlsafe", return_value=token),
             patch.object(admin_service.settings, "ADMIN_TOKEN_TTL", 900),
-            patch("builtins.print") as print_mock,
+            patch.object(admin_service.logger, "warning") as warning_mock,
             patch.object(admin_service, "append_admin_log") as append_log_mock,
         ):
             issued = await admin_service.issue_admin_token()
@@ -105,7 +105,10 @@ class AdminTokenLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 fake_redis.ttls[token_key],
                 900 + admin_service.TOKEN_ISSUE_OVERLAP_SECONDS,
             )
-            self.assertIn(token, print_mock.call_args.args[0])
+            self.assertEqual(
+                warning_mock.call_args.kwargs["extra"]["context"]["token"],
+                token,
+            )
             self.assertNotIn(token, append_log_mock.call_args.args[0])
 
             fake_redis.values[fail_key] = "3"
@@ -132,7 +135,7 @@ class AdminTokenLifecycleTests(unittest.IsolatedAsyncioTestCase):
             patch.object(admin_service, "engine", _FakeEngine()),
             patch.object(admin_service.secrets, "token_urlsafe", side_effect=tokens),
             patch.object(admin_service.settings, "ADMIN_TOKEN_TTL", 900),
-            patch("builtins.print"),
+            patch.object(admin_service.logger, "warning"),
             patch.object(admin_service, "append_admin_log"),
         ):
             for _token in tokens:
