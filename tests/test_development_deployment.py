@@ -56,6 +56,7 @@ class DevelopmentDeploymentTests(unittest.TestCase):
     def test_environment_example_is_the_complete_public_contract(self):
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
         config = (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8")
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         listed_names = re.findall(
             r"(?m)^#? ?([A-Z][A-Z0-9_]*)=",
             env_example,
@@ -77,16 +78,26 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertEqual(len(listed_names), len(set(listed_names)))
 
         app_names = set(re.findall(r'validation_alias="([A-Z][A-Z0-9_]*)"', config))
-        compose_names = {
-            "HTTP_PORT",
-            "HTTPS_PORT",
-            "SSL_CERT_PATH",
-            "SSL_KEY_PATH",
-            "ACME_WEBROOT",
+        compose_names = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", compose))
+        private_compose_names = {
+            "BACKUP_DIR",
+            "METRICS_BASIC_PASSWORD",
+            "METRICS_BASIC_USER",
+            "MONITORING_ALLOW_CIDR",
+            "MONITORING_SELF_ALLOW_CIDR",
+            "MYSQL_BACKUP_PASSWORD",
+            "MYSQL_BACKUP_USER",
+            "MYSQL_EXPORTER_PASSWORD",
+            "MYSQL_EXPORTER_USER",
+            "NGINX_METRIC_LOG_MAX_BYTES",
         }
-        self.assertEqual(set(listed_names), app_names | compose_names)
+        self.assertLessEqual(private_compose_names, compose_names)
+        self.assertEqual(
+            set(listed_names),
+            app_names | (compose_names - private_compose_names),
+        )
 
-        for private_name in (
+        for private_name in private_compose_names | {
             "PROMETHEUS_URL",
             "GRAFANA_URL",
             "ELASTICSEARCH_URL",
@@ -95,11 +106,7 @@ class DevelopmentDeploymentTests(unittest.TestCase):
             "WG_ENDPOINT",
             "PRODUCTION_HOST",
             "STAGING_HOST",
-            "MONITORING_ALLOW_CIDR",
-            "METRICS_BASIC_PASSWORD",
-            "MYSQL_EXPORTER_PASSWORD",
-            "MYSQL_BACKUP_PASSWORD",
-        ):
+        }:
             self.assertNotIn(f"{private_name}=", env_example)
 
     def test_development_nginx_is_http_only(self):
