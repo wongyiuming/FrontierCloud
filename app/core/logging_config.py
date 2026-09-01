@@ -51,10 +51,14 @@ def configure_logging() -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(settings.LOG_LEVEL)
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    for name in ("uvicorn", "uvicorn.error"):
         child = logging.getLogger(name)
         child.handlers.clear()
         child.propagate = True
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.handlers.clear()
+    access_logger.propagate = False
+    access_logger.disabled = True
 
 
 def bind_request_context(request_id: str, trace_id: str) -> tuple[Token[str], Token[str]]:

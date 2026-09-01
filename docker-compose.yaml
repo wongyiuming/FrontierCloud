@@ -1,9 +1,6 @@
 services:
   secrets-init:
     build: .
-    env_file:
-      - path: .env
-        required: false
     user: "0:0"
     command: ["python", "-m", "app.services.runtime_secrets"]
     restart: "no"

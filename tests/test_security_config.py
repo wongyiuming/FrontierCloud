@@ -33,7 +33,8 @@ class SecurityConfigurationTests(unittest.TestCase):
             with patch.object(config, "MYSQL_PASSWORD_FILE", password_file):
                 with patch.dict(os.environ, {}, clear=True):
                     settings = Settings(_env_file=None)
-        self.assertIn("database%20secret%2Bwith%40reserved%2Fchars", settings.MYSQL_URL)
+                self.assertIn("database%20secret%2Bwith%40reserved%2Fchars", settings.MYSQL_URL)
+        self.assertNotIn("MYSQL_URL", type(settings).model_fields)
 
     def test_webrtc_url_is_always_derived_from_server_name_and_port(self):
         with patch.dict(os.environ, {}, clear=True):

@@ -15,7 +15,6 @@ engine: AsyncEngine = create_async_engine(
 async def init_db() -> None:
     from sqlalchemy import text
     async with engine.begin() as conn:
-        await conn.execute(text("DROP TABLE IF EXISTS admin_token_history"))
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS media_visibility (
                 relative_path VARCHAR(255) NOT NULL PRIMARY KEY,

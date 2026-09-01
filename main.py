@@ -221,4 +221,5 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
         proxy_headers=False,
+        access_log=False,
     )

@@ -21,7 +21,6 @@ def _read_secret(path: Path, fallback: str) -> str:
 class Settings(BaseSettings):
     TLS_ENABLED: bool = Field(False, validation_alias="TLS_ENABLED")
     REDIS_URL: str = Field("redis://redis:6379/0", validation_alias="REDIS_URL")
-    MYSQL_URL: str | None = Field(None, validation_alias="MYSQL_URL")
     MYSQL_DATABASE: str = Field("office_automation", validation_alias="MYSQL_DATABASE")
     MYSQL_USER: str = Field("media_admin", validation_alias="MYSQL_USER")
     SERVER_NAME: str = Field("localhost", validation_alias="SERVER_NAME")
@@ -56,11 +55,6 @@ class Settings(BaseSettings):
         errors: list[str] = []
         if self.TLS_ENABLED and self.SERVER_NAME.strip().lower() in {"", "localhost"}:
             errors.append("SERVER_NAME must be set to the public hostname when TLS_ENABLED=true")
-        if not self.MYSQL_URL:
-            user = quote(self.MYSQL_USER, safe="")
-            password = quote(_read_secret(MYSQL_PASSWORD_FILE, "uninitialized"), safe="")
-            database = quote(self.MYSQL_DATABASE, safe="")
-            self.MYSQL_URL = f"mysql+asyncmy://{user}:{password}@mysql:3306/{database}"
         if self.ADMIN_COOKIE_SAMESITE.strip().lower() not in {"strict", "lax"}:
             errors.append("ADMIN_COOKIE_SAMESITE must be strict or lax")
         if errors:
@@ -86,6 +80,13 @@ class Settings(BaseSettings):
     @property
     def ADMIN_COOKIE_SECURE(self) -> bool:
         return self.TLS_ENABLED
+
+    @property
+    def MYSQL_URL(self) -> str:
+        user = quote(self.MYSQL_USER, safe="")
+        password = quote(_read_secret(MYSQL_PASSWORD_FILE, "uninitialized"), safe="")
+        database = quote(self.MYSQL_DATABASE, safe="")
+        return f"mysql+asyncmy://{user}:{password}@mysql:3306/{database}"
 
     @property
     def ADMIN_COOKIE_NAME(self) -> str:

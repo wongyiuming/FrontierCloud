@@ -10,8 +10,8 @@ ANNOUNCE_MARKER = SECRET_DIR / ".announce-once"
 logger = logging.getLogger("frontiercloud.init")
 
 
-def _new_secret(legacy_name: str) -> str:
-    return os.getenv(legacy_name, "").strip() or secrets.token_urlsafe(48)
+def _new_secret() -> str:
+    return secrets.token_urlsafe(48)
 
 
 def _set_web_owner(path) -> None:
@@ -24,16 +24,12 @@ def initialize_runtime_secrets() -> None:
     os.chmod(SECRET_DIR, 0o700)
     _set_web_owner(SECRET_DIR)
     created = False
-    managed = (
-        (MYSQL_PASSWORD_FILE, "MYSQL_PASSWORD"),
-        (MYSQL_ROOT_PASSWORD_FILE, "MYSQL_ROOT_PASSWORD"),
-        (ADMIN_KEY_FILE, "ADMIN_BOOTSTRAP_TOKEN"),
-    )
-    for path, legacy_name in managed:
+    managed = (MYSQL_PASSWORD_FILE, MYSQL_ROOT_PASSWORD_FILE, ADMIN_KEY_FILE)
+    for path in managed:
         if path.exists() and path.read_text(encoding="utf-8").strip():
             _set_web_owner(path)
             continue
-        path.write_text(_new_secret(legacy_name) + "\n", encoding="utf-8")
+        path.write_text(_new_secret() + "\n", encoding="utf-8")
         os.chmod(path, 0o600)
         _set_web_owner(path)
         created = True

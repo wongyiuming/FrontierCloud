@@ -83,6 +83,23 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn('"trace_id"', nginx)
         self.assertNotIn("/var/log/nginx", nginx + compose)
 
+    def test_duplicate_uvicorn_access_log_is_disabled(self):
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        logging_config = (ROOT / "app/core/logging_config.py").read_text(encoding="utf-8")
+        self.assertIn("--no-access-log", dockerfile)
+        self.assertIn('logging.getLogger("uvicorn.access")', logging_config)
+        self.assertIn("access_logger.disabled = True", logging_config)
+
+    def test_runtime_secret_initializer_has_no_legacy_environment_inputs(self):
+        initializer = (ROOT / "app/services/runtime_secrets.py").read_text(encoding="utf-8")
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        deploy = (ROOT / "scripts/deploy_rn.sh").read_text(encoding="utf-8")
+        for obsolete in (
+            "ADMIN_BOOTSTRAP_TOKEN", "MYSQL_PASSWORD=", "MYSQL_ROOT_PASSWORD=",
+            "MYSQL_URL=", "WEBRTC_STUN_URLS=", "SECURITY_AUTO_BAN_TTL=",
+        ):
+            self.assertNotIn(obsolete, initializer + compose + deploy)
+
     def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         deploy = workflow.split("  deploy-rn:", 1)[1]
