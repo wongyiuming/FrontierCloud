@@ -27,6 +27,7 @@ jobs:
             -keyout certs/privkey.pem \
             -out certs/fullchain.pem \
             -subj "/C=CN/ST=CI/L=CI/O=FrontierCloud/CN=localhost"
+          echo '127.0.0.1 ci.frontiercloud.local' | sudo tee -a /etc/hosts
           cat <<'EOF' > .env
           TLS_ENABLED=true
           METRICS_TOKEN=ci_metrics_token_0123456789abcdef
@@ -63,16 +64,16 @@ jobs:
 
       - name: Test public and admin flows
         run: |
-          curl -kfsSL https://localhost/ | grep "前沿视界"
-          curl -kfsS https://localhost/health/live | grep '"status":"healthy"'
-          curl -kfsS https://localhost/health/ready | grep '"status":"ready"'
-          curl -kfsS https://localhost/metrics \
+          curl -kfsSL https://ci.frontiercloud.local/ | grep "前沿视界"
+          curl -kfsS https://ci.frontiercloud.local/health/live | grep '"status":"healthy"'
+          curl -kfsS https://ci.frontiercloud.local/health/ready | grep '"status":"ready"'
+          curl -kfsS https://ci.frontiercloud.local/metrics \
             -H 'Authorization: Bearer ci_metrics_token_0123456789abcdef' | grep 'frontiercloud_http_requests_total'
-          curl -kfsS https://localhost/api/v1/media/ | grep "前沿视界"
-          test "$(curl -ksS -o /dev/null -w '%{http_code}' https://localhost/api/v1/media/admin/)" = 401
+          curl -kfsS https://ci.frontiercloud.local/api/v1/media/ | grep "前沿视界"
+          test "$(curl -ksS -o /dev/null -w '%{http_code}' https://ci.frontiercloud.local/api/v1/media/admin/)" = 401
 
           ADMIN_KEY=$(docker compose exec -T web python -c "from app.core.config import ADMIN_KEY_FILE; print(ADMIN_KEY_FILE.read_text().strip())")
-          curl -kfsS -c /tmp/admin-cookies.txt -X POST https://localhost/api/v1/media/admin/elevate \
+          curl -kfsS -c /tmp/admin-cookies.txt -X POST https://ci.frontiercloud.local/api/v1/media/admin/elevate \
             --data-urlencode "token=$ADMIN_KEY" | grep '"status":"ok"'
           CSRF_TOKEN=$(awk '$6 == "__Host-admin-csrf" {print $7}' /tmp/admin-cookies.txt)
 
@@ -80,24 +81,24 @@ jobs:
           printf 'RIFF1111WAVEfmt ' > /tmp/ci-two.wav
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -F 'target_dir=' -F 'relative_path=music/ci-folder/one.wav' -F 'file=@/tmp/ci-one.wav;type=audio/wav' \
-            https://localhost/api/v1/media/admin/upload/item | grep 'music/ci-folder/one.wav'
+            https://ci.frontiercloud.local/api/v1/media/admin/upload/item | grep 'music/ci-folder/one.wav'
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -F 'target_dir=music/ci-multiple' -F 'file=@/tmp/ci-one.wav;type=audio/wav' \
-            https://localhost/api/v1/media/admin/upload/item | grep 'music/ci-multiple/ci-one.wav'
+            https://ci.frontiercloud.local/api/v1/media/admin/upload/item | grep 'music/ci-multiple/ci-one.wav'
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -F 'target_dir=music/ci-multiple' -F 'file=@/tmp/ci-two.wav;type=audio/wav' \
-            https://localhost/api/v1/media/admin/upload/item | grep 'music/ci-multiple/ci-two.wav'
+            https://ci.frontiercloud.local/api/v1/media/admin/upload/item | grep 'music/ci-multiple/ci-two.wav'
           curl -kfsS -b /tmp/admin-cookies.txt \
-            'https://localhost/api/v1/media/admin/download?paths=%5B%22music%2Fci-multiple%2Fci-one.wav%22%5D' \
+            'https://ci.frontiercloud.local/api/v1/media/admin/download?paths=%5B%22music%2Fci-multiple%2Fci-one.wav%22%5D' \
             -o /tmp/ci-downloaded.wav
           cmp /tmp/ci-one.wav /tmp/ci-downloaded.wav
           test "$(docker compose exec -T redis redis-cli GET media:catalog:v2:generation)" -ge 3
-          curl -kfsS 'https://localhost/api/v1/media/music/category?path=music%2Fci-folder' | grep 'one'
+          curl -kfsS 'https://ci.frontiercloud.local/api/v1/media/music/category?path=music%2Fci-folder' | grep 'one'
           docker compose exec -T redis redis-cli --scan \
             --pattern 'media:catalog:v2:*:tracks:*' | grep 'media:catalog:v2:'
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -H 'Content-Type: application/json' -d '{"mode":"random"}' \
-            https://localhost/api/v1/media/admin/key/rotate | grep '"admin_key"'
+            https://ci.frontiercloud.local/api/v1/media/admin/key/rotate | grep '"admin_key"'
 
           for attempt in $(seq 1 6); do
             docker compose exec -T web python -c \
@@ -105,18 +106,18 @@ jobs:
           done
           docker compose exec -T redis redis-cli GET security:auto-ban:203.0.113.77 | grep '203.0.113.77'
           curl -kfsS -b /tmp/admin-cookies.txt \
-            https://localhost/api/v1/media/admin/security/blocks | grep '203.0.113.77'
+            https://ci.frontiercloud.local/api/v1/media/admin/security/blocks | grep '203.0.113.77'
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -H 'Content-Type: application/json' -d '{"ip":"203.0.113.77"}' \
-            https://localhost/api/v1/media/admin/security/unban | grep '"status":"ok"'
+            https://ci.frontiercloud.local/api/v1/media/admin/security/unban | grep '"status":"ok"'
           test -z "$(docker compose exec -T redis redis-cli GET security:auto-ban:203.0.113.77)"
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -H 'Content-Type: application/json' -d '{"ip":"203.0.113.77","note":"CI"}' \
-            https://localhost/api/v1/media/admin/security/whitelist | grep '"status":"ok"'
+            https://ci.frontiercloud.local/api/v1/media/admin/security/whitelist | grep '"status":"ok"'
           docker compose exec -T redis redis-cli SISMEMBER security:ip-whitelist 203.0.113.77 | grep '^1$'
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -H 'Content-Type: application/json' -d '{"ip":"203.0.113.77"}' \
-            https://localhost/api/v1/media/admin/security/whitelist/remove | grep '"status":"ok"'
+            https://ci.frontiercloud.local/api/v1/media/admin/security/whitelist/remove | grep '"status":"ok"'
 
       - name: Show service logs on failure
         if: failure()
