@@ -175,6 +175,7 @@ class MonitoringStackTests(unittest.TestCase):
         script = (ROOT / "nginx" / "12-log-permissions.sh").read_text(encoding="utf-8")
         dockerfile = (ROOT / "nginx" / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("chown nginx:nginx /var/log/nginx/access_log.log", script)
+        self.assertIn("chmod 0644 /var/log/nginx/access_log.log", script)
         self.assertIn("12-log-permissions.sh", dockerfile)
 
 
