@@ -10,7 +10,7 @@ services:
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
     volumes: [runtime_secrets:/run/frontiercloud-secrets]
     logging: &service_logging
       driver: json-file
