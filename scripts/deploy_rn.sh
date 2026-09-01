@@ -11,6 +11,8 @@ fi
 
 docker compose config --quiet
 docker compose up -d --build --remove-orphans --wait --wait-timeout 240
+# One-time recovery for the client address blocked by the 2026-09-01 release probe.
+docker compose exec -T web python -c "import asyncio; from app.services.ip_security import unban_ip; asyncio.run(unban_ip('154.26.176.194', 'release-probe-recovery'))"
 docker compose exec -T nginx nginx -t
 tls_enabled="$(docker compose exec -T nginx printenv TLS_ENABLED)"
 if [ "$tls_enabled" != "true" ]; then
