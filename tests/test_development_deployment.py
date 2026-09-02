@@ -146,7 +146,7 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         )
         self.assertIn("current Web container", readme)
         self.assertIn("persistent `runtime_secrets` volume", readme)
-        self.assertIn("select `提权`", readme)
+        self.assertIn('privilege-elevation control (`id="elevate"`)', readme)
 
     def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")

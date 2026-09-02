@@ -47,7 +47,7 @@ The complete formal configuration contract is [`.env.example`](.env.example). Ev
 
 ## Admin WebUI
 
-Open the media home page, select `提权`, and enter the current Admin Key. After login, use the Admin Key panel to generate a random replacement or enter the same custom replacement twice. Save the returned new key immediately; it becomes the only valid key and every other admin session is invalidated. The admin view also provides:
+Open the media home page, select the privilege-elevation control (`id="elevate"`), and enter the current Admin Key. After login, use the Admin Key panel to generate a random replacement or enter the same custom replacement twice. Save the returned new key immediately; it becomes the only valid key and every other admin session is invalidated. The admin view also provides:
 
 - Random or custom Admin Key rotation.
 - Media upload, download, visibility, and deletion controls.
