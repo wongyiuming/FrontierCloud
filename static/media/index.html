@@ -9,7 +9,7 @@
 </head>
 <body><div class="container"><h1>前沿视界</h1><div class="card-grid"><a href="/api/v1/media/music" class="card"><div class="card-icon">🎵</div><div class="card-title">前沿音乐</div></a><a href="/api/v1/media/video" class="card"><div class="card-icon">🎬</div><div class="card-title">前沿视讯</div></a></div><button class="elevate" id="elevate">提权</button><a class="elevate" href="/api/v1/media/refresh">↻ 刷新界面</a></div>
 <script>
-window.frontierCloudStunUrls={{STUN_URLS_JSON}};
+window.frontierCloudStunUrls={{STUN_URLS_JSON}};window.frontierCloudWebrtcIntervalMs={{WEBRTC_INTERVAL_MS}};
 const btn=document.getElementById('elevate');
-btn.onclick=async()=>{const token=prompt('请输入今日内搭颜色款式:');if(!token)return;const body=new URLSearchParams({token});try{const r=await fetch('/api/v1/media/admin/elevate',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const d=await r.json();if(!r.ok){const detail=d.detail;throw new Error(detail&&typeof detail==='object'?(detail.message||'提权失败'):(detail||'提权失败'))}location.href=d.redirect}catch(e){alert(e.message)}};
+btn.onclick=async()=>{const token=prompt('请输入 Admin Key:');if(!token)return;const body=new URLSearchParams({token});try{const r=await fetch('/api/v1/media/admin/elevate',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const d=await r.json();if(!r.ok){const detail=d.detail;throw new Error(detail&&typeof detail==='object'?(detail.message||'登录失败'):(detail||'登录失败'))}location.href=d.redirect}catch(e){alert(e.message)}};
 </script><script src="{{NETWORK_OBSERVATION_JS_URL}}"></script></body></html>

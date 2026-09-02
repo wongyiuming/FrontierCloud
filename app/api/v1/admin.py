@@ -17,7 +17,6 @@ from fastapi import (
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from app.core.config import settings
-from app.core.admin_log import admin_log_buffer
 from app.services import admin_service
 from app.services import ip_security
 from app.services.media_catalog_cache import invalidate_media_catalog
@@ -40,7 +39,7 @@ def secure_admin_transport(request: Request) -> bool:
 
 
 # ============================================================
-# 1. Temporary token to admin session
+# 1. Persistent Admin Key to admin session
 # ============================================================
 
 @router.post("/elevate")
@@ -49,13 +48,13 @@ async def elevate(
     response: Response,
     token: str = Form(...),
 ):
-    token_hash = await admin_service.verify_admin_token(
+    key_hash = await admin_service.verify_admin_key(
         token,
         request,
     )
 
     await admin_service.create_session(
-        token_hash,
+        key_hash,
         request,
         response,
     )
@@ -191,19 +190,25 @@ async def upload_item(
         await file.close()
 
 
-@router.get("/logs")
-async def admin_logs(
+@router.post("/key/rotate")
+async def admin_key_rotate(
     request: Request,
-    after: int = Query(0, ge=0),
-    limit: int = Query(200, ge=1, le=500),
+    payload: dict,
     session_hash: str = Depends(require_session),
 ):
-    if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
-        raise HTTPException(status_code=426, detail="生产环境日志控制台只允许通过 HTTPS 访问")
-    return JSONResponse(
-        {"entries": admin_log_buffer.read(after=after, limit=limit), "secure_transport": secure_admin_transport(request)},
-        headers={"Cache-Control": "private, no-store"},
-    )
+    mode = payload.get("mode")
+    if mode not in {"random", "custom"}:
+        raise HTTPException(status_code=400, detail="Admin Key 生成模式无效")
+    try:
+        new_key = await admin_service.rotate_admin_key(
+            session_hash,
+            None if mode == "random" else str(payload.get("key", "")),
+            None if mode == "random" else str(payload.get("confirmation", "")),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await admin_service.audit(session_hash, "admin_key_rotate", 1, mode, "success", "", request)
+    return JSONResponse({"status": "ok", "admin_key": new_key}, headers={"Cache-Control": "private, no-store"})
 
 
 @router.get("/security/blocks")

@@ -74,7 +74,6 @@ const context = {
                 };
             }
             if (String(url).includes('/tree')) return {path: '', items: []};
-            if (String(url).includes('/logs')) return {entries: [], secure_transport: true};
             return {};
         },
         blob: async () => new Blob(),
@@ -161,7 +160,11 @@ assert(!adminHtml.includes('Artplayer'));
 assert(!adminHtml.includes('id="move"'));
 assert(adminHtml.includes('id="securityPanel"'));
 assert(adminHtml.includes('id="banList"'));
-assert(adminHtml.includes('/static/js/admin.js?v=20260815-2'));
+assert(adminHtml.includes('/static/js/admin.js?v=20260901-1'));
+assert(adminHtml.includes('id="randomKey"'));
+assert(adminHtml.match(/施工中/g).length === 3);
+assert(!adminHtml.includes('logOutput'));
+assert(!adminHtml.includes('securityToggle'));
 
 const adminJs = fs.readFileSync('static/js/admin.js', 'utf8');
 assert(!adminJs.includes('response.blob()'));

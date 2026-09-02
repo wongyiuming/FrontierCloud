@@ -27,14 +27,9 @@ class NetworkObservationTests(unittest.TestCase):
             network_observation.normalize_observed_addresses([f"203.0.113.{value}" for value in range(1, 10)])
 
     def test_stun_configuration_is_environment_driven_and_scheme_limited(self):
-        with patch.object(settings, "WEBRTC_STUN_URLS", "stun:one.example:3478,stuns:two.example:5349"):
-            self.assertEqual(
-                settings.webrtc_stun_urls(),
-                ["stun:one.example:3478", "stuns:two.example:5349"],
-            )
-        with patch.object(settings, "WEBRTC_STUN_URLS", "https://not-stun.example"):
-            with self.assertRaises(ValueError):
-                settings.webrtc_stun_urls()
+        with patch.object(settings, "SERVER_NAME", "one.example"), patch.object(settings, "WEBRTC_STUN_PORT", 3478):
+            self.assertEqual(settings.webrtc_stun_urls(), ["stun:one.example:3478"])
+        self.assertNotIn("WEBRTC_STUN_URLS", type(settings).model_fields)
 
     def test_browser_probe_only_reports_srflx_and_closes_peer(self):
         script = (ROOT / "static" / "js" / "network-observation.js").read_text(encoding="utf-8")

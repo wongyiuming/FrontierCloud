@@ -1,33 +1,34 @@
+from pathlib import Path
 from urllib.parse import quote
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import make_url
-from sqlalchemy.exc import ArgumentError
+
+SECRET_DIR = Path("/run/frontiercloud-secrets")
+MYSQL_PASSWORD_FILE = SECRET_DIR / "mysql_password"
+MYSQL_ROOT_PASSWORD_FILE = SECRET_DIR / "mysql_root_password"
+ADMIN_KEY_FILE = SECRET_DIR / "admin_key"
+
+
+def _read_secret(path: Path, fallback: str) -> str:
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return fallback
+    return value or fallback
 
 
 class Settings(BaseSettings):
-    TLS_ENABLED: bool = Field(True, validation_alias="TLS_ENABLED")
+    TLS_ENABLED: bool = Field(False, validation_alias="TLS_ENABLED")
     REDIS_URL: str = Field("redis://redis:6379/0", validation_alias="REDIS_URL")
-
-    MYSQL_URL: str | None = Field(None, validation_alias="MYSQL_URL")
     MYSQL_DATABASE: str = Field("office_automation", validation_alias="MYSQL_DATABASE")
     MYSQL_USER: str = Field("media_admin", validation_alias="MYSQL_USER")
-    MYSQL_PASSWORD: str = Field(..., validation_alias="MYSQL_PASSWORD")
-    MYSQL_ROOT_PASSWORD: str = Field(..., validation_alias="MYSQL_ROOT_PASSWORD")
     SERVER_NAME: str = Field("localhost", validation_alias="SERVER_NAME")
-
-    ADMIN_TOKEN_TTL: int = Field(900, ge=1, validation_alias="ADMIN_TOKEN_TTL")
-    ADMIN_TOKEN_ISSUE_INTERVAL: int = Field(900, ge=1, validation_alias="ADMIN_TOKEN_ISSUE_INTERVAL")
     ADMIN_SESSION_TTL: int = Field(900, ge=1, validation_alias="ADMIN_SESSION_TTL")
     ADMIN_MAX_FAILED_ATTEMPTS_PER_IP: int = Field(10, validation_alias="ADMIN_MAX_FAILED_ATTEMPTS_PER_IP")
     ADMIN_FAILED_WINDOW: int = Field(300, validation_alias="ADMIN_FAILED_WINDOW")
     ADMIN_MAX_UPLOAD_FILE_SIZE: int = Field(800 * 1024 * 1024, validation_alias="ADMIN_MAX_UPLOAD_FILE_SIZE")
-    ADMIN_UPLOAD_INACTIVITY_TIMEOUT: int = Field(
-        300,
-        ge=1,
-        validation_alias="ADMIN_UPLOAD_INACTIVITY_TIMEOUT",
-    )
+    ADMIN_UPLOAD_INACTIVITY_TIMEOUT: int = Field(300, ge=1, validation_alias="ADMIN_UPLOAD_INACTIVITY_TIMEOUT")
     ADMIN_MAX_UPLOAD_TASK_FILES: int = Field(5000, validation_alias="ADMIN_MAX_UPLOAD_TASK_FILES")
     ADMIN_MAX_BATCH_FILES: int = Field(200, validation_alias="ADMIN_MAX_BATCH_FILES")
     ADMIN_MAX_DOWNLOAD_ITEMS: int = Field(100, validation_alias="ADMIN_MAX_DOWNLOAD_ITEMS")
@@ -36,75 +37,26 @@ class Settings(BaseSettings):
     MEDIA_MAX_DEPTH: int = Field(32, validation_alias="MEDIA_MAX_DEPTH")
     MEDIA_CATALOG_CACHE_TTL: int = Field(300, validation_alias="MEDIA_CATALOG_CACHE_TTL")
     WEBRTC_STUN_PORT: int = Field(3478, ge=1, le=65535, validation_alias="WEBRTC_STUN_PORT")
-    WEBRTC_STUN_URLS: str = Field("", validation_alias="WEBRTC_STUN_URLS")
-    WEBRTC_REPORT_COOLDOWN: int = Field(60, ge=10, le=3600, validation_alias="WEBRTC_REPORT_COOLDOWN")
+    WEBRTC_REPORT_COOLDOWN: int = Field(30, ge=10, le=3600, validation_alias="WEBRTC_REPORT_COOLDOWN")
     METRICS_TOKEN: str = Field("", validation_alias="METRICS_TOKEN")
     LOG_LEVEL: str = Field("INFO", validation_alias="LOG_LEVEL")
     LOG_FORMAT: str = Field("json", validation_alias="LOG_FORMAT")
     INSTANCE_NAME: str = Field("frontiercloud", validation_alias="INSTANCE_NAME")
-
     TRUSTED_PROXY_NETWORKS: str = Field("172.16.0.0/12", validation_alias="TRUSTED_PROXY_NETWORKS")
     SECURITY_EXEMPT_NETWORKS: str = Field("127.0.0.0/8,::1/128", validation_alias="SECURITY_EXEMPT_NETWORKS")
     SECURITY_INVALID_API_LIMIT: int = Field(5, validation_alias="SECURITY_INVALID_API_LIMIT")
     SECURITY_INVALID_API_WINDOW: int = Field(3600, validation_alias="SECURITY_INVALID_API_WINDOW")
-    SECURITY_AUTO_BAN_TTL: int = Field(86400, validation_alias="SECURITY_AUTO_BAN_TTL")
     SECURITY_RECENT_BAN_HOURS: int = Field(24, validation_alias="SECURITY_RECENT_BAN_HOURS")
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=True,
-        extra="ignore",
-    )
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore")
 
     @model_validator(mode="after")
-    def validate_security_settings(self):
-        if not self.MYSQL_URL:
-            encoded_user = quote(self.MYSQL_USER, safe="")
-            encoded_password = quote(self.MYSQL_PASSWORD, safe="")
-            encoded_database = quote(self.MYSQL_DATABASE, safe="")
-            self.MYSQL_URL = (
-                f"mysql+asyncmy://{encoded_user}:{encoded_password}"
-                f"@mysql:3306/{encoded_database}"
-            )
-        if not self.WEBRTC_STUN_URLS:
-            self.WEBRTC_STUN_URLS = f"stun:{self.SERVER_NAME}:{self.WEBRTC_STUN_PORT}"
-
-        if self.ADMIN_TOKEN_ISSUE_INTERVAL > self.ADMIN_TOKEN_TTL:
-            raise ValueError("ADMIN_TOKEN_ISSUE_INTERVAL must not exceed ADMIN_TOKEN_TTL")
-
-        weak_values = {
-            "change_me",
-            "change_root_password",
-            "password",
-            "huawei@123",
-        }
-
-        def is_weak(value: str, minimum_length: int) -> bool:
-            normalized = value.strip().lower()
-            return (
-                len(value) < minimum_length
-                or normalized in weak_values
-                or normalized.startswith(("replace_with", "change_me", "changeme"))
-            )
-
-        errors = []
-        if is_weak(self.MYSQL_PASSWORD, 16):
-            errors.append("MYSQL_PASSWORD must be a unique secret of at least 16 characters")
-        if is_weak(self.MYSQL_ROOT_PASSWORD, 16):
-            errors.append("MYSQL_ROOT_PASSWORD must be a unique secret of at least 16 characters")
-
-        try:
-            url_password = make_url(self.MYSQL_URL).password or ""
-        except ArgumentError:
-            errors.append("MYSQL_URL is invalid")
-        else:
-            if url_password != self.MYSQL_PASSWORD:
-                errors.append("MYSQL_URL password must match MYSQL_PASSWORD")
-
+    def validate_settings(self):
+        errors: list[str] = []
+        if self.TLS_ENABLED and self.SERVER_NAME.strip().lower() in {"", "localhost"}:
+            errors.append("SERVER_NAME must be set to the public hostname when TLS_ENABLED=true")
         if self.ADMIN_COOKIE_SAMESITE.strip().lower() not in {"strict", "lax"}:
             errors.append("ADMIN_COOKIE_SAMESITE must be strict or lax")
-
         if errors:
             raise ValueError("; ".join(errors))
         return self
@@ -130,6 +82,13 @@ class Settings(BaseSettings):
         return self.TLS_ENABLED
 
     @property
+    def MYSQL_URL(self) -> str:
+        user = quote(self.MYSQL_USER, safe="")
+        password = quote(_read_secret(MYSQL_PASSWORD_FILE, "uninitialized"), safe="")
+        database = quote(self.MYSQL_DATABASE, safe="")
+        return f"mysql+asyncmy://{user}:{password}@mysql:3306/{database}"
+
+    @property
     def ADMIN_COOKIE_NAME(self) -> str:
         return "__Host-admin_session" if self.TLS_ENABLED else "admin_session"
 
@@ -138,10 +97,7 @@ class Settings(BaseSettings):
         return "__Host-admin-csrf" if self.TLS_ENABLED else "admin_csrf"
 
     def webrtc_stun_urls(self) -> list[str]:
-        urls = [value.strip() for value in self.WEBRTC_STUN_URLS.split(",") if value.strip()]
-        if any(not value.startswith(("stun:", "stuns:")) for value in urls):
-            raise ValueError("WEBRTC_STUN_URLS only accepts STUN URLs")
-        return urls[:4]
+        return [f"stun:{self.SERVER_NAME}:{self.WEBRTC_STUN_PORT}"]
 
 
 settings = Settings()
