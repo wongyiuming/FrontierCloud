@@ -336,6 +336,69 @@ async def manual_ban_ip(ip_value: str, session_hash: str, reason: str) -> dict[s
     return {"id": event_id, "ip": ip, "expires_at": expires_at.isoformat()}
 
 
+async def manual_permanent_ban_ip(ip_value: str, session_hash: str, reason: str) -> dict[str, Any]:
+    ip = normalize_ip(ip_value)
+    reason = str(reason or "").strip()
+    if not reason or len(reason) > 255:
+        raise ValueError("Permanent ban reason is required")
+    if is_security_exempt(ip):
+        raise ValueError("Security exempt addresses cannot be banned")
+    now = _utcnow()
+    payload = {
+        "ip": ip,
+        "trigger_count": 0,
+        "window_started_at": now.isoformat(),
+        "banned_at": now.isoformat(),
+        "expires_at": PERMANENT_EXPIRES_AT.isoformat(),
+        "last_method": "ADMIN",
+        "last_path": "manual-permanent-ban",
+        "ban_kind": "permanent",
+        "permanent": True,
+    }
+    async with engine.begin() as conn:
+        whitelisted = await conn.scalar(
+            text("SELECT 1 FROM ip_permanent_whitelist WHERE ip_address=:ip LIMIT 1"),
+            {"ip": ip},
+        )
+        if whitelisted:
+            raise ValueError("Whitelisted addresses cannot be banned")
+        already_permanent = await conn.scalar(text("""
+            SELECT 1 FROM ip_auto_ban_events
+            WHERE ip_address=:ip AND status='active' AND ban_kind='permanent'
+            LIMIT 1
+        """), {"ip": ip})
+        if already_permanent:
+            raise ValueError("Address is already permanently banned")
+        await conn.execute(text("""
+            UPDATE ip_auto_ban_events
+            SET status='replaced', released_at=:now, released_by_session_hash=:session
+            WHERE ip_address=:ip AND status='active'
+        """), {"ip": ip, "now": now, "session": session_hash})
+        inserted = await conn.execute(text("""
+            INSERT INTO ip_auto_ban_events
+            (ip_address, trigger_count, window_started_at, banned_at, expires_at,
+             last_method, last_path, user_agent, ban_kind, reason,
+             created_by_session_hash, status)
+            VALUES (:ip, 0, :now, :now, :expires_at,
+                    'ADMIN', 'manual-permanent-ban', NULL, 'permanent', :reason,
+                    :session_hash, 'active')
+        """), {
+            "ip": ip,
+            "now": now,
+            "expires_at": PERMANENT_EXPIRES_AT,
+            "reason": reason,
+            "session_hash": session_hash,
+        })
+        event_id = int(inserted.lastrowid)
+    await redis_client.set(_ban_key(ip), json.dumps(payload, ensure_ascii=False))
+    await redis_client.delete(_violation_key(ip))
+    await redis_client.zadd(RECENT_BANS_KEY, {ip: now.timestamp()})
+    append_admin_log(
+        f"[IP_SECURITY] permanently banned ip={ip} event_id={event_id} reason={reason[:128]}"
+    )
+    return {"id": event_id, "ip": ip, "permanent": True}
+
+
 async def add_whitelist(ip_value: str, session_hash: str, note: str = "") -> str:
     ip = normalize_ip(ip_value)
     now = _utcnow()

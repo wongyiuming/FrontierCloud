@@ -280,6 +280,29 @@ async def security_reban(
     return {"status": "ok", **result}
 
 
+@router.post("/security/permanent-ban")
+async def security_permanent_ban(
+    request: Request,
+    payload: dict,
+    session_hash: str = Depends(require_session),
+):
+    if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
+        raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
+    reason = payload.get("reason", "")
+    if not isinstance(reason, str):
+        raise HTTPException(status_code=400, detail="拉黑原因无效")
+    try:
+        result = await ip_security.manual_permanent_ban_ip(
+            str(payload.get("ip", "")), session_hash, reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await admin_service.audit(
+        session_hash, "security_permanent_ban", 1, result["ip"], "success", reason, request,
+    )
+    return {"status": "ok", **result}
+
+
 @router.post("/security/whitelist")
 async def security_whitelist(
     request: Request,

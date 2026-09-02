@@ -4,34 +4,36 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿视界 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260901-1">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260902-1">
 </head>
 <body>
-    <section class="admin-console">
-        <section class="key-panel">
-            <header><div><strong>Admin Key</strong><small>Key 长期有效；轮换后其他登录会立即失效。新 Key 只显示一次。</small></div></header>
-            <div class="key-actions">
+    <main class="admin-console">
+        <section class="admin-module key-panel" data-admin-module="key">
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>Admin Key</strong><small>Key 长期有效；轮换后其他登录会立即失效。新 Key 只显示一次。</small></span><b>＋</b></button>
+            <div class="module-content">
+              <div class="key-actions">
                 <button id="randomKey" type="button">生成随机强 Key</button>
                 <form id="customKeyForm">
                     <input id="customKey" type="password" minlength="16" maxlength="512" autocomplete="new-password" placeholder="自定义新 Key（至少 16 个字符）" required>
                     <input id="customKeyConfirm" type="password" minlength="16" maxlength="512" autocomplete="new-password" placeholder="再次输入确认" required>
                     <button type="submit">确认更换</button>
                 </form>
+              </div>
+              <div id="newKeyResult" class="new-key-result hidden" aria-live="polite"><strong>请立即保存新 Admin Key</strong><code id="newKeyValue"></code><button id="copyKey" type="button">复制</button></div>
             </div>
-            <div id="newKeyResult" class="new-key-result hidden" aria-live="polite"><strong>请立即保存新 Admin Key</strong><code id="newKeyValue"></code><button id="copyKey" type="button">复制</button></div>
         </section>
 
-        <section id="securityPanel" class="security-panel">
+        <section id="securityPanel" class="admin-module security-panel expanded" data-admin-module="security">
             <header class="security-header">
-                <div>
+                <button class="module-heading" type="button" aria-expanded="true"><span>
                     <strong>IP 安全防护</strong>
                     <small id="securitySummary">正在加载…</small>
-                </div>
+                </span><b>−</b></button>
                 <div class="security-header-actions">
                     <button id="securityRefresh" type="button">刷新</button>
                 </div>
             </header>
-            <div id="securityPanelBody" class="security-body">
+            <div id="securityPanelBody" class="module-content security-body">
                 <div class="security-stats">
                     <span>合法 API <strong id="legalApiCount">-</strong></span>
                     <span>当前封禁 <strong id="activeBanCount">-</strong></span>
@@ -41,6 +43,11 @@
                     <input id="whitelistIp" type="text" inputmode="text" autocomplete="off" placeholder="IPv4 或 IPv6">
                     <input id="whitelistNote" type="text" maxlength="255" autocomplete="off" placeholder="备注（可选）">
                     <button type="submit">永久加白</button>
+                </form>
+                <form id="permanentBanForm" class="permanent-ban-form">
+                    <input id="permanentBanIp" type="text" inputmode="text" autocomplete="off" placeholder="需要永久拉黑的 IPv4 或 IPv6" required>
+                    <input id="permanentBanReason" type="text" maxlength="255" autocomplete="off" placeholder="永久拉黑原因（必填）" required>
+                    <button type="submit">永久拉黑</button>
                 </form>
                 <form id="securityFilterForm" class="security-filter-form">
                     <input id="securityIpFilter" type="text" maxlength="45" autocomplete="off" placeholder="精确 IP（可选）">
@@ -68,18 +75,20 @@
                 <div id="whitelistList" class="security-list whitelist-list"></div>
             </div>
         </section>
-        <section class="construction" aria-label="待建设功能"><span>施工中</span><span>施工中</span><span>施工中</span></section>
-    </section>
 
-    <aside class="admin-side">
+        <section class="admin-module construction-module" data-admin-module="planned-one"><button class="module-heading" type="button" aria-expanded="false"><span><strong>待建设模块 A</strong><small>预留扩展空间</small></span><b>＋</b></button><div class="module-content construction"><span>施工中</span></div></section>
+        <section class="admin-module construction-module" data-admin-module="planned-two"><button class="module-heading" type="button" aria-expanded="false"><span><strong>待建设模块 B</strong><small>预留扩展空间</small></span><b>＋</b></button><div class="module-content construction"><span>施工中</span></div></section>
+        <section class="admin-module construction-module" data-admin-module="planned-three"><button class="module-heading" type="button" aria-expanded="false"><span><strong>待建设模块 C</strong><small>预留扩展空间</small></span><b>＋</b></button><div class="module-content construction"><span>施工中</span></div></section>
+
+    <section class="admin-module admin-side" data-admin-module="media">
         <header class="admin-header">
-            <strong>媒体管理</strong>
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>媒体管理</strong><small>上传、下载、隐藏及删除媒体</small></span><b>＋</b></button>
             <div>
                 <button id="backPublic">公共视图</button>
                 <button id="logout">退出特权</button>
             </div>
         </header>
-
+        <div class="module-content media-content">
         <div class="toolbar">
             <div class="upload-wrap">
                 <button id="uploadBtn">上传 ▾</button>
@@ -108,7 +117,9 @@
         <div class="selection" id="selection">未选择</div>
         <div class="pathbar" id="pathbar">/</div>
         <div id="tree" class="tree"></div>
-    </aside>
+        </div>
+    </section>
+    </main>
 
     <input id="fileInput" type="file" multiple hidden accept=".mp3,.m4a,.flac,.wav,.mp4,.webm,.mkv">
     <input id="folderInput" type="file" multiple webkitdirectory directory hidden>
@@ -124,6 +135,6 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260901-1"></script>
+    <script src="/static/js/admin.js?v=20260902-1"></script>
 </body>
 </html>
