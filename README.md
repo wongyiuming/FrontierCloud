@@ -30,7 +30,7 @@ SERVER_NAME=media.example.com
 
 The default certificate paths are `./certs/fullchain.pem` and `./certs/privkey.pem`. Enable the corresponding optional entries in `.env.example` to change them. Startup fails when TLS is enabled without a valid `SERVER_NAME`. HTTP mode has no required variables.
 
-The complete formal configuration contract is [`.env.example`](.env.example). Every optional variable remains commented, and omission selects the documented technical default. Database passwords and the Admin Key are initialization-generated runtime secrets, not environment variables.
+The complete formal configuration contract is [`.env.example`](.env.example). Every optional variable remains commented, and omission selects the documented technical default. Database passwords and the Admin Key are initialization-generated runtime secrets, not environment variables. `.env` may contain only variables listed by that contract; CI and RN deployment reject unknown names before Compose starts.
 
 ## Admin WebUI
 

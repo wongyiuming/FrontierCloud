@@ -37,6 +37,7 @@ jobs:
 
       - name: Validate configuration and frontend syntax
         run: |
+          python3 scripts/validate_env_contract.py
           docker compose config --quiet
           python3 scripts/check_english_comments.py
           node --check static/js/admin.js

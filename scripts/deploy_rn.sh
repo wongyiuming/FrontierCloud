@@ -9,6 +9,7 @@ if [ "$(git branch --show-current)" != "dev" ]; then
     exit 1
 fi
 
+python3 scripts/validate_env_contract.py
 docker compose config --quiet
 docker compose up -d --build --remove-orphans --wait --wait-timeout 240
 docker compose exec -T nginx nginx -t

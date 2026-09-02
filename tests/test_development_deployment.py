@@ -1,4 +1,7 @@
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -100,14 +103,51 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         ):
             self.assertNotIn(obsolete, initializer + compose + deploy)
 
+    def test_env_contract_validator_rejects_unknown_names_without_printing_values(self):
+        validator = ROOT / "scripts/validate_env_contract.py"
+        with tempfile.TemporaryDirectory() as directory:
+            temp_root = Path(directory)
+            example = temp_root / ".env.example"
+            env_file = temp_root / ".env"
+            example.write_text("# Supported switch.\n# TLS_ENABLED=false\n", encoding="utf-8")
+            env_file.write_text(
+                "TLS_ENABLED=true\nENVIRONMENT=test\nMETRICS_BASIC_PASSWORD=do_not_print_me\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, str(validator), "--env-file", str(env_file),
+                 "--example-file", str(example)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ENVIRONMENT", result.stdout)
+        self.assertIn("METRICS_BASIC_PASSWORD", result.stdout)
+        self.assertNotIn("do_not_print_me", result.stdout + result.stderr)
+
+    def test_env_contract_validator_accepts_only_formal_variables(self):
+        validator = ROOT / "scripts/validate_env_contract.py"
+        result = subprocess.run(
+            [sys.executable, str(validator), "--env-file", str(ROOT / ".env.example"),
+             "--example-file", str(ROOT / ".env.example")],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
+        deploy_script = (ROOT / "scripts/deploy_rn.sh").read_text(encoding="utf-8")
         deploy = workflow.split("  deploy-rn:", 1)[1]
         self.assertIn("needs: test-compose", deploy)
         self.assertIn("github.event_name == 'push'", deploy)
         self.assertIn("github.ref == 'refs/heads/dev'", deploy)
         self.assertNotIn("refs/heads/main", deploy)
         self.assertNotIn("workflow_dispatch", workflow)
+        self.assertIn("python3 scripts/validate_env_contract.py", workflow)
+        self.assertIn("python3 scripts/validate_env_contract.py", deploy_script)
 
 
 if __name__ == "__main__":
