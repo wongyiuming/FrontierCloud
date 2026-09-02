@@ -14,6 +14,25 @@ let uploadLimits = {
 
 const $ = id => document.getElementById(id);
 
+function expandAdminModule(target) {
+    const shouldExpand = !target.classList.contains('expanded');
+    for (const module of document.querySelectorAll('.admin-module')) {
+        const expanded = module === target && shouldExpand;
+        module.classList.toggle('expanded', expanded);
+        const heading = module.querySelector?.('.module-heading');
+        if (heading) {
+            heading.setAttribute('aria-expanded', String(expanded));
+            const indicator = heading.querySelector('b');
+            if (indicator) indicator.textContent = expanded ? '−' : '＋';
+        }
+    }
+}
+
+for (const module of document.querySelectorAll('.admin-module')) {
+    const heading = module.querySelector('.module-heading');
+    if (heading) heading.onclick = () => expandAdminModule(module);
+}
+
 function getCookie(name) {
     return document.cookie
         .split('; ')
@@ -382,6 +401,18 @@ function renderSecurityList(data) {
                     });
                 }));
             }
+            if (event.ban_kind !== 'permanent') {
+                actions.appendChild(securityButton('永久拉黑', 'danger', async () => {
+                    const reason = prompt(`请输入永久拉黑 ${event.ip} 的原因:`);
+                    if (!reason?.trim()) return;
+                    if (!confirm(`确认永久拉黑 ${event.ip}？该封禁不会自动到期。`)) return;
+                    await api('/api/v1/media/admin/security/permanent-ban', {
+                        method: 'POST',
+                        headers: requestHeaders(),
+                        body: JSON.stringify({ip: event.ip, reason: reason.trim()}),
+                    });
+                }));
+            }
         }
         row.append(main, actions);
         banList.appendChild(row);
@@ -474,6 +505,22 @@ $('whitelistForm').onsubmit = async event => {
         });
         $('whitelistIp').value = '';
         $('whitelistNote').value = '';
+        await loadSecurityStatus(true);
+    } catch (error) {
+        alert(error.message);
+    }
+};
+$('permanentBanForm').onsubmit = async event => {
+    event.preventDefault();
+    const ip = $('permanentBanIp').value.trim();
+    const reason = $('permanentBanReason').value.trim();
+    if (!ip || !reason) return;
+    if (!confirm(`确认永久拉黑 ${ip}？该封禁不会自动到期。`)) return;
+    try {
+        await api('/api/v1/media/admin/security/permanent-ban', {
+            method: 'POST', headers: requestHeaders(), body: JSON.stringify({ip, reason}),
+        });
+        $('permanentBanForm').reset();
         await loadSecurityStatus(true);
     } catch (error) {
         alert(error.message);

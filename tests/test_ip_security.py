@@ -235,6 +235,14 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("created_by_session_hash", source)
         self.assertNotIn("UPDATE ip_auto_ban_events", source)
 
+    def test_manual_permanent_ban_has_no_expiry_and_replaces_active_ban(self):
+        source = inspect.getsource(ip_security.manual_permanent_ban_ip)
+        self.assertIn("'permanent'", source)
+        self.assertIn("PERMANENT_EXPIRES_AT", source)
+        self.assertIn("status='replaced'", source)
+        self.assertIn("await redis_client.set(_ban_key(ip)", source)
+        self.assertNotIn("ex=", source)
+
 
 class AdminAuthenticationCoverageTests(unittest.TestCase):
     def test_every_admin_view_route_except_elevation_requires_session(self):

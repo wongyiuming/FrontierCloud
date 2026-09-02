@@ -137,6 +137,17 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_readme_documents_runtime_secret_recovery_after_web_recreation(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("docker compose logs web | grep initial_runtime_secrets", readme)
+        self.assertIn(
+            "docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'",
+            readme,
+        )
+        self.assertIn("current Web container", readme)
+        self.assertIn("persistent `runtime_secrets` volume", readme)
+        self.assertIn('privilege-elevation control (`id="elevate"`)', readme)
+
     def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         deploy_script = (ROOT / "scripts/deploy_rn.sh").read_text(encoding="utf-8")
