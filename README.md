@@ -19,6 +19,19 @@ docker compose logs web | grep initial_runtime_secrets
 
 Save these values immediately. Restarts neither rotate nor print them again. The Admin Key has no automatic expiration or scheduled rotation. A holder of the current key can enter Admin WebUI and either generate a new random strong key or enter and confirm a custom key. Rotation immediately invalidates every other admin session.
 
+`docker compose logs web` only reads the current Web container. If CD or a manual deployment has recreated that container, the one-time initialization entry may no longer be available. The generated values are still stored in the persistent `runtime_secrets` volume and can be read by a host administrator at any time:
+
+```bash
+# Current Admin Key
+docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'
+
+# Current generated database passwords
+docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/mysql_password'
+docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/mysql_root_password'
+```
+
+These commands print secrets to the terminal, so run them only in a private administrator session and do not paste their output into tickets or logs.
+
 ## HTTPS
 
 HTTPS requires enabling TLS, setting the public hostname, and providing a certificate:
@@ -34,7 +47,7 @@ The complete formal configuration contract is [`.env.example`](.env.example). Ev
 
 ## Admin WebUI
 
-Open the admin login from the media home page and enter the current Admin Key. The admin view provides:
+Open the media home page, select `提权`, and enter the current Admin Key. After login, use the Admin Key panel to generate a random replacement or enter the same custom replacement twice. Save the returned new key immediately; it becomes the only valid key and every other admin session is invalidated. The admin view also provides:
 
 - Random or custom Admin Key rotation.
 - Media upload, download, visibility, and deletion controls.
