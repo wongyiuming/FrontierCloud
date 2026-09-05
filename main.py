@@ -19,7 +19,7 @@ from app.api.v1.endpoints import router as api_v1_router
 from app.core.admin_log import sanitize_log_value
 from app.core.config import settings
 from app.core.client_ip import client_ip
-from app.core.db import init_db
+from app.core.db import close_db, init_db
 from app.core.logging_config import bind_request_context, configure_logging, reset_request_context
 from app.core.metrics import MetricsMiddleware
 from app.core.upload_lifecycle import install_upload_lifecycle_guard
@@ -27,6 +27,7 @@ from app.middleware.ip_security import IPSecurityMiddleware
 from app.services import admin_service
 from app.services.health import live_status, readiness_response
 from app.services.ip_security import initialize_ip_security_cache
+from app.services.media_manager import recover_interrupted_media_deletions
 from app.services.runtime_secrets import announce_initial_secrets_once
 from app.services.upload_cleanup import cleanup_stale_upload_parts, run_stale_upload_cleanup
 
@@ -38,20 +39,24 @@ logger = logging.getLogger("frontiercloud.http")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
-    await initialize_ip_security_cache()
-    announce_initial_secrets_once()
-    await asyncio.to_thread(cleanup_stale_upload_parts)
-    upload_cleanup_task = asyncio.create_task(
-        run_stale_upload_cleanup(),
-        name="stale-upload-cleanup",
-    )
+    upload_cleanup_task = None
     try:
+        await init_db()
+        await recover_interrupted_media_deletions()
+        await initialize_ip_security_cache()
+        announce_initial_secrets_once()
+        await asyncio.to_thread(cleanup_stale_upload_parts)
+        upload_cleanup_task = asyncio.create_task(
+            run_stale_upload_cleanup(),
+            name="stale-upload-cleanup",
+        )
         yield
     finally:
-        upload_cleanup_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await upload_cleanup_task
+        if upload_cleanup_task is not None:
+            upload_cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await upload_cleanup_task
+        await close_db()
 
 
 app = FastAPI(
