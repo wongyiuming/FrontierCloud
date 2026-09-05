@@ -147,11 +147,16 @@ class FastAPIRouteClassificationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class _FakeConnection:
-    async def execute(self, *_args, **_kwargs):
+    def __init__(self, scalar_values=None):
+        self.scalar_values = list(scalar_values or [])
+        self.executed = []
+
+    async def execute(self, statement, params=None):
+        self.executed.append((str(statement), params or {}))
         return None
 
     async def scalar(self, *_args, **_kwargs):
-        return 0
+        return self.scalar_values.pop(0) if self.scalar_values else 0
 
 
 class _FakeTransaction:
@@ -176,11 +181,14 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
         fake_redis = AsyncMock()
         fake_redis.sismember.return_value = False
         fake_redis.eval.return_value = [6, now_ms - 1000]
-        fake_redis.set.return_value = True
+        connection = _FakeConnection([0, 0, 0])
+
+        async def run_transaction(operation, **_kwargs):
+            return await operation(connection)
 
         with (
             patch.object(ip_security, "redis_client", fake_redis),
-            patch.object(ip_security, "engine", _FakeEngine()),
+            patch.object(ip_security, "_run_state_transaction", side_effect=run_transaction),
             patch.object(ip_security.settings, "SECURITY_INVALID_API_LIMIT", 5),
         ):
             count = await ip_security.record_invalid_api(
@@ -188,32 +196,32 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(count, 6)
-        self.assertEqual(fake_redis.set.await_args.kwargs["ex"], 86400)
-        self.assertTrue(fake_redis.set.await_args.kwargs["nx"])
-        fake_redis.zadd.assert_awaited_once()
+        insert = next(item for item in connection.executed if "INSERT INTO ip_auto_ban_events" in item[0])
+        self.assertEqual(insert[1]["ban_kind"], "auto")
+        self.assertEqual(
+            int((insert[1]["expires_at"] - insert[1]["banned_at"]).total_seconds()),
+            86400,
+        )
 
     async def test_second_offense_creates_permanent_ban_without_redis_ttl(self):
         now_ms = int(time.time() * 1000)
         fake_redis = AsyncMock()
         fake_redis.sismember.return_value = False
         fake_redis.eval.return_value = [6, now_ms - 1000]
-        fake_redis.set.return_value = True
+        connection = _FakeConnection([0, 0, 1])
 
-        class PreviousBanConnection(_FakeConnection):
-            async def scalar(self, *_args, **_kwargs):
-                return 1
-        class PreviousBanTransaction(_FakeTransaction):
-            async def __aenter__(self): return PreviousBanConnection()
-        class PreviousBanEngine(_FakeEngine):
-            def connect(self): return PreviousBanTransaction()
+        async def run_transaction(operation, **_kwargs):
+            return await operation(connection)
 
-        with patch.object(ip_security, "redis_client", fake_redis), patch.object(ip_security, "engine", PreviousBanEngine()), \
+        with patch.object(ip_security, "redis_client", fake_redis), \
+             patch.object(ip_security, "_run_state_transaction", side_effect=run_transaction), \
              patch.object(ip_security.settings, "SECURITY_INVALID_API_LIMIT", 5):
             count = await ip_security.record_invalid_api("203.0.113.11", "GET", "/second", "scanner")
 
         self.assertEqual(count, 6)
-        self.assertNotIn("ex", fake_redis.set.await_args.kwargs)
-        self.assertTrue(fake_redis.set.await_args.kwargs["nx"])
+        insert = next(item for item in connection.executed if "INSERT INTO ip_auto_ban_events" in item[0])
+        self.assertEqual(insert[1]["ban_kind"], "permanent")
+        self.assertEqual(insert[1]["expires_at"], ip_security.PERMANENT_EXPIRES_AT)
 
     def test_ban_runtime_never_deletes_audit_history(self):
         record_source = inspect.getsource(ip_security.record_invalid_api)
@@ -233,15 +241,16 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("INSERT INTO ip_auto_ban_events", source)
         self.assertIn("'manual'", source)
         self.assertIn("created_by_session_hash", source)
-        self.assertNotIn("UPDATE ip_auto_ban_events", source)
+        self.assertIn("SET status='expired'", source)
+        self.assertIn("_run_state_transaction", source)
 
     def test_manual_permanent_ban_has_no_expiry_and_replaces_active_ban(self):
         source = inspect.getsource(ip_security.manual_permanent_ban_ip)
         self.assertIn("'permanent'", source)
         self.assertIn("PERMANENT_EXPIRES_AT", source)
         self.assertIn("status='replaced'", source)
-        self.assertIn("await redis_client.set(_ban_key(ip)", source)
-        self.assertNotIn("ex=", source)
+        self.assertIn("_run_state_transaction", source)
+        self.assertNotIn("redis_client.set", source)
 
 
 class AdminAuthenticationCoverageTests(unittest.TestCase):

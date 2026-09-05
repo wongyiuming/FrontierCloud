@@ -43,6 +43,7 @@ jobs:
           node --check static/js/admin.js
           node --check static/js/player.js
           node tests/admin_ui_smoke.mjs
+          node tests/player_cache_smoke.mjs
 
       - name: Build and start services
         run: docker compose up -d --build --remove-orphans --wait --wait-timeout 180

@@ -55,6 +55,10 @@ Open the media home page, select the privilege-elevation control (`id="elevate"`
 
 The automatic security lifecycle is fixed: the first threshold violation blocks an IP for 24 hours, and the second violation permanently blacklists it. This timing is not configurable. An administrator may still explicitly release or allowlist an address in Admin WebUI.
 
+## Audio playback caching
+
+Audio playback preloads the next item from the same page-local queue used by the Next control. Preloading starts after five seconds (earlier for short tracks), retries transient failures, and uses a completed Blob directly when switching. Score changes update displayed values; ordering is recalculated when opening a player page, not mid-queue. At most the current cached track and one upcoming track are retained, with a 128 MiB limit per speculative download. Oversized audio and videos use normal streaming. Offline switching requires the next download to have completed; early manual skips or interrupted downloads still require network access. The player does not automatically mute after inactivity.
+
 ## WebRTC network observation
 
 WebRTC is a core FrontierCloud function, so Compose always starts the STUN service. The browser uses this derived address without a separate URL setting:
@@ -85,12 +89,17 @@ The project does not deploy or manage Prometheus, Grafana, Elasticsearch, Logsta
 
 An ordinary `docker compose down` preserves these volumes. Only an explicit destructive operation with `--volumes` removes the databases and runtime secrets. The next startup then performs a fresh initialization and generates new values.
 
+Media deletion first moves the selected objects into `data/media/.delete-<operation-id>` on the same filesystem. A MySQL journal records whether metadata deletion committed. Web startup restores pending operations and removes committed quarantine data. Do not manually remove a quarantine directory or its `media_delete_operations` row while recovery is pending. If a commit outcome cannot be determined, further media mutations return HTTP 503; restore database availability and restart Web (`docker compose restart web`) to run recovery. Incomplete rollback recovery prevents startup so new uploads cannot overwrite files awaiting restoration. These filesystem mutation locks cover the single Web worker shipped by the project; shared-media multi-worker or multi-replica deployment is not supported by this recovery mechanism.
+
+Schema migrations use individually atomic MySQL DDL statements under a named connection lock; the entire startup migration is not one rollbackable transaction. IP security changes commit to MySQL before rebuilding Redis. A dirty or unavailable security cache is read from MySQL until it can be rebuilt. No extra configuration variables are required for these transaction safeguards.
+
 ## Development checks
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py' -v
 node --check static/js/admin.js
 node --check static/js/network-observation.js
+node tests/player_cache_smoke.mjs
 docker compose config --quiet
 docker compose up -d --build --wait
 curl -fsS http://localhost/health/ready

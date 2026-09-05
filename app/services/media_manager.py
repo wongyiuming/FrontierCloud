@@ -1,8 +1,11 @@
+import asyncio
+import json
 import os
 import re
 import shutil
 import tempfile
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -10,8 +13,12 @@ from fastapi import HTTPException, UploadFile
 from sqlalchemy import text
 from zipstream import ZIP_STORED, ZipStream
 
+from app.core.async_lock import LoopLocalAsyncLock
 from app.core.config import settings
 from app.core.db import engine
+from app.core.admin_log import append_admin_log
+from app.services.media_catalog_cache import invalidate_media_catalog
+
 BASE_DIR = Path(__file__).resolve().parents[2]
 MEDIA_ROOT = (BASE_DIR / "data" / "media").resolve()
 AUDIO_EXTS = (".mp3", ".m4a", ".flac", ".wav")
@@ -21,6 +28,43 @@ MEDIA_TYPE_EXTS = {
     "music": set(AUDIO_EXTS),
     "vido": set(VIDEO_EXTS),
 }
+
+DELETE_QUARANTINE_PREFIX = ".delete-"
+media_mutation_lock = LoopLocalAsyncLock()
+_RECOVERY_REQUIRED_ROOTS: set[Path] = set()
+
+
+def _sync_media_directory(directory: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def ensure_media_mutations_ready() -> None:
+    if MEDIA_ROOT in _RECOVERY_REQUIRED_ROOTS:
+        raise HTTPException(
+            status_code=503,
+            detail="媒体事务等待恢复，请在数据库恢复后重启 Web 服务",
+        )
+
+
+async def _finish_media_cleanup(task: asyncio.Task) -> None:
+    cancellation = None
+    while True:
+        try:
+            await asyncio.shield(task)
+            break
+        except asyncio.CancelledError as exc:
+            cancellation = exc
+            if task.done():
+                task.result()
+                break
+    if cancellation is not None:
+        raise cancellation
 
 def resolve_safe_path(base_dir: Path, sub_path: str) -> Path:
     clean = str(sub_path or "").replace("\\", "/").lstrip("/\\")
@@ -140,11 +184,15 @@ class MediaManager:
             raise HTTPException(status_code=409, detail="上传失败，目标位置已存在同名文件")
         MediaManager._validate_media_destination(destination)
 
-        fd, tmp_name = tempfile.mkstemp(prefix=".upload-", suffix=".part", dir=str(target_dir))
+        # Stage under MEDIA_ROOT so folder uploads do not create persistent
+        # directories until their complete payload has passed validation.
+        fd, tmp_name = tempfile.mkstemp(prefix=".upload-", suffix=".part", dir=str(MEDIA_ROOT))
         os.close(fd)
         tmp = Path(tmp_name)
         total = 0
         head = b""
+        published = False
+        created_dirs: list[Path] = []
         try:
             with tmp.open("wb") as out:
                 while True:
@@ -161,20 +209,37 @@ class MediaManager:
                 os.fsync(out.fileno())
             if total == 0 or not MediaManager._signature_ok(ext, head):
                 raise HTTPException(status_code=400, detail="上传失败，文件内容不是受支持的媒体格式")
-            # mkstemp creates files as 0600. The Nginx container uses a
-            # different unprivileged UID and must be able to read media after
-            # FastAPI authorizes an X-Accel-Redirect download.
-            tmp.chmod(0o644)
-            try:
-                os.link(tmp, destination)
-            except FileExistsError as exc:
-                raise HTTPException(
-                    status_code=409,
-                    detail="上传失败，目标位置已存在同名文件",
-                ) from exc
+            async with media_mutation_lock:
+                ensure_media_mutations_ready()
+                if destination.exists():
+                    raise HTTPException(status_code=409, detail="上传失败，目标位置已存在同名文件")
+                MediaManager._validate_media_destination(destination)
+                missing = target_dir
+                while missing != MEDIA_ROOT and not missing.exists():
+                    created_dirs.append(missing)
+                    missing = missing.parent
+                target_dir.mkdir(parents=True, exist_ok=True)
+
+                # mkstemp creates files as 0600. The Nginx container uses a
+                # different unprivileged UID and must be able to read media.
+                tmp.chmod(0o644)
+                try:
+                    os.link(tmp, destination)
+                except FileExistsError as exc:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="上传失败，目标位置已存在同名文件",
+                    ) from exc
+                published = True
             return str(destination.relative_to(MEDIA_ROOT).as_posix())
         finally:
             tmp.unlink(missing_ok=True)
+            if not published:
+                for directory in created_dirs:
+                    try:
+                        directory.rmdir()
+                    except (FileNotFoundError, OSError):
+                        break
 
     @staticmethod
     def ensure_download_readable(path: Path) -> None:
@@ -201,7 +266,6 @@ class MediaManager:
         destination_dir = (base / nested).resolve() if nested else base.resolve()
         MediaManager._validate_upload_directory(destination_dir)
         MediaManager._validate_media_destination(destination_dir / name)
-        destination_dir.mkdir(parents=True, exist_ok=True)
         return destination_dir, name
 
     @staticmethod
@@ -241,21 +305,27 @@ class MediaManager:
 
     @staticmethod
     async def set_hidden(paths: list[str], hidden: bool) -> None:
-        now = datetime.utcnow()
-        async with engine.begin() as conn:
-            for path in paths:
-                rel = MediaManager.normalize_relative(path)
-                target = resolve_safe_path(MEDIA_ROOT, rel)
-                if not target.is_dir():
-                    raise HTTPException(status_code=400, detail="隐藏操作只允许目录")
-                if hidden:
-                    await conn.execute(
-                        text("INSERT INTO media_visibility(relative_path,hidden,updated_at) VALUES(:p,1,:t) ON DUPLICATE KEY UPDATE hidden=1,updated_at=:t"),
-                        {"p": rel, "t": now},
-                    )
-                else:
-                    prefix = rel + "/"
-                    await conn.execute(text("DELETE FROM media_visibility WHERE relative_path=:p OR relative_path LIKE :prefix"), {"p": rel, "prefix": prefix + "%"})
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        async with media_mutation_lock:
+            ensure_media_mutations_ready()
+            async with engine.begin() as conn:
+                for path in paths:
+                    rel = MediaManager.normalize_relative(path)
+                    target = resolve_safe_path(MEDIA_ROOT, rel)
+                    if not target.is_dir():
+                        raise HTTPException(status_code=400, detail="隐藏操作只允许目录")
+                    if hidden:
+                        await conn.execute(
+                            text("INSERT INTO media_visibility(relative_path,hidden,updated_at) VALUES(:p,1,:t) ON DUPLICATE KEY UPDATE hidden=1,updated_at=:t"),
+                            {"p": rel, "t": now},
+                        )
+                    else:
+                        prefix = rel + "/"
+                        await conn.execute(text("""
+                            DELETE FROM media_visibility
+                            WHERE BINARY relative_path=BINARY :p
+                               OR BINARY LEFT(relative_path, CHAR_LENGTH(:prefix))=BINARY :prefix
+                        """), {"p": rel, "prefix": prefix})
 
     @staticmethod
     async def _collect(paths: Iterable[str]) -> list[tuple[str, Path]]:
@@ -273,18 +343,171 @@ class MediaManager:
         return result
 
     @staticmethod
-    async def delete(paths: list[str]) -> int:
-        objects = await MediaManager._collect(paths)
-        count = 0
-        for rel, p in objects:
-            if p.is_dir():
-                shutil.rmtree(p)
-                async with engine.begin() as conn:
-                    await conn.execute(text("DELETE FROM media_visibility WHERE relative_path=:p OR relative_path LIKE :prefix"), {"p": rel, "prefix": rel + "/%"})
+    def _deduplicate_objects(objects: list[tuple[str, Path]]) -> list[tuple[str, Path]]:
+        selected: list[tuple[str, Path]] = []
+        for rel, path in sorted(objects, key=lambda item: len(item[1].parts)):
+            if any(path.is_relative_to(parent) for _parent_rel, parent in selected):
+                continue
+            selected.append((rel, path))
+        return selected
+
+    @staticmethod
+    async def _delete_metadata(conn, rel: str, is_directory: bool) -> None:
+        params = {"p": rel, "prefix": rel + "/"}
+        if is_directory:
+            event_scope = """
+                BINARY stats.media_path=BINARY :p
+                OR BINARY LEFT(stats.media_path, CHAR_LENGTH(:prefix))=BINARY :prefix
+            """
+            stats_scope = """
+                BINARY media_path=BINARY :p
+                OR BINARY LEFT(media_path, CHAR_LENGTH(:prefix))=BINARY :prefix
+            """
+        else:
+            event_scope = "BINARY stats.media_path=BINARY :p"
+            stats_scope = "BINARY media_path=BINARY :p"
+
+        await conn.execute(text(f"""
+            DELETE events
+            FROM media_playback_events AS events
+            INNER JOIN media_playback_stats AS stats ON stats.media_id=events.media_id
+            WHERE {event_scope}
+        """), params)
+        await conn.execute(
+            text(f"DELETE FROM media_playback_stats WHERE {stats_scope}"),
+            params,
+        )
+        if is_directory:
+            await conn.execute(text("""
+                DELETE FROM media_visibility
+                WHERE BINARY relative_path=BINARY :p
+                   OR BINARY LEFT(relative_path, CHAR_LENGTH(:prefix))=BINARY :prefix
+            """), params)
+
+    @staticmethod
+    def _restore_staged(quarantine: Path, manifest: list[dict]) -> None:
+        failures = []
+        for item in reversed(manifest):
+            staged = quarantine / item["slot"]
+            original = resolve_safe_path(MEDIA_ROOT, item["relative_path"])
+            if not staged.exists():
+                if not original.exists():
+                    failures.append(item["relative_path"])
+                continue
+            if original.exists():
+                failures.append(item["relative_path"])
+                continue
+            original.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.replace(staged, original)
+                _sync_media_directory(original.parent)
+                _sync_media_directory(quarantine)
+            except OSError:
+                failures.append(item["relative_path"])
+        if failures:
+            raise RuntimeError("Could not restore staged media: " + ", ".join(failures))
+        shutil.rmtree(quarantine, ignore_errors=True)
+
+    @staticmethod
+    async def _delete_journal(operation_id: str) -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM media_delete_operations WHERE operation_id=:operation_id"),
+                {"operation_id": operation_id},
+            )
+
+    @staticmethod
+    async def _journal_state(operation_id: str) -> str | None:
+        async with engine.connect() as conn:
+            value = await conn.scalar(
+                text("SELECT state FROM media_delete_operations WHERE operation_id=:operation_id"),
+                {"operation_id": operation_id},
+            )
+        return str(value) if value is not None else None
+
+    @staticmethod
+    async def _reconcile_failed_delete(operation_id: str, quarantine: Path, manifest: list[dict]) -> None:
+        try:
+            state = await MediaManager._journal_state(operation_id)
+            if state == "pending":
+                MediaManager._restore_staged(quarantine, manifest)
+                await MediaManager._delete_journal(operation_id)
+            elif state == "committed":
+                await MediaManager._cleanup_committed_delete(operation_id, quarantine)
             else:
-                p.unlink()
-            count += 1
-        return count
+                raise RuntimeError("Media delete commit state is unknown")
+        except Exception as exc:
+            _RECOVERY_REQUIRED_ROOTS.add(MEDIA_ROOT)
+            append_admin_log(f"[MEDIA_DELETE] recovery required operation={operation_id}: {exc}")
+
+    @staticmethod
+    async def _cleanup_committed_delete(operation_id: str, quarantine: Path) -> None:
+        await invalidate_media_catalog()
+        try:
+            if quarantine.exists():
+                shutil.rmtree(quarantine)
+            await MediaManager._delete_journal(operation_id)
+        except Exception as exc:
+            append_admin_log(f"[MEDIA_DELETE] committed cleanup deferred operation={operation_id}: {exc}")
+
+    @staticmethod
+    async def delete(paths: list[str]) -> int:
+        async with media_mutation_lock:
+            ensure_media_mutations_ready()
+            objects = MediaManager._deduplicate_objects(await MediaManager._collect(paths))
+            operation_id = uuid.uuid4().hex
+            quarantine = MEDIA_ROOT / f"{DELETE_QUARANTINE_PREFIX}{operation_id}"
+            manifest = [
+                {
+                    "relative_path": rel,
+                    "slot": str(index),
+                    "is_directory": path.is_dir(),
+                }
+                for index, (rel, path) in enumerate(objects)
+            ]
+            async with engine.begin() as conn:
+                await conn.execute(text("""
+                    INSERT INTO media_delete_operations
+                    (operation_id, state, manifest, created_at)
+                    VALUES (:operation_id, 'pending', :manifest, :created_at)
+                """), {
+                    "operation_id": operation_id,
+                    "manifest": json.dumps(manifest, ensure_ascii=False),
+                    "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+                })
+
+            try:
+                quarantine.mkdir(mode=0o700)
+                _sync_media_directory(MEDIA_ROOT)
+                for item, (_rel, original) in zip(manifest, objects, strict=True):
+                    os.replace(original, quarantine / item["slot"])
+                    _sync_media_directory(original.parent)
+                    _sync_media_directory(quarantine)
+
+                async with engine.begin() as conn:
+                    for item in manifest:
+                        await MediaManager._delete_metadata(
+                            conn,
+                            item["relative_path"],
+                            bool(item["is_directory"]),
+                        )
+                    await conn.execute(text("""
+                        UPDATE media_delete_operations
+                        SET state='committed'
+                        WHERE operation_id=:operation_id
+                    """), {"operation_id": operation_id})
+            except BaseException:
+                cleanup_task = asyncio.create_task(
+                    MediaManager._reconcile_failed_delete(operation_id, quarantine, manifest)
+                )
+                await _finish_media_cleanup(cleanup_task)
+                raise
+
+            cleanup_task = asyncio.create_task(
+                MediaManager._cleanup_committed_delete(operation_id, quarantine)
+            )
+            await _finish_media_cleanup(cleanup_task)
+            return len(objects)
 
     @staticmethod
     async def build_zip_stream(paths: list[str]) -> ZipStream:
@@ -337,3 +560,58 @@ class MediaManager:
                 add_file(child, child.relative_to(MEDIA_ROOT).as_posix())
 
         return archive
+
+
+async def recover_interrupted_media_deletions() -> None:
+    """Finish or roll back journaled deletes left by a terminated worker."""
+    async with media_mutation_lock:
+        async with engine.connect() as conn:
+            result = await conn.execute(text("""
+                SELECT operation_id, state, manifest
+                FROM media_delete_operations
+                ORDER BY created_at, operation_id
+            """))
+            rows = result.mappings().all()
+
+        for row in rows:
+            operation_id = str(row["operation_id"])
+            if not re.fullmatch(r"[0-9a-f]{32}", operation_id):
+                raise RuntimeError(f"Invalid media recovery operation id: {operation_id!r}")
+            try:
+                raw_manifest = row["manifest"]
+                manifest = raw_manifest if isinstance(raw_manifest, list) else json.loads(str(raw_manifest))
+                if not isinstance(manifest, list):
+                    raise ValueError("manifest is not a list")
+                for item in manifest:
+                    if (
+                        not isinstance(item, dict)
+                        or not isinstance(item.get("relative_path"), str)
+                        or not str(item.get("slot", "")).isdigit()
+                    ):
+                        raise ValueError("manifest entry is invalid")
+                    MediaManager.normalize_relative(item["relative_path"])
+            except (TypeError, ValueError, json.JSONDecodeError, HTTPException) as exc:
+                append_admin_log(
+                    f"[MEDIA_DELETE] invalid recovery manifest operation={operation_id}: {exc}"
+                )
+                raise RuntimeError(f"Invalid media recovery manifest: {operation_id}") from exc
+
+            quarantine = MEDIA_ROOT / f"{DELETE_QUARANTINE_PREFIX}{operation_id}"
+            try:
+                if str(row["state"]) == "committed":
+                    await invalidate_media_catalog()
+                    if quarantine.exists():
+                        shutil.rmtree(quarantine)
+                elif str(row["state"]) == "pending":
+                    MediaManager._restore_staged(quarantine, manifest)
+                else:
+                    raise RuntimeError("Unknown media recovery state")
+                await MediaManager._delete_journal(operation_id)
+            except Exception as exc:
+                append_admin_log(
+                    f"[MEDIA_DELETE] recovery deferred operation={operation_id}: {exc}"
+                )
+                if str(row["state"]) != "committed":
+                    _RECOVERY_REQUIRED_ROOTS.add(MEDIA_ROOT)
+                    raise RuntimeError(f"Media recovery incomplete: {operation_id}") from exc
+        _RECOVERY_REQUIRED_ROOTS.discard(MEDIA_ROOT)
