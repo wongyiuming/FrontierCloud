@@ -70,6 +70,14 @@ ORDER BY banned_at, id;
 
 The removed `SECURITY_RECENT_BAN_HOURS` variable is no longer supported; remove it from any existing deployment `.env` before upgrading. There is no replacement time-range variable or web history view.
 
+### Edge enforcement
+
+Known bans are enforced by native Nginx `geo` rules against the socket peer address, before proxying or serving static content. Client-supplied `X-Real-IP`/forwarding headers cannot bypass this check. MySQL remains authoritative: after a committed security change, Web atomically publishes `data/.ip-security/active-bans.tsv`, outside the media tree. Nginx reads this existing read-only data mount; no extra container, port, Docker socket, package, or environment variable is needed. A small shell helper checks the local snapshot once per second and validates/reloads Nginx only when the effective IP set changes, including expiration. See the [Nginx geo documentation](https://nginx.org/en/docs/http/ngx_http_geo_module.html).
+
+Allowlisting, manual release and expiration remove the edge rule. Updates normally propagate in about 1–2 seconds, not synchronously with the admin response. A malformed/missing snapshot or rejected Nginx configuration retains the last valid rules and logs an error. Failed Web publication is retried every five seconds; initial publication failure prevents Web readiness. The backend check remains as defense during propagation and for direct internal access. First-seen invalid requests still reach the application for route classification; existing in-flight requests are not retroactively cancelled by a graceful reload.
+
+Classified violations and state changes are durable MySQL audit records. Requests already rejected at the edge stay in Nginx stdout logs (`security_blocked=1`, `upstream_addr="-"`), not per-request MySQL writes: otherwise a blocked scanner would still cause backend/database load. Expiration is determined by each ban's stored `expires_at`; it does not require a page visit or a synthetic audit row. Investigation combines the database lifecycle with edge access logs when individual rejected requests are needed.
+
 ## Audio playback caching
 
 Audio playback preloads the next item from the same page-local queue used by the Next control. Preloading starts after five seconds (earlier for short tracks), retries transient failures, and uses a completed Blob directly when switching. Score changes update displayed values; ordering is recalculated when opening a player page, not mid-queue. At most the current cached track and one upcoming track are retained, with a 128 MiB limit per speculative download. Oversized audio and videos use normal streaming. Offline switching requires the next download to have completed; early manual skips or interrupted downloads still require network access. The player does not automatically mute after inactivity.
@@ -101,6 +109,7 @@ The project does not deploy or manage Prometheus, Grafana, Elasticsearch, Logsta
 - MySQL: Docker `mysql_data` volume.
 - Redis: Docker `redis_data` volume.
 - Generated secrets: Docker `runtime_secrets` volume.
+- Derived edge ban snapshot: `data/.ip-security/`, rebuilt from MySQL at Web startup; no secrets or media are stored there. Do not delete it as a live unban mechanism; use Admin WebUI.
 
 An ordinary `docker compose down` preserves these volumes. Only an explicit destructive operation with `--volumes` removes the databases and runtime secrets. The next startup then performs a fresh initialization and generates new values.
 

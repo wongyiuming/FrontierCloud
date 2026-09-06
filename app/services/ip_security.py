@@ -21,6 +21,7 @@ from app.core.client_ip import is_security_exempt, normalize_ip
 from app.core.config import settings
 from app.core.db import engine
 from app.core.redis import redis_client
+from app.services.edge_security import publish_edge_snapshot
 
 
 VIOLATION_PREFIX = "security:invalid-api:"
@@ -37,6 +38,7 @@ CACHE_LOCK_RENEW_SECONDS = 40
 _LOCAL_SECURITY_LOCK = LoopLocalAsyncLock()
 _CACHE_LOCK: ContextVar[Any] = ContextVar("ip_security_cache_lock", default=None)
 _MutationResult = TypeVar("_MutationResult")
+_edge_projection_dirty = False
 
 _SLIDING_WINDOW_SCRIPT = """
 local key = KEYS[1]
@@ -173,6 +175,27 @@ async def initialize_ip_security_cache() -> None:
     """Hydrate permanent whitelist and still-active bans from MySQL on startup."""
     async with _security_state_guard():
         await _hydrate_ip_security_cache()
+        await _refresh_edge_projection()
+
+
+async def _refresh_edge_projection() -> None:
+    global _edge_projection_dirty
+    _edge_projection_dirty = True
+    await publish_edge_snapshot()
+    _edge_projection_dirty = False
+
+
+async def retry_edge_projection() -> None:
+    """Retry failed publications without polling MySQL when the state is clean."""
+    while True:
+        await asyncio.sleep(5)
+        if _edge_projection_dirty:
+            try:
+                async with _security_state_guard():
+                    if _edge_projection_dirty:
+                        await _refresh_edge_projection()
+            except Exception as exc:
+                append_admin_log(f"[IP_SECURITY] edge projection retry failed: {exc}")
 
 
 async def ensure_ip_security_cache() -> None:
@@ -218,14 +241,21 @@ async def _run_state_transaction(
     clear_violations_for: str | None = None,
 ) -> _MutationResult:
     """Commit MySQL while Redis is dirty, then rebuild the cache projection."""
+    global _edge_projection_dirty
     async with _security_state_guard():
         await redis_client.delete(CACHE_READY_KEY)
+        _edge_projection_dirty = True
         try:
             async with engine.begin() as conn:
                 result = await operation(conn)
         except Exception:
             await _refresh_after_failed_mutation()
             raise
+
+        try:
+            await _refresh_edge_projection()
+        except Exception as exc:
+            append_admin_log(f"[IP_SECURITY] MySQL committed; edge projection retry pending: {exc}")
 
         try:
             if clear_violations_for is not None:
@@ -602,11 +632,7 @@ async def list_security_summary(
     # The active record wins over history. Time is used only to derive current
     # state, not as a web query dimension. Whitelist-only IPs also have an object.
     objects_sql = """
-        WITH known_ips AS (
-            SELECT ip_address FROM ip_auto_ban_events
-            UNION SELECT ip_address FROM ip_permanent_whitelist
-            UNION SELECT ip_address FROM ip_security_audit_log
-        ), ranked_bans AS (
+        WITH ranked_bans AS (
             SELECT b.*, COUNT(*) OVER (PARTITION BY ip_address) AS ban_count,
                    ROW_NUMBER() OVER (
                        PARTITION BY ip_address
@@ -614,6 +640,13 @@ async def list_security_summary(
                                 banned_at DESC, id DESC
                    ) AS position
             FROM ip_auto_ban_events b
+        ), current_whitelist AS (
+            SELECT ip_address, MAX(note) AS note
+            FROM ip_permanent_whitelist GROUP BY ip_address
+        ), known_ips AS (
+            SELECT ip_address FROM ranked_bans
+            UNION SELECT ip_address FROM current_whitelist
+            UNION SELECT ip_address FROM ip_security_audit_log
         ), objects AS (
             SELECT k.ip_address, COALESCE(b.ban_count, 0) AS ban_count,
                    b.ban_kind, b.reason, w.note,
@@ -626,7 +659,7 @@ async def list_security_summary(
                    END AS status
             FROM known_ips k
             LEFT JOIN ranked_bans b ON b.ip_address=k.ip_address AND b.position=1
-            LEFT JOIN ip_permanent_whitelist w ON w.ip_address=k.ip_address
+            LEFT JOIN current_whitelist w ON w.ip_address=k.ip_address
         )
     """
     # INET6_ATON returns network-order bytes, not text: 13.11 > 10.199.

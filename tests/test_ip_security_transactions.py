@@ -51,6 +51,11 @@ class _Connection:
 
 
 class SecurityStateTransactionTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        publisher = patch.object(ip_security, "publish_edge_snapshot", new=AsyncMock())
+        self.publish_edge = publisher.start()
+        self.addCleanup(publisher.stop)
+
     async def test_db_commit_survives_cache_refresh_failure_and_cache_stays_dirty(self):
         connection = _Connection()
         fake_engine = _Engine(connection)
@@ -74,6 +79,24 @@ class SecurityStateTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(fake_engine.transaction.committed)
         fake_redis.delete.assert_awaited_once_with(ip_security.CACHE_READY_KEY)
         hydrate.assert_awaited_once()
+
+    async def test_edge_publication_failure_keeps_committed_state_and_schedules_retry(self):
+        fake_engine = _Engine(_Connection())
+        self.publish_edge.side_effect = OSError("snapshot disk unavailable")
+        with (
+            patch.object(ip_security, "engine", fake_engine),
+            patch.object(ip_security, "redis_client", new=AsyncMock()),
+            patch.object(ip_security, "_security_state_guard", _unlocked_guard),
+            patch.object(ip_security, "_hydrate_ip_security_cache", new=AsyncMock()),
+            patch.object(ip_security, "append_admin_log"),
+        ):
+            result = await ip_security._run_state_transaction(AsyncMock(return_value="committed"))
+        self.assertEqual(result, "committed")
+        self.assertTrue(fake_engine.transaction.committed)
+        self.assertTrue(ip_security._edge_projection_dirty)
+        self.publish_edge.side_effect = None
+        await ip_security._refresh_edge_projection()
+        self.assertFalse(ip_security._edge_projection_dirty)
 
     async def test_db_failure_rolls_back_and_recovers_the_previous_projection(self):
         connection = _Connection()
