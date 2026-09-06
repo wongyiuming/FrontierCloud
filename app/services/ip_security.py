@@ -25,7 +25,6 @@ from app.core.redis import redis_client
 
 VIOLATION_PREFIX = "security:invalid-api:"
 BAN_PREFIX = "security:auto-ban:"
-RECENT_BANS_KEY = "security:auto-bans:recent"
 WHITELIST_KEY = "security:ip-whitelist"
 CACHE_READY_KEY = "security:cache-ready"
 CACHE_LOCK_KEY = "security:cache-lock"
@@ -119,12 +118,6 @@ async def _hydrate_ip_security_cache() -> None:
             WHERE status='active' AND expires_at > :now
             ORDER BY banned_at DESC
         """), {"now": now})
-        recent_rows = await conn.execute(text("""
-            SELECT ip_address, MAX(banned_at) AS banned_at
-            FROM ip_auto_ban_events
-            WHERE banned_at >= :cutoff
-            GROUP BY ip_address
-        """), {"cutoff": now - timedelta(hours=settings.SECURITY_RECENT_BAN_HOURS)})
 
     whitelist = [str(row[0]) for row in whitelist_rows.fetchall()]
     active_bans: dict[str, dict[str, Any]] = {}
@@ -147,14 +140,11 @@ async def _hydrate_ip_security_cache() -> None:
             await pipe.reset()
             raise
     pipe.delete(WHITELIST_KEY)
-    pipe.delete(RECENT_BANS_KEY)
+    pipe.delete("security:auto-bans:recent")
     if stale_ban_keys:
         pipe.delete(*stale_ban_keys)
     if whitelist:
         pipe.sadd(WHITELIST_KEY, *whitelist)
-    for row in recent_rows.mappings().all():
-        banned_timestamp = row["banned_at"].replace(tzinfo=timezone.utc).timestamp()
-        pipe.zadd(RECENT_BANS_KEY, {str(row["ip_address"]): banned_timestamp})
     for ip, event in active_bans.items():
         permanent = str(event.get("ban_kind")) == "permanent"
         payload = {
@@ -208,6 +198,18 @@ async def _lock_ip_state(conn: AsyncConnection, ip: str) -> None:
         VALUES (:ip)
         ON DUPLICATE KEY UPDATE ip_address=VALUES(ip_address)
     """), {"ip": ip})
+
+
+async def _audit_ip(conn: AsyncConnection, ip: str, action: str,
+                    detail: dict[str, Any], session: str | None = None) -> None:
+    """Append investigation evidence in the same transaction as the transition."""
+    await conn.execute(text("""
+        INSERT INTO ip_security_audit_log
+        (ip_address, action, detail, session_id_hash, created_at)
+        VALUES (:ip, :action, :detail, :session, :now)
+    """), {"ip": ip, "action": action,
+           "detail": json.dumps(detail, ensure_ascii=False),
+           "session": session, "now": _utcnow()})
 
 
 async def _run_state_transaction(
@@ -326,13 +328,18 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
         append_admin_log(f"[IP_SECURITY] invalid API counter failed for {ip}: {exc}")
         return 0
 
+    evidence = {"method": method[:16], "path": path[:2048],
+                "user_agent": user_agent[:512], "window_count": count}
     if count <= settings.SECURITY_INVALID_API_LIMIT:
+        async with engine.begin() as conn:
+            await _audit_ip(conn, ip, "invalid_api", evidence)
         return count
 
     now = _utcnow()
 
     async def create_ban(conn: AsyncConnection) -> tuple[str, datetime] | None:
         await _lock_ip_state(conn, ip)
+        await _audit_ip(conn, ip, "invalid_api", evidence)
         await conn.execute(text("""
             UPDATE ip_auto_ban_events
             SET status='expired'
@@ -375,6 +382,9 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
             "ua": user_agent[:512],
             "ban_kind": ban_kind,
         })
+        await _audit_ip(conn, ip, "automatic_ban", {
+            **evidence, "ban_kind": ban_kind, "expires_at": expires_at.isoformat(),
+        })
         return ban_kind, expires_at
 
     try:
@@ -403,6 +413,7 @@ async def unban_ip(ip_value: str, session_hash: str, status: str = "unbanned") -
             SET status=:status, released_at=:now, released_by_session_hash=:session
             WHERE ip_address=:ip AND status='active'
         """), {"status": status, "now": now, "session": session_hash, "ip": ip})
+        await _audit_ip(conn, ip, "unban", {"status": status}, session_hash)
 
     await _run_state_transaction(release_ban, clear_violations_for=ip)
     return ip
@@ -453,6 +464,10 @@ async def manual_ban_ip(ip_value: str, session_hash: str, reason: str) -> dict[s
             "reason": reason,
             "session_hash": session_hash,
         })
+        await _audit_ip(conn, ip, "manual_ban", {
+            "event_id": int(inserted.lastrowid), "reason": reason,
+            "expires_at": expires_at.isoformat(),
+        }, session_hash)
         return int(inserted.lastrowid)
 
     event_id = await _run_state_transaction(create_manual_ban)
@@ -507,6 +522,9 @@ async def manual_permanent_ban_ip(ip_value: str, session_hash: str, reason: str)
             "reason": reason,
             "session_hash": session_hash,
         })
+        await _audit_ip(conn, ip, "permanent_ban", {
+            "event_id": int(inserted.lastrowid), "reason": reason,
+        }, session_hash)
         return int(inserted.lastrowid)
 
     event_id = await _run_state_transaction(create_permanent_ban, clear_violations_for=ip)
@@ -533,125 +551,132 @@ async def add_whitelist(ip_value: str, session_hash: str, note: str = "") -> str
             SET status='whitelisted', released_at=:now, released_by_session_hash=:session
             WHERE ip_address=:ip AND status='active'
         """), {"now": now, "session": session_hash, "ip": ip})
+        await _audit_ip(conn, ip, "whitelist_add", {"note": note[:255]}, session_hash)
 
     await _run_state_transaction(whitelist_and_release, clear_violations_for=ip)
     return ip
 
 
-async def remove_whitelist(ip_value: str) -> str:
+async def remove_whitelist(ip_value: str, session_hash: str | None = None) -> str:
     ip = normalize_ip(ip_value)
 
     async def remove(conn: AsyncConnection) -> None:
         await _lock_ip_state(conn, ip)
         await conn.execute(text("DELETE FROM ip_permanent_whitelist WHERE ip_address=:ip"), {"ip": ip})
+        await _audit_ip(conn, ip, "whitelist_remove", {}, session_hash)
 
     await _run_state_transaction(remove, clear_violations_for=ip)
     return ip
 
 
-async def list_security_history(
+async def list_security_summary(
     ip_filter: str | None = None,
     status_filter: str | None = None,
     page: int = 1,
     page_size: int = 100,
-    recent_only: bool = True,
+    ip_order: str = "asc",
 ) -> dict[str, Any]:
+    """Return one current object per IP; never paginate or filter event history."""
     now = _utcnow()
-    cutoff = now - timedelta(hours=settings.SECURITY_RECENT_BAN_HOURS)
+    if ip_order not in {"asc", "desc"}:
+        raise ValueError("Invalid IP order")
+    page = max(1, page)
+    page_size = max(1, min(200, page_size))
     conditions: list[str] = []
     params: dict[str, Any] = {
         "now": now,
-        "cutoff": cutoff,
         "limit": page_size,
         "offset": (page - 1) * page_size,
     }
-    if recent_only:
-        conditions.append("banned_at >= :cutoff")
     if ip_filter:
         conditions.append("ip_address = :ip")
         params["ip"] = normalize_ip(ip_filter)
     if status_filter:
-        allowed_statuses = {"active", "expired", "unbanned", "whitelisted", "replaced"}
+        allowed_statuses = {"active", "expired", "unbanned", "whitelisted", "observed"}
         if status_filter not in allowed_statuses:
             raise ValueError("Invalid ban status")
         conditions.append("status = :status")
         params["status"] = status_filter
     where_sql = " WHERE " + " AND ".join(conditions) if conditions else ""
 
-    async with engine.begin() as conn:
-        await conn.execute(text("""
-            UPDATE ip_auto_ban_events
-            SET status='expired'
-            WHERE status='active' AND expires_at <= :now
-        """), {"now": now})
+    # The active record wins over history. Time is used only to derive current
+    # state, not as a web query dimension. Whitelist-only IPs also have an object.
+    objects_sql = """
+        WITH known_ips AS (
+            SELECT ip_address FROM ip_auto_ban_events
+            UNION SELECT ip_address FROM ip_permanent_whitelist
+            UNION SELECT ip_address FROM ip_security_audit_log
+        ), ranked_bans AS (
+            SELECT b.*, COUNT(*) OVER (PARTITION BY ip_address) AS ban_count,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY ip_address
+                       ORDER BY (status='active' AND expires_at > :now) DESC,
+                                banned_at DESC, id DESC
+                   ) AS position
+            FROM ip_auto_ban_events b
+        ), objects AS (
+            SELECT k.ip_address, COALESCE(b.ban_count, 0) AS ban_count,
+                   b.ban_kind, b.reason, w.note,
+                   CASE
+                       WHEN w.ip_address IS NOT NULL THEN 'whitelisted'
+                       WHEN b.status='active' AND b.expires_at > :now THEN 'active'
+                       WHEN b.status='active' THEN 'expired'
+                       WHEN b.status IN ('whitelisted', 'replaced') THEN 'unbanned'
+                       ELSE COALESCE(b.status, 'observed')
+                   END AS status
+            FROM known_ips k
+            LEFT JOIN ranked_bans b ON b.ip_address=k.ip_address AND b.position=1
+            LEFT JOIN ip_permanent_whitelist w ON w.ip_address=k.ip_address
+        )
+    """
+    # INET6_ATON returns network-order bytes, not text: 13.11 > 10.199.
+    # IPv4 sorts before IPv6 ascending, after IPv6 descending.
+    order_sql = (f" ORDER BY LENGTH(INET6_ATON(ip_address)) {ip_order},"
+                 f" INET6_ATON(ip_address) {ip_order}, ip_address {ip_order}")
+    async with engine.connect() as conn:
         count_result = await conn.execute(
-            text("SELECT COUNT(*) FROM ip_auto_ban_events" + where_sql),
+            text(objects_sql + "SELECT COUNT(*) FROM objects" + where_sql),
             params,
         )
-        total_events = int(count_result.scalar_one())
-        active_count_result = await conn.execute(text("""
-            SELECT COUNT(*) FROM ip_auto_ban_events
-            WHERE status='active' AND expires_at > :now
-        """), {"now": now})
-        active_ban_count = int(active_count_result.scalar_one())
-        ban_result = await conn.execute(text("""
-            SELECT id, ip_address, trigger_count, window_started_at, banned_at, expires_at,
-                   last_method, last_path, status, released_at, released_by_session_hash,
-                   ban_kind, reason, created_by_session_hash
-            FROM ip_auto_ban_events
-        """ + where_sql + """
-            ORDER BY banned_at DESC
-            LIMIT :limit OFFSET :offset
-        """), params)
-        whitelist_result = await conn.execute(text("""
-            SELECT ip_address, created_at, note
-            FROM ip_permanent_whitelist
-            ORDER BY created_at DESC
-        """))
+        total_ips = int(count_result.scalar_one())
+        stats = (await conn.execute(text(objects_sql + """
+            SELECT COALESCE(SUM(status='active'), 0) AS active_count,
+                   COALESCE(SUM(status='whitelisted'), 0) AS whitelist_count
+            FROM objects
+        """), params)).mappings().one()
+        rows = (await conn.execute(text(
+            objects_sql + "SELECT * FROM objects" + where_sql + order_sql
+            + " LIMIT :limit OFFSET :offset"
+        ), params)).mappings().all()
 
-    whitelist_rows = whitelist_result.mappings().all()
-    whitelist = {str(row["ip_address"]) for row in whitelist_rows}
     events = []
-    for row in ban_result.mappings().all():
-        expires_at = row["expires_at"]
+    whitelist = []
+    for row in rows:
         status = str(row["status"])
-        active = status == "active" and expires_at > now and str(row["ip_address"]) not in whitelist
+        if status == "whitelisted":
+            whitelist.append({"ip": str(row["ip_address"]), "note": row["note"] or ""})
+            continue
         events.append({
-            "id": int(row["id"]),
             "ip": str(row["ip_address"]),
-            "trigger_count": int(row["trigger_count"]),
-            "window_started_at": row["window_started_at"].isoformat(),
-            "banned_at": row["banned_at"].isoformat(),
-            "expires_at": expires_at.isoformat(),
-            "last_method": row["last_method"],
-            "last_path": row["last_path"],
+            "ban_count": int(row["ban_count"]),
             "status": status,
-            "active": active,
-            "whitelisted": str(row["ip_address"]) in whitelist,
-            "released_at": row["released_at"].isoformat() if row["released_at"] else None,
-            "released_by_session_hash": row["released_by_session_hash"],
+            "active": status == "active",
+            "whitelisted": False,
             "ban_kind": row["ban_kind"],
             "reason": row["reason"],
-            "created_by_session_hash": row["created_by_session_hash"],
         })
 
     return {
         "events": events,
-        "whitelist": [
-            {
-                "ip": str(row["ip_address"]),
-                "created_at": row["created_at"].isoformat(),
-                "note": row["note"] or "",
-            }
-            for row in whitelist_rows
-        ],
-        "active_ban_count": active_ban_count,
+        "whitelist": whitelist,
+        "active_ban_count": int(stats["active_count"]),
+        "whitelist_count": int(stats["whitelist_count"]),
         "pagination": {
             "page": page,
             "page_size": page_size,
-            "total": total_events,
-            "pages": max(1, (total_events + page_size - 1) // page_size),
-            "recent_only": recent_only,
+            "total": total_ips,
+            "pages": max(1, (total_ips + page_size - 1) // page_size),
+            "ip_order": ip_order,
         },
         "threshold": settings.SECURITY_INVALID_API_LIMIT,
         "window_seconds": settings.SECURITY_INVALID_API_WINDOW,

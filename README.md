@@ -51,9 +51,24 @@ Open the media home page, select the privilege-elevation control (`id="elevate"`
 
 - Random or custom Admin Key rotation.
 - Media upload, download, visibility, and deletion controls.
-- An always-visible IP security view with audit history, manual release, and permanent allowlist management.
+- Expandable modules with one module open at a time, without changing URL.
+- IP state summaries, numeric IP ordering, manual release/permanent bans, and permanent allowlist management; the existing layout is retained.
 
 The automatic security lifecycle is fixed: the first threshold violation blocks an IP for 24 hours, and the second violation permanently blacklists it. This timing is not configurable. An administrator may still explicitly release or allowlist an address in Admin WebUI.
+
+Each IP is one object across the security page, including the allowlist. Filtering and pagination operate on current objects, not historical events. The IP sort control replaces the old time range: IPv4 is compared by its four numeric octets (`10.199.254.235 < 13.11.1.1`); IPv6 is compared by its 128-bit value, after IPv4 in ascending order. Allowlisted objects appear only in the allowlist section of the same paginated result. The statistics count all current objects, independently of the page/filter.
+
+Detailed investigations belong in MySQL. `ip_auto_ban_events` retains all historical bans and their effective expiry/release timestamps. New classified invalid requests and security actions are appended to `ip_security_audit_log`; a state change and its audit entry commit or roll back together. Whitelist removal no longer removes its audit evidence. Earlier deployments' missing per-request/whitelist details cannot be reconstructed retroactively. Connect with the generated database credentials and query, for example:
+
+```sql
+SELECT created_at, id, action, detail, session_id_hash
+FROM ip_security_audit_log WHERE ip_address = '203.0.113.9'
+ORDER BY created_at, id;
+SELECT * FROM ip_auto_ban_events WHERE ip_address = '203.0.113.9'
+ORDER BY banned_at, id;
+```
+
+The removed `SECURITY_RECENT_BAN_HOURS` variable is no longer supported; remove it from any existing deployment `.env` before upgrading. There is no replacement time-range variable or web history view.
 
 ## Audio playback caching
 

@@ -46,7 +46,6 @@ class Settings(BaseSettings):
     SECURITY_EXEMPT_NETWORKS: str = Field("127.0.0.0/8,::1/128", validation_alias="SECURITY_EXEMPT_NETWORKS")
     SECURITY_INVALID_API_LIMIT: int = Field(5, validation_alias="SECURITY_INVALID_API_LIMIT")
     SECURITY_INVALID_API_WINDOW: int = Field(3600, validation_alias="SECURITY_INVALID_API_WINDOW")
-    SECURITY_RECENT_BAN_HOURS: int = Field(24, validation_alias="SECURITY_RECENT_BAN_HOURS")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore")
 

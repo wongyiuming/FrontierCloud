@@ -57,14 +57,15 @@
                         <option value="expired">expired</option>
                         <option value="unbanned">unbanned</option>
                         <option value="whitelisted">whitelisted</option>
+                        <option value="observed">observed</option>
                     </select>
-                    <select id="securityScopeFilter">
-                        <option value="recent">最近 24 小时</option>
-                        <option value="all">全部历史</option>
+                    <select id="securityIpOrder" aria-label="IP 数值排序">
+                        <option value="asc">IP 从小到大</option>
+                        <option value="desc">IP 从大到小</option>
                     </select>
                     <button type="submit">查询</button>
                 </form>
-                <div class="security-section-title">封禁审计历史</div>
+                <div class="security-section-title">IP 状态摘要 · 明细请查询 MySQL</div>
                 <div id="banList" class="security-list"></div>
                 <div class="security-pagination">
                     <button id="securityPrev" type="button">上一页</button>

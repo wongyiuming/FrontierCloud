@@ -13,7 +13,7 @@ class SecurityUIContractTests(unittest.TestCase):
         for element_id in (
             "securityIpFilter",
             "securityStatusFilter",
-            "securityScopeFilter",
+            "securityIpOrder",
             "securityPrev",
             "securityNext",
         ):
@@ -21,6 +21,10 @@ class SecurityUIContractTests(unittest.TestCase):
         self.assertIn("/api/v1/media/admin/security/reban", script)
         self.assertIn("page_size", script)
         self.assertIn("event.reason", script)
+        self.assertNotIn("securityScopeFilter", html)
+        self.assertNotIn("securityDate", script)
+        self.assertIn('value="asc"', html)
+        self.assertIn('value="desc"', html)
 
     def test_single_expanded_module_and_permanent_ban_controls_are_exposed(self):
         html = (ROOT / "static" / "media" / "admin.html").read_text(encoding="utf-8")

@@ -211,6 +211,17 @@ async def init_db() -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
             await _commit_ddl(conn, """
+                CREATE TABLE IF NOT EXISTS ip_security_audit_log (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    ip_address VARCHAR(45) NOT NULL,
+                    action VARCHAR(32) NOT NULL,
+                    detail JSON NOT NULL,
+                    session_id_hash CHAR(64) NULL,
+                    created_at DATETIME(6) NOT NULL,
+                    INDEX idx_ip_security_timeline (ip_address, created_at, id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
+            await _commit_ddl(conn, """
                 CREATE TABLE IF NOT EXISTS ip_security_locks (
                     ip_address VARCHAR(45) NOT NULL PRIMARY KEY
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

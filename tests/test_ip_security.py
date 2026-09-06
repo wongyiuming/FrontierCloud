@@ -225,16 +225,19 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
 
     def test_ban_runtime_never_deletes_audit_history(self):
         record_source = inspect.getsource(ip_security.record_invalid_api)
-        list_source = inspect.getsource(ip_security.list_security_history)
+        list_source = inspect.getsource(ip_security.list_security_summary)
         self.assertNotIn("DELETE FROM ip_auto_ban_events", record_source)
         self.assertNotIn("DELETE FROM ip_auto_ban_events", list_source)
-        self.assertIn("SET status='expired'", list_source)
+        self.assertNotIn("UPDATE ip_auto_ban_events", list_source)
 
     def test_history_query_supports_filters_and_bounded_pagination(self):
-        source = inspect.getsource(ip_security.list_security_history)
+        source = inspect.getsource(ip_security.list_security_summary)
         self.assertIn("ip_address = :ip", source)
         self.assertIn("status = :status", source)
         self.assertIn("LIMIT :limit OFFSET :offset", source)
+        self.assertIn("INET6_ATON(ip_address)", source)
+        self.assertIn("b.position=1", source)
+        self.assertNotIn("recent_only", source)
 
     def test_manual_reban_creates_a_new_audit_event(self):
         source = inspect.getsource(ip_security.manual_ban_ip)

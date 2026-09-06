@@ -216,7 +216,7 @@ async def security_blocks(
     request: Request,
     ip: str | None = Query(None, max_length=45),
     status: str | None = Query(None, max_length=32),
-    scope: str = Query("recent", pattern="^(recent|all)$"),
+    ip_order: str = Query("asc", pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=200),
     session_hash: str = Depends(require_session),
@@ -224,12 +224,12 @@ async def security_blocks(
     if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
         raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
     try:
-        result = await ip_security.list_security_history(
+        result = await ip_security.list_security_summary(
             ip_filter=ip,
             status_filter=status,
             page=page,
             page_size=page_size,
-            recent_only=scope == "recent",
+            ip_order=ip_order,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -331,7 +331,7 @@ async def security_whitelist_remove(
     if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
         raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
     try:
-        ip = await ip_security.remove_whitelist(str(payload.get("ip", "")))
+        ip = await ip_security.remove_whitelist(str(payload.get("ip", "")), session_hash)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="IP 地址无效") from exc
     await admin_service.audit(session_hash, "security_whitelist_remove", 1, ip, "success", "", request)

@@ -323,13 +323,6 @@ async function runUploadTask(fileList, relativePaths = null) {
     }
 }
 
-function securityDate(value) {
-    if (!value) return '-';
-    const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : `${value}Z`;
-    const date = new Date(normalized);
-    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
 function securityButton(label, className, handler) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -352,7 +345,7 @@ function securityButton(label, className, handler) {
 function renderSecurityList(data) {
     $('legalApiCount').textContent = String(data.legal_api_count ?? 0);
     $('activeBanCount').textContent = String(data.active_ban_count ?? 0);
-    $('whitelistCount').textContent = String(data.whitelist?.length ?? 0);
+    $('whitelistCount').textContent = String(data.whitelist_count ?? 0);
     $('securitySummary').textContent = `首次超过阈值封禁 24 小时；第二次触犯永久封禁`;
 
     const banList = $('banList');
@@ -360,7 +353,7 @@ function renderSecurityList(data) {
     if (!data.events?.length) {
         const empty = document.createElement('div');
         empty.className = 'security-empty';
-        empty.textContent = '当前查询没有封禁审计记录';
+        empty.textContent = '当前页没有非白名单 IP';
         banList.appendChild(empty);
     }
     for (const event of data.events || []) {
@@ -373,11 +366,12 @@ function renderSecurityList(data) {
         ip.textContent = event.ip;
         const meta = document.createElement('div');
         meta.className = 'security-meta';
-        const expiry = event.ban_kind === 'permanent' ? '永久' : securityDate(event.expires_at);
-        meta.textContent = `${event.status} · ${event.ban_kind || 'auto'} · ${event.trigger_count} 次 · ${securityDate(event.banned_at)} → ${expiry}`;
+        const statuses = {active: '封禁中', expired: '已到期', unbanned: '已解封', observed: '已记录'};
+        const kind = event.active ? (event.ban_kind === 'permanent' ? ' · 永久' : ' · 临时') : '';
+        meta.textContent = `${statuses[event.status] || event.status}${kind} · 累计封禁 ${event.ban_count || 0} 次`;
         const path = document.createElement('div');
         path.className = 'security-path';
-        path.textContent = [event.reason, `${event.last_method || ''} ${event.last_path || ''}`.trim()].filter(Boolean).join(' · ');
+        path.textContent = event.reason || '';
         main.append(ip, meta, path);
         const actions = document.createElement('div');
         actions.className = 'security-actions';
@@ -401,7 +395,7 @@ function renderSecurityList(data) {
                     });
                 }));
             }
-            if (event.ban_kind !== 'permanent') {
+            if (!event.active || event.ban_kind !== 'permanent') {
                 actions.appendChild(securityButton('永久拉黑', 'danger', async () => {
                     const reason = prompt(`请输入永久拉黑 ${event.ip} 的原因:`);
                     if (!reason?.trim()) return;
@@ -423,7 +417,7 @@ function renderSecurityList(data) {
     if (!data.whitelist?.length) {
         const empty = document.createElement('div');
         empty.className = 'security-empty';
-        empty.textContent = '永久白名单为空';
+        empty.textContent = '当前页没有白名单 IP';
         whitelistList.appendChild(empty);
     }
     for (const entry of data.whitelist || []) {
@@ -436,7 +430,7 @@ function renderSecurityList(data) {
         ip.textContent = entry.ip;
         const meta = document.createElement('div');
         meta.className = 'security-meta';
-        meta.textContent = `${securityDate(entry.created_at)}${entry.note ? ` · ${entry.note}` : ''}`;
+        meta.textContent = entry.note || '永久白名单';
         main.append(ip, meta);
         const actions = document.createElement('div');
         actions.className = 'security-actions';
@@ -449,7 +443,7 @@ function renderSecurityList(data) {
 
     securityPage = data.pagination?.page || 1;
     securityPages = data.pagination?.pages || 1;
-    $('securityPageInfo').textContent = `第 ${securityPage} / ${securityPages} 页，共 ${data.pagination?.total || 0} 条`;
+    $('securityPageInfo').textContent = `第 ${securityPage} / ${securityPages} 页，共 ${data.pagination?.total || 0} 个 IP（含白名单）`;
     $('securityPrev').disabled = securityPage <= 1;
     $('securityNext').disabled = securityPage >= securityPages;
 }
@@ -459,7 +453,7 @@ async function loadSecurityStatus(force = false) {
     securityLoading = true;
     try {
         const params = new URLSearchParams({
-            scope: $('securityScopeFilter').value,
+            ip_order: $('securityIpOrder').value,
             page: String(securityPage),
             page_size: '100',
         });
