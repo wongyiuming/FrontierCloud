@@ -6,6 +6,32 @@ from app.services import ip_security
 
 
 class SummaryTests(unittest.IsolatedAsyncioTestCase):
+    def test_api_counter_includes_nested_routers_without_private_wrapper_access(self):
+        from fastapi import APIRouter, FastAPI
+
+        app = FastAPI()
+        root, child = APIRouter(), APIRouter()
+
+        @child.get("/item")
+        async def get_item():
+            return {}
+
+        @child.post("/item")
+        async def create_item():
+            return {}
+
+        @child.get("/view", include_in_schema=False)
+        async def html_view():
+            return "view"
+
+        root.include_router(child, prefix="/nested")
+        app.include_router(root, prefix="/api/v1")
+        self.assertEqual(ip_security.legal_api_count(app), 2)
+
+    def test_running_application_api_count_is_not_zero(self):
+        from main import app
+        self.assertGreater(ip_security.legal_api_count(app), 0)
+
     async def test_one_summary_projection_splits_white_ips_without_duplicate_history(self):
         count, stats, rows = MagicMock(), MagicMock(), MagicMock()
         count.scalar_one.return_value = 3

@@ -719,13 +719,14 @@ async def list_security_summary(
 
 
 def legal_api_count(app: Any) -> int:
-    pairs = set()
-    for route in app.routes:
-        path = getattr(route, "path", "")
-        methods = getattr(route, "methods", None)
-        if not path.startswith("/api/") or not methods:
-            continue
-        for method in methods:
-            if method not in {"HEAD", "OPTIONS"}:
-                pairs.add((method, path))
-    return len(pairs)
+    """Count documented API operations, including lazily included routers.
+
+    Use FastAPI's public schema interface, not private route wrapper internals.
+    Hidden HTML views and health/static endpoints are not API operations here.
+    """
+    methods = {"get", "post", "put", "patch", "delete", "trace"}
+    return sum(
+        len(methods.intersection(operations))
+        for path, operations in app.openapi().get("paths", {}).items()
+        if path.startswith("/api/")
+    )

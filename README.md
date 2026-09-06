@@ -72,6 +72,8 @@ The removed `SECURITY_RECENT_BAN_HOURS` variable is no longer supported; remove 
 
 ### Edge enforcement
 
+The legal API statistic counts documented method/path operations under `/api/` using FastAPI's public OpenAPI schema; hidden HTML views, HEAD/OPTIONS, health checks and static files are excluded. This also supports nested/lazily included routers without relying on private routing internals.
+
 Known bans are enforced by native Nginx `geo` rules against the socket peer address, before proxying or serving static content. Client-supplied `X-Real-IP`/forwarding headers cannot bypass this check. MySQL remains authoritative: after a committed security change, Web atomically publishes `data/.ip-security/active-bans.tsv`, outside the media tree. Nginx reads this existing read-only data mount; no extra container, port, Docker socket, package, or environment variable is needed. A small shell helper checks the local snapshot once per second and validates/reloads Nginx only when the effective IP set changes, including expiration. See the [Nginx geo documentation](https://nginx.org/en/docs/http/ngx_http_geo_module.html).
 
 Allowlisting, manual release and expiration remove the edge rule. Updates normally propagate in about 1–2 seconds, not synchronously with the admin response. A malformed/missing snapshot or rejected Nginx configuration retains the last valid rules and logs an error. Failed Web publication is retried every five seconds; initial publication failure prevents Web readiness. The backend check remains as defense during propagation and for direct internal access. First-seen invalid requests still reach the application for route classification; existing in-flight requests are not retroactively cancelled by a graceful reload.
