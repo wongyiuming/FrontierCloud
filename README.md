@@ -51,9 +51,38 @@ Open the media home page, select the privilege-elevation control (`id="elevate"`
 
 - Random or custom Admin Key rotation.
 - Media upload, download, visibility, and deletion controls.
-- An always-visible IP security view with audit history, manual release, and permanent allowlist management.
+- Expandable modules with one module open at a time, without changing URL.
+- IP state summaries, numeric IP ordering, manual release/permanent bans, and permanent allowlist management; the existing layout is retained.
 
 The automatic security lifecycle is fixed: the first threshold violation blocks an IP for 24 hours, and the second violation permanently blacklists it. This timing is not configurable. An administrator may still explicitly release or allowlist an address in Admin WebUI.
+
+Each IP is one object across the security page, including the allowlist. Filtering and pagination operate on current objects, not historical events. The IP sort control replaces the old time range: IPv4 is compared by its four numeric octets (`10.199.254.235 < 13.11.1.1`); IPv6 is compared by its 128-bit value, after IPv4 in ascending order. Allowlisted objects appear only in the allowlist section of the same paginated result. The statistics count all current objects, independently of the page/filter.
+
+Detailed investigations belong in MySQL. `ip_auto_ban_events` retains all historical bans and their effective expiry/release timestamps. New classified invalid requests and security actions are appended to `ip_security_audit_log`; a state change and its audit entry commit or roll back together. Whitelist removal no longer removes its audit evidence. Earlier deployments' missing per-request/whitelist details cannot be reconstructed retroactively. Connect with the generated database credentials and query, for example:
+
+```sql
+SELECT created_at, id, action, detail, session_id_hash
+FROM ip_security_audit_log WHERE ip_address = '203.0.113.9'
+ORDER BY created_at, id;
+SELECT * FROM ip_auto_ban_events WHERE ip_address = '203.0.113.9'
+ORDER BY banned_at, id;
+```
+
+The removed `SECURITY_RECENT_BAN_HOURS` variable is no longer supported; remove it from any existing deployment `.env` before upgrading. There is no replacement time-range variable or web history view.
+
+### Edge enforcement
+
+The legal API statistic counts documented method/path operations under `/api/` using FastAPI's public OpenAPI schema; hidden HTML views, HEAD/OPTIONS, health checks and static files are excluded. This also supports nested/lazily included routers without relying on private routing internals.
+
+Known bans are enforced by native Nginx `geo` rules against the socket peer address, before proxying or serving static content. Client-supplied `X-Real-IP`/forwarding headers cannot bypass this check. MySQL remains authoritative: after a committed security change, Web atomically publishes `data/.ip-security/active-bans.tsv`, outside the media tree. Nginx reads this existing read-only data mount; no extra container, port, Docker socket, package, or environment variable is needed. A small shell helper checks the local snapshot once per second and validates/reloads Nginx only when the effective IP set changes, including expiration. See the [Nginx geo documentation](https://nginx.org/en/docs/http/ngx_http_geo_module.html).
+
+Allowlisting, manual release and expiration remove the edge rule. Updates normally propagate in about 1–2 seconds, not synchronously with the admin response. A malformed/missing snapshot or rejected Nginx configuration retains the last valid rules and logs an error. Failed Web publication is retried every five seconds; initial publication failure prevents Web readiness. The backend check remains as defense during propagation and for direct internal access. First-seen invalid requests still reach the application for route classification; existing in-flight requests are not retroactively cancelled by a graceful reload.
+
+Classified violations and state changes are durable MySQL audit records. Requests already rejected at the edge stay in Nginx stdout logs (`security_blocked=1`, `upstream_addr="-"`), not per-request MySQL writes: otherwise a blocked scanner would still cause backend/database load. Expiration is determined by each ban's stored `expires_at`; it does not require a page visit or a synthetic audit row. Investigation combines the database lifecycle with edge access logs when individual rejected requests are needed.
+
+## Audio playback caching
+
+Audio playback preloads the next item from the same page-local queue used by the Next control. Preloading starts after five seconds (earlier for short tracks), retries transient failures, and uses a completed Blob directly when switching. Score changes update displayed values; ordering is recalculated when opening a player page, not mid-queue. At most the current cached track and one upcoming track are retained, with a 128 MiB limit per speculative download. Oversized audio and videos use normal streaming. Offline switching requires the next download to have completed; early manual skips or interrupted downloads still require network access. The player does not automatically mute after inactivity.
 
 ## WebRTC network observation
 
@@ -82,8 +111,13 @@ The project does not deploy or manage Prometheus, Grafana, Elasticsearch, Logsta
 - MySQL: Docker `mysql_data` volume.
 - Redis: Docker `redis_data` volume.
 - Generated secrets: Docker `runtime_secrets` volume.
+- Derived edge ban snapshot: `data/.ip-security/`, rebuilt from MySQL at Web startup; no secrets or media are stored there. Do not delete it as a live unban mechanism; use Admin WebUI.
 
 An ordinary `docker compose down` preserves these volumes. Only an explicit destructive operation with `--volumes` removes the databases and runtime secrets. The next startup then performs a fresh initialization and generates new values.
+
+Media deletion first moves the selected objects into `data/media/.delete-<operation-id>` on the same filesystem. A MySQL journal records whether metadata deletion committed. Web startup restores pending operations and removes committed quarantine data. Do not manually remove a quarantine directory or its `media_delete_operations` row while recovery is pending. If a commit outcome cannot be determined, further media mutations return HTTP 503; restore database availability and restart Web (`docker compose restart web`) to run recovery. Incomplete rollback recovery prevents startup so new uploads cannot overwrite files awaiting restoration. These filesystem mutation locks cover the single Web worker shipped by the project; shared-media multi-worker or multi-replica deployment is not supported by this recovery mechanism.
+
+Schema migrations use individually atomic MySQL DDL statements under a named connection lock; the entire startup migration is not one rollbackable transaction. IP security changes commit to MySQL before rebuilding Redis. A dirty or unavailable security cache is read from MySQL until it can be rebuilt. No extra configuration variables are required for these transaction safeguards.
 
 ## Development checks
 
@@ -91,6 +125,7 @@ An ordinary `docker compose down` preserves these volumes. Only an explicit dest
 python -m unittest discover -s tests -p 'test_*.py' -v
 node --check static/js/admin.js
 node --check static/js/network-observation.js
+node tests/player_cache_smoke.mjs
 docker compose config --quiet
 docker compose up -d --build --wait
 curl -fsS http://localhost/health/ready

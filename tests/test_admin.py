@@ -20,20 +20,58 @@ class _FakeRedis:
     def __init__(self):
         self.values = {}
         self.hashes = {}
+        self.ttls = {}
 
     async def get(self, key): return self.values.get(key)
     async def incr(self, key):
         self.values[key] = str(int(self.values.get(key, "0")) + 1)
         return int(self.values[key])
-    async def expire(self, *_args): return True
-    async def delete(self, key):
-        self.values.pop(key, None); self.hashes.pop(key, None); return 1
+    async def expire(self, key, ttl): self.ttls[key] = ttl; return True
+    async def delete(self, *keys):
+        for key in keys:
+            self.values.pop(key, None); self.hashes.pop(key, None)
+        return len(keys)
     async def hset(self, key, mapping): self.hashes.setdefault(key, {}).update(mapping)
     async def hgetall(self, key): return self.hashes.get(key, {})
     async def scan_iter(self, match=None):
         prefix = (match or "").rstrip("*")
         for key in list(self.hashes):
             if key.startswith(prefix): yield key
+    async def eval(self, _script, _key_count, key, window, increment):
+        count = int(self.values.get(key, "0"))
+        if int(increment):
+            count += 1
+            self.values[key] = str(count)
+        if count and self.ttls.get(key, -1) < 0:
+            self.ttls[key] = int(window)
+        return count
+    def pipeline(self, transaction=True):
+        return _FakePipeline(self, transaction)
+
+
+class _FakePipeline:
+    def __init__(self, redis, transaction):
+        self.redis = redis
+        self.transaction = transaction
+        self.commands = []
+
+    def hset(self, key, mapping):
+        self.commands.append(("hset", key, mapping)); return self
+    def expire(self, key, ttl):
+        self.commands.append(("expire", key, ttl)); return self
+    def unlink(self, *keys):
+        self.commands.append(("delete", keys)); return self
+
+    async def execute(self):
+        results = []
+        for command in self.commands:
+            if command[0] == "hset":
+                results.append(await self.redis.hset(command[1], command[2]))
+            elif command[0] == "expire":
+                results.append(await self.redis.expire(command[1], command[2]))
+            else:
+                results.append(await self.redis.delete(*command[1]))
+        return results
 
 
 def _request(method="POST", cookies=None, headers=None):

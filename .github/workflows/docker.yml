@@ -43,6 +43,7 @@ jobs:
           node --check static/js/admin.js
           node --check static/js/player.js
           node tests/admin_ui_smoke.mjs
+          node tests/player_cache_smoke.mjs
 
       - name: Build and start services
         run: docker compose up -d --build --remove-orphans --wait --wait-timeout 180
@@ -62,6 +63,11 @@ jobs:
           docker compose exec -T nginx nginx -t
           docker compose exec -T redis redis-cli ping | grep PONG
           docker compose exec -T mysql sh -c 'MYSQL_PWD=$(cat /run/frontiercloud-secrets/mysql_password) mysqladmin ping -h 127.0.0.1 -umedia_admin --silent'
+
+      - name: Test IP summaries and edge enforcement against the running stack
+        run: |
+          docker compose exec -T web python -m tests.security_mysql_smoke
+          python3 tests/security_stack_smoke.py
 
       - name: Test public and admin flows
         run: |

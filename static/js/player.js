@@ -1,12 +1,65 @@
 let art = null;
 let currentIndex = 0;
-let isNextPreloaded = false;
+let nextPreload = null;
+let activeObjectUrl = null;
+let playerSwitchSequence = 0;
 let clickTimer = null;
 let playbackState = null;
 let playbackReporter = null;
 const DIRECT_SEEK_ZONE_START = 0.75;
 const MIN_PREFERENCE = -2;
 const MAX_PREFERENCE = 7;
+const PRELOAD_MAX_BYTES = 128 * 1024 * 1024;
+const PRELOAD_START_SECONDS = 5;
+
+function nextMediaIndex() {
+    return (currentIndex + 1) % currentMediaList.length;
+}
+
+function discardNextPreload() {
+    if (!nextPreload) return;
+    nextPreload.controller?.abort();
+    if (nextPreload.objectUrl) URL.revokeObjectURL(nextPreload.objectUrl);
+    nextPreload = null;
+}
+
+async function preloadMedia(entry) {
+    const timeout = setTimeout(() => entry.controller.abort(), 120000);
+    try {
+        const response = await fetch(entry.url, {signal: entry.controller.signal});
+        if (!response.ok || response.status === 206) throw new Error('Incomplete preload response');
+        if (Number(response.headers.get('Content-Length')) > PRELOAD_MAX_BYTES) {
+            entry.tooLarge = true;
+            throw new Error('Preload memory limit exceeded');
+        }
+        const reader = response.body.getReader();
+        const chunks = [];
+        let bytes = 0;
+        while (true) {
+            const {done, value} = await reader.read();
+            if (done) break;
+            bytes += value.byteLength;
+            if (bytes > PRELOAD_MAX_BYTES) {
+                entry.tooLarge = true;
+                throw new Error('Preload memory limit exceeded');
+            }
+            chunks.push(value);
+        }
+        if (!bytes) throw new Error('Empty preload response');
+        if (nextPreload !== entry) return;
+        entry.objectUrl = URL.createObjectURL(new Blob(chunks, {
+            type: response.headers.get('Content-Type') || 'application/octet-stream',
+        }));
+        entry.status = 'ready';
+    } catch (_error) {
+        entry.controller.abort();
+        if (nextPreload !== entry) return;
+        entry.status = entry.tooLarge ? 'skipped' : 'failed';
+        entry.retryAt = performance.now() + Math.min(30000, 3000 * (2 ** entry.attempt));
+    } finally {
+        clearTimeout(timeout);
+    }
+}
 
 // Escape HTML globally to prevent DOM-based XSS.
 function escapeHTML(str) {
@@ -39,20 +92,26 @@ function updateMediaSession(media) {
 }
 
 function checkAndPreloadNext(currentTime) {
-    if (currentTime >= 20 && !isNextPreloaded) {
-        isNextPreloaded = true;
-        if (!currentMediaList || currentMediaList.length <= 1) return;
-        const nextIndex = (currentIndex + 1) % currentMediaList.length;
-        const nextUrl = currentMediaList[nextIndex].url;
-
-        fetch(nextUrl, { method: 'GET', headers: { 'Range': 'bytes=0-2097152' } })
-            .catch(() => {});
+    if (!currentMediaList || currentMediaList.length <= 1) return;
+    const duration = Number(art?.duration || 0);
+    const start = duration > 0 ? Math.min(PRELOAD_START_SECONDS, duration / 4) : PRELOAD_START_SECONDS;
+    if (currentTime < start) return;
+    const next = currentMediaList[nextMediaIndex()];
+    // Keep speculative memory bounded; video continues to use normal streaming.
+    if (next.type !== 'audio') return;
+    let attempt = 0;
+    if (nextPreload?.url === next.url) {
+        if (nextPreload.status !== 'failed' || performance.now() < nextPreload.retryAt) return;
+        attempt = Math.min(nextPreload.attempt + 1, 4);
     }
+    discardNextPreload();
+    nextPreload = {url: next.url, status: 'loading', controller: new AbortController(), attempt};
+    void preloadMedia(nextPreload);
 }
 
 function playNext() {
     if (!currentMediaList || currentMediaList.length === 0) return;
-    const nextIndex = (currentIndex + 1) % currentMediaList.length;
+    const nextIndex = nextMediaIndex();
     selectMedia(nextIndex);
 }
 
@@ -109,7 +168,8 @@ async function reportValidPlayback() {
     if (!media || !duration || playbackState.mediaId !== media.media_id) return;
     if (playbackState.accumulated + 0.05 < playbackThreshold(duration)) return;
 
-    playbackState.reporting = true;
+    const reportingState = playbackState;
+    reportingState.reporting = true;
     try {
         const response = await fetch('/api/v1/media/playback', {
             method: 'POST',
@@ -117,19 +177,19 @@ async function reportValidPlayback() {
             body: JSON.stringify({
                 media_path: media.media_path,
                 playback_session_id: playbackSessionId,
-                played_seconds: playbackState.accumulated,
+                played_seconds: reportingState.accumulated,
                 duration,
             }),
         });
         if (!response.ok) return;
         const data = await response.json();
-        playbackState.reported = true;
+        reportingState.reported = true;
         media.play_score = data.play_score;
         updateTrackStats(media);
     } catch (_error) {
         // Playback remains available while transient accounting failures retry.
     } finally {
-        playbackState.reporting = false;
+        reportingState.reporting = false;
     }
 }
 
@@ -151,7 +211,13 @@ async function changePreference(index, delta) {
 function initPlayer(media, index) {
     accountPlaybackTime();
     currentIndex = index;
-    isNextPreloaded = false;
+    const sequence = ++playerSwitchSequence;
+    const previousObjectUrl = activeObjectUrl;
+    activeObjectUrl = nextPreload?.url === media.url && nextPreload.status === 'ready'
+        ? nextPreload.objectUrl : null;
+    if (activeObjectUrl) nextPreload.objectUrl = null;
+    discardNextPreload();
+    const playbackUrl = activeObjectUrl || media.url;
     resetPlaybackAccounting(media);
     const isAudio = media.type === 'audio';
     const audioCover = document.getElementById('audioCover');
@@ -168,26 +234,31 @@ function initPlayer(media, index) {
     }
 
     if (art) {
-        art.switchUrl(media.url).then(() => {
-            art.title = media.title;
-            art.play();
+        // Assign directly: switchUrl waits for canplay before our play() call,
+        // and its same-URL path never settles in Artplayer 5.1.1.
+        if (art.url !== playbackUrl) art.url = playbackUrl;
+        else art.currentTime = 0;
+        if (previousObjectUrl) URL.revokeObjectURL(previousObjectUrl);
+        art.title = media.title;
+        Promise.resolve(art.play()).then(() => {
+            if (sequence !== playerSwitchSequence) return;
             if (isAudio) {
-                audioDisk.classList.add('rotate-disk');
+                audioDisk?.classList.add('rotate-disk');
             } else {
-                audioDisk.classList.remove('rotate-disk');
+                audioDisk?.classList.remove('rotate-disk');
             }
             updateMediaSession(media);
-        }).catch(() => {
-            art.url = media.url;
-            art.play();
-            updateMediaSession(media);
+        }).catch(error => {
+            if (sequence !== playerSwitchSequence || error.name === 'AbortError') return;
+            art.notice.show = error.name === 'NotAllowedError'
+                ? '浏览器暂停了自动播放，请点击播放继续' : '播放失败，请重试';
         });
         return;
     }
 
     art = new Artplayer({
         container: '#artplayer',
-        url: media.url,
+        url: playbackUrl,
         title: media.title,
         volume: 0.7,
         autoplay: true,
@@ -490,9 +561,18 @@ window.addEventListener('DOMContentLoaded', () => {
     playbackReporter = setInterval(reportValidPlayback, 1000);
 });
 
-window.addEventListener('pagehide', () => {
+window.addEventListener('pagehide', event => {
     if (playbackReporter) clearInterval(playbackReporter);
     accountPlaybackTime();
+    discardNextPreload();
+    if (!event.persisted && activeObjectUrl) {
+        URL.revokeObjectURL(activeObjectUrl);
+        activeObjectUrl = null;
+    }
+});
+
+window.addEventListener('pageshow', event => {
+    if (event.persisted && art) playbackReporter = setInterval(reportValidPlayback, 1000);
 });
 
 function selectMedia(index) {
