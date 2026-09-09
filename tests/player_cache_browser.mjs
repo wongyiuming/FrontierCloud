@@ -26,7 +26,7 @@ const server = http.createServer((req, res) => {
         res.setHeader('Cache-Control', 'no-store'); res.end(wave); return;
     }
     res.setHeader('Content-Type', 'text/html');
-    res.end('<div id="artplayer" style="width:640px;height:360px"></div><div id="audioCover"></div><div id="audioDisk"></div><div id="audioBlurBg"></div>');
+    res.end('<div id="artplayer" style="width:640px;height:360px"></div>');
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch({channel: process.env.PLAYWRIGHT_CHANNEL || 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required']});

@@ -217,18 +217,25 @@ function renderInlineLyrics(lines) {
     const container = document.getElementById('inlineLyricsLines');
     if (!panel || !container) return;
     container.replaceChildren();
+    const columns = [0, 1].map(() => {
+        const column = document.createElement('div');
+        column.className = 'inline-lyrics-column';
+        container.appendChild(column);
+        return column;
+    });
+    const rowsPerColumn = Math.max(1, Math.ceil(lines.length / columns.length));
     for (const [index, line] of lines.entries()) {
         const row = document.createElement('p');
         row.textContent = line || '\u00a0';
         row.style.color = INLINE_LYRIC_PALETTE[index % INLINE_LYRIC_PALETTE.length];
-        container.appendChild(row);
+        columns[Math.min(columns.length - 1, Math.floor(index / rowsPerColumn))].appendChild(row);
     }
     panel.classList.toggle('hidden', lines.length === 0);
     if (lines.length === 0) return;
     const availableHeight = Math.max(100, panel.clientHeight - 20);
     const longest = Math.max(1, ...lines.map(line => Array.from(line).length));
-    const heightSize = availableHeight / Math.max(1, lines.length * 1.32);
-    const widthSize = Math.max(100, panel.clientWidth - 28) / Math.max(4, longest * 1.05);
+    const heightSize = availableHeight / (rowsPerColumn * 1.32);
+    const widthSize = Math.max(100, panel.clientWidth / columns.length - 42) / Math.max(4, longest * 1.05);
     panel.style.setProperty('--inline-lyric-font-size', `${Math.max(9, Math.min(34, heightSize, widthSize))}px`);
 }
 
@@ -275,10 +282,6 @@ function initPlayer(media, index) {
     discardNextPreload();
     const playbackUrl = activeObjectUrl || media.url;
     resetPlaybackAccounting(media);
-    const isAudio = media.type === 'audio';
-    const audioCover = document.getElementById('audioCover');
-    const audioDisk = document.getElementById('audioDisk');
-    const audioBlurBg = document.getElementById('audioBlurBg');
     const lyricsLink = document.getElementById('lyricsLink');
 
     void loadInlineLyrics(media);
@@ -294,15 +297,6 @@ function initPlayer(media, index) {
         }
     }
 
-    if (isAudio && audioCover && audioDisk && audioBlurBg) {
-        audioCover.style.display = 'flex';
-        const safeCover = encodeURI(media.cover);
-        audioDisk.style.backgroundImage = `url('${safeCover}')`;
-        audioBlurBg.style.backgroundImage = `url('${safeCover}')`;
-    } else if (audioCover) {
-        audioCover.style.display = 'none';
-    }
-
     if (art) {
         // Assign directly: switchUrl waits for canplay before our play() call,
         // and its same-URL path never settles in Artplayer 5.1.1.
@@ -312,11 +306,6 @@ function initPlayer(media, index) {
         art.title = media.title;
         Promise.resolve(art.play()).then(() => {
             if (sequence !== playerSwitchSequence) return;
-            if (isAudio) {
-                audioDisk?.classList.add('rotate-disk');
-            } else {
-                audioDisk?.classList.remove('rotate-disk');
-            }
             updateMediaSession(media);
         }).catch(error => {
             if (sequence !== playerSwitchSequence || error.name === 'AbortError') return;
@@ -338,15 +327,12 @@ function initPlayer(media, index) {
     });
 
     art.on('play', () => {
-        const activeMedia = currentMediaList[currentIndex];
-        if (activeMedia.type === 'audio') audioDisk?.classList.add('rotate-disk');
         if (playbackState) playbackState.lastTick = performance.now();
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
     });
 
     art.on('pause', () => {
         accountPlaybackTime();
-        audioDisk?.classList.remove('rotate-disk');
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     });
 
