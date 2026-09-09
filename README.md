@@ -93,6 +93,8 @@ Classified violations and state changes are durable MySQL audit records. Request
 
 Audio playback preloads the next item from the same page-local queue used by the Next control. Preloading starts after five seconds (earlier for short tracks), retries transient failures, and uses a completed Blob directly when switching. Score changes update displayed values; ordering is recalculated when opening a player page, not mid-queue. At most the current cached track and one upcoming track are retained, with a 128 MiB limit per speculative download. Oversized audio and videos use normal streaming. Offline switching requires the next download to have completed; early manual skips or interrupted downloads still require network access. The player does not automatically mute after inactivity.
 
+Public media requests are path-validated and visibility-authorized by Web, then transferred by Nginx through an internal-only media location. Nginx `sendfile` and byte-range handling keep large audio/video bodies out of the Python worker while preserving seek and preload behavior. General public and API requests accept at most 64 KiB bodies; only authenticated Admin upload routes permit large request bodies, up to the application upload limit.
+
 ## WebRTC network observation
 
 WebRTC is a core FrontierCloud function, so Compose always starts the STUN service. The browser uses this derived address without a separate URL setting:

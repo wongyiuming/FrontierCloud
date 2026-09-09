@@ -124,15 +124,36 @@ class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
             await lyrics.replace_relations("track", "missing", ["one", "two"])
 
     async def test_public_content_endpoint_returns_only_lines_without_cache(self):
-        with patch.object(
-            media.lyrics,
-            "load_for_track",
-            new=unittest.mock.AsyncMock(return_value=("lyrics/shared.json", ["one", "two"])),
+        with (
+            patch.object(media.lyrics, "validate_track", return_value=("music/album/song.mp3", Path("song.mp3"))),
+            patch.object(media, "_hidden_set", new=unittest.mock.AsyncMock(return_value=set())),
+            patch.object(
+                media.lyrics,
+                "load_for_track",
+                new=unittest.mock.AsyncMock(return_value=("lyrics/shared.json", ["one", "two"])),
+            ),
         ):
             response = await media.get_lyrics_content("music/album/song.mp3")
 
         self.assertEqual(json.loads(response.body), {"lines": ["one", "two"]})
         self.assertIn("no-store", response.headers["cache-control"])
+
+    async def test_hidden_track_cannot_expose_lyrics(self):
+        loader = unittest.mock.AsyncMock()
+        with (
+            patch.object(media.lyrics, "validate_track", return_value=("music/album/song.mp3", Path("song.mp3"))),
+            patch.object(
+                media,
+                "_hidden_set",
+                new=unittest.mock.AsyncMock(return_value={"music/album"}),
+            ),
+            patch.object(media.lyrics, "load_for_track", new=loader),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await media.get_lyrics_content("music/album/song.mp3")
+
+        self.assertEqual(raised.exception.status_code, 404)
+        loader.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -127,6 +127,23 @@ class PublicMediaHierarchyTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("不应展示", body)
         self.assertIn("path=music%2F%E9%BB%84%E8%80%80%E6%98%8E", body)
 
+    async def test_public_stream_is_delegated_to_nginx_sendfile(self):
+        artist = self.music_root / "artist"
+        artist.mkdir()
+        track = artist / "song.mp3"
+        track.write_bytes(b"ID3payload")
+
+        with patch.object(media, "_hidden_set", new=AsyncMock(return_value=set())):
+            response = await media.stream_media_file("music/artist/song.mp3")
+
+        self.assertEqual(response.body, b"")
+        self.assertEqual(response.media_type, "audio/mpeg")
+        self.assertEqual(
+            response.headers["x-accel-redirect"],
+            "/_protected_media/music/artist/song.mp3",
+        )
+        self.assertEqual(response.headers["cache-control"], "public, max-age=86400")
+
 
 if __name__ == "__main__":
     unittest.main()
