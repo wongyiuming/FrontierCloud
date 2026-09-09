@@ -7,10 +7,25 @@ const flush = () => new Promise(setImmediate);
 function playerContext(fetchImpl) {
     let clock = 10000;
     const requests = [], revoked = [], objects = [];
-    const element = {style: {}, classList: {add() {}, remove() {}}};
+    const element = {
+        style: {setProperty(name, value) { this[name] = value; }},
+        classList: {add() {}, remove() {}, toggle() {}},
+        clientHeight: 400,
+        clientWidth: 500,
+        children: [],
+        replaceChildren(...children) { this.children = children; },
+        appendChild(child) { this.children.push(child); },
+        setAttribute() {},
+        removeAttribute() {},
+    };
     const context = vm.createContext({
         window: {addEventListener() {}}, navigator: {},
-        document: {getElementById: () => element, querySelector: () => null, querySelectorAll: () => []},
+        document: {
+            getElementById: () => element,
+            createElement: () => ({style: {}, children: [], appendChild(child) { this.children.push(child); }}),
+            querySelector: () => null,
+            querySelectorAll: () => [],
+        },
         performance: {now: () => clock}, AbortController, Blob, setTimeout, clearTimeout,
         URL: {
             createObjectURL(blob) { objects.push(blob); return `blob:track-${objects.length}`; },
@@ -96,6 +111,14 @@ for (const failure of ['network', 'status', 'truncated']) {
     await flush();
     assert.equal(p.run('playbackState.reported'), false);
     assert.equal(p.run('currentMediaList[0].play_score'), 1);
+}
+
+{
+    const p = playerContext(async () => new Response('unused'));
+    p.run("renderInlineLyrics(['one', 'two', 'three', 'four', 'five'])");
+    assert.equal(p.run("document.getElementById('inlineLyricsLines').children.length"), 2);
+    assert.equal(p.run("document.getElementById('inlineLyricsLines').children[0].children.length"), 3);
+    assert.equal(p.run("document.getElementById('inlineLyricsLines').children[1].children.length"), 2);
 }
 
 console.log('player-cache-smoke-ok');

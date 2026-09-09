@@ -51,10 +51,19 @@ Open the media home page, select the privilege-elevation control (`id="elevate"`
 
 - Random or custom Admin Key rotation.
 - Media upload, download, visibility, and deletion controls.
+- Lyric upload and track-to-lyric relation editing.
 - Expandable modules with one module open at a time, without changing URL.
 - IP state summaries, numeric IP ordering, manual release/permanent bans, and permanent allowlist management; the existing layout is retained.
 
 The automatic security lifecycle is fixed: the first threshold violation blocks an IP for 24 hours, and the second violation permanently blacklists it. This timing is not configurable. An administrator may still explicitly release or allowlist an address in Admin WebUI.
+
+### Lyrics
+
+Static lyrics live in `data/media/lyrics`, alongside `data/media/music` and `data/media/vido`. Upload them from the existing media-management upload menu. Lyrics are reference-only objects: they never appear as standalone items in the public media catalog and do not have a visibility toggle. Supported files are UTF-8 `.txt` and `.json`, with a fixed 2 MiB limit. JSON may be a string array or an object whose `lines` field is a string array.
+
+In the Lyrics module, the counters show current track, lyric, and relation totals. Select one track or lyric first and then enter linking mode. The graph displays only that selected object's edges, so a shared lyric does not turn the entire catalog into a spider web. A track has zero or one lyric; a lyric may be reused by any number of tracks. Saving a track relation replaces its earlier lyric. Saving from a lyric replaces the complete set of tracks that reference that lyric. Deleting a track, lyric, or containing directory removes its relationships in the same MySQL transaction as the existing media metadata cleanup.
+
+For an associated song, the audio player uses the full area above the heartbeat line for a fixed two-column lyric view and enables its Fullscreen Lyrics control. The old album-cover disc is not rendered. The control opens a dedicated blank lyric window without exposing a standalone lyric index; that fullscreen view always uses three columns. Both views size text from the actual line count and viewport and use a fixed, muted color cycle with bold static text. A song without a relation hides the inline lyric and keeps the fullscreen control disabled.
 
 Each IP is one object across the security page, including the allowlist. Filtering and pagination operate on current objects, not historical events. The IP sort control replaces the old time range: IPv4 is compared by its four numeric octets (`10.199.254.235 < 13.11.1.1`); IPv6 is compared by its 128-bit value, after IPv4 in ascending order. Allowlisted objects appear only in the allowlist section of the same paginated result. The statistics count all current objects, independently of the page/filter.
 
@@ -84,6 +93,8 @@ Classified violations and state changes are durable MySQL audit records. Request
 
 Audio playback preloads the next item from the same page-local queue used by the Next control. Preloading starts after five seconds (earlier for short tracks), retries transient failures, and uses a completed Blob directly when switching. Score changes update displayed values; ordering is recalculated when opening a player page, not mid-queue. At most the current cached track and one upcoming track are retained, with a 128 MiB limit per speculative download. Oversized audio and videos use normal streaming. Offline switching requires the next download to have completed; early manual skips or interrupted downloads still require network access. The player does not automatically mute after inactivity.
 
+Public media requests are path-validated and visibility-authorized by Web, then transferred by Nginx through an internal-only media location. Nginx `sendfile` and byte-range handling keep large audio/video bodies out of the Python worker while preserving seek and preload behavior. General public and API requests accept at most 64 KiB bodies; only authenticated Admin upload routes permit large request bodies, up to the application upload limit.
+
 ## WebRTC network observation
 
 WebRTC is a core FrontierCloud function, so Compose always starts the STUN service. The browser uses this derived address without a separate URL setting:
@@ -108,6 +119,7 @@ The project does not deploy or manage Prometheus, Grafana, Elasticsearch, Logsta
 ## Data lifecycle
 
 - Media: host `./data` directory.
+- Lyrics and their files: host `./data/media/lyrics`; track relationships: MySQL `media_lyric_links`.
 - MySQL: Docker `mysql_data` volume.
 - Redis: Docker `redis_data` volume.
 - Generated secrets: Docker `runtime_secrets` volume.
@@ -125,6 +137,8 @@ Schema migrations use individually atomic MySQL DDL statements under a named con
 python -m unittest discover -s tests -p 'test_*.py' -v
 node --check static/js/admin.js
 node --check static/js/network-observation.js
+node --check static/js/lyrics.js
+node tests/admin_ui_smoke.mjs
 node tests/player_cache_smoke.mjs
 docker compose config --quiet
 docker compose up -d --build --wait

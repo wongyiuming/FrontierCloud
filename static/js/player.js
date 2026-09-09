@@ -6,6 +6,10 @@ let playerSwitchSequence = 0;
 let clickTimer = null;
 let playbackState = null;
 let playbackReporter = null;
+let inlineLyricsRequest = null;
+let inlineLyricsSequence = 0;
+const inlineLyricsCache = new Map();
+const INLINE_LYRIC_PALETTE = ['#aebfca', '#b9c4a6', '#c5b49f', '#b8adc4', '#9fbeb9', '#c4bda4'];
 const DIRECT_SEEK_ZONE_START = 0.75;
 const MIN_PREFERENCE = -2;
 const MAX_PREFERENCE = 7;
@@ -208,6 +212,65 @@ async function changePreference(index, delta) {
     updateTrackStats(media);
 }
 
+function renderInlineLyrics(lines) {
+    const panel = document.getElementById('inlineLyrics');
+    const container = document.getElementById('inlineLyricsLines');
+    if (!panel || !container) return;
+    container.replaceChildren();
+    const columns = [0, 1].map(() => {
+        const column = document.createElement('div');
+        column.className = 'inline-lyrics-column';
+        container.appendChild(column);
+        return column;
+    });
+    const rowsPerColumn = Math.max(1, Math.ceil(lines.length / columns.length));
+    for (const [index, line] of lines.entries()) {
+        const row = document.createElement('p');
+        row.textContent = line || '\u00a0';
+        row.style.color = INLINE_LYRIC_PALETTE[index % INLINE_LYRIC_PALETTE.length];
+        columns[Math.min(columns.length - 1, Math.floor(index / rowsPerColumn))].appendChild(row);
+    }
+    panel.classList.toggle('hidden', lines.length === 0);
+    if (lines.length === 0) return;
+    const availableHeight = Math.max(100, panel.clientHeight - 20);
+    const longest = Math.max(1, ...lines.map(line => Array.from(line).length));
+    const heightSize = availableHeight / (rowsPerColumn * 1.32);
+    const widthSize = Math.max(100, panel.clientWidth / columns.length - 42) / Math.max(4, longest * 1.05);
+    panel.style.setProperty('--inline-lyric-font-size', `${Math.max(9, Math.min(34, heightSize, widthSize))}px`);
+}
+
+async function loadInlineLyrics(media) {
+    const sequence = ++inlineLyricsSequence;
+    inlineLyricsRequest?.abort();
+    inlineLyricsRequest = null;
+    if (!media.has_lyrics) {
+        renderInlineLyrics([]);
+        return;
+    }
+    const cached = inlineLyricsCache.get(media.media_path);
+    if (cached) {
+        renderInlineLyrics(cached);
+        return;
+    }
+    const controller = new AbortController();
+    inlineLyricsRequest = controller;
+    try {
+        const response = await fetch(`/api/v1/media/lyrics/content?track=${encodeURIComponent(media.media_path)}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('Lyrics unavailable');
+        const data = await response.json();
+        const lines = Array.isArray(data.lines) ? data.lines.map(line => String(line)) : [];
+        inlineLyricsCache.set(media.media_path, lines);
+        if (sequence === inlineLyricsSequence) renderInlineLyrics(lines);
+    } catch (error) {
+        if (error.name !== 'AbortError' && sequence === inlineLyricsSequence) renderInlineLyrics([]);
+    } finally {
+        if (inlineLyricsRequest === controller) inlineLyricsRequest = null;
+    }
+}
+
 function initPlayer(media, index) {
     accountPlaybackTime();
     currentIndex = index;
@@ -219,18 +282,19 @@ function initPlayer(media, index) {
     discardNextPreload();
     const playbackUrl = activeObjectUrl || media.url;
     resetPlaybackAccounting(media);
-    const isAudio = media.type === 'audio';
-    const audioCover = document.getElementById('audioCover');
-    const audioDisk = document.getElementById('audioDisk');
-    const audioBlurBg = document.getElementById('audioBlurBg');
+    const lyricsLink = document.getElementById('lyricsLink');
 
-    if (isAudio && audioCover && audioDisk && audioBlurBg) {
-        audioCover.style.display = 'flex';
-        const safeCover = encodeURI(media.cover);
-        audioDisk.style.backgroundImage = `url('${safeCover}')`;
-        audioBlurBg.style.backgroundImage = `url('${safeCover}')`;
-    } else if (audioCover) {
-        audioCover.style.display = 'none';
+    void loadInlineLyrics(media);
+
+    if (lyricsLink) {
+        lyricsLink.classList.toggle('unavailable', !media.has_lyrics);
+        if (media.has_lyrics) {
+            lyricsLink.href = `/api/v1/media/lyrics?track=${encodeURIComponent(media.media_path)}`;
+            lyricsLink.setAttribute('aria-label', `打开 ${media.title} 的歌词`);
+        } else {
+            lyricsLink.removeAttribute('href');
+            lyricsLink.setAttribute('aria-label', `${media.title} 暂无歌词`);
+        }
     }
 
     if (art) {
@@ -242,11 +306,6 @@ function initPlayer(media, index) {
         art.title = media.title;
         Promise.resolve(art.play()).then(() => {
             if (sequence !== playerSwitchSequence) return;
-            if (isAudio) {
-                audioDisk?.classList.add('rotate-disk');
-            } else {
-                audioDisk?.classList.remove('rotate-disk');
-            }
             updateMediaSession(media);
         }).catch(error => {
             if (sequence !== playerSwitchSequence || error.name === 'AbortError') return;
@@ -268,15 +327,12 @@ function initPlayer(media, index) {
     });
 
     art.on('play', () => {
-        const activeMedia = currentMediaList[currentIndex];
-        if (activeMedia.type === 'audio') audioDisk?.classList.add('rotate-disk');
         if (playbackState) playbackState.lastTick = performance.now();
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
     });
 
     art.on('pause', () => {
         accountPlaybackTime();
-        audioDisk?.classList.remove('rotate-disk');
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     });
 
@@ -573,6 +629,12 @@ window.addEventListener('pagehide', event => {
 
 window.addEventListener('pageshow', event => {
     if (event.persisted && art) playbackReporter = setInterval(reportValidPlayback, 1000);
+});
+
+window.addEventListener('resize', () => {
+    const media = currentMediaList?.[currentIndex];
+    const lines = media ? inlineLyricsCache.get(media.media_path) : null;
+    if (lines) renderInlineLyrics(lines);
 });
 
 function selectMedia(index) {

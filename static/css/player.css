@@ -9,16 +9,13 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .artplayer-app .art-bottom .art-progress .art-control-progress:focus-within .art-control-progress-inner { height: 10px; }
 .audio-player-page .artplayer-app .art-bottom { opacity: 1 !important; visibility: visible !important; transform: translateY(0) !important; }
 .audio-player-page .artplayer-app .art-bottom .art-progress { opacity: 1 !important; visibility: visible !important; }
-.audio-cover-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; justify-content: center; align-items: center; background-size: cover; background-position: center; z-index: 1; pointer-events: none; }
-.audio-blur-bg { position: absolute; width: 100%; height: 100%; background-size: cover; background-position: center; filter: blur(40px) brightness(0.4); transform: scale(1.1); }
-.audio-disk { width: 250px; height: 250px; border-radius: 50%; border: 8px solid rgba(255,255,255,0.1); box-shadow: 0 10px 40px rgba(0,0,0,0.6); z-index: 2; background-size: cover; background-position: center; }
-.rotate-disk { animation: rotate 20s linear infinite; }
-@keyframes rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.inline-lyrics { --inline-lyric-font-size: 22px; position: absolute; top: 5%; right: 3%; bottom: 30%; left: 3%; z-index: 7; display: flex; align-items: center; justify-content: center; padding: 10px 18px; overflow: hidden; pointer-events: none; }
+.inline-lyrics.hidden { display: none; }
+.inline-lyrics-lines { display: grid; width: 100%; max-height: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(24px, 5vw, 80px); }
+.inline-lyrics-column { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: .18em; }
+.inline-lyrics p { margin: 0; overflow: hidden; font-size: var(--inline-lyric-font-size); font-weight: 800; line-height: 1.18; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 
 .audio-interaction-guide { position: absolute; inset: 0; z-index: 8; pointer-events: none; user-select: none; }
-.interaction-hint { position: absolute; left: 4%; right: 4%; display: flex; align-items: center; justify-content: center; text-align: center; color: #fff; font-size: clamp(25px, 4vw, 56px); font-weight: 900; letter-spacing: 0.04em; line-height: 1.25; text-shadow: 0 2px 6px #000, 0 0 18px rgba(0,0,0,0.95), 0 0 28px rgba(0,229,255,0.55); }
-.interaction-hint-upper { top: 43%; transform: translateY(-50%); flex-wrap: wrap; gap: 0.25em 0.9em; }
-.interaction-hint-lower { top: 87.5%; transform: translateY(-50%); }
 .interaction-boundary { position: absolute; top: 75%; left: 0; width: 100%; height: 64px; transform: translateY(-50%); overflow: visible; filter: drop-shadow(0 0 8px rgba(0,229,255,0.95)); }
 .interaction-boundary path { fill: none; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .boundary-glow { stroke: rgba(255,255,255,0.32); stroke-width: 9; }
@@ -37,6 +34,8 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .player-controls { padding: 12px 15px; background: #1f1f1f; display: flex; gap: 10px; border-bottom: 1px solid #282828; }
 .control-btn { flex: 1; background: #2a2a2a; color: #fff; border: 1px solid #3a3a3a; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; text-align: center; transition: background 0.2s; user-select: none; }
 .control-btn:hover { background: #3a3a3a; }
+.lyrics-link { text-decoration: none; }
+.lyrics-link.unavailable { pointer-events: none; opacity: .35; }
 .media-list { flex: 1; overflow-y: auto; list-style: none; margin: 0; padding: 0; -webkit-overflow-scrolling: touch; touch-action: pan-y; will-change: transform; }
 .media-item { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid #222; cursor: pointer; transition: background 0.2s; user-select: none; }
 .media-item:hover { background: #282828; }
@@ -62,7 +61,6 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
     .sidebar-header { padding: 12px 14px; }
     .player-controls { padding: 8px 10px; }
     .media-item { padding: 10px 12px; }
-    .interaction-hint { left: 2%; right: 2%; font-size: clamp(21px, 7vw, 34px); }
-    .interaction-hint-upper { gap: 0.18em 0.55em; }
-    .audio-disk { width: min(48vw, 210px); height: min(48vw, 210px); }
+    .inline-lyrics { top: 3%; right: 2%; bottom: 30%; left: 2%; padding: 6px; }
+    .inline-lyrics-lines { gap: 12px; }
 }

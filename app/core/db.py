@@ -346,6 +346,18 @@ async def init_db() -> None:
                     INDEX idx_playback_event_expiry (expires_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
+            await _commit_ddl(conn, """
+                CREATE TABLE IF NOT EXISTS media_lyric_links (
+                    media_id CHAR(64) NOT NULL PRIMARY KEY,
+                    media_path VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+                    lyric_id CHAR(64) NOT NULL,
+                    lyric_path VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+                    created_at DATETIME(6) NOT NULL,
+                    updated_at DATETIME(6) NOT NULL,
+                    INDEX idx_media_lyric_lyric_id (lyric_id),
+                    INDEX idx_media_lyric_updated_at (updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
         except BaseException:
             try:
                 await conn.rollback()

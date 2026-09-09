@@ -2,17 +2,20 @@ import asyncio
 import hashlib
 import html as html_escape
 import json
+import mimetypes
 import urllib.parse
 import uuid
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from app.services.media_catalog_cache import load_media_catalog, store_media_catalog
 from app.services import playback
 from app.services import network_observation
+from app.services import lyrics
 from app.core.config import settings
 
 router = APIRouter()
@@ -20,9 +23,11 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 MEDIA_ROOT = (BASE_DIR / "data" / "media").resolve()
 MUSIC_ROOT = (MEDIA_ROOT / "music").resolve()
 VIDEO_ROOT = (MEDIA_ROOT / "vido").resolve()
+LYRICS_ROOT = (MEDIA_ROOT / "lyrics").resolve()
 STATIC_MEDIA_DIR = BASE_DIR / "static" / "media"
 MUSIC_ROOT.mkdir(parents=True, exist_ok=True)
 VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
+LYRICS_ROOT.mkdir(parents=True, exist_ok=True)
 
 AUDIO_EXTS = (".mp3", ".m4a", ".flac", ".wav")
 VIDEO_EXTS = (".mp4", ".webm", ".mkv")
@@ -50,6 +55,7 @@ class NetworkObservation(BaseModel):
     failure: str | None = Field(None, max_length=32)
 
 
+@lru_cache(maxsize=16)
 def static_asset_url(relative_path: str) -> str:
     path = (BASE_DIR / "static" / relative_path).resolve()
     if not path.is_relative_to((BASE_DIR / "static").resolve()) or not path.is_file():
@@ -65,6 +71,8 @@ def inject_page_runtime(html: str) -> str:
         "{{NETWORK_OBSERVATION_JS_URL}}": html_escape.escape(static_asset_url("js/network-observation.js"), quote=True),
         "{{PLAYER_JS_URL}}": html_escape.escape(static_asset_url("js/player.js"), quote=True),
         "{{PLAYER_CSS_URL}}": html_escape.escape(static_asset_url("css/player.css"), quote=True),
+        "{{LYRICS_JS_URL}}": html_escape.escape(static_asset_url("js/lyrics.js"), quote=True),
+        "{{LYRICS_CSS_URL}}": html_escape.escape(static_asset_url("css/lyrics.css"), quote=True),
     }
     for marker, value in replacements.items():
         html = html.replace(marker, value)
@@ -252,6 +260,7 @@ async def scan_media_files_by_category(category_subpath, valid_exts, media_type)
     return media_list
 
 
+@lru_cache(maxsize=16)
 def load_html_template(filename: str) -> str:
     path = STATIC_MEDIA_DIR / filename
     if not path.exists():
@@ -277,7 +286,17 @@ async def stream_media_file(file_path: str = Query(...)):
     rel = safe_path.relative_to(MEDIA_ROOT).as_posix()
     if _is_publicly_hidden(rel, hidden):
         raise HTTPException(status_code=404, detail="Media file not found")
-    return FileResponse(safe_path, headers={"Cache-Control": "public, max-age=86400"})
+    content_type = mimetypes.guess_type(safe_path.name)[0] or "application/octet-stream"
+    return Response(
+        media_type=content_type,
+        headers={
+            "X-Accel-Redirect": (
+                "/_protected_media/"
+                + urllib.parse.quote(rel, safe="/")
+            ),
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -372,6 +391,8 @@ async def _get_player_or_subcategories(
         await scan_media_files_by_category(path, valid_exts, playback_type),
         session_id,
     )
+    if playback_type == "audio":
+        media_list = await lyrics.attach_links(media_list)
     html = load_html_template(player_template)
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"{title_prefix} - {display_path}"))
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape(back_url, quote=True))
@@ -403,6 +424,33 @@ async def get_video_player_page(path: str = Query(...)):
         "video-player.html",
         "前沿视讯",
     )
+
+
+@router.get("/lyrics", response_class=HTMLResponse)
+async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024)):
+    try:
+        normalized_track, _track_path = lyrics.validate_track(track)
+        if _is_publicly_hidden(normalized_track, await _hidden_set()):
+            raise FileNotFoundError
+        _lyric_path, lines = await lyrics.load_for_track(normalized_track)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Lyrics not found")
+    html = load_html_template("lyrics.html")
+    html = html.replace("{{LYRICS_JSON}}", safe_json_dumps(lines))
+    html = html.replace("{{LINE_COUNT}}", str(len(lines)))
+    return HTMLResponse(inject_page_runtime(html), headers=NO_STORE_HEADERS)
+
+
+@router.get("/lyrics/content")
+async def get_lyrics_content(track: str = Query(..., min_length=1, max_length=1024)):
+    try:
+        normalized_track, _track_path = lyrics.validate_track(track)
+        if _is_publicly_hidden(normalized_track, await _hidden_set()):
+            raise FileNotFoundError
+        _lyric_path, lines = await lyrics.load_for_track(normalized_track)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Lyrics not found")
+    return JSONResponse({"lines": lines}, headers=NO_STORE_HEADERS)
 
 
 @router.post("/playback")

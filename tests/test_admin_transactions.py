@@ -68,9 +68,22 @@ class _Redis:
         self.pipelines.append(pipeline)
         return pipeline
 
+    def lock(self, name, **kwargs):
+        self.lock_name = name
+        self.lock_options = kwargs
+        return _Lock()
+
     async def scan_iter(self, match=None):
         for key in list(self.sessions):
             yield key
+
+
+class _Lock:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
 
 
 class AdminRedisTransactionTests(unittest.IsolatedAsyncioTestCase):
@@ -108,12 +121,14 @@ class AdminRedisTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(names, ["hset", "expire"])
 
     async def test_rotation_returns_published_key_when_redis_reconciliation_fails(self):
+        fake = _Redis()
         with tempfile.TemporaryDirectory() as directory:
             key_file = Path(directory) / "admin_key"
             key_file.write_text("old-admin-key-123456789\n", encoding="utf-8")
             new_key = "new-admin-key-123456789"
             with (
                 patch.object(admin_service, "ADMIN_KEY_FILE", key_file),
+                patch.object(admin_service, "redis_client", fake),
                 patch.object(admin_service.secrets, "token_urlsafe", return_value=new_key),
                 patch.object(
                     admin_service,
@@ -130,12 +145,14 @@ class AdminRedisTransactionTests(unittest.IsolatedAsyncioTestCase):
             logged.assert_called_once()
 
     async def test_concurrent_rotations_do_not_share_a_temporary_file(self):
+        fake = _Redis()
         with tempfile.TemporaryDirectory() as directory:
             key_file = Path(directory) / "admin_key"
             key_file.write_text("old-admin-key-123456789\n", encoding="utf-8")
             generated = ["random-admin-key-a-123456789", "random-admin-key-b-123456789"]
             with (
                 patch.object(admin_service, "ADMIN_KEY_FILE", key_file),
+                patch.object(admin_service, "redis_client", fake),
                 patch.object(admin_service.secrets, "token_urlsafe", side_effect=generated),
                 patch.object(admin_service, "_replace_admin_sessions", new=AsyncMock()),
             ):
@@ -151,6 +168,24 @@ class AdminRedisTransactionTests(unittest.IsolatedAsyncioTestCase):
                 hashlib.sha256(results[-1].encode()).hexdigest(),
                 admin_service._hash(generated[-1]),
             )
+
+    async def test_rotation_uses_cross_worker_distributed_lock(self):
+        fake = _Redis()
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "admin_key"
+            key_file.write_text("old-admin-key-123456789\n", encoding="utf-8")
+            with (
+                patch.object(admin_service, "ADMIN_KEY_FILE", key_file),
+                patch.object(admin_service, "redis_client", fake),
+                patch.object(admin_service, "_replace_admin_sessions", new=AsyncMock()),
+            ):
+                await admin_service.rotate_admin_key("current", None, None)
+
+        self.assertEqual(fake.lock_name, admin_service.ADMIN_KEY_ROTATION_LOCK_KEY)
+        self.assertEqual(
+            fake.lock_options["timeout"],
+            admin_service.ADMIN_KEY_ROTATION_LOCK_SECONDS,
+        )
 
 
 class _FailingAuditConnection:

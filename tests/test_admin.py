@@ -1,4 +1,5 @@
 import hashlib
+import asyncio
 import io
 import json
 import stat
@@ -47,6 +48,20 @@ class _FakeRedis:
         return count
     def pipeline(self, transaction=True):
         return _FakePipeline(self, transaction)
+    def lock(self, name, **kwargs):
+        return _FakeLock(name, kwargs)
+
+
+class _FakeLock:
+    def __init__(self, name, options):
+        self.name = name
+        self.options = options
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
 
 
 class _FakePipeline:
@@ -105,6 +120,25 @@ class AdminKeyLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     await admin_service.verify_admin_key("wrong", _request())
         self.assertEqual(raised.exception.detail["code"], "ADMIN_KEY_INVALID")
         self.assertEqual(fake.values[admin_service.FAIL_PREFIX + "203.0.113.8"], "1")
+
+    async def test_parallel_key_guesses_reserve_rate_limit_slots_atomically(self):
+        fake = _FakeRedis()
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "admin_key"
+            key_file.write_text("stable-admin-key-123456789\n", encoding="utf-8")
+            with (
+                patch.object(admin_service, "ADMIN_KEY_FILE", key_file),
+                patch.object(admin_service, "redis_client", fake),
+                patch.object(admin_service.settings, "ADMIN_MAX_FAILED_ATTEMPTS_PER_IP", 3),
+            ):
+                results = await asyncio.gather(*(
+                    admin_service.verify_admin_key(f"wrong-{index}", _request())
+                    for index in range(8)
+                ), return_exceptions=True)
+
+        statuses = [result.status_code for result in results if isinstance(result, HTTPException)]
+        self.assertEqual(statuses.count(403), 3)
+        self.assertEqual(statuses.count(429), 5)
 
     async def test_random_rotation_replaces_file_and_invalidates_other_sessions(self):
         fake = _FakeRedis()

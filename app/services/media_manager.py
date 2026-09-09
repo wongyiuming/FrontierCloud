@@ -23,11 +23,16 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 MEDIA_ROOT = (BASE_DIR / "data" / "media").resolve()
 AUDIO_EXTS = (".mp3", ".m4a", ".flac", ".wav")
 VIDEO_EXTS = (".mp4", ".webm", ".mkv")
+LYRIC_EXTS = (".txt", ".json")
+LYRIC_MAX_BYTES = 2 * 1024 * 1024
 ALLOWED_EXTS = set(AUDIO_EXTS + VIDEO_EXTS)
 MEDIA_TYPE_EXTS = {
     "music": set(AUDIO_EXTS),
     "vido": set(VIDEO_EXTS),
 }
+MANAGED_ROOTS = set(MEDIA_TYPE_EXTS) | {"lyrics"}
+LYRICS_ROOT = (MEDIA_ROOT / "lyrics").resolve()
+LYRICS_ROOT.mkdir(parents=True, exist_ok=True)
 
 DELETE_QUARANTINE_PREFIX = ".delete-"
 media_mutation_lock = LoopLocalAsyncLock()
@@ -85,6 +90,8 @@ SIGNATURES = {
 
 
 class MediaManager:
+    LYRIC_MAX_BYTES = LYRIC_MAX_BYTES
+
     @staticmethod
     def _layout_parts(path: Path) -> tuple[str, ...]:
         try:
@@ -242,6 +249,55 @@ class MediaManager:
                         break
 
     @staticmethod
+    async def upload_lyric(upload: UploadFile) -> str:
+        from app.services.lyrics import parse_lyric_bytes
+
+        name = MediaManager.validate_name(upload.filename or "")
+        ext = Path(name).suffix.lower()
+        if ext not in LYRIC_EXTS:
+            raise HTTPException(status_code=400, detail="歌词只支持 .txt 或 .json")
+        destination = LYRICS_ROOT / name
+        if destination.exists():
+            raise HTTPException(status_code=409, detail="上传失败，已存在同名歌词")
+
+        fd, tmp_name = tempfile.mkstemp(prefix=".upload-", suffix=".part", dir=str(MEDIA_ROOT))
+        os.close(fd)
+        tmp = Path(tmp_name)
+        published = False
+        try:
+            payload = bytearray()
+            while True:
+                chunk = await upload.read(256 * 1024)
+                if not chunk:
+                    break
+                payload.extend(chunk)
+                if len(payload) > LYRIC_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="歌词文件不得超过 2 MiB")
+            try:
+                parse_lyric_bytes(bytes(payload), ext)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            with tmp.open("wb") as out:
+                out.write(payload)
+                out.flush()
+                os.fsync(out.fileno())
+
+            async with media_mutation_lock:
+                ensure_media_mutations_ready()
+                if destination.exists():
+                    raise HTTPException(status_code=409, detail="上传失败，已存在同名歌词")
+                LYRICS_ROOT.mkdir(parents=True, exist_ok=True)
+                tmp.chmod(0o644)
+                try:
+                    os.link(tmp, destination)
+                except FileExistsError as exc:
+                    raise HTTPException(status_code=409, detail="上传失败，已存在同名歌词") from exc
+                published = True
+            return destination.relative_to(MEDIA_ROOT).as_posix()
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    @staticmethod
     def ensure_download_readable(path: Path) -> None:
         """Repair legacy 0600 uploads before delegating them to Nginx."""
         mode = path.stat().st_mode
@@ -275,14 +331,22 @@ class MediaManager:
         if not current.exists() or not current.is_dir():
             raise HTTPException(status_code=404, detail="目录不存在")
         parts = current.relative_to(MEDIA_ROOT).parts
-        if parts and (parts[0] not in MEDIA_TYPE_EXTS or len(parts) > 3):
+        if parts and (
+            parts[0] not in MANAGED_ROOTS
+            or (parts[0] == "lyrics" and len(parts) > 1)
+            or (parts[0] != "lyrics" and len(parts) > 3)
+        ):
             raise HTTPException(status_code=400, detail="目录不在受支持的媒体层级内")
         hidden = await MediaManager.hidden_paths()
         items = []
         for entry in sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.casefold())):
             if entry.is_symlink() or entry.name.startswith("."):
                 continue
-            if not parts and (not entry.is_dir() or entry.name not in MEDIA_TYPE_EXTS):
+            if parts and parts[0] == "lyrics" and (
+                not entry.is_file() or entry.suffix.lower() not in LYRIC_EXTS
+            ):
+                continue
+            if not parts and (not entry.is_dir() or entry.name not in MANAGED_ROOTS):
                 continue
             if len(parts) == 3 and entry.is_dir():
                 continue
@@ -294,6 +358,7 @@ class MediaManager:
                 "size": entry.stat().st_size if entry.is_file() else None,
                 "hidden": rel_path in hidden,
                 "media": entry.suffix.lower() in ALLOWED_EXTS,
+                "hideable": entry.is_dir() and rel_path.split("/", 1)[0] in MEDIA_TYPE_EXTS,
             })
         return {"path": rel, "items": items}
 
@@ -312,8 +377,9 @@ class MediaManager:
                 for path in paths:
                     rel = MediaManager.normalize_relative(path)
                     target = resolve_safe_path(MEDIA_ROOT, rel)
-                    if not target.is_dir():
-                        raise HTTPException(status_code=400, detail="隐藏操作只允许目录")
+                    parts = target.relative_to(MEDIA_ROOT).parts
+                    if not target.is_dir() or not parts or parts[0] not in MEDIA_TYPE_EXTS:
+                        raise HTTPException(status_code=400, detail="隐藏操作只允许 music/vido 目录")
                     if hidden:
                         await conn.execute(
                             text("INSERT INTO media_visibility(relative_path,hidden,updated_at) VALUES(:p,1,:t) ON DUPLICATE KEY UPDATE hidden=1,updated_at=:t"),
@@ -339,6 +405,25 @@ class MediaManager:
             p = resolve_safe_path(MEDIA_ROOT, rel)
             if not p.exists() or p.is_symlink():
                 raise HTTPException(status_code=404, detail=f"对象不存在: {rel}")
+            parts = p.relative_to(MEDIA_ROOT).parts
+            valid_directory = p.is_dir() and (
+                (parts and parts[0] in MEDIA_TYPE_EXTS and len(parts) <= 3)
+                or (parts == ("lyrics",))
+            )
+            valid_file = p.is_file() and (
+                (
+                    len(parts) in {3, 4}
+                    and parts[0] in MEDIA_TYPE_EXTS
+                    and p.suffix.lower() in MEDIA_TYPE_EXTS[parts[0]]
+                )
+                or (
+                    len(parts) == 2
+                    and parts[0] == "lyrics"
+                    and p.suffix.lower() in LYRIC_EXTS
+                )
+            )
+            if not valid_directory and not valid_file:
+                raise HTTPException(status_code=400, detail=f"对象不在受支持的数据层级内: {rel}")
             result.append((rel, p))
         return result
 
@@ -377,6 +462,19 @@ class MediaManager:
             text(f"DELETE FROM media_playback_stats WHERE {stats_scope}"),
             params,
         )
+        if is_directory:
+            await conn.execute(text("""
+                DELETE FROM media_lyric_links
+                WHERE BINARY media_path=BINARY :p
+                   OR BINARY LEFT(media_path, CHAR_LENGTH(:prefix))=BINARY :prefix
+                   OR BINARY lyric_path=BINARY :p
+                   OR BINARY LEFT(lyric_path, CHAR_LENGTH(:prefix))=BINARY :prefix
+            """), params)
+        else:
+            await conn.execute(text("""
+                DELETE FROM media_lyric_links
+                WHERE BINARY media_path=BINARY :p OR BINARY lyric_path=BINARY :p
+            """), params)
         if is_directory:
             await conn.execute(text("""
                 DELETE FROM media_visibility
@@ -532,10 +630,10 @@ class MediaManager:
                 yield path
                 return
             parts = path.relative_to(MEDIA_ROOT).parts
-            if not parts or parts[0] not in MEDIA_TYPE_EXTS:
+            if not parts or parts[0] not in MANAGED_ROOTS:
                 return
-            allowed_exts = MEDIA_TYPE_EXTS[parts[0]]
-            max_file_parts = 4
+            allowed_exts = MEDIA_TYPE_EXTS.get(parts[0], set(LYRIC_EXTS))
+            max_file_parts = 2 if parts[0] == "lyrics" else 4
             pending = [path]
             while pending:
                 current = pending.pop()
@@ -547,7 +645,10 @@ class MediaManager:
                         pending.append(child)
                     elif (
                         child.is_file()
-                        and len(child_parts) in {3, 4}
+                        and (
+                            (parts[0] == "lyrics" and len(child_parts) == 2)
+                            or (parts[0] != "lyrics" and len(child_parts) in {3, 4})
+                        )
                         and child.suffix.lower() in allowed_exts
                     ):
                         yield child

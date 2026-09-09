@@ -106,6 +106,7 @@ class MediaDeleteTransactionTests(unittest.IsolatedAsyncioTestCase):
         sql = "\n".join(statement for statement, _params in connection.executed)
         self.assertIn("DELETE events", sql)
         self.assertIn("DELETE FROM media_playback_stats", sql)
+        self.assertIn("DELETE FROM media_lyric_links", sql)
         self.assertIn("DELETE FROM media_visibility", sql)
 
     async def test_database_failure_restores_every_staged_object(self):
