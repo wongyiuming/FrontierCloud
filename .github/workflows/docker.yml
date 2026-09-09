@@ -106,6 +106,8 @@ jobs:
             'https://ci.frontiercloud.local/api/v1/media/stream?file_path=music%2Fci-folder%2Fone.wav' \
             -o /tmp/ci-streamed.wav
           cmp /tmp/ci-one.wav /tmp/ci-streamed.wav
+          grep -qi '^cache-control: public, max-age=86400' /tmp/media-headers.txt
+          test "$(grep -ci '^cache-control:' /tmp/media-headers.txt)" = 1
           grep -qi '^x-content-type-options: nosniff' /tmp/media-headers.txt
           grep -qi '^strict-transport-security: max-age=31536000' /tmp/media-headers.txt
           test "$(curl -ksS -H 'Range: bytes=0-3' -o /tmp/ci-range.bin -w '%{http_code}' \
