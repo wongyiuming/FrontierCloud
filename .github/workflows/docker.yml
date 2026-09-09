@@ -117,16 +117,16 @@ jobs:
           test "$(curl -ksS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
             --data-binary @/tmp/oversized-body.bin \
             https://ci.frontiercloud.local/api/v1/media/network-observation)" = 413
-          printf '测试歌词第一行\n测试歌词第二行\n' > /tmp/ci-lyrics.txt
+          printf '[00:01.00]测试歌词第一行\n[00:05.25]测试歌词第二行\n' > /tmp/ci-lyrics.lrc
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -F 'file=@/tmp/ci-lyrics.txt;type=text/plain' \
-            https://ci.frontiercloud.local/api/v1/media/admin/upload/lyric | grep 'lyrics/ci-lyrics.txt'
+            -F 'file=@/tmp/ci-lyrics.lrc;type=text/plain' \
+            https://ci.frontiercloud.local/api/v1/media/admin/upload/lyric | grep 'lyrics/ci-lyrics.lrc'
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -H 'Content-Type: application/json' \
-            -d '{"origin_kind":"track","origin_path":"music/ci-folder/one.wav","linked_paths":["lyrics/ci-lyrics.txt"]}' \
+            -d '{"origin_kind":"track","origin_path":"music/ci-folder/one.wav","linked_paths":["lyrics/ci-lyrics.lrc"]}' \
             https://ci.frontiercloud.local/api/v1/media/admin/lyrics/relations | grep '"relations":1'
           curl -kfsS -b /tmp/admin-cookies.txt \
-            https://ci.frontiercloud.local/api/v1/media/admin/lyrics/catalog | grep 'lyrics/ci-lyrics.txt'
+            https://ci.frontiercloud.local/api/v1/media/admin/lyrics/catalog | grep 'lyrics/ci-lyrics.lrc'
           curl -kfsSG --data-urlencode 'track=music/ci-folder/one.wav' \
             https://ci.frontiercloud.local/api/v1/media/lyrics | grep '测试歌词第一行'
           curl -kfsSG --data-urlencode 'track=music/ci-folder/one.wav' \
