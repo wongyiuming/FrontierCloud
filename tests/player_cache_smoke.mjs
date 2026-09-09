@@ -7,7 +7,12 @@ const flush = () => new Promise(setImmediate);
 function playerContext(fetchImpl) {
     let clock = 10000;
     const requests = [], revoked = [], objects = [];
-    const element = {style: {}, classList: {add() {}, remove() {}}};
+    const element = {
+        style: {},
+        classList: {add() {}, remove() {}, toggle() {}},
+        setAttribute() {},
+        removeAttribute() {},
+    };
     const context = vm.createContext({
         window: {addEventListener() {}}, navigator: {},
         document: {getElementById: () => element, querySelector: () => null, querySelectorAll: () => []},

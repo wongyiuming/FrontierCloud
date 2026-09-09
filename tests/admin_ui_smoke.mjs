@@ -160,11 +160,13 @@ assert(!adminHtml.includes('Artplayer'));
 assert(!adminHtml.includes('id="move"'));
 assert(adminHtml.includes('id="securityPanel"'));
 assert(adminHtml.includes('id="banList"'));
-assert(adminHtml.includes('/static/js/admin.js?v=20260902-1'));
+assert(adminHtml.includes('/static/js/admin.js?v=20260909-1'));
 assert(adminHtml.includes('id="randomKey"'));
 assert(adminHtml.includes('id="permanentBanForm"'));
 assert(adminHtml.match(/class="module-heading"/g).length === 6);
-assert(adminHtml.match(/施工中/g).length === 3);
+assert(adminHtml.match(/施工中/g).length === 2);
+assert(adminHtml.includes('id="lyricsPanel"'));
+assert(adminHtml.includes('id="uploadLyrics"'));
 assert(!adminHtml.includes('logOutput'));
 assert(!adminHtml.includes('securityToggle'));
 

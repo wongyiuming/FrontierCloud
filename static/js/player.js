@@ -223,6 +223,18 @@ function initPlayer(media, index) {
     const audioCover = document.getElementById('audioCover');
     const audioDisk = document.getElementById('audioDisk');
     const audioBlurBg = document.getElementById('audioBlurBg');
+    const lyricsLink = document.getElementById('lyricsLink');
+
+    if (lyricsLink) {
+        lyricsLink.classList.toggle('unavailable', !media.has_lyrics);
+        if (media.has_lyrics) {
+            lyricsLink.href = `/api/v1/media/lyrics?track=${encodeURIComponent(media.media_path)}`;
+            lyricsLink.setAttribute('aria-label', `打开 ${media.title} 的歌词`);
+        } else {
+            lyricsLink.removeAttribute('href');
+            lyricsLink.setAttribute('aria-label', `${media.title} 暂无歌词`);
+        }
+    }
 
     if (isAudio && audioCover && audioDisk && audioBlurBg) {
         audioCover.style.display = 'flex';

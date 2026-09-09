@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿视界 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260902-1">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260909-1">
 </head>
 <body>
     <main class="admin-console">
@@ -77,7 +77,28 @@
             </div>
         </section>
 
-        <section class="admin-module construction-module" data-admin-module="planned-one"><button class="module-heading" type="button" aria-expanded="false"><span><strong>待建设模块 A</strong><small>预留扩展空间</small></span><b>＋</b></button><div class="module-content construction"><span>施工中</span></div></section>
+        <section id="lyricsPanel" class="admin-module lyrics-panel" data-admin-module="lyrics">
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>歌词关联</strong><small>先选择一首曲目或一份歌词，再进入连线编辑</small></span><b>＋</b></button>
+            <div class="module-content lyrics-content">
+                <div class="lyrics-stats">
+                    <span>曲目<strong id="lyricsTrackCount">-</strong></span>
+                    <span>歌词<strong id="lyricsFileCount">-</strong></span>
+                    <span>关联<strong id="lyricsRelationCount">-</strong></span>
+                </div>
+                <div class="lyrics-toolbar">
+                    <span id="lyricsModeStatus">请选择一个起点</span>
+                    <button id="lyricsRefresh" type="button">刷新</button>
+                    <button id="lyricsEnterLink" type="button" disabled>进入连线</button>
+                    <button id="lyricsCancelLink" class="hidden" type="button">取消</button>
+                    <button id="lyricsSaveLink" class="hidden" type="button">保存关联</button>
+                </div>
+                <div class="lyrics-browser">
+                    <section><label>曲目<input id="lyricsTrackFilter" type="search" placeholder="筛选曲目"></label><div id="lyricsTrackList" class="lyrics-object-list"></div></section>
+                    <section><label>歌词<input id="lyricsFileFilter" type="search" placeholder="筛选歌词"></label><div id="lyricsFileList" class="lyrics-object-list"></div></section>
+                </div>
+                <div class="lyrics-graph-wrap"><svg id="lyricsGraph" class="lyrics-graph" role="img" aria-label="当前选中对象的歌词关联图"></svg></div>
+            </div>
+        </section>
         <section class="admin-module construction-module" data-admin-module="planned-two"><button class="module-heading" type="button" aria-expanded="false"><span><strong>待建设模块 B</strong><small>预留扩展空间</small></span><b>＋</b></button><div class="module-content construction"><span>施工中</span></div></section>
         <section class="admin-module construction-module" data-admin-module="planned-three"><button class="module-heading" type="button" aria-expanded="false"><span><strong>待建设模块 C</strong><small>预留扩展空间</small></span><b>＋</b></button><div class="module-content construction"><span>施工中</span></div></section>
 
@@ -96,6 +117,7 @@
                 <div class="upload-menu">
                     <button id="uploadFiles">上传文件</button>
                     <button id="uploadFolder">上传文件夹</button>
+                    <button id="uploadLyrics">上传歌词</button>
                 </div>
             </div>
             <button id="download" disabled>下载</button>
@@ -124,6 +146,7 @@
 
     <input id="fileInput" type="file" multiple hidden accept=".mp3,.m4a,.flac,.wav,.mp4,.webm,.mkv">
     <input id="folderInput" type="file" multiple webkitdirectory directory hidden>
+    <input id="lyricsInput" type="file" multiple hidden accept=".txt,.json,application/json,text/plain">
 
     <div id="modal" class="modal hidden">
         <div class="modal-box">
@@ -136,6 +159,6 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260902-1"></script>
+    <script src="/static/js/admin.js?v=20260909-1"></script>
 </body>
 </html>
