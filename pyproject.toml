@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tools = ["yt-dlp[default]"]
+tools = ["opencc==1.4.2", "yt-dlp[default]"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
