@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,9 +18,11 @@ MEDIA_ROOT = (BASE_DIR / "data" / "media").resolve()
 MUSIC_ROOT = (MEDIA_ROOT / "music").resolve()
 LYRICS_ROOT = (MEDIA_ROOT / "lyrics").resolve()
 AUDIO_EXTS = {".mp3", ".m4a", ".flac", ".wav"}
-LYRIC_EXTS = {".txt", ".json"}
+LYRIC_EXTS = {".lrc"}
 MAX_LYRIC_LINES = 10_000
 MAX_LYRIC_LINE_LENGTH = 4_000
+LRC_TIME_TAG = re.compile(r"\[(\d{1,3}):([0-5]\d)(?:[\.:](\d{1,3}))?\]")
+LRC_OFFSET_TAG = re.compile(r"\[offset:([+-]?\d+)\]", re.IGNORECASE)
 
 
 def _utcnow() -> datetime:
@@ -31,7 +33,7 @@ def lyric_id_for_path(relative_path: str) -> str:
     return hashlib.sha256(relative_path.encode("utf-8")).hexdigest()
 
 
-def parse_lyric_bytes(payload: bytes, extension: str) -> list[str]:
+def parse_lrc_bytes(payload: bytes) -> list[dict[str, Any]]:
     if not payload:
         raise ValueError("歌词文件不能为空")
     try:
@@ -41,32 +43,37 @@ def parse_lyric_bytes(payload: bytes, extension: str) -> list[str]:
     if "\x00" in content:
         raise ValueError("歌词文件包含非法字符")
 
-    if extension.lower() == ".json":
-        try:
-            document = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise ValueError("歌词 JSON 格式无效") from exc
-        if isinstance(document, dict):
-            document = document.get("lines")
-        if not isinstance(document, list) or any(not isinstance(line, str) for line in document):
-            raise ValueError('歌词 JSON 必须是字符串数组或包含字符串数组的 {"lines": [...]}')
-        lines = document
-    elif extension.lower() == ".txt":
-        lines = content.splitlines()
-    else:
-        raise ValueError("歌词只支持 .txt 或 .json")
+    offset_match = LRC_OFFSET_TAG.search(content)
+    offset_seconds = int(offset_match.group(1)) / 1000 if offset_match else 0.0
+    entries: list[dict[str, Any]] = []
+    seen: set[tuple[float, str]] = set()
+    for raw_line in content.splitlines():
+        matches = list(LRC_TIME_TAG.finditer(raw_line))
+        if not matches:
+            continue
+        lyric_text = LRC_TIME_TAG.sub("", raw_line).strip()
+        if not lyric_text:
+            continue
+        if len(lyric_text) > MAX_LYRIC_LINE_LENGTH:
+            raise ValueError(f"单行歌词最多允许 {MAX_LYRIC_LINE_LENGTH} 个字符")
+        for match in matches:
+            fraction = match.group(3) or ""
+            seconds = int(match.group(1)) * 60 + int(match.group(2))
+            if fraction:
+                seconds += int(fraction) / (10 ** len(fraction))
+            timestamp = round(max(0.0, seconds + offset_seconds), 3)
+            identity = (timestamp, lyric_text)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            entries.append({"time": timestamp, "text": lyric_text})
 
-    while lines and not lines[0].strip():
-        lines.pop(0)
-    while lines and not lines[-1].strip():
-        lines.pop()
-    if not lines:
-        raise ValueError("歌词文件没有可展示内容")
-    if len(lines) > MAX_LYRIC_LINES:
+    if not entries:
+        raise ValueError("LRC 歌词没有可展示的时间轴内容")
+    if len(entries) > MAX_LYRIC_LINES:
         raise ValueError(f"歌词最多允许 {MAX_LYRIC_LINES} 行")
-    if any(len(line) > MAX_LYRIC_LINE_LENGTH for line in lines):
-        raise ValueError(f"单行歌词最多允许 {MAX_LYRIC_LINE_LENGTH} 个字符")
-    return lines
+    entries.sort(key=lambda entry: entry["time"])
+    return entries
 
 
 def _safe_file(relative_path: str, root_name: str, extensions: set[str]) -> tuple[str, Path]:
@@ -223,7 +230,7 @@ async def attach_links(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return enriched
 
 
-async def load_for_track(track_path: str) -> tuple[str, list[str]]:
+async def load_for_track(track_path: str) -> tuple[str, list[dict[str, Any]]]:
     normalized_track, _ = validate_track(track_path)
     async with engine.connect() as conn:
         lyric_path = await conn.scalar(text(
@@ -233,8 +240,8 @@ async def load_for_track(track_path: str) -> tuple[str, list[str]]:
         raise FileNotFoundError("曲目没有关联歌词")
     normalized_lyric, path = validate_lyric(str(lyric_path))
     payload = await asyncio.to_thread(path.read_bytes)
-    lines = await asyncio.to_thread(parse_lyric_bytes, payload, path.suffix.lower())
-    return normalized_lyric, lines
+    entries = await asyncio.to_thread(parse_lrc_bytes, payload)
+    return normalized_lyric, entries
 
 
 def _existing_lyric_path(relative_path: str) -> bool:

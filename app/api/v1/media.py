@@ -432,10 +432,11 @@ async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024)
         normalized_track, _track_path = lyrics.validate_track(track)
         if _is_publicly_hidden(normalized_track, await _hidden_set()):
             raise FileNotFoundError
-        _lyric_path, lines = await lyrics.load_for_track(normalized_track)
+        _lyric_path, entries = await lyrics.load_for_track(normalized_track)
     except (ValueError, FileNotFoundError):
         raise HTTPException(status_code=404, detail="Lyrics not found")
     html = load_html_template("lyrics.html")
+    lines = [entry["text"] for entry in entries]
     html = html.replace("{{LYRICS_JSON}}", safe_json_dumps(lines))
     html = html.replace("{{LINE_COUNT}}", str(len(lines)))
     return HTMLResponse(inject_page_runtime(html), headers=NO_STORE_HEADERS)
@@ -447,10 +448,10 @@ async def get_lyrics_content(track: str = Query(..., min_length=1, max_length=10
         normalized_track, _track_path = lyrics.validate_track(track)
         if _is_publicly_hidden(normalized_track, await _hidden_set()):
             raise FileNotFoundError
-        _lyric_path, lines = await lyrics.load_for_track(normalized_track)
+        _lyric_path, entries = await lyrics.load_for_track(normalized_track)
     except (ValueError, FileNotFoundError):
         raise HTTPException(status_code=404, detail="Lyrics not found")
-    return JSONResponse({"lines": lines}, headers=NO_STORE_HEADERS)
+    return JSONResponse({"entries": entries}, headers=NO_STORE_HEADERS)
 
 
 @router.post("/playback")
