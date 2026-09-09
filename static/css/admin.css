@@ -35,6 +35,7 @@ button:disabled { cursor: not-allowed; opacity: .35; }
 }
 
 .admin-module {
+    position: relative;
     display: flex;
     min-height: 58px;
     flex: 0 0 58px;
@@ -45,6 +46,8 @@ button:disabled { cursor: not-allowed; opacity: .35; }
     border-radius: 10px;
     transition: flex-basis .24s ease, flex-grow .24s ease;
 }
+
+.admin-side[data-admin-module="media"] { order: -1; }
 
 .admin-module.expanded { min-height: 0; flex: 1 1 auto; }
 .module-content { display: none; min-height: 0; }
@@ -76,6 +79,10 @@ button:disabled { cursor: not-allowed; opacity: .35; }
 .security-panel {
     background: #111821;
 }
+.admin-header-actions, .global-admin-actions { display: flex; align-items: center; gap: 6px; }
+.global-admin-actions button { padding: 5px 8px; font-size: 11px; white-space: nowrap; }
+.admin-module > .global-admin-actions { position: absolute; top: 10px; right: 46px; z-index: 4; }
+.admin-module.has-global-actions > .module-heading { padding-right: 190px; }
 
 .security-header {
     display: flex;

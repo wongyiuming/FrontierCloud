@@ -160,18 +160,23 @@ assert(!adminHtml.includes('Artplayer'));
 assert(!adminHtml.includes('id="move"'));
 assert(adminHtml.includes('id="securityPanel"'));
 assert(adminHtml.includes('id="banList"'));
-assert(adminHtml.includes('/static/js/admin.js?v=20260909-1'));
+assert(adminHtml.includes('/static/js/admin.js?v=20260909-2'));
 assert(adminHtml.includes('id="randomKey"'));
 assert(adminHtml.includes('id="permanentBanForm"'));
 assert(adminHtml.match(/class="module-heading"/g).length === 6);
 assert(adminHtml.match(/施工中/g).length === 2);
 assert(adminHtml.includes('id="lyricsPanel"'));
 assert(adminHtml.includes('id="uploadLyrics"'));
+assert(adminHtml.includes('id="globalAdminActions"'));
 assert(!adminHtml.includes('logOutput'));
 assert(!adminHtml.includes('securityToggle'));
 
 const adminJs = fs.readFileSync('static/js/admin.js', 'utf8');
 assert(!adminJs.includes('response.blob()'));
 assert(adminJs.includes('anchor.href = url'));
+assert(adminJs.includes('attachGlobalActions(target)'));
+
+const adminCss = fs.readFileSync('static/css/admin.css', 'utf8');
+assert(adminCss.includes('.admin-side[data-admin-module="media"] { order: -1; }'));
 
 console.log('admin-ui-smoke-ok');

@@ -4,10 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿视界 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260909-1">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260909-2">
 </head>
 <body>
     <main class="admin-console">
+        <div id="globalAdminActions" class="global-admin-actions">
+            <button id="backPublic" type="button">公共视图</button>
+            <button id="logout" type="button">退出特权</button>
+        </div>
         <section class="admin-module key-panel" data-admin-module="key">
             <button class="module-heading" type="button" aria-expanded="false"><span><strong>Admin Key</strong><small>Key 长期有效；轮换后其他登录会立即失效。新 Key 只显示一次。</small></span><b>＋</b></button>
             <div class="module-content">
@@ -29,7 +33,7 @@
                     <strong>IP 安全防护</strong>
                     <small id="securitySummary">正在加载…</small>
                 </span><b>−</b></button>
-                <div class="security-header-actions">
+                <div class="security-header-actions module-action-host">
                     <button id="securityRefresh" type="button">刷新</button>
                 </div>
             </header>
@@ -105,10 +109,7 @@
     <section class="admin-module admin-side" data-admin-module="media">
         <header class="admin-header">
             <button class="module-heading" type="button" aria-expanded="false"><span><strong>媒体管理</strong><small>上传、下载、隐藏及删除媒体</small></span><b>＋</b></button>
-            <div>
-                <button id="backPublic">公共视图</button>
-                <button id="logout">退出特权</button>
-            </div>
+            <div class="admin-header-actions module-action-host"></div>
         </header>
         <div class="module-content media-content">
         <div class="toolbar">
@@ -159,6 +160,6 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260909-1"></script>
+    <script src="/static/js/admin.js?v=20260909-2"></script>
 </body>
 </html>

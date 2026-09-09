@@ -19,6 +19,16 @@ let uploadLimits = {
 
 const $ = id => document.getElementById(id);
 
+function attachGlobalActions(target) {
+    const actions = $('globalAdminActions');
+    if (!actions || !target) return;
+    for (const module of document.querySelectorAll('.admin-module')) {
+        module.classList.toggle('has-global-actions', module === target);
+    }
+    const host = target.querySelector?.('.module-action-host') || target;
+    host.appendChild(actions);
+}
+
 function expandAdminModule(target) {
     const shouldExpand = !target.classList.contains('expanded');
     for (const module of document.querySelectorAll('.admin-module')) {
@@ -31,6 +41,7 @@ function expandAdminModule(target) {
             if (indicator) indicator.textContent = expanded ? '−' : '＋';
         }
     }
+    attachGlobalActions(target);
 }
 
 for (const module of document.querySelectorAll('.admin-module')) {
@@ -43,6 +54,13 @@ for (const module of document.querySelectorAll('.admin-module')) {
             });
         }
     };
+}
+
+for (const module of document.querySelectorAll('.admin-module')) {
+    if (module.classList.contains('expanded')) {
+        attachGlobalActions(module);
+        break;
+    }
 }
 
 function getCookie(name) {
