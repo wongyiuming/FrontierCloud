@@ -8,6 +8,7 @@ venv
 ENV
 data
 scripts/auto_download
+scripts/lrclib_backfill_experimental.py
 
 # Exclude Python bytecode.
 __pycache__
