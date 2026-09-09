@@ -5,6 +5,7 @@ import logging
 import os
 import secrets
 import tempfile
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -24,6 +25,9 @@ SESSION_PREFIX = "admin:session:"
 FAIL_PREFIX = "admin:fail:"
 logger = logging.getLogger("frontiercloud.admin")
 _ADMIN_KEY_ROTATION_LOCK = LoopLocalAsyncLock()
+ADMIN_KEY_ROTATION_LOCK_KEY = "admin:key:rotation-lock"
+ADMIN_KEY_ROTATION_LOCK_SECONDS = 120
+ADMIN_KEY_ROTATION_WAIT_SECONDS = 30
 
 _FAILED_ATTEMPT_SCRIPT = """
 local key = KEYS[1]
@@ -120,6 +124,21 @@ async def _replace_admin_sessions(current_session_key: str, new_key_hash: str) -
         raise RedisError("Failed to refresh the current admin session TTL")
 
 
+@asynccontextmanager
+async def _admin_key_rotation_guard():
+    """Serialize key publication across event loops, workers, and instances."""
+    async with _ADMIN_KEY_ROTATION_LOCK:
+        distributed_lock = redis_client.lock(
+            ADMIN_KEY_ROTATION_LOCK_KEY,
+            timeout=ADMIN_KEY_ROTATION_LOCK_SECONDS,
+            blocking_timeout=ADMIN_KEY_ROTATION_WAIT_SECONDS,
+            thread_local=False,
+            raise_on_release_error=False,
+        )
+        async with distributed_lock:
+            yield
+
+
 def _read_admin_key() -> str:
     try:
         key = ADMIN_KEY_FILE.read_text(encoding="utf-8").strip()
@@ -142,12 +161,13 @@ async def verify_admin_key(key: str, request: Request) -> str:
     key = (key or "").strip()
     ip = _client_ip(request)
     fail_key = FAIL_PREFIX + ip
-    failed = await _failed_attempt_count(fail_key, increment=False)
-    if failed >= settings.ADMIN_MAX_FAILED_ATTEMPTS_PER_IP:
+    # Reserve this attempt atomically before the expensive secret comparison.
+    # Parallel requests therefore cannot all pass a stale pre-check together.
+    failed = await _failed_attempt_count(fail_key, increment=True)
+    if failed > settings.ADMIN_MAX_FAILED_ATTEMPTS_PER_IP:
         raise HTTPException(status_code=429, detail={"code": "ADMIN_RATE_LIMITED", "message": "验证请求过于频繁，请稍后再试"})
     valid = 1 <= len(key) <= 512 and secrets.compare_digest(_hash(key), _hash(_read_admin_key()))
     if not valid:
-        await _failed_attempt_count(fail_key, increment=True)
         raise HTTPException(status_code=403, detail={"code": "ADMIN_KEY_INVALID", "message": "Admin Key 无效，请检查输入"})
     await redis_client.delete(fail_key)
     return _hash(key)
@@ -197,7 +217,7 @@ async def rotate_admin_key(session_hash: str, custom_key: str | None, confirmati
             raise ValueError("自定义 Admin Key 长度必须为 16 到 512 个字符")
         if not confirmation or not secrets.compare_digest(new_key, confirmation):
             raise ValueError("两次输入的 Admin Key 不一致")
-    async with _ADMIN_KEY_ROTATION_LOCK:
+    async with _admin_key_rotation_guard():
         if secrets.compare_digest(_hash(new_key), _hash(_read_admin_key())):
             raise ValueError("新 Admin Key 不能与当前 Key 相同")
         _replace_admin_key_file(new_key)

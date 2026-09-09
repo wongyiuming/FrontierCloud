@@ -230,7 +230,11 @@ async def lyric_relations(
     session_hash: str = Depends(require_session),
 ):
     linked_paths = payload.get("linked_paths")
-    if not isinstance(linked_paths, list) or any(not isinstance(path, str) for path in linked_paths):
+    if (
+        not isinstance(linked_paths, list)
+        or len(linked_paths) > settings.ADMIN_MAX_BATCH_FILES
+        or any(not isinstance(path, str) for path in linked_paths)
+    ):
         raise HTTPException(status_code=400, detail="关联目标无效")
     try:
         count = await lyrics.replace_relations(
@@ -465,6 +469,7 @@ async def hide_objects(
     if (
         not isinstance(paths, list)
         or not paths
+        or len(paths) > settings.ADMIN_MAX_BATCH_FILES
         or not isinstance(hidden, bool)
     ):
         raise HTTPException(
