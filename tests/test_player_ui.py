@@ -83,6 +83,7 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn(".sync-lyrics-track { width: 100%; height: 125%", player_style)
         self.assertIn("translateY(-20%)", player_script)
         self.assertIn("const LYRIC_SLIDE_MS = 480", player_script)
+        self.assertIn("bottom: calc(25% + 32px)", player_style)
         self.assertIn("function lyricIndexAt(entries, currentTime)", player_script)
         self.assertIn("updateSynchronizedLyrics(art.currentTime)", player_script)
         self.assertIn("function startLyricClock()", player_script)

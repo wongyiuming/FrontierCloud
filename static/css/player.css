@@ -10,7 +10,7 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .artplayer-app .art-bottom .art-progress .art-control-progress:focus-within .art-control-progress-inner { height: 10px; }
 .audio-player-page .artplayer-app .art-bottom { opacity: 1 !important; visibility: visible !important; transform: translateY(0) !important; }
 .audio-player-page .artplayer-app .art-bottom .art-progress { opacity: 1 !important; visibility: visible !important; }
-.inline-lyrics { --sync-lyric-font-size: 42px; position: absolute; top: 3%; right: 3%; bottom: 28%; left: 3%; z-index: 7; display: flex; align-items: stretch; justify-content: center; overflow: hidden; pointer-events: none; }
+.inline-lyrics { --sync-lyric-font-size: 42px; position: absolute; top: 3%; right: 3%; bottom: calc(25% + 32px); left: 3%; z-index: 7; display: flex; align-items: stretch; justify-content: center; overflow: hidden; pointer-events: none; }
 .inline-lyrics.hidden { display: none; }
 .sync-lyrics-lines { width: 100%; height: 100%; overflow: hidden; }
 .sync-lyrics-track { width: 100%; height: 125%; transform: translateY(0); will-change: transform; }
@@ -73,5 +73,5 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
     .sidebar-header { padding: 12px 14px; }
     .player-controls { padding: 8px 10px; }
     .media-item { padding: 10px 12px; }
-    .inline-lyrics { top: 2%; right: 2%; bottom: 29%; left: 2%; }
+    .inline-lyrics { top: 2%; right: 2%; bottom: calc(25% + 32px); left: 2%; }
 }
