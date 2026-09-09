@@ -2,6 +2,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -10,6 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DevelopmentDeploymentTests(unittest.TestCase):
+    def test_runtime_dependencies_are_reproducibly_pinned(self):
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        unpinned = [dependency for dependency in project["dependencies"] if "==" not in dependency]
+        self.assertEqual(unpinned, [])
+
     def test_environment_example_is_the_complete_public_contract(self):
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
         config = (ROOT / "app/core/config.py").read_text(encoding="utf-8")
@@ -74,6 +80,18 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("TLS_ENABLED: ${TLS_ENABLED:-false}", compose)
         self.assertIn("UPLOAD_INACTIVITY_TIMEOUT: ${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}", compose)
         self.assertIn("client_body_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
+
+    def test_nginx_limits_large_bodies_to_upload_routes_and_sets_security_headers(self):
+        nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+        headers = (ROOT / "nginx/security-headers.conf").read_text(encoding="utf-8")
+        dockerfile = (ROOT / "nginx/Dockerfile").read_text(encoding="utf-8")
+        self.assertEqual(nginx.count("client_max_body_size 820M"), 1)
+        self.assertIn("location /api/v1/media/admin/upload/", nginx)
+        self.assertIn("client_max_body_size 64k", nginx)
+        self.assertIn("X-Content-Type-Options", headers)
+        self.assertIn("X-Frame-Options", headers)
+        self.assertIn("Strict-Transport-Security", headers)
+        self.assertIn("COPY nginx/security-headers.conf", dockerfile)
 
     def test_nginx_emits_structured_logs_without_a_log_directory(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")

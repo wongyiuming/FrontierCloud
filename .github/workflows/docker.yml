@@ -102,6 +102,19 @@ jobs:
           cmp /tmp/ci-one.wav /tmp/ci-downloaded.wav
           test "$(docker compose exec -T redis redis-cli GET media:catalog:v2:generation)" -ge 3
           curl -kfsS 'https://ci.frontiercloud.local/api/v1/media/music/category?path=music%2Fci-folder' | grep 'one'
+          curl -kfsS -D /tmp/media-headers.txt \
+            'https://ci.frontiercloud.local/api/v1/media/stream?file_path=music%2Fci-folder%2Fone.wav' \
+            -o /tmp/ci-streamed.wav
+          cmp /tmp/ci-one.wav /tmp/ci-streamed.wav
+          grep -qi '^x-content-type-options: nosniff' /tmp/media-headers.txt
+          grep -qi '^strict-transport-security: max-age=31536000' /tmp/media-headers.txt
+          test "$(curl -ksS -H 'Range: bytes=0-3' -o /tmp/ci-range.bin -w '%{http_code}' \
+            'https://ci.frontiercloud.local/api/v1/media/stream?file_path=music%2Fci-folder%2Fone.wav')" = 206
+          test "$(wc -c < /tmp/ci-range.bin)" = 4
+          head -c 70000 /dev/zero > /tmp/oversized-body.bin
+          test "$(curl -ksS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+            --data-binary @/tmp/oversized-body.bin \
+            https://ci.frontiercloud.local/api/v1/media/network-observation)" = 413
           printf '测试歌词第一行\n测试歌词第二行\n' > /tmp/ci-lyrics.txt
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -F 'file=@/tmp/ci-lyrics.txt;type=text/plain' \
