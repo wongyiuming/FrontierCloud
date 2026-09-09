@@ -113,6 +113,11 @@ class PublicMediaHierarchyTests(unittest.IsolatedAsyncioTestCase):
                 "attach_stats_and_sort",
                 new=AsyncMock(return_value=media_list),
             ),
+            patch.object(
+                media.lyrics,
+                "attach_links",
+                new=AsyncMock(return_value=media_list),
+            ),
         ):
             response = await media.get_music_player_page(album_path)
 

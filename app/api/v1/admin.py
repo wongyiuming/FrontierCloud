@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from app.core.config import settings
 from app.services import admin_service
 from app.services import ip_security
+from app.services import lyrics
 from app.services.media_catalog_cache import invalidate_media_catalog
 from app.services.media_manager import MediaManager
 
@@ -128,6 +129,7 @@ async def admin_status(
             "max_upload_file_size": settings.ADMIN_MAX_UPLOAD_FILE_SIZE,
             "max_upload_task_files": settings.ADMIN_MAX_UPLOAD_TASK_FILES,
             "max_batch_files": settings.ADMIN_MAX_BATCH_FILES,
+            "max_lyric_file_size": MediaManager.LYRIC_MAX_BYTES,
         },
         "csrf_cookie_name": settings.ADMIN_CSRF_COOKIE_NAME,
     }
@@ -188,6 +190,66 @@ async def upload_item(
         return {"path": saved_path}
     finally:
         await file.close()
+
+
+@router.post("/upload/lyric")
+async def upload_lyric(
+    request: Request,
+    file: Annotated[UploadFile, File(...)],
+    session_hash: str = Depends(require_session),
+):
+    source = file.filename or ""
+    try:
+        try:
+            saved_path = await MediaManager.upload_lyric(file)
+        except HTTPException as exc:
+            await admin_service.audit(
+                session_hash, "upload_lyric", 1, source, "failed", str(exc.detail), request,
+            )
+            raise
+        await admin_service.audit(
+            session_hash, "upload_lyric", 1, source, "success", saved_path, request,
+        )
+        return {"path": saved_path}
+    finally:
+        await file.close()
+
+
+@router.get("/lyrics/catalog")
+async def lyric_catalog(
+    request: Request,
+    session_hash: str = Depends(require_session),
+):
+    return JSONResponse(await lyrics.catalog(), headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/lyrics/relations")
+async def lyric_relations(
+    request: Request,
+    payload: dict,
+    session_hash: str = Depends(require_session),
+):
+    linked_paths = payload.get("linked_paths")
+    if not isinstance(linked_paths, list) or any(not isinstance(path, str) for path in linked_paths):
+        raise HTTPException(status_code=400, detail="关联目标无效")
+    try:
+        count = await lyrics.replace_relations(
+            str(payload.get("origin_kind", "")),
+            str(payload.get("origin_path", "")),
+            linked_paths,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await admin_service.audit(
+        session_hash,
+        "lyric_relations",
+        count,
+        str(payload.get("origin_path", "")),
+        "success",
+        json.dumps(linked_paths, ensure_ascii=False),
+        request,
+    )
+    return {"status": "ok", "relations": count}
 
 
 @router.post("/key/rotate")
