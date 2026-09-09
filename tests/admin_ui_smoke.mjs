@@ -178,5 +178,7 @@ assert(adminJs.includes('attachGlobalActions(target)'));
 
 const adminCss = fs.readFileSync('static/css/admin.css', 'utf8');
 assert(adminCss.includes('.admin-side[data-admin-module="media"] { order: -1; }'));
+assert.match(adminCss, /\.tree\s*\{[^}]*min-height:\s*0;/s);
+assert.match(adminCss, /\.tree\s*\{[^}]*overflow-y:\s*scroll;/s);
 
 console.log('admin-ui-smoke-ok');

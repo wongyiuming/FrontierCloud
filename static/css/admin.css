@@ -223,7 +223,17 @@ button:disabled { cursor: not-allowed; opacity: .35; }
     border-bottom: 1px solid #292929;
 }
 
-.tree { flex: 1; padding: 8px; overflow: auto; }
+.tree {
+    min-height: 0;
+    flex: 1;
+    padding: 8px;
+    overflow-x: hidden;
+    overflow-y: scroll;
+    scrollbar-color: #6384a5 #181818;
+    scrollbar-width: auto;
+}
+.tree::-webkit-scrollbar { width: 12px; }
+.tree::-webkit-scrollbar-thumb { background: #6384a5; border: 3px solid #181818; border-radius: 8px; }
 .tree-row { display: flex; align-items: center; gap: 8px; padding: 9px; user-select: none; border-radius: 6px; }
 .tree-row:hover { background: #242424; }
 .tree-row.selected { background: #343434; outline: 1px solid #4d83b8; }
