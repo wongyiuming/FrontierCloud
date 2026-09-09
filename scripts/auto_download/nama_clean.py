@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Protocol
 
 
 _SEPARATOR_RE = re.compile(r"_+")
@@ -15,10 +16,32 @@ _WINDOWS_RESERVED_NAMES = {
     *(f"COM{number}" for number in range(1, 10)),
     *(f"LPT{number}" for number in range(1, 10)),
 }
+_converter: "_Converter | None" = None
+
+
+class _Converter(Protocol):
+    def convert(self, value: str) -> str: ...
+
+
+def traditional_to_simplified(value: str) -> str:
+    """Convert every filename component to Simplified Chinese before cleaning."""
+    global _converter
+    if _converter is None:
+        try:
+            from opencc import OpenCC
+        except ImportError as exc:
+            raise RuntimeError(
+                'Filename cleaning requires OpenCC; install the tools extra with '
+                '`python -m pip install -e ".[tools]"`.'
+            ) from exc
+        _converter = OpenCC("t2s")
+    return _converter.convert(str(value or ""))
 
 
 def sanitize_component(value: str, *, fallback: str = "untitled") -> str:
-    """Return one portable path component while preserving Unicode letters."""
+    """Return a Simplified-Chinese portable path component."""
+    value = traditional_to_simplified(value)
+    fallback = traditional_to_simplified(fallback)
     normalized = "".join(
         character if character.isalnum() or character == "_" else "_"
         for character in str(value or "")

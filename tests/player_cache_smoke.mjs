@@ -7,22 +7,28 @@ const flush = () => new Promise(setImmediate);
 function playerContext(fetchImpl) {
     let clock = 10000;
     const requests = [], revoked = [], objects = [];
-    const element = {
-        style: {setProperty(name, value) { this[name] = value; }},
-        classList: {add() {}, remove() {}, toggle() {}},
-        clientHeight: 400,
-        clientWidth: 500,
-        children: [],
-        replaceChildren(...children) { this.children = children; },
-        appendChild(child) { this.children.push(child); },
-        setAttribute() {},
-        removeAttribute() {},
+    const elements = new Map();
+    const elementFor = id => {
+        if (!elements.has(id)) elements.set(id, {
+            id,
+            textContent: '',
+            style: {setProperty(name, value) { this[name] = value; }},
+            classList: {add() {}, remove() {}, toggle() {}},
+            clientHeight: 400,
+            clientWidth: 500,
+            children: [],
+            replaceChildren(...children) { this.children = children; },
+            appendChild(child) { this.children.push(child); },
+            setAttribute() {},
+            removeAttribute() {},
+        });
+        return elements.get(id);
     };
     const context = vm.createContext({
         window: {addEventListener() {}}, navigator: {},
         document: {
-            getElementById: () => element,
-            createElement: () => ({style: {}, children: [], appendChild(child) { this.children.push(child); }}),
+            getElementById: id => elementFor(id),
+            createElement: () => ({className: '', textContent: '', style: {}, children: [], appendChild(child) { this.children.push(child); }}),
             querySelector: () => null,
             querySelectorAll: () => [],
         },
@@ -36,7 +42,7 @@ function playerContext(fetchImpl) {
     });
     vm.runInContext(source, context);
     vm.runInContext("art = {duration: 100, currentTime: 5, playing: false, url: '/a', play: async () => {}, notice: {}}", context);
-    return {context, requests, revoked, objects, advance: n => {clock += n;}, run: code => vm.runInContext(code, context)};
+    return {context, elements, requests, revoked, objects, advance: n => {clock += n;}, run: code => vm.runInContext(code, context)};
 }
 
 {
@@ -115,10 +121,13 @@ for (const failure of ['network', 'status', 'truncated']) {
 
 {
     const p = playerContext(async () => new Response('unused'));
-    p.run("renderInlineLyrics(['one', 'two', 'three', 'four', 'five'])");
-    assert.equal(p.run("document.getElementById('inlineLyricsLines').children.length"), 2);
-    assert.equal(p.run("document.getElementById('inlineLyricsLines').children[0].children.length"), 3);
-    assert.equal(p.run("document.getElementById('inlineLyricsLines').children[1].children.length"), 2);
+    p.run("showSynchronizedLyrics([{time:1,text:'one'},{time:2,text:'two'},{time:3,text:'three'},{time:4,text:'four'}], 2.5)");
+    const track = p.elements.get('inlineLyricsTrack');
+    assert.deepEqual(track.children.slice(0, 4).map(row => row.textContent), ['one', 'two', 'three', 'four']);
+    assert.equal(track.children[1].className, 'sync-lyric current');
+    p.run('updateSynchronizedLyrics(3.1)');
+    assert.equal(track.style.transform, 'translateY(-20%)');
+    assert.equal(track.children[2].className, 'sync-lyric current');
 }
 
 console.log('player-cache-smoke-ok');

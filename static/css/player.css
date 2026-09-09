@@ -1,5 +1,6 @@
 * { box-sizing: border-box; }
 body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; flex-direction: row-reverse; }
+.audio-player-page { flex-direction: row; }
 .player-section { flex: 3; background: #000; position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; overflow: hidden; touch-action: none; }
 .artplayer-app { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
 .artplayer-app .art-video-player { --art-progress-height: 26px; --art-bottom-gap: 8px; }
@@ -9,11 +10,18 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .artplayer-app .art-bottom .art-progress .art-control-progress:focus-within .art-control-progress-inner { height: 10px; }
 .audio-player-page .artplayer-app .art-bottom { opacity: 1 !important; visibility: visible !important; transform: translateY(0) !important; }
 .audio-player-page .artplayer-app .art-bottom .art-progress { opacity: 1 !important; visibility: visible !important; }
-.inline-lyrics { --inline-lyric-font-size: 22px; position: absolute; top: 5%; right: 3%; bottom: 30%; left: 3%; z-index: 7; display: flex; align-items: center; justify-content: center; padding: 10px 18px; overflow: hidden; pointer-events: none; }
+.inline-lyrics { --sync-lyric-font-size: 42px; position: absolute; top: 3%; right: 3%; bottom: calc(25% + 32px); left: 3%; z-index: 7; display: flex; align-items: stretch; justify-content: center; overflow: hidden; pointer-events: none; }
 .inline-lyrics.hidden { display: none; }
-.inline-lyrics-lines { display: grid; width: 100%; max-height: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(24px, 5vw, 80px); }
-.inline-lyrics-column { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: .18em; }
-.inline-lyrics p { margin: 0; overflow: hidden; font-size: var(--inline-lyric-font-size); font-weight: 800; line-height: 1.18; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.sync-lyrics-lines { width: 100%; height: 100%; overflow: hidden; }
+.sync-lyrics-track { width: 100%; height: 125%; transform: translateY(0); will-change: transform; }
+.sync-lyrics-track.sliding { transition: transform .48s cubic-bezier(.22, .72, .24, 1); }
+.sync-lyric { display: flex; width: 100%; height: 20%; min-width: 0; min-height: 0; align-items: center; justify-content: center; margin: 0; padding: clamp(2px, .6vh, 8px) 0; overflow: hidden; color: #8d9ba7; font-size: var(--sync-lyric-font-size); font-weight: 800; line-height: 1.12; text-align: center; overflow-wrap: anywhere; transition: color .48s ease, opacity .48s ease, transform .48s ease; }
+.sync-lyric.previous { opacity: .48; transform: scale(.82); }
+.sync-lyric.current { color: #f5fbff; font-size: calc(var(--sync-lyric-font-size) * 1.16); opacity: 1; transform: scale(1); }
+.sync-lyric.next { color: #a7b8c5; opacity: .7; transform: scale(.9); }
+.sync-lyric.next.far { opacity: .46; transform: scale(.82); }
+.sync-lyric.trailing { opacity: .28; transform: scale(.76); }
+.sync-lyric.departing { opacity: 0; transform: scale(.72); }
 
 .audio-interaction-guide { position: absolute; inset: 0; z-index: 8; pointer-events: none; user-select: none; }
 .interaction-boundary { position: absolute; top: 75%; left: 0; width: 100%; height: 64px; transform: translateY(-50%); overflow: visible; filter: drop-shadow(0 0 8px rgba(0,229,255,0.95)); }
@@ -24,9 +32,12 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 
 @media (prefers-reduced-motion: reduce) {
     .boundary-flow { animation-duration: 3s; }
+    .sync-lyrics-track.sliding { transition: none; }
+    .sync-lyric { transition: none; }
 }
 
 .sidebar { flex: 1; min-width: 280px; background: #181818; border-right: 1px solid #282828; display: flex; flex-direction: column; z-index: 10; touch-action: pan-y; }
+.audio-player-page .sidebar { border-right: 0; border-left: 1px solid #282828; }
 .sidebar-header { padding: 20px; font-size: 16px; font-weight: bold; border-bottom: 1px solid #282828; display: flex; justify-content: space-between; align-items: center; background: #181818; }
 .back-btn { color: #888; text-decoration: none; font-size: 14px; }
 .back-btn:hover { color: #fff; }
@@ -40,6 +51,7 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .media-item { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid #222; cursor: pointer; transition: background 0.2s; user-select: none; }
 .media-item:hover { background: #282828; }
 .media-item.active { background: #333; border-right: 4px solid #3498db; border-left: none; }
+.audio-player-page .media-item.active { border-right: none; border-left: 4px solid #3498db; }
 .media-item img { width: 50px; height: 50px; border-radius: 6px; margin-right: 15px; object-fit: cover; pointer-events: none; }
 .media-info { flex: 1; overflow: hidden; }
 .media-title { font-size: 14px; font-weight: 500; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -55,12 +67,11 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .gesture-hud { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.75); color: #fff; padding: 12px 24px; border-radius: 8px; font-size: 16px; font-weight: bold; pointer-events: none; z-index: 100; display: none; }
 
 @media (max-width: 700px) and (orientation: portrait) {
-    body { flex-direction: column; height: 100vh; height: 100dvh; }
+    body.audio-player-page, body.video-player-page { flex-direction: column; height: 100vh; height: 100dvh; }
     .player-section { flex: 0 0 60vh; flex-basis: 60dvh; width: 100%; min-height: 0; }
     .sidebar { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 0; border-right: 0; border-top: 1px solid #282828; }
     .sidebar-header { padding: 12px 14px; }
     .player-controls { padding: 8px 10px; }
     .media-item { padding: 10px 12px; }
-    .inline-lyrics { top: 3%; right: 2%; bottom: 30%; left: 2%; padding: 6px; }
-    .inline-lyrics-lines { gap: 12px; }
+    .inline-lyrics { top: 2%; right: 2%; bottom: calc(25% + 32px); left: 2%; }
 }

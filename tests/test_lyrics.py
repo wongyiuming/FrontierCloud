@@ -48,19 +48,25 @@ class _Engine:
 
 
 class LyricFormatTests(unittest.TestCase):
-    def test_txt_and_both_supported_json_shapes_are_normalized(self):
-        self.assertEqual(lyrics.parse_lyric_bytes("\n甲\n乙\n".encode(), ".txt"), ["甲", "乙"])
-        self.assertEqual(lyrics.parse_lyric_bytes(json.dumps(["甲", "乙"]).encode(), ".json"), ["甲", "乙"])
+    def test_lrc_timestamps_offset_and_duplicate_tags_are_normalized(self):
+        payload = (
+            "[ar:FrontierCloud]\n[offset:+100]\n"
+            "[00:01.20][00:02.345] 第一句\n[00:03.00] \n[01:04] 第二句\n"
+        ).encode()
         self.assertEqual(
-            lyrics.parse_lyric_bytes(json.dumps({"lines": ["甲", "乙"]}).encode(), ".json"),
-            ["甲", "乙"],
+            lyrics.parse_lrc_bytes(payload),
+            [
+                {"time": 1.3, "text": "第一句"},
+                {"time": 2.445, "text": "第一句"},
+                {"time": 64.1, "text": "第二句"},
+            ],
         )
 
-    def test_invalid_encoding_and_non_string_json_are_rejected(self):
+    def test_invalid_encoding_and_untimed_content_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "UTF-8"):
-            lyrics.parse_lyric_bytes(b"\xff", ".txt")
-        with self.assertRaisesRegex(ValueError, "字符串数组"):
-            lyrics.parse_lyric_bytes(b'["ok", 3]', ".json")
+            lyrics.parse_lrc_bytes(b"\xff")
+        with self.assertRaisesRegex(ValueError, "时间轴"):
+            lyrics.parse_lrc_bytes("没有时间标签".encode())
 
 
 class LyricUploadTests(unittest.IsolatedAsyncioTestCase):
@@ -69,7 +75,7 @@ class LyricUploadTests(unittest.IsolatedAsyncioTestCase):
             root = Path(directory).resolve()
             lyric_root = root / "lyrics"
             lyric_root.mkdir()
-            upload = UploadFile(filename="共享歌词.txt", file=io.BytesIO("第一行\n第二行".encode()))
+            upload = UploadFile(filename="共享歌词.lrc", file=io.BytesIO("[00:01.00]第一行\n[00:05.25]第二行".encode()))
             with (
                 patch.object(media_manager, "MEDIA_ROOT", root),
                 patch.object(media_manager, "LYRICS_ROOT", lyric_root),
@@ -77,12 +83,12 @@ class LyricUploadTests(unittest.IsolatedAsyncioTestCase):
                 saved = await media_manager.MediaManager.upload_lyric(upload)
             await upload.close()
 
-            self.assertEqual(saved, "lyrics/共享歌词.txt")
-            self.assertEqual((lyric_root / "共享歌词.txt").read_text(encoding="utf-8"), "第一行\n第二行")
-            self.assertTrue((lyric_root / "共享歌词.txt").stat().st_mode & 0o004)
+            self.assertEqual(saved, "lyrics/共享歌词.lrc")
+            self.assertEqual((lyric_root / "共享歌词.lrc").read_text(encoding="utf-8"), "[00:01.00]第一行\n[00:05.25]第二行")
+            self.assertTrue((lyric_root / "共享歌词.lrc").stat().st_mode & 0o004)
 
     async def test_upload_rejects_unsupported_extension(self):
-        upload = UploadFile(filename="lyrics.lrc", file=io.BytesIO(b"line"))
+        upload = UploadFile(filename="lyrics.txt", file=io.BytesIO(b"[00:01]line"))
         with self.assertRaises(HTTPException) as raised:
             await media_manager.MediaManager.upload_lyric(upload)
         await upload.close()
@@ -99,7 +105,7 @@ class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
             album.mkdir(parents=True)
             lyric_root.mkdir()
             (album / "song.mp3").write_bytes(b"ID3")
-            (lyric_root / "shared.json").write_text('["one"]', encoding="utf-8")
+            (lyric_root / "shared.lrc").write_text("[00:01]one", encoding="utf-8")
             connection = _Connection()
             with (
                 patch.object(lyrics, "MEDIA_ROOT", root),
@@ -108,7 +114,7 @@ class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(lyrics, "engine", _Engine(connection)),
             ):
                 count = await lyrics.replace_relations(
-                    "track", "music/album/song.mp3", ["lyrics/shared.json"],
+                    "track", "music/album/song.mp3", ["lyrics/shared.lrc"],
                 )
 
         self.assertEqual(count, 1)
@@ -117,7 +123,7 @@ class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("INSERT INTO media_lyric_links", sql)
         insert_params = connection.executed[-1][1]
         self.assertEqual(insert_params["media_path"], "music/album/song.mp3")
-        self.assertEqual(insert_params["lyric_path"], "lyrics/shared.json")
+        self.assertEqual(insert_params["lyric_path"], "lyrics/shared.lrc")
 
     async def test_one_track_cannot_link_multiple_lyrics(self):
         with self.assertRaisesRegex(ValueError, "最多关联一份"):
@@ -130,12 +136,17 @@ class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 media.lyrics,
                 "load_for_track",
-                new=unittest.mock.AsyncMock(return_value=("lyrics/shared.json", ["one", "two"])),
+                new=unittest.mock.AsyncMock(return_value=(
+                    "lyrics/shared.lrc",
+                    [{"time": 1.0, "text": "one"}, {"time": 2.0, "text": "two"}],
+                )),
             ),
         ):
             response = await media.get_lyrics_content("music/album/song.mp3")
 
-        self.assertEqual(json.loads(response.body), {"lines": ["one", "two"]})
+        self.assertEqual(json.loads(response.body), {
+            "entries": [{"time": 1.0, "text": "one"}, {"time": 2.0, "text": "two"}],
+        })
         self.assertIn("no-store", response.headers["cache-control"])
 
     async def test_hidden_track_cannot_expose_lyrics(self):

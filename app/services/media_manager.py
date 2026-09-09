@@ -23,7 +23,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 MEDIA_ROOT = (BASE_DIR / "data" / "media").resolve()
 AUDIO_EXTS = (".mp3", ".m4a", ".flac", ".wav")
 VIDEO_EXTS = (".mp4", ".webm", ".mkv")
-LYRIC_EXTS = (".txt", ".json")
+LYRIC_EXTS = (".lrc",)
 LYRIC_MAX_BYTES = 2 * 1024 * 1024
 ALLOWED_EXTS = set(AUDIO_EXTS + VIDEO_EXTS)
 MEDIA_TYPE_EXTS = {
@@ -250,12 +250,12 @@ class MediaManager:
 
     @staticmethod
     async def upload_lyric(upload: UploadFile) -> str:
-        from app.services.lyrics import parse_lyric_bytes
+        from app.services.lyrics import parse_lrc_bytes
 
         name = MediaManager.validate_name(upload.filename or "")
         ext = Path(name).suffix.lower()
         if ext not in LYRIC_EXTS:
-            raise HTTPException(status_code=400, detail="歌词只支持 .txt 或 .json")
+            raise HTTPException(status_code=400, detail="歌词只支持 .lrc")
         destination = LYRICS_ROOT / name
         if destination.exists():
             raise HTTPException(status_code=409, detail="上传失败，已存在同名歌词")
@@ -274,7 +274,7 @@ class MediaManager:
                 if len(payload) > LYRIC_MAX_BYTES:
                     raise HTTPException(status_code=413, detail="歌词文件不得超过 2 MiB")
             try:
-                parse_lyric_bytes(bytes(payload), ext)
+                parse_lrc_bytes(bytes(payload))
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             with tmp.open("wb") as out:
