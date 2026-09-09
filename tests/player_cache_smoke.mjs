@@ -28,7 +28,7 @@ function playerContext(fetchImpl) {
         window: {addEventListener() {}}, navigator: {},
         document: {
             getElementById: id => elementFor(id),
-            createElement: () => ({style: {}, children: [], appendChild(child) { this.children.push(child); }}),
+            createElement: () => ({className: '', textContent: '', style: {}, children: [], appendChild(child) { this.children.push(child); }}),
             querySelector: () => null,
             querySelectorAll: () => [],
         },
@@ -122,13 +122,12 @@ for (const failure of ['network', 'status', 'truncated']) {
 {
     const p = playerContext(async () => new Response('unused'));
     p.run("showSynchronizedLyrics([{time:1,text:'one'},{time:2,text:'two'},{time:3,text:'three'},{time:4,text:'four'}], 2.5)");
-    assert.equal(p.elements.get('lyricPrevious').textContent, 'one');
-    assert.equal(p.elements.get('lyricCurrent').textContent, 'two');
-    assert.equal(p.elements.get('lyricNext1').textContent, 'three');
-    assert.equal(p.elements.get('lyricNext2').textContent, 'four');
+    const track = p.elements.get('inlineLyricsTrack');
+    assert.deepEqual(track.children.slice(0, 4).map(row => row.textContent), ['one', 'two', 'three', 'four']);
+    assert.equal(track.children[1].className, 'sync-lyric current');
     p.run('updateSynchronizedLyrics(3.1)');
-    assert.equal(p.elements.get('lyricPrevious').textContent, 'two');
-    assert.equal(p.elements.get('lyricCurrent').textContent, 'three');
+    assert.equal(track.style.transform, 'translateY(-20%)');
+    assert.equal(track.children[2].className, 'sync-lyric current');
 }
 
 console.log('player-cache-smoke-ok');
