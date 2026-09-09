@@ -9,7 +9,9 @@ let playbackReporter = null;
 let inlineLyricsRequest = null;
 let inlineLyricsSequence = 0;
 const inlineLyricsCache = new Map();
-const INLINE_LYRIC_PALETTE = ['#aebfca', '#b9c4a6', '#c5b49f', '#b8adc4', '#9fbeb9', '#c4bda4'];
+let activeLyricEntries = [];
+let activeLyricIndex = null;
+const SYNC_LYRIC_ROW_IDS = ['lyricPrevious', 'lyricCurrent', 'lyricNext1', 'lyricNext2'];
 const DIRECT_SEEK_ZONE_START = 0.75;
 const MIN_PREFERENCE = -2;
 const MAX_PREFERENCE = 7;
@@ -212,31 +214,65 @@ async function changePreference(index, delta) {
     updateTrackStats(media);
 }
 
-function renderInlineLyrics(lines) {
+function lyricIndexAt(entries, currentTime) {
+    let low = 0;
+    let high = entries.length - 1;
+    let active = -1;
+    while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        if (entries[middle].time <= currentTime + 0.03) {
+            active = middle;
+            low = middle + 1;
+        } else {
+            high = middle - 1;
+        }
+    }
+    return active;
+}
+
+function sizeSynchronizedLyrics() {
+    const panel = document.getElementById('inlineLyrics');
+    if (!panel || activeLyricEntries.length === 0) return;
+    const visible = SYNC_LYRIC_ROW_IDS.map(id => document.getElementById(id)?.textContent || '');
+    const longest = Math.max(1, ...visible.map(line => Array.from(line).length));
+    const heightSize = Math.max(18, panel.clientHeight / 4.9);
+    const widthSize = Math.max(18, (panel.clientWidth - 40) / Math.max(6, longest * 1.02));
+    panel.style.setProperty('--sync-lyric-font-size', `${Math.max(18, Math.min(58, heightSize, widthSize))}px`);
+}
+
+function updateSynchronizedLyrics(currentTime, force = false) {
     const panel = document.getElementById('inlineLyrics');
     const container = document.getElementById('inlineLyricsLines');
     if (!panel || !container) return;
-    container.replaceChildren();
-    const columns = [0, 1].map(() => {
-        const column = document.createElement('div');
-        column.className = 'inline-lyrics-column';
-        container.appendChild(column);
-        return column;
-    });
-    const rowsPerColumn = Math.max(1, Math.ceil(lines.length / columns.length));
-    for (const [index, line] of lines.entries()) {
-        const row = document.createElement('p');
-        row.textContent = line || '\u00a0';
-        row.style.color = INLINE_LYRIC_PALETTE[index % INLINE_LYRIC_PALETTE.length];
-        columns[Math.min(columns.length - 1, Math.floor(index / rowsPerColumn))].appendChild(row);
+    panel.classList.toggle('hidden', activeLyricEntries.length === 0);
+    if (activeLyricEntries.length === 0) {
+        activeLyricIndex = null;
+        for (const id of SYNC_LYRIC_ROW_IDS) {
+            const row = document.getElementById(id);
+            if (row) row.textContent = '';
+        }
+        return;
     }
-    panel.classList.toggle('hidden', lines.length === 0);
-    if (lines.length === 0) return;
-    const availableHeight = Math.max(100, panel.clientHeight - 20);
-    const longest = Math.max(1, ...lines.map(line => Array.from(line).length));
-    const heightSize = availableHeight / (rowsPerColumn * 1.32);
-    const widthSize = Math.max(100, panel.clientWidth / columns.length - 42) / Math.max(4, longest * 1.05);
-    panel.style.setProperty('--inline-lyric-font-size', `${Math.max(9, Math.min(34, heightSize, widthSize))}px`);
+    const nextIndex = lyricIndexAt(activeLyricEntries, Number(currentTime) || 0);
+    if (!force && nextIndex === activeLyricIndex) return;
+    activeLyricIndex = nextIndex;
+    const indexes = [nextIndex - 1, nextIndex, nextIndex + 1, nextIndex + 2];
+    indexes.forEach((entryIndex, rowIndex) => {
+        const row = document.getElementById(SYNC_LYRIC_ROW_IDS[rowIndex]);
+        if (!row) return;
+        const entry = activeLyricEntries[entryIndex];
+        row.textContent = entry?.text || (rowIndex === 1 ? '♪' : '\u00a0');
+    });
+    container.classList.remove('advancing');
+    void container.offsetWidth;
+    container.classList.add('advancing');
+    sizeSynchronizedLyrics();
+}
+
+function showSynchronizedLyrics(entries, currentTime = 0) {
+    activeLyricEntries = entries;
+    activeLyricIndex = null;
+    updateSynchronizedLyrics(currentTime, true);
 }
 
 async function loadInlineLyrics(media) {
@@ -244,12 +280,12 @@ async function loadInlineLyrics(media) {
     inlineLyricsRequest?.abort();
     inlineLyricsRequest = null;
     if (!media.has_lyrics) {
-        renderInlineLyrics([]);
+        showSynchronizedLyrics([]);
         return;
     }
     const cached = inlineLyricsCache.get(media.media_path);
     if (cached) {
-        renderInlineLyrics(cached);
+        showSynchronizedLyrics(cached, art?.currentTime || 0);
         return;
     }
     const controller = new AbortController();
@@ -261,11 +297,14 @@ async function loadInlineLyrics(media) {
         });
         if (!response.ok) throw new Error('Lyrics unavailable');
         const data = await response.json();
-        const lines = Array.isArray(data.lines) ? data.lines.map(line => String(line)) : [];
-        inlineLyricsCache.set(media.media_path, lines);
-        if (sequence === inlineLyricsSequence) renderInlineLyrics(lines);
+        const entries = Array.isArray(data.entries) ? data.entries
+            .map(entry => ({time: Number(entry?.time), text: String(entry?.text || '')}))
+            .filter(entry => Number.isFinite(entry.time) && entry.time >= 0 && entry.text)
+            .sort((left, right) => left.time - right.time) : [];
+        inlineLyricsCache.set(media.media_path, entries);
+        if (sequence === inlineLyricsSequence) showSynchronizedLyrics(entries, art?.currentTime || 0);
     } catch (error) {
-        if (error.name !== 'AbortError' && sequence === inlineLyricsSequence) renderInlineLyrics([]);
+        if (error.name !== 'AbortError' && sequence === inlineLyricsSequence) showSynchronizedLyrics([]);
     } finally {
         if (inlineLyricsRequest === controller) inlineLyricsRequest = null;
     }
@@ -284,6 +323,7 @@ function initPlayer(media, index) {
     resetPlaybackAccounting(media);
     const lyricsLink = document.getElementById('lyricsLink');
 
+    showSynchronizedLyrics([]);
     void loadInlineLyrics(media);
 
     if (lyricsLink) {
@@ -338,6 +378,9 @@ function initPlayer(media, index) {
 
     art.on('video:timeupdate', () => {
         checkAndPreloadNext(art.currentTime);
+        if (typeof PLAYER_KIND !== 'undefined' && PLAYER_KIND === 'audio') {
+            updateSynchronizedLyrics(art.currentTime);
+        }
         reportValidPlayback();
     });
 
@@ -632,9 +675,7 @@ window.addEventListener('pageshow', event => {
 });
 
 window.addEventListener('resize', () => {
-    const media = currentMediaList?.[currentIndex];
-    const lines = media ? inlineLyricsCache.get(media.media_path) : null;
-    if (lines) renderInlineLyrics(lines);
+    sizeSynchronizedLyrics();
 });
 
 function selectMedia(index) {

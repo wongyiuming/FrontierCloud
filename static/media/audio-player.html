@@ -9,7 +9,12 @@
 <body class="audio-player-page">
     <div class="player-section" id="playerSection">
         <section id="inlineLyrics" class="inline-lyrics hidden" aria-live="polite" aria-label="当前曲目歌词">
-            <div id="inlineLyricsLines" class="inline-lyrics-lines"></div>
+            <div id="inlineLyricsLines" class="sync-lyrics-lines">
+                <p id="lyricPrevious" class="sync-lyric previous"></p>
+                <p id="lyricCurrent" class="sync-lyric current"></p>
+                <p id="lyricNext1" class="sync-lyric next"></p>
+                <p id="lyricNext2" class="sync-lyric next far"></p>
+            </div>
         </section>
         <div id="artplayer" class="artplayer-app"></div>
         <div class="audio-interaction-guide" aria-hidden="true">
