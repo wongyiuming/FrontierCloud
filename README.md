@@ -69,22 +69,6 @@ For an associated song, the audio player uses the full area above the heartbeat 
 
 The helpers under `scripts/auto_download/` are operator-owned tools, not application packages. They are excluded from the business image and never run in the Web lifecycle or CD. Install the workstation-only dependencies with `python -m pip install -e ".[tools]"`. Every automatic download filename and directory component is forcibly converted from Traditional to Simplified Chinese before portable-character cleaning and collision allocation; missing OpenCC is a hard failure rather than a silent fallback.
 
-`scripts/lrclib_backfill_experimental.py` is a separate, experimental LRCLIB backfill workflow. Nothing imports or schedules it, and deleting that one file removes the experiment. It scans `/data/media/music` by default, uses directory and filename evidence plus media duration when `ffprobe` can read it to accept only unambiguous synchronized records, splits explicitly numbered/marked medleys into candidate songs, and deduplicates LRC content across media files. Multiple inferred songs from one media file may therefore produce multiple reusable lyric objects; the script intentionally does not alter MySQL relations because the current business relation remains one media track to zero or one lyric.
-
-Run a bounded preview first; preview is the default and writes nothing:
-
-```bash
-python scripts/lrclib_backfill_experimental.py --include 'artist/album/*' --max-files 50 --max-requests 200
-```
-
-After reviewing the JSON plan, opt into atomic LRC writes and optionally retain the media-to-lyric plan:
-
-```bash
-python scripts/lrclib_backfill_experimental.py --write --report /tmp/lrclib-plan.json
-```
-
-Ambiguous versions, missing synchronized lyrics, generic concert-only names, and insufficient artist/title evidence are reported and skipped. A missing duration never triggers a guess: only a uniquely strong title/artist result can still pass. Existing identical `.lrc` content is reused rather than duplicated. Generated names use LRCLIB metadata in `<track>_<album>_<artist>.lrc` form, with empty placeholder albums omitted.
-
 Each IP is one object across the security page, including the allowlist. Filtering and pagination operate on current objects, not historical events. The IP sort control replaces the old time range: IPv4 is compared by its four numeric octets (`10.199.254.235 < 13.11.1.1`); IPv6 is compared by its 128-bit value, after IPv4 in ascending order. Allowlisted objects appear only in the allowlist section of the same paginated result. The statistics count all current objects, independently of the page/filter.
 
 Detailed investigations belong in MySQL. `ip_auto_ban_events` retains all historical bans and their effective expiry/release timestamps. New classified invalid requests and security actions are appended to `ip_security_audit_log`; a state change and its audit entry commit or roll back together. Whitelist removal no longer removes its audit evidence. Earlier deployments' missing per-request/whitelist details cannot be reconstructed retroactively. Connect with the generated database credentials and query, for example:
