@@ -87,6 +87,8 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("updateSynchronizedLyrics(art.currentTime)", player_script)
         self.assertIn("function startLyricClock()", player_script)
         self.assertIn("requestAnimationFrame(tick)", player_script)
+        timeupdate_handler = player_script.split("art.on('video:timeupdate'", 1)[1].split("art.on('video:ended'", 1)[0]
+        self.assertIn("startLyricClock()", timeupdate_handler)
         self.assertIn(".audio-player-page { flex-direction: row; }", player_style)
         self.assertIn("body {", player_style)
         self.assertIn("flex-direction: row-reverse", player_style)

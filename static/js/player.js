@@ -456,6 +456,9 @@ function initPlayer(media, index) {
         checkAndPreloadNext(art.currentTime);
         if (typeof PLAYER_KIND !== 'undefined' && PLAYER_KIND === 'audio') {
             updateSynchronizedLyrics(art.currentTime);
+            // Initial autoplay can begin before Artplayer delivers our play listener.
+            // The first native time update therefore also hands off to the frame clock.
+            startLyricClock();
         }
         reportValidPlayback();
     });
