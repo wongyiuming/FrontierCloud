@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException, UploadFile
 
+from app.api.v1 import media
 from app.services import lyrics, media_manager
 
 
@@ -121,6 +122,17 @@ class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
     async def test_one_track_cannot_link_multiple_lyrics(self):
         with self.assertRaisesRegex(ValueError, "最多关联一份"):
             await lyrics.replace_relations("track", "missing", ["one", "two"])
+
+    async def test_public_content_endpoint_returns_only_lines_without_cache(self):
+        with patch.object(
+            media.lyrics,
+            "load_for_track",
+            new=unittest.mock.AsyncMock(return_value=("lyrics/shared.json", ["one", "two"])),
+        ):
+            response = await media.get_lyrics_content("music/album/song.mp3")
+
+        self.assertEqual(json.loads(response.body), {"lines": ["one", "two"]})
+        self.assertIn("no-store", response.headers["cache-control"])
 
 
 if __name__ == "__main__":

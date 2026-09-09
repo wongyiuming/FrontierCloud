@@ -10,12 +10,17 @@ function playerContext(fetchImpl) {
     const element = {
         style: {},
         classList: {add() {}, remove() {}, toggle() {}},
+        clientHeight: 400,
+        clientWidth: 500,
+        children: [],
+        replaceChildren(...children) { this.children = children; },
+        appendChild(child) { this.children.push(child); },
         setAttribute() {},
         removeAttribute() {},
     };
     const context = vm.createContext({
         window: {addEventListener() {}}, navigator: {},
-        document: {getElementById: () => element, querySelector: () => null, querySelectorAll: () => []},
+        document: {getElementById: () => element, createElement: () => ({style: {}}), querySelector: () => null, querySelectorAll: () => []},
         performance: {now: () => clock}, AbortController, Blob, setTimeout, clearTimeout,
         URL: {
             createObjectURL(blob) { objects.push(blob); return `blob:track-${objects.length}`; },

@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.services.media_catalog_cache import load_media_catalog, store_media_catalog
@@ -422,6 +422,15 @@ async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024)
     html = html.replace("{{LYRICS_JSON}}", safe_json_dumps(lines))
     html = html.replace("{{LINE_COUNT}}", str(len(lines)))
     return HTMLResponse(inject_page_runtime(html), headers=NO_STORE_HEADERS)
+
+
+@router.get("/lyrics/content")
+async def get_lyrics_content(track: str = Query(..., min_length=1, max_length=1024)):
+    try:
+        _lyric_path, lines = await lyrics.load_for_track(track)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Lyrics not found")
+    return JSONResponse({"lines": lines}, headers=NO_STORE_HEADERS)
 
 
 @router.post("/playback")

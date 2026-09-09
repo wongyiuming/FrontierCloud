@@ -6,21 +6,20 @@ body { background: #05070b; font-family: "Microsoft YaHei", "PingFang SC", sans-
     display: grid;
     width: 100%;
     height: 100%;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: clamp(18px, 4vw, 72px);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(12px, 2.5vw, 44px);
     padding: clamp(18px, 4vw, 64px);
-    background: radial-gradient(circle at 50% 50%, #152133 0, #080c13 46%, #020305 100%);
+    background: radial-gradient(circle at 50% 50%, #111923 0, #080c13 48%, #020305 100%);
 }
 .lyrics-column { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: .2em; }
 .lyric-line {
     margin: 0;
     overflow: hidden;
     font-size: var(--lyric-font-size);
-    font-weight: 750;
+    font-weight: 800;
     line-height: 1.18;
     text-align: center;
     text-overflow: ellipsis;
     white-space: nowrap;
-    text-shadow: 0 0 .8em currentColor;
 }
 @media (max-width: 700px) { .lyrics-board { gap: 12px; padding: 14px; } }

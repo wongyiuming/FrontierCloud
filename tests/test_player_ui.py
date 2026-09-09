@@ -60,7 +60,7 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("top: 75%", style)
         self.assertIn(".audio-player-page .artplayer-app .art-bottom { opacity: 1", style)
 
-    def test_audio_player_links_to_fixed_two_column_lyrics_page(self):
+    def test_audio_player_offers_inline_and_three_column_fullscreen_lyrics(self):
         player_script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
         lyric_script = (ROOT / "static" / "js" / "lyrics.js").read_text(encoding="utf-8")
         lyric_style = (ROOT / "static" / "css" / "lyrics.css").read_text(encoding="utf-8")
@@ -68,11 +68,17 @@ class PlayerUIContractTests(unittest.TestCase):
         lyric_template = (ROOT / "static" / "media" / "lyrics.html").read_text(encoding="utf-8")
 
         self.assertIn('id="lyricsLink"', audio_template)
+        self.assertIn('id="inlineLyrics"', audio_template)
+        self.assertIn('id="inlineLyricsLines"', audio_template)
         self.assertIn("encodeURIComponent(media.media_path)", player_script)
-        self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)", lyric_style)
+        self.assertIn("/api/v1/media/lyrics/content?track=", player_script)
+        self.assertIn("inlineLyricsRequest?.abort()", player_script)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", lyric_style)
+        self.assertEqual(lyric_template.count('class="lyrics-column"'), 3)
         self.assertIn("lyricPalette[index % lyricPalette.length]", lyric_script)
         self.assertIn("--lyric-font-size", lyric_script)
         self.assertIn("{{LYRICS_JSON}}", lyric_template)
+        self.assertNotIn("text-shadow", lyric_style)
 
     def test_video_uses_split_seek_without_overlay_or_track_switch_gestures(self):
         script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")

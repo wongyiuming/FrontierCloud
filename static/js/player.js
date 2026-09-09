@@ -6,6 +6,10 @@ let playerSwitchSequence = 0;
 let clickTimer = null;
 let playbackState = null;
 let playbackReporter = null;
+let inlineLyricsRequest = null;
+let inlineLyricsSequence = 0;
+const inlineLyricsCache = new Map();
+const INLINE_LYRIC_PALETTE = ['#aebfca', '#b9c4a6', '#c5b49f', '#b8adc4', '#9fbeb9', '#c4bda4'];
 const DIRECT_SEEK_ZONE_START = 0.75;
 const MIN_PREFERENCE = -2;
 const MAX_PREFERENCE = 7;
@@ -208,6 +212,58 @@ async function changePreference(index, delta) {
     updateTrackStats(media);
 }
 
+function renderInlineLyrics(lines) {
+    const panel = document.getElementById('inlineLyrics');
+    const container = document.getElementById('inlineLyricsLines');
+    if (!panel || !container) return;
+    container.replaceChildren();
+    for (const [index, line] of lines.entries()) {
+        const row = document.createElement('p');
+        row.textContent = line || '\u00a0';
+        row.style.color = INLINE_LYRIC_PALETTE[index % INLINE_LYRIC_PALETTE.length];
+        container.appendChild(row);
+    }
+    panel.classList.toggle('hidden', lines.length === 0);
+    if (lines.length === 0) return;
+    const availableHeight = Math.max(100, panel.clientHeight - 20);
+    const longest = Math.max(1, ...lines.map(line => Array.from(line).length));
+    const heightSize = availableHeight / Math.max(1, lines.length * 1.32);
+    const widthSize = Math.max(100, panel.clientWidth - 28) / Math.max(4, longest * 1.05);
+    panel.style.setProperty('--inline-lyric-font-size', `${Math.max(9, Math.min(34, heightSize, widthSize))}px`);
+}
+
+async function loadInlineLyrics(media) {
+    const sequence = ++inlineLyricsSequence;
+    inlineLyricsRequest?.abort();
+    inlineLyricsRequest = null;
+    if (!media.has_lyrics) {
+        renderInlineLyrics([]);
+        return;
+    }
+    const cached = inlineLyricsCache.get(media.media_path);
+    if (cached) {
+        renderInlineLyrics(cached);
+        return;
+    }
+    const controller = new AbortController();
+    inlineLyricsRequest = controller;
+    try {
+        const response = await fetch(`/api/v1/media/lyrics/content?track=${encodeURIComponent(media.media_path)}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('Lyrics unavailable');
+        const data = await response.json();
+        const lines = Array.isArray(data.lines) ? data.lines.map(line => String(line)) : [];
+        inlineLyricsCache.set(media.media_path, lines);
+        if (sequence === inlineLyricsSequence) renderInlineLyrics(lines);
+    } catch (error) {
+        if (error.name !== 'AbortError' && sequence === inlineLyricsSequence) renderInlineLyrics([]);
+    } finally {
+        if (inlineLyricsRequest === controller) inlineLyricsRequest = null;
+    }
+}
+
 function initPlayer(media, index) {
     accountPlaybackTime();
     currentIndex = index;
@@ -224,6 +280,8 @@ function initPlayer(media, index) {
     const audioDisk = document.getElementById('audioDisk');
     const audioBlurBg = document.getElementById('audioBlurBg');
     const lyricsLink = document.getElementById('lyricsLink');
+
+    void loadInlineLyrics(media);
 
     if (lyricsLink) {
         lyricsLink.classList.toggle('unavailable', !media.has_lyrics);
@@ -585,6 +643,12 @@ window.addEventListener('pagehide', event => {
 
 window.addEventListener('pageshow', event => {
     if (event.persisted && art) playbackReporter = setInterval(reportValidPlayback, 1000);
+});
+
+window.addEventListener('resize', () => {
+    const media = currentMediaList?.[currentIndex];
+    const lines = media ? inlineLyricsCache.get(media.media_path) : null;
+    if (lines) renderInlineLyrics(lines);
 });
 
 function selectMedia(index) {

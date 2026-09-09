@@ -12,6 +12,9 @@
             <div id="audioBlurBg" class="audio-blur-bg"></div>
             <div id="audioDisk" class="audio-disk"></div>
         </div>
+        <section id="inlineLyrics" class="inline-lyrics hidden" aria-live="polite" aria-label="当前曲目歌词">
+            <div id="inlineLyricsLines" class="inline-lyrics-lines"></div>
+        </section>
         <div id="artplayer" class="artplayer-app"></div>
         <div class="audio-interaction-guide" aria-hidden="true">
             <svg class="interaction-boundary" viewBox="0 0 1200 64" preserveAspectRatio="none">
@@ -37,7 +40,7 @@
         <div class="player-controls">
             <button class="control-btn" onclick="playPrev()">⏮ up_music</button>
             <button class="control-btn" onclick="playNext()">next_music ⏭</button>
-            <a id="lyricsLink" class="control-btn lyrics-link unavailable" target="_blank" rel="noopener">歌词</a>
+            <a id="lyricsLink" class="control-btn lyrics-link unavailable" target="_blank" rel="noopener">全屏歌词</a>
         </div>
         <ul id="mediaList" class="media-list"></ul>
     </div>
