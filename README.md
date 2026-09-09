@@ -74,7 +74,7 @@ The helpers under `scripts/auto_download/` are operator-owned tools, not applica
 Run a bounded preview first; preview is the default and writes nothing:
 
 ```bash
-python scripts/lrclib_backfill_experimental.py --include '黄耀明/明哥CD/*' --max-files 50 --max-requests 200
+python scripts/lrclib_backfill_experimental.py --include 'artist/album/*' --max-files 50 --max-requests 200
 ```
 
 After reviewing the JSON plan, opt into atomic LRC writes and optionally retain the media-to-lyric plan:
