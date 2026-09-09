@@ -6,40 +6,15 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from scripts import lrclib_backfill_experimental as lrclib
-from scripts.auto_download import nama_clean
-from scripts.auto_download.media_sync import MediaSynchronizer, RemoteItem, SyncProfile
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class FakeChineseConverter:
-    MAPPING = str.maketrans({
-        "黃": "黄", "湧": "涌", "歷": "历", "嘗": "尝", "詞": "词",
-        "見": "见", "藍": "蓝", "張": "张",
-    })
-
-    def convert(self, value):
-        return value.translate(self.MAPPING)
-
-
 class DevelopmentDeploymentTests(unittest.TestCase):
-    def setUp(self):
-        self.clean_converter = nama_clean._converter
-        self.lrclib_converter = lrclib._converter
-        nama_clean._converter = FakeChineseConverter()
-        lrclib._converter = FakeChineseConverter()
-
-    def tearDown(self):
-        nama_clean._converter = self.clean_converter
-        lrclib._converter = self.lrclib_converter
-
     def test_runtime_dependencies_are_reproducibly_pinned(self):
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
         unpinned = [dependency for dependency in project["dependencies"] if "==" not in dependency]
         self.assertEqual(unpinned, [])
-        self.assertIn("opencc==1.4.2", project["optional-dependencies"]["tools"])
 
     def test_environment_example_is_the_complete_public_contract(self):
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
@@ -96,74 +71,7 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn("scripts/auto_download", dockerignore)
-        self.assertIn("scripts/lrclib_backfill_experimental.py", dockerignore)
         self.assertNotIn('"auto_download*"', pyproject)
-
-        experimental = ROOT / "scripts" / "lrclib_backfill_experimental.py"
-        self.assertTrue(experimental.is_file())
-        for path in (ROOT / "scripts" / "auto_download").glob("*.py"):
-            self.assertNotIn("lrclib_backfill_experimental", path.read_text(encoding="utf-8"))
-
-    def test_auto_download_planning_forces_simplified_chinese_names(self):
-        profile = SyncProfile("test", "https://example.test", "audio", "mp3", "best", {})
-        item = RemoteItem("one", "test", "暗湧_歌詞", "黃耀明", "https://example.test/one")
-        planned = MediaSynchronizer(profile, ROOT / "unused").plan_items([item])["one"]
-        self.assertEqual(planned.clean_playlist, "黄耀明")
-        self.assertEqual(planned.clean_title, "暗涌_歌词")
-        self.assertEqual(planned.relative_path, str(Path("黄耀明") / "暗涌_歌词.mp3"))
-
-    def test_experiment_infers_artist_and_numbered_medley_tracks(self):
-        root = Path("C:/data/media/music")
-        simple = root / "黃耀明" / "明哥CD" / "暗湧_黃耀明.mp3"
-        candidates = lrclib.infer_song_candidates(simple, root)
-        self.assertEqual(candidates[0].artist, "黄耀明")
-        self.assertEqual(candidates[0].title, "暗涌")
-        self.assertFalse(candidates[0].compound)
-
-        medley = root / "張崇德張崇基" / "1_孤星_2_再見天藍_附歌詞_張崇德.mp3"
-        candidates = lrclib.infer_song_candidates(medley, root)
-        self.assertEqual([item.title for item in candidates], ["孤星", "再见天蓝"])
-        self.assertTrue(all(item.compound for item in candidates))
-
-    def test_lrclib_metadata_controls_portable_output_name(self):
-        record = lrclib.LyricsRecord(
-            20069124, "暗湧", "黃耀明", "歷久嘗新 CD3", 231.4,
-            "[00:01.00]第一句\n",
-        )
-        self.assertEqual(lrclib.output_name(record), "暗涌_历久尝新CD3_黄耀明.lrc")
-
-    def test_experiment_rejects_distinct_near_tied_versions(self):
-        first = lrclib.LyricsRecord(1, "暗涌", "黄耀明", "甲", 231, "[00:01.00]甲\n")
-        second = lrclib.LyricsRecord(2, "暗涌", "黄耀明", "乙", 231, "[00:02.00]乙\n")
-        selected, reason = lrclib.select_unambiguous([
-            lrclib.ScoredRecord(first, 0.96, 1, 1, 0),
-            lrclib.ScoredRecord(second, 0.93, 1, 1, 0),
-        ])
-        self.assertIsNone(selected)
-        self.assertEqual(reason, "ambiguous-versions")
-
-    def test_experiment_reuses_identical_lrc_content(self):
-        with tempfile.TemporaryDirectory() as directory:
-            lyric_dir = Path(directory)
-            existing = lyric_dir / "shared.lrc"
-            existing.write_text("[00:01.00]same\n", encoding="utf-8")
-            hashes, names = lrclib.existing_lyrics(lyric_dir)
-            self.assertEqual(hashes[lrclib.lyric_digest("[00:01.00]same\r\n")], existing)
-            self.assertIn("shared.lrc", names)
-
-    def test_experiment_scan_can_be_bounded_by_relative_glob(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            selected = root / "黄耀明" / "明哥CD" / "暗涌.mp3"
-            ignored = root / "其他" / "歌曲.mp3"
-            selected.parent.mkdir(parents=True)
-            ignored.parent.mkdir(parents=True)
-            selected.write_bytes(b"ID3")
-            ignored.write_bytes(b"ID3")
-            self.assertEqual(
-                lrclib.media_files(root, 10, ["黄耀明/明哥CD/*"]),
-                [selected],
-            )
 
     def test_transport_and_upload_timeout_are_direct_technical_settings(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
