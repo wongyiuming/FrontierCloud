@@ -49,7 +49,7 @@ button:disabled { cursor: not-allowed; opacity: .35; }
 
 .admin-side[data-admin-module="media"] { order: -1; }
 
-.admin-module.expanded { min-height: 0; flex: 1 1 auto; }
+.admin-module.expanded { min-height: 0; flex: 1 1 0; }
 .module-content { display: none; min-height: 0; }
 .admin-module.expanded > .module-content,
 .admin-module.expanded > header + .module-content { display: block; }
@@ -68,9 +68,9 @@ button:disabled { cursor: not-allowed; opacity: .35; }
 }
 
 .key-panel { background: #121923; }
-.key-panel.expanded { min-height: 58px; flex: 0 0 58px; flex-direction: row; align-items: center; }
-.key-panel.expanded > .module-heading { width: min(32%, 430px); flex: 0 0 min(32%, 430px); }
-.key-panel .module-content { min-width: 0; flex: 1; padding: 6px 10px; overflow-x: auto; overflow-y: hidden; }
+.key-panel.expanded { min-height: 108px; flex: 0 0 108px; }
+.key-panel.expanded > .module-heading { width: 100%; min-height: 50px; flex: 0 0 50px; padding-block: 6px; }
+.key-panel .module-content { width: 100%; min-width: 0; min-height: 0; flex: 1 1 0; padding: 6px 10px; overflow-x: auto; overflow-y: hidden; }
 .key-panel small { color: #92a5ba; }
 .key-actions { display: grid; min-width: 650px; grid-template-columns: auto 1fr; gap: 8px; }
 .key-actions form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
@@ -185,8 +185,8 @@ button:disabled { cursor: not-allowed; opacity: .35; }
 .admin-side.expanded { display: flex; min-height: 0; overflow: hidden; }
 .admin-side .admin-header { flex: 0 0 56px; padding: 0; }
 .admin-side .module-heading { min-height: 56px; }
-.media-content { height: 0; min-height: 0; flex: 1 1 0; overflow: hidden; }
-.admin-side.expanded > .media-content { display: flex; flex-direction: column; }
+.media-content { min-height: 0; flex: 1 1 0; overflow: hidden; }
+.admin-side.expanded > header + .media-content { display: flex; flex-direction: column; }
 
 .admin-header > div { display: flex; gap: 6px; }
 .toolbar { display: flex; gap: 6px; padding: 10px; border-bottom: 1px solid #292929; }
@@ -248,8 +248,7 @@ button:disabled { cursor: not-allowed; opacity: .35; }
 }
 
 .tree {
-    height: 0;
-    min-height: 0;
+    min-height: 80px;
     flex: 1 1 0;
     padding: 8px;
     overflow-x: hidden;
@@ -285,7 +284,6 @@ button:disabled { cursor: not-allowed; opacity: .35; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 
 @media (max-width: 900px) {
-    .key-panel.expanded > .module-heading { width: 230px; flex-basis: 230px; }
     .whitelist-form { grid-template-columns: 1fr; }
     .permanent-ban-form { grid-template-columns: 1fr; }
     .security-filter-form { grid-template-columns: 1fr; }
