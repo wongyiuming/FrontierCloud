@@ -55,7 +55,7 @@ Open the media home page, select the privilege-elevation control (`id="elevate"`
 - Expandable modules with one module open at a time, without changing URL.
 - IP state summaries, numeric IP ordering, manual release/permanent bans, and permanent allowlist management; the existing layout is retained.
 
-The public home, Admin media browser, and Lyrics relation browser all support the same bounded search behavior. Simplified Chinese, Traditional Chinese, and full pinyin share one normalized index, so `暗涌`, `暗湧`, and `anyong` can locate the same object. Results include the media path for disambiguation. This is substring matching over precomputed aliases, not an unbounded edit-distance algorithm; a query returns at most 200 results.
+The public home, Admin media browser, and Lyrics relation browser all support the same bounded search behavior. Simplified Chinese, Traditional Chinese, and full pinyin share one normalized index, so a title's Simplified spelling, Traditional spelling, and a query such as `anyong` can locate the same object. Results include the media path for disambiguation. This is substring matching over precomputed aliases, not an unbounded edit-distance algorithm; a query returns at most 200 results.
 
 The automatic security lifecycle is fixed: the first threshold violation blocks an IP for 24 hours, and the second violation permanently blacklists it. This timing is not configurable. An administrator may still explicitly release or allowlist an address in Admin WebUI.
 
