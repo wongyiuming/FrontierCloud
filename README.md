@@ -59,7 +59,7 @@ Open the media home page, select the privilege-elevation control (`id="elevate"`
 - IP state summaries, numeric IP ordering, manual release/permanent bans, and permanent allowlist management; the existing layout is retained.
 - Aggregated public-IP-to-WebRTC-IP history with exact lookup from either side.
 
-The default Admin session idle lifetime is 180 minutes. `ADMIN_SESSION_TTL` can change that technical timeout without changing the long-lived Admin Key lifecycle. The Admin Key module remains a single row when opened; a newly generated key is shown in a separate one-time overlay.
+The default Admin session idle lifetime is 180 minutes. `ADMIN_SESSION_TTL` can change that technical timeout without changing the long-lived Admin Key lifecycle. When the Admin Key module is opened, its title keeps a separate header row and all key-change controls stay in one compact row below it; a newly generated key is shown in a separate one-time overlay.
 
 Search exists only inside Admin WebUI. Every search is scoped to the currently selected file-tree directory and its descendants. The largest accepted media scope is `data/media/music`, `data/media/vido`, or the separate `data/media/lyrics` tree; `data/media` itself is rejected by the backend, even if a caller bypasses the UI. The media browser disables search at that global root and explains that a supported tree must be entered first. The Lyrics relation browser uses independent track and lyric trees and sends both current scopes to the backend. Public home and player views deliberately have no search UI or search endpoint.
 
