@@ -43,11 +43,14 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .back-btn:hover { color: #fff; }
 .header-actions { display: flex; align-items: center; gap: 12px; }
 .player-controls { padding: 12px 15px; background: #1f1f1f; display: flex; gap: 10px; border-bottom: 1px solid #282828; }
+.playlist-search { flex: 1 1 auto; min-width: 0; padding: 9px 11px; color: #f4f8fb; background: #111; border: 1px solid #3a3a3a; border-radius: 6px; font: inherit; }
+.playlist-search:focus { outline: 2px solid #3498db; outline-offset: 1px; }
 .control-btn { flex: 1; background: #2a2a2a; color: #fff; border: 1px solid #3a3a3a; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; text-align: center; transition: background 0.2s; user-select: none; }
 .control-btn:hover { background: #3a3a3a; }
 .lyrics-link { text-decoration: none; }
 .lyrics-link.unavailable { pointer-events: none; opacity: .35; }
 .media-list { flex: 1; overflow-y: auto; list-style: none; margin: 0; padding: 0; -webkit-overflow-scrolling: touch; touch-action: pan-y; will-change: transform; }
+.playlist-empty { padding: 24px 12px; color: #748596; text-align: center; }
 .media-item { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid #222; cursor: pointer; transition: background 0.2s; user-select: none; }
 .media-item:hover { background: #282828; }
 .media-item.active { background: #333; border-right: 4px solid #3498db; border-left: none; }
@@ -56,6 +59,7 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .media-info { flex: 1; overflow: hidden; }
 .media-title { font-size: 14px; font-weight: 500; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .media-artist { font-size: 12px; color: #888; }
+.media-path { margin-top: 4px; color: #748596; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .media-stats { display: flex; gap: 10px; margin-top: 5px; color: #777; font-size: 11px; }
 .preference-controls { display: flex; gap: 6px; margin-left: 8px; }
 .preference-btn { width: 36px; height: 36px; border: 1px solid transparent; border-radius: 50%; cursor: pointer; font-size: 18px; line-height: 1; transition: transform 0.15s, filter 0.15s, border-color 0.15s; }

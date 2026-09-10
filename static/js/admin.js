@@ -3,6 +3,7 @@ let selectionKind = null;
 let currentPath = '';
 let csrfCookieName = '__Host-admin-csrf';
 let uploadRunning = false;
+let mediaSearchTimer = null;
 let securityTimer = null;
 let securityLoading = false;
 let securityPage = 1;
@@ -115,6 +116,10 @@ function escapeHtml(value) {
     }[character]));
 }
 
+function normalizeSearchQuery(value) {
+    return String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
 function formatSize(value) {
     if (value == null) return '';
     const units = ['B', 'KB', 'MB', 'GB'];
@@ -177,12 +182,19 @@ function toggleSelection(item) {
 }
 
 async function renderTree() {
-    const data = await api(`/api/v1/media/admin/tree?path=${encodeURIComponent(currentPath)}`);
-    $('pathbar').textContent = `/${currentPath}`;
+    const rawQuery = $('mediaSearch').value.trim();
+    const searching = Boolean(rawQuery);
+    const endpoint = searching
+        ? `/api/v1/media/admin/tree/search?q=${encodeURIComponent(rawQuery)}`
+        : `/api/v1/media/admin/tree?path=${encodeURIComponent(currentPath)}`;
+    const data = await api(endpoint);
+    $('pathbar').textContent = searching
+        ? `搜索：${rawQuery} · ${data.items.length}${data.truncated ? '+' : ''} 项`
+        : `/${currentPath}`;
     const tree = $('tree');
     tree.innerHTML = '';
 
-    if (currentPath) {
+    if (currentPath && !searching) {
         const up = document.createElement('div');
         up.className = 'tree-row';
         up.innerHTML = '<span class="kind">↩</span><span class="name">返回上级</span>';
@@ -201,8 +213,11 @@ async function renderTree() {
         row.dataset.path = item.path;
         row.dataset.hidden = String(item.hidden);
         row.dataset.hideable = String(item.hideable === true);
+        const pathDetail = searching
+            ? `<small class="tree-path">媒体路径 /${escapeHtml(item.path.split('/').slice(1).join('/'))}</small>`
+            : '';
         row.innerHTML = `<span class="kind">${item.kind === 'directory' ? '📁' : '📄'}</span>`
-            + `<span class="name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>`
+            + `<span class="tree-label"><span class="name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>${pathDetail}</span>`
             + `<small>${item.kind === 'file' ? formatSize(item.size) : ''}</small>`;
         row.onclick = event => {
             event.stopPropagation();
@@ -398,23 +413,24 @@ function lyricObjectButton(item, kind) {
     button.classList.toggle('linked', isTarget || (!lyricLinking && (kind === 'track' ? item.lyric_path : item.linked_count)));
     button.disabled = lyricLinking && lyricOrigin?.kind === kind && !isOrigin;
     const count = kind === 'track' ? (item.lyric_path ? '已关联' : '未关联') : `${item.linked_count || 0} 首`;
-    button.innerHTML = `<span title="${escapeHtml(path)}">${escapeHtml(item.name)}</span><small>${count}</small>`;
+    const displayPath = `/${path.split('/').slice(1).join('/')}`;
+    button.innerHTML = `<span class="lyrics-object-label" title="${escapeHtml(path)}"><strong>${escapeHtml(item.name)}</strong><small>媒体路径 ${escapeHtml(displayPath)}</small></span><small>${count}</small>`;
     button.onclick = () => selectLyricObject(kind, path);
     return button;
 }
 
 function renderLyricObjects() {
     if (!lyricCatalog) return;
-    const trackNeedle = $('lyricsTrackFilter').value.trim().toLocaleLowerCase();
-    const lyricNeedle = $('lyricsFileFilter').value.trim().toLocaleLowerCase();
+    const trackNeedle = normalizeSearchQuery($('lyricsTrackFilter').value);
+    const lyricNeedle = normalizeSearchQuery($('lyricsFileFilter').value);
     const tracks = $('lyricsTrackList');
     const files = $('lyricsFileList');
     tracks.innerHTML = '';
     files.innerHTML = '';
-    for (const item of lyricCatalog.tracks.filter(item => `${item.name} ${item.path}`.toLocaleLowerCase().includes(trackNeedle))) {
+    for (const item of lyricCatalog.tracks.filter(item => String(item.search_text || '').includes(trackNeedle))) {
         tracks.appendChild(lyricObjectButton(item, 'track'));
     }
-    for (const item of lyricCatalog.lyrics.filter(item => `${item.name} ${item.path}`.toLocaleLowerCase().includes(lyricNeedle))) {
+    for (const item of lyricCatalog.lyrics.filter(item => String(item.search_text || '').includes(lyricNeedle))) {
         files.appendChild(lyricObjectButton(item, 'lyric'));
     }
 }
@@ -467,6 +483,12 @@ async function loadLyricCatalog() {
 $('lyricsRefresh').onclick = () => loadLyricCatalog().catch(error => alert(error.message));
 $('lyricsTrackFilter').oninput = renderLyricObjects;
 $('lyricsFileFilter').oninput = renderLyricObjects;
+$('mediaSearch').oninput = () => {
+    clearTimeout(mediaSearchTimer);
+    selected.clear();
+    selectionKind = null;
+    mediaSearchTimer = setTimeout(() => renderTree().catch(error => alert(error.message)), 220);
+};
 $('lyricsEnterLink').onclick = () => {
     if (!lyricOrigin) return;
     lyricLinking = true;

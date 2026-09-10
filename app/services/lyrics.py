@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +9,7 @@ from typing import Any
 from sqlalchemy import text
 
 from app.core.db import engine
-from app.services.playback import media_id_for_path
+from app.services import media_objects, media_search
 
 
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -27,10 +26,6 @@ LRC_OFFSET_TAG = re.compile(r"\[offset:([+-]?\d+)\]", re.IGNORECASE)
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-def lyric_id_for_path(relative_path: str) -> str:
-    return hashlib.sha256(relative_path.encode("utf-8")).hexdigest()
 
 
 def parse_lrc_bytes(payload: bytes) -> list[dict[str, Any]]:
@@ -108,13 +103,13 @@ def _scan_catalog_sync() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
             if path.is_file() and not path.is_symlink() and path.suffix.lower() in AUDIO_EXTS:
                 rel = path.relative_to(MEDIA_ROOT).as_posix()
                 if len(path.relative_to(MEDIA_ROOT).parts) in {3, 4}:
-                    tracks.append({"path": rel, "name": path.stem, "media_id": media_id_for_path(rel)})
+                    tracks.append({"path": rel, "name": path.stem})
     lyric_files: list[dict[str, Any]] = []
     if LYRICS_ROOT.is_dir():
         for path in LYRICS_ROOT.iterdir():
             if path.is_file() and not path.is_symlink() and path.suffix.lower() in LYRIC_EXTS:
                 rel = path.relative_to(MEDIA_ROOT).as_posix()
-                lyric_files.append({"path": rel, "name": path.stem, "lyric_id": lyric_id_for_path(rel)})
+                lyric_files.append({"path": rel, "name": path.stem})
     tracks.sort(key=lambda item: (item["name"].casefold(), item["path"].casefold()))
     lyric_files.sort(key=lambda item: (item["name"].casefold(), item["path"].casefold()))
     return tracks, lyric_files
@@ -122,10 +117,21 @@ def _scan_catalog_sync() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
 
 async def catalog() -> dict[str, Any]:
     tracks, lyric_files = await asyncio.to_thread(_scan_catalog_sync)
+    tracks = await media_objects.bind_items(
+        tracks, "audio", path_key="path", id_key="media_id"
+    )
+    lyric_files = await media_objects.bind_items(
+        lyric_files, "lyric", path_key="path", id_key="lyric_id"
+    )
     valid_tracks = {item["path"] for item in tracks}
     valid_lyrics = {item["path"] for item in lyric_files}
     async with engine.connect() as conn:
-        result = await conn.execute(text("SELECT media_path, lyric_path FROM media_lyric_links"))
+        result = await conn.execute(text("""
+            SELECT media_object.media_path, lyric_object.media_path AS lyric_path
+            FROM media_lyric_links AS link
+            INNER JOIN media_objects AS media_object ON media_object.media_id=link.media_id
+            INNER JOIN media_objects AS lyric_object ON lyric_object.media_id=link.lyric_id
+        """))
         rows = result.mappings().all()
     relations = [
         {"track": str(row["media_path"]), "lyric": str(row["lyric_path"])}
@@ -139,8 +145,10 @@ async def catalog() -> dict[str, Any]:
         linked_counts[relation["lyric"]] = linked_counts.get(relation["lyric"], 0) + 1
     for item in tracks:
         item["lyric_path"] = relation_by_track.get(item["path"], "")
+        item["search_text"] = media_search.build_search_text(item["name"], item["path"])
     for item in lyric_files:
         item["linked_count"] = linked_counts.get(item["path"], 0)
+        item["search_text"] = media_search.build_search_text(item["name"], item["path"])
     return {
         "counts": {"tracks": len(tracks), "lyrics": len(lyric_files), "relations": len(relations)},
         "tracks": tracks,
@@ -179,18 +187,22 @@ async def replace_relations(origin_kind: str, origin_path: str, linked_paths: li
         now = _utcnow()
         async with engine.begin() as conn:
             if origin_kind == "track":
+                origin_id = await media_objects.ensure_object(conn, origin_path, "audio")
                 await conn.execute(
-                    text("DELETE FROM media_lyric_links WHERE BINARY media_path=BINARY :origin"),
-                    {"origin": origin_path},
+                    text("DELETE FROM media_lyric_links WHERE media_id=:origin_id"),
+                    {"origin_id": origin_id},
                 )
                 pairs = [(origin_path, path) for path in normalized_targets]
             else:
+                origin_id = await media_objects.ensure_object(conn, origin_path, "lyric")
                 await conn.execute(
-                    text("DELETE FROM media_lyric_links WHERE BINARY lyric_path=BINARY :origin"),
-                    {"origin": origin_path},
+                    text("DELETE FROM media_lyric_links WHERE lyric_id=:origin_id"),
+                    {"origin_id": origin_id},
                 )
                 pairs = [(path, origin_path) for path in normalized_targets]
             for track, lyric in pairs:
+                media_id = await media_objects.ensure_object(conn, track, "audio")
+                lyric_id = await media_objects.ensure_object(conn, lyric, "lyric")
                 await conn.execute(text("""
                     INSERT INTO media_lyric_links
                     (media_id, media_path, lyric_id, lyric_path, created_at, updated_at)
@@ -199,9 +211,9 @@ async def replace_relations(origin_kind: str, origin_path: str, linked_paths: li
                         media_path=VALUES(media_path), lyric_id=VALUES(lyric_id),
                         lyric_path=VALUES(lyric_path), updated_at=VALUES(updated_at)
                 """), {
-                    "media_id": media_id_for_path(track),
+                    "media_id": media_id,
                     "media_path": track,
-                    "lyric_id": lyric_id_for_path(lyric),
+                    "lyric_id": lyric_id,
                     "lyric_path": lyric,
                     "now": now,
                 })
@@ -232,10 +244,14 @@ async def attach_links(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 async def load_for_track(track_path: str) -> tuple[str, list[dict[str, Any]]]:
     normalized_track, _ = validate_track(track_path)
-    async with engine.connect() as conn:
-        lyric_path = await conn.scalar(text(
-            "SELECT lyric_path FROM media_lyric_links WHERE media_id=:media_id"
-        ), {"media_id": media_id_for_path(normalized_track)})
+    async with engine.begin() as conn:
+        media_id = await media_objects.ensure_object(conn, normalized_track, "audio")
+        lyric_path = await conn.scalar(text("""
+            SELECT lyric_object.media_path
+            FROM media_lyric_links AS link
+            INNER JOIN media_objects AS lyric_object ON lyric_object.media_id=link.lyric_id
+            WHERE link.media_id=:media_id
+        """), {"media_id": media_id})
     if not lyric_path:
         raise FileNotFoundError("曲目没有关联歌词")
     normalized_lyric, path = validate_lyric(str(lyric_path))

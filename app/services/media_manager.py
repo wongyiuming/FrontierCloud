@@ -17,7 +17,12 @@ from app.core.async_lock import LoopLocalAsyncLock
 from app.core.config import settings
 from app.core.db import engine
 from app.core.admin_log import append_admin_log
-from app.services.media_catalog_cache import invalidate_media_catalog
+from app.services import media_search
+from app.services.media_catalog_cache import (
+    invalidate_media_catalog,
+    load_media_catalog,
+    store_media_catalog,
+)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 MEDIA_ROOT = (BASE_DIR / "data" / "media").resolve()
@@ -363,6 +368,59 @@ class MediaManager:
         return {"path": rel, "items": items}
 
     @staticmethod
+    def _search_catalog_sync(hidden: set[str]) -> list[dict]:
+        items: list[dict] = []
+        for root_name, extensions in (*MEDIA_TYPE_EXTS.items(), ("lyrics", set(LYRIC_EXTS))):
+            root = MEDIA_ROOT / root_name
+            if not root.is_dir() or root.is_symlink():
+                continue
+            for path in root.rglob("*"):
+                if not path.is_file() or path.is_symlink() or path.name.startswith("."):
+                    continue
+                parts = path.relative_to(MEDIA_ROOT).parts
+                valid_depth = len(parts) == 2 if root_name == "lyrics" else len(parts) in {3, 4}
+                if not valid_depth or path.suffix.lower() not in extensions:
+                    continue
+                rel_path = path.relative_to(MEDIA_ROOT).as_posix()
+                is_hidden = any(
+                    "/".join(parts[:index]) in hidden
+                    for index in range(1, len(parts) + 1)
+                )
+                items.append({
+                    "name": path.name,
+                    "path": rel_path,
+                    "kind": "file",
+                    "size": path.stat().st_size,
+                    "hidden": is_hidden,
+                    "media": path.suffix.lower() in ALLOWED_EXTS,
+                    "hideable": False,
+                    "search_text": media_search.build_search_text(path.name, rel_path),
+                })
+        items.sort(key=lambda item: (item["name"].casefold(), item["path"].casefold()))
+        return items
+
+    @staticmethod
+    async def search_tree(query: str) -> dict:
+        normalized = media_search.normalized_query(query)
+        generation, catalog = await load_media_catalog("search", "admin:all")
+        if catalog is None:
+            hidden = await MediaManager.hidden_paths()
+            catalog = await asyncio.to_thread(MediaManager._search_catalog_sync, hidden)
+            await store_media_catalog(generation, "search", "admin:all", catalog)
+        matches = [
+            {key: value for key, value in item.items() if key != "search_text"}
+            for item in catalog
+            if media_search.matches_search(item.get("search_text", ""), normalized)
+        ]
+        truncated = len(matches) > media_search.MAX_SEARCH_RESULTS
+        return {
+            "path": "",
+            "query": query,
+            "items": matches[:media_search.MAX_SEARCH_RESULTS],
+            "truncated": truncated,
+        }
+
+    @staticmethod
     async def hidden_paths() -> set[str]:
         async with engine.connect() as conn:
             result = await conn.execute(text("SELECT relative_path FROM media_visibility WHERE hidden=1"))
@@ -440,6 +498,10 @@ class MediaManager:
     async def _delete_metadata(conn, rel: str, is_directory: bool) -> None:
         params = {"p": rel, "prefix": rel + "/"}
         if is_directory:
+            object_scope = """
+                BINARY object.media_path=BINARY :p
+                OR BINARY LEFT(object.media_path, CHAR_LENGTH(:prefix))=BINARY :prefix
+            """
             event_scope = """
                 BINARY stats.media_path=BINARY :p
                 OR BINARY LEFT(stats.media_path, CHAR_LENGTH(:prefix))=BINARY :prefix
@@ -449,9 +511,30 @@ class MediaManager:
                 OR BINARY LEFT(media_path, CHAR_LENGTH(:prefix))=BINARY :prefix
             """
         else:
+            object_scope = "BINARY object.media_path=BINARY :p"
             event_scope = "BINARY stats.media_path=BINARY :p"
             stats_scope = "BINARY media_path=BINARY :p"
 
+        await conn.execute(text(f"""
+            DELETE events
+            FROM media_playback_events AS events
+            INNER JOIN media_objects AS object ON object.media_id=events.media_id
+            WHERE {object_scope}
+        """), params)
+        await conn.execute(text(f"""
+            DELETE stats
+            FROM media_playback_stats AS stats
+            INNER JOIN media_objects AS object ON object.media_id=stats.media_id
+            WHERE {object_scope}
+        """), params)
+        await conn.execute(text(f"""
+            DELETE link
+            FROM media_lyric_links AS link
+            LEFT JOIN media_objects AS media_object ON media_object.media_id=link.media_id
+            LEFT JOIN media_objects AS lyric_object ON lyric_object.media_id=link.lyric_id
+            WHERE {object_scope.replace('object.', 'media_object.')}
+               OR {object_scope.replace('object.', 'lyric_object.')}
+        """), params)
         await conn.execute(text(f"""
             DELETE events
             FROM media_playback_events AS events
@@ -481,6 +564,9 @@ class MediaManager:
                 WHERE BINARY relative_path=BINARY :p
                    OR BINARY LEFT(relative_path, CHAR_LENGTH(:prefix))=BINARY :prefix
             """), params)
+        await conn.execute(text(f"""
+            DELETE object FROM media_objects AS object WHERE {object_scope}
+        """), params)
 
     @staticmethod
     def _restore_staged(quarantine: Path, manifest: list[dict]) -> None:

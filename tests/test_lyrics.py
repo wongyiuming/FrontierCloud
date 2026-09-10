@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException, UploadFile
 
@@ -112,6 +112,11 @@ class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(lyrics, "MUSIC_ROOT", music_root),
                 patch.object(lyrics, "LYRICS_ROOT", lyric_root),
                 patch.object(lyrics, "engine", _Engine(connection)),
+                patch.object(
+                    lyrics.media_objects,
+                    "ensure_object",
+                    new=AsyncMock(side_effect=["track-id", "track-id", "lyric-id"]),
+                ),
             ):
                 count = await lyrics.replace_relations(
                     "track", "music/album/song.mp3", ["lyrics/shared.lrc"],

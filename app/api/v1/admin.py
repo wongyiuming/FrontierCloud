@@ -148,6 +148,18 @@ async def admin_tree(
     return await MediaManager.list_tree(path)
 
 
+@router.get("/tree/search")
+async def admin_tree_search(
+    request: Request,
+    q: str = Query(..., min_length=1, max_length=100),
+    session_hash: str = Depends(require_session),
+):
+    try:
+        return await MediaManager.search_tree(q)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 # ============================================================
 # 5. Single-file upload; browsers submit multi-file and folder jobs one file
 # at a time so progress remains accurate.
@@ -210,6 +222,7 @@ async def upload_lyric(
         await admin_service.audit(
             session_hash, "upload_lyric", 1, source, "success", saved_path, request,
         )
+        await invalidate_media_catalog()
         return {"path": saved_path}
     finally:
         await file.close()

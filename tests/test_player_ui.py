@@ -23,6 +23,12 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("const playbackSessionId = {{PLAYBACK_SESSION_ID}}", audio_template)
         self.assertIn("const PLAYER_KIND = 'audio'", audio_template)
         self.assertIn("const PLAYER_KIND = 'video'", video_template)
+        self.assertIn('id="playlistSearch"', audio_template)
+        self.assertIn('id="playlistSearch"', video_template)
+        self.assertNotIn("up_music", audio_template + video_template)
+        self.assertNotIn("next_music", audio_template + video_template)
+        self.assertIn("function playNext()", script)
+        self.assertIn("function playPrev()", script)
 
     def test_audio_and_video_players_use_independent_templates(self):
         api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")

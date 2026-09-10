@@ -143,6 +143,9 @@ button:disabled { cursor: not-allowed; opacity: .35; }
 .lyrics-object-list { display: flex; max-height: 28vh; flex-direction: column; gap: 5px; overflow: auto; }
 .lyrics-object { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px; color: #c7d8e8; text-align: left; background: #131e2a; border-color: #2d4359; }
 .lyrics-object span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lyrics-object-label { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.lyrics-object-label strong { overflow: hidden; text-overflow: ellipsis; }
+.lyrics-object-label small { overflow: hidden; color: #8294a8; font-size: 10px; text-overflow: ellipsis; }
 .lyrics-object small { color: #718aa2; }
 .lyrics-object.selected { color: #fff; background: #214568; border-color: #67b5ff; }
 .lyrics-object.linked { border-color: #75df9b; box-shadow: inset 3px 0 #75df9b; }
@@ -167,6 +170,7 @@ button:disabled { cursor: not-allowed; opacity: .35; }
 
 .admin-header > div { display: flex; gap: 6px; }
 .toolbar { display: flex; gap: 6px; padding: 10px; border-bottom: 1px solid #292929; }
+.media-search-input { min-width: 180px; flex: 1; padding: 7px 10px; color: #eef5ff; background: #111; border: 1px solid #3b3b3b; border-radius: 6px; }
 .upload-wrap { position: relative; }
 
 .upload-menu {
@@ -238,6 +242,9 @@ button:disabled { cursor: not-allowed; opacity: .35; }
 .tree-row:hover { background: #242424; }
 .tree-row.selected { background: #343434; outline: 1px solid #4d83b8; }
 .tree-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-label { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.tree-label .name { flex: 0 1 auto; }
+.tree-path { overflow: hidden; color: #8294a8; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .kind { width: 24px; text-align: center; }
 .hidden-item { opacity: .55; }
 

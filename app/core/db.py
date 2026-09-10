@@ -301,6 +301,18 @@ async def init_db() -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
             await _commit_ddl(conn, """
+                CREATE TABLE IF NOT EXISTS media_objects (
+                    media_id CHAR(64) NOT NULL PRIMARY KEY,
+                    object_kind VARCHAR(16) NOT NULL,
+                    media_path VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+                    path_locator CHAR(64) NOT NULL,
+                    created_at DATETIME(6) NOT NULL,
+                    updated_at DATETIME(6) NOT NULL,
+                    UNIQUE INDEX uq_media_objects_path_locator (path_locator),
+                    INDEX idx_media_objects_kind (object_kind)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
+            await _commit_ddl(conn, """
                 CREATE TABLE IF NOT EXISTS media_playback_stats (
                     media_id CHAR(64) NOT NULL PRIMARY KEY,
                     media_path VARCHAR(1024) NOT NULL,
