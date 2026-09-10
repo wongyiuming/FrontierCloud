@@ -57,8 +57,13 @@ Open the media home page, select the privilege-elevation control (`id="elevate"`
 - Lyric upload and track-to-lyric relation editing.
 - Expandable modules with one module open at a time, without changing URL.
 - IP state summaries, numeric IP ordering, manual release/permanent bans, and permanent allowlist management; the existing layout is retained.
+- Aggregated public-IP-to-WebRTC-IP history with exact lookup from either side.
 
-Search exists only inside Admin WebUI: the Admin media browser and Lyrics relation browser share the same bounded behavior. Public home and player views deliberately have no search UI or search endpoint. Simplified Chinese, Traditional Chinese, and full pinyin share one normalized index, so a title's Simplified spelling, Traditional spelling, and a query such as `anyong` can locate the same object. Results include the media path for disambiguation. This is substring matching over precomputed aliases, not an unbounded edit-distance algorithm; an Admin media query returns at most 200 results.
+The default Admin session idle lifetime is 180 minutes. `ADMIN_SESSION_TTL` can change that technical timeout without changing the long-lived Admin Key lifecycle. The Admin Key module remains a single row when opened; a newly generated key is shown in a separate one-time overlay.
+
+Search exists only inside Admin WebUI. Every search is scoped to the currently selected file-tree directory and its descendants. The largest accepted media scope is `data/media/music`, `data/media/vido`, or the separate `data/media/lyrics` tree; `data/media` itself is rejected by the backend, even if a caller bypasses the UI. The media browser disables search at that global root and explains that a supported tree must be entered first. The Lyrics relation browser uses independent track and lyric trees and sends both current scopes to the backend. Public home and player views deliberately have no search UI or search endpoint.
+
+Simplified Chinese, Traditional Chinese, and full pinyin share one normalized index, so a title's Simplified spelling, Traditional spelling, and a query such as `anyong` can locate the same object. Results include the media path for disambiguation. This is substring matching over precomputed aliases, not an unbounded edit-distance algorithm; each scoped result list returns at most 200 files. Admin media, lyric, security, and WebRTC result lists expose persistent scrollbars when their contents exceed the available panel.
 
 The automatic security lifecycle is fixed: the first threshold violation blocks an IP for 24 hours, and the second violation permanently blacklists it. This timing is not configurable. An administrator may still explicitly release or allowlist an address in Admin WebUI.
 
@@ -66,7 +71,7 @@ The automatic security lifecycle is fixed: the first threshold violation blocks 
 
 Static lyrics live in `data/media/lyrics`, alongside `data/media/music` and `data/media/vido`. Upload them from the existing media-management upload menu. Lyrics are reference-only objects: they never appear as standalone items in the public media catalog and do not have a visibility toggle. The only supported format is UTF-8 `.lrc`, with a fixed 2 MiB limit. Standard timestamp tags, multiple timestamps on one line, and `[offset:+/-milliseconds]` are supported; metadata and empty timestamp lines are ignored.
 
-In the Lyrics module, the counters show current track, lyric, and relation totals. Select one track or lyric first and then enter linking mode. The graph displays only that selected object's edges, so a shared lyric does not turn the entire catalog into a spider web. A track has zero or one lyric; a lyric may be reused by any number of tracks. Saving a track relation replaces its earlier lyric. Saving from a lyric replaces the complete set of tracks that reference that lyric. Deleting a track, lyric, or containing directory removes its relationships in the same MySQL transaction as the existing media metadata cleanup.
+In the Lyrics module, browse the independent `music` and `lyrics` trees before searching. The counters describe the selected scopes, and the backend rejects any attempt to replace them with the global `data/media` root. Select one track or lyric first and then enter linking mode. The graph displays only that selected object's edges, so a shared lyric does not turn the entire catalog into a spider web. A track has zero or one lyric; a lyric may be reused by any number of tracks. Saving a track relation replaces its earlier lyric. Saving from a lyric replaces the complete set of tracks that reference that lyric. Deleting a track, lyric, or containing directory removes its relationships in the same MySQL transaction as the existing media metadata cleanup.
 
 For an associated song, the audio player uses the full area above the heartbeat line for a synchronized four-line LRC view: the previous line, current line, and next two lines. Lyrics advance as one continuous track with a gentle 480 ms upward slide instead of replacing all four rows at once; cue detection follows the foreground playback frame clock. Seeking renders the destination window directly so the interface does not animate through skipped lines. The audio playlist is on the right; the video playlist remains on the left. The old album-cover disc is not rendered. Fullscreen Lyrics opens a dedicated static three-column view without exposing a standalone lyric index. A song without a relation hides the inline lyric and keeps the fullscreen control disabled.
 
@@ -113,6 +118,8 @@ stun:<SERVER_NAME>:<WEBRTC_STUN_PORT>
 ```
 
 The first probe starts with the initial page connection and repeats every 30 seconds by default. `WEBRTC_STUN_PORT` changes the port, and `WEBRTC_REPORT_COOLDOWN` changes the probe period. There is no `WEBRTC_STUN_URLS` setting.
+
+Accepted browser reports are permanent MySQL business records. `webrtc_observation_events` retains the detailed timeline. In the same database transaction, `webrtc_observation_summary` increments one row per public-IP/WebRTC-IP pair, including a same-address pair when no proxy changes the visible address and a null observed side when probing fails. The Admin WebRTC module reads only this compact summary, orders relationships by latest observation, and supports exact public-IP and WebRTC-IP filters independently or together. It never groups the unbounded event table during a page request. Records begin accumulating after this schema is deployed; older stdout logs are not retroactively imported.
 
 ## Observability boundary
 
