@@ -8,10 +8,14 @@ let securityTimer = null;
 let securityLoading = false;
 let securityPage = 1;
 let securityPages = 1;
+let networkPage = 1;
+let networkPages = 1;
 let lyricCatalog = null;
 let lyricOrigin = null;
 let lyricLinking = false;
 let lyricTargets = new Set();
+let lyricScopes = {track: 'music', lyric: 'lyrics'};
+let lyricSearchTimer = null;
 let uploadLimits = {
     max_upload_file_size: 800 * 1024 * 1024,
     max_upload_task_files: 5000,
@@ -52,6 +56,11 @@ for (const module of document.querySelectorAll('.admin-module')) {
         if (module.dataset.adminModule === 'lyrics' && !lyricCatalog) {
             loadLyricCatalog().catch(error => {
                 $('lyricsModeStatus').textContent = `加载失败：${error.message}`;
+            });
+        }
+        if (module.dataset.adminModule === 'network') {
+            loadNetworkObservations().catch(error => {
+                $('networkSummary').textContent = `加载失败：${error.message}`;
             });
         }
     };
@@ -114,10 +123,6 @@ function escapeHtml(value) {
     return String(value).replace(/[&<>'"]/g, character => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
     }[character]));
-}
-
-function normalizeSearchQuery(value) {
-    return String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
 function formatSize(value) {
@@ -184,17 +189,27 @@ function toggleSelection(item) {
 async function renderTree() {
     const rawQuery = $('mediaSearch').value.trim();
     const searching = Boolean(rawQuery);
-    const endpoint = searching
-        ? `/api/v1/media/admin/tree/search?q=${encodeURIComponent(rawQuery)}`
+    if (searching && !currentPath) {
+        $('mediaSearch').value = '';
+        alert('禁止在 data/media 执行全局搜索，请先进入 music、vido 或 lyrics');
+    }
+    const activeQuery = currentPath ? $('mediaSearch').value.trim() : '';
+    const scopedSearch = Boolean(activeQuery);
+    const endpoint = scopedSearch
+        ? `/api/v1/media/admin/tree/search?q=${encodeURIComponent(activeQuery)}&path=${encodeURIComponent(currentPath)}`
         : `/api/v1/media/admin/tree?path=${encodeURIComponent(currentPath)}`;
     const data = await api(endpoint);
-    $('pathbar').textContent = searching
-        ? `搜索：${rawQuery} · ${data.items.length}${data.truncated ? '+' : ''} 项`
+    $('mediaSearch').disabled = !currentPath;
+    $('mediaSearch').placeholder = currentPath
+        ? `仅搜索 /data/media/${currentPath} 及其子目录`
+        : '请先进入 music、vido 或 lyrics 后搜索';
+    $('pathbar').textContent = scopedSearch
+        ? `/${currentPath} 内搜索：${activeQuery} · ${data.items.length}${data.truncated ? '+' : ''} 项`
         : `/${currentPath}`;
     const tree = $('tree');
     tree.innerHTML = '';
 
-    if (currentPath && !searching) {
+    if (currentPath && !scopedSearch) {
         const up = document.createElement('div');
         up.className = 'tree-row';
         up.innerHTML = '<span class="kind">↩</span><span class="name">返回上级</span>';
@@ -213,7 +228,7 @@ async function renderTree() {
         row.dataset.path = item.path;
         row.dataset.hidden = String(item.hidden);
         row.dataset.hideable = String(item.hideable === true);
-        const pathDetail = searching
+        const pathDetail = scopedSearch
             ? `<small class="tree-path">媒体路径 /${escapeHtml(item.path.split('/').slice(1).join('/'))}</small>`
             : '';
         row.innerHTML = `<span class="kind">${item.kind === 'directory' ? '📁' : '📄'}</span>`
@@ -419,20 +434,66 @@ function lyricObjectButton(item, kind) {
     return button;
 }
 
+function lyricDirectoryButton(item, kind) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'lyrics-object lyrics-directory';
+    button.innerHTML = `<span class="lyrics-object-label" title="${escapeHtml(item.path)}"><strong>📁 ${escapeHtml(item.name)}</strong><small>/data/media/${escapeHtml(item.path)}</small></span><small>进入</small>`;
+    button.onclick = () => {
+        lyricScopes[kind] = item.path;
+        const filter = kind === 'track' ? $('lyricsTrackFilter') : $('lyricsFileFilter');
+        filter.value = '';
+        lyricOrigin = null;
+        lyricLinking = false;
+        lyricTargets.clear();
+        loadLyricCatalog().catch(error => alert(error.message));
+    };
+    return button;
+}
+
+function lyricUpButton(kind) {
+    const root = kind === 'track' ? 'music' : 'lyrics';
+    if (lyricScopes[kind] === root) return null;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'lyrics-object lyrics-directory';
+    button.innerHTML = '<span class="lyrics-object-label"><strong>↩ 返回上级</strong></span>';
+    button.onclick = () => {
+        lyricScopes[kind] = lyricScopes[kind].split('/').slice(0, -1).join('/');
+        const filter = kind === 'track' ? $('lyricsTrackFilter') : $('lyricsFileFilter');
+        filter.value = '';
+        lyricOrigin = null;
+        lyricLinking = false;
+        lyricTargets.clear();
+        loadLyricCatalog().catch(error => alert(error.message));
+    };
+    return button;
+}
+
 function renderLyricObjects() {
     if (!lyricCatalog) return;
-    const trackNeedle = normalizeSearchQuery($('lyricsTrackFilter').value);
-    const lyricNeedle = normalizeSearchQuery($('lyricsFileFilter').value);
     const tracks = $('lyricsTrackList');
     const files = $('lyricsFileList');
     tracks.innerHTML = '';
     files.innerHTML = '';
-    for (const item of lyricCatalog.tracks.filter(item => String(item.search_text || '').includes(trackNeedle))) {
+    const trackUp = lyricUpButton('track');
+    const lyricUp = lyricUpButton('lyric');
+    if (trackUp) tracks.appendChild(trackUp);
+    if (lyricUp) files.appendChild(lyricUp);
+    for (const item of lyricCatalog.track_directories || []) {
+        tracks.appendChild(lyricDirectoryButton(item, 'track'));
+    }
+    for (const item of lyricCatalog.lyric_directories || []) {
+        files.appendChild(lyricDirectoryButton(item, 'lyric'));
+    }
+    for (const item of lyricCatalog.tracks) {
         tracks.appendChild(lyricObjectButton(item, 'track'));
     }
-    for (const item of lyricCatalog.lyrics.filter(item => String(item.search_text || '').includes(lyricNeedle))) {
+    for (const item of lyricCatalog.lyrics) {
         files.appendChild(lyricObjectButton(item, 'lyric'));
     }
+    if (!tracks.children.length) tracks.innerHTML = '<div class="lyrics-empty">当前目录没有曲目或子目录</div>';
+    if (!files.children.length) files.innerHTML = '<div class="lyrics-empty">当前目录没有歌词或子目录</div>';
 }
 
 function svgLabel(path) {
@@ -468,7 +529,18 @@ function renderLyricGraph() {
 }
 
 async function loadLyricCatalog() {
-    lyricCatalog = await api('/api/v1/media/admin/lyrics/catalog');
+    const params = new URLSearchParams({
+        track_path: lyricScopes.track,
+        lyric_path: lyricScopes.lyric,
+    });
+    const trackQuery = $('lyricsTrackFilter').value.trim();
+    const lyricQuery = $('lyricsFileFilter').value.trim();
+    if (trackQuery) params.set('track_q', trackQuery);
+    if (lyricQuery) params.set('lyric_q', lyricQuery);
+    lyricCatalog = await api(`/api/v1/media/admin/lyrics/catalog?${params}`);
+    lyricScopes = {...lyricScopes, ...lyricCatalog.scopes};
+    $('lyricsTrackPath').textContent = `/data/media/${lyricScopes.track}${trackQuery ? ` 内搜索：${trackQuery}${lyricCatalog.truncated.track ? '（仅显示前 200 项）' : ''}` : ''}`;
+    $('lyricsFilePath').textContent = `/data/media/${lyricScopes.lyric}${lyricQuery ? ` 内搜索：${lyricQuery}${lyricCatalog.truncated.lyric ? '（仅显示前 200 项）' : ''}` : ''}`;
     $('lyricsTrackCount').textContent = String(lyricCatalog.counts.tracks);
     $('lyricsFileCount').textContent = String(lyricCatalog.counts.lyrics);
     $('lyricsRelationCount').textContent = String(lyricCatalog.counts.relations);
@@ -481,8 +553,12 @@ async function loadLyricCatalog() {
 }
 
 $('lyricsRefresh').onclick = () => loadLyricCatalog().catch(error => alert(error.message));
-$('lyricsTrackFilter').oninput = renderLyricObjects;
-$('lyricsFileFilter').oninput = renderLyricObjects;
+for (const id of ['lyricsTrackFilter', 'lyricsFileFilter']) {
+    $(id).oninput = () => {
+        clearTimeout(lyricSearchTimer);
+        lyricSearchTimer = setTimeout(() => loadLyricCatalog().catch(error => alert(error.message)), 220);
+    };
+}
 $('mediaSearch').oninput = () => {
     clearTimeout(mediaSearchTimer);
     selected.clear();
@@ -733,6 +809,66 @@ $('permanentBanForm').onsubmit = async event => {
     }
 };
 
+function renderNetworkObservations(data) {
+    const list = $('networkList');
+    list.innerHTML = '';
+    for (const item of data.items || []) {
+        const row = document.createElement('div');
+        row.className = 'network-row';
+        const pair = document.createElement('div');
+        pair.className = 'network-pair';
+        const observed = item.webrtc_ip || '未获取';
+        pair.innerHTML = `<strong>${escapeHtml(item.client_ip)}</strong> → ${escapeHtml(observed)}`
+            + `<div class="network-meta">首次 ${escapeHtml(item.first_seen || '-')} · 最近 ${escapeHtml(item.last_seen || '-')} · 结果 ${escapeHtml(item.outcomes || '-')}</div>`;
+        const count = document.createElement('div');
+        count.className = 'network-count';
+        count.textContent = `${item.observation_count || 0} 次`;
+        row.append(pair, count);
+        list.appendChild(row);
+    }
+    if (!list.children.length) {
+        list.innerHTML = '<div class="security-empty">没有符合条件的 WebRTC 关系记录</div>';
+    }
+    networkPage = data.pagination?.page || 1;
+    networkPages = data.pagination?.pages || 1;
+    $('networkSummary').textContent = `聚合关系 ${data.pagination?.total || 0} 组；每个“公网 IP → WebRTC IP”只显示一行`;
+    $('networkPageInfo').textContent = `第 ${networkPage} / ${networkPages} 页`;
+    $('networkPrev').disabled = networkPage <= 1;
+    $('networkNext').disabled = networkPage >= networkPages;
+}
+
+async function loadNetworkObservations() {
+    const params = new URLSearchParams({page: String(networkPage), page_size: '100'});
+    const publicIp = $('networkPublicIp').value.trim();
+    const webrtcIp = $('networkWebrtcIp').value.trim();
+    if (publicIp) params.set('public_ip', publicIp);
+    if (webrtcIp) params.set('webrtc_ip', webrtcIp);
+    renderNetworkObservations(await api(`/api/v1/media/admin/network/observations?${params}`));
+}
+
+$('networkFilterForm').onsubmit = event => {
+    event.preventDefault();
+    networkPage = 1;
+    loadNetworkObservations().catch(error => alert(error.message));
+};
+$('networkReset').onclick = () => {
+    $('networkFilterForm').reset();
+    networkPage = 1;
+    loadNetworkObservations().catch(error => alert(error.message));
+};
+$('networkPrev').onclick = () => {
+    if (networkPage > 1) {
+        networkPage -= 1;
+        loadNetworkObservations().catch(error => alert(error.message));
+    }
+};
+$('networkNext').onclick = () => {
+    if (networkPage < networkPages) {
+        networkPage += 1;
+        loadNetworkObservations().catch(error => alert(error.message));
+    }
+};
+
 async function changeAdminKey(payload) {
     const data = await api('/api/v1/media/admin/key/rotate', {
         method: 'POST', headers: requestHeaders(), body: JSON.stringify(payload),
@@ -760,6 +896,7 @@ $('copyKey').onclick = async () => {
     await navigator.clipboard.writeText($('newKeyValue').textContent);
     $('copyKey').textContent = '已复制';
 };
+$('dismissKey').onclick = () => $('newKeyResult').classList.add('hidden');
 
 $('uploadFiles').onclick = () => $('fileInput').click();
 $('uploadFolder').onclick = () => $('folderInput').click();

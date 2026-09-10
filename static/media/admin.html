@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿视界 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260910-2">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260910-3">
 </head>
 <body>
     <main class="admin-console">
@@ -23,7 +23,7 @@
                     <button type="submit">确认更换</button>
                 </form>
               </div>
-              <div id="newKeyResult" class="new-key-result hidden" aria-live="polite"><strong>请立即保存新 Admin Key</strong><code id="newKeyValue"></code><button id="copyKey" type="button">复制</button></div>
+              <div id="newKeyResult" class="new-key-result hidden" aria-live="polite"><strong>请立即保存新 Admin Key</strong><code id="newKeyValue"></code><button id="copyKey" type="button">复制</button><button id="dismissKey" type="button">关闭</button></div>
             </div>
         </section>
 
@@ -97,13 +97,38 @@
                     <button id="lyricsSaveLink" class="hidden" type="button">保存关联</button>
                 </div>
                 <div class="lyrics-browser">
-                    <section><label>曲目<input id="lyricsTrackFilter" type="search" placeholder="筛选曲目"></label><div id="lyricsTrackList" class="lyrics-object-list"></div></section>
-                    <section><label>歌词<input id="lyricsFileFilter" type="search" placeholder="筛选歌词"></label><div id="lyricsFileList" class="lyrics-object-list"></div></section>
+                    <section>
+                        <label>曲目<input id="lyricsTrackFilter" type="search" maxlength="100" placeholder="搜索当前目录及其子目录"></label>
+                        <div id="lyricsTrackPath" class="lyrics-pathbar">/data/media/music</div>
+                        <div id="lyricsTrackList" class="lyrics-object-list"></div>
+                    </section>
+                    <section>
+                        <label>歌词<input id="lyricsFileFilter" type="search" maxlength="100" placeholder="搜索当前目录及其子目录"></label>
+                        <div id="lyricsFilePath" class="lyrics-pathbar">/data/media/lyrics</div>
+                        <div id="lyricsFileList" class="lyrics-object-list"></div>
+                    </section>
                 </div>
                 <div class="lyrics-graph-wrap"><svg id="lyricsGraph" class="lyrics-graph" role="img" aria-label="当前选中对象的歌词关联图"></svg></div>
             </div>
         </section>
-        <section class="admin-module construction-module" data-admin-module="planned-two"><button class="module-heading" type="button" aria-expanded="false"><span><strong>待建设模块 B</strong><small>预留扩展空间</small></span><b>＋</b></button><div class="module-content construction"><span>施工中</span></div></section>
+        <section id="networkPanel" class="admin-module network-panel" data-admin-module="network">
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>WebRTC 网络关系</strong><small>最近访问的公网 IP 与 WebRTC IP 聚合关系</small></span><b>＋</b></button>
+            <div class="module-content network-content">
+                <form id="networkFilterForm" class="network-filter-form">
+                    <input id="networkPublicIp" type="text" maxlength="45" autocomplete="off" placeholder="公网 IP（精确查询）">
+                    <input id="networkWebrtcIp" type="text" maxlength="45" autocomplete="off" placeholder="WebRTC IP（精确查询）">
+                    <button type="submit">查询</button>
+                    <button id="networkReset" type="button">最近访问</button>
+                </form>
+                <div id="networkSummary" class="network-summary">尚未加载</div>
+                <div id="networkList" class="network-list"></div>
+                <div class="network-pagination">
+                    <button id="networkPrev" type="button">上一页</button>
+                    <span id="networkPageInfo">第 1 / 1 页</span>
+                    <button id="networkNext" type="button">下一页</button>
+                </div>
+            </div>
+        </section>
         <section class="admin-module construction-module" data-admin-module="planned-three"><button class="module-heading" type="button" aria-expanded="false"><span><strong>待建设模块 C</strong><small>预留扩展空间</small></span><b>＋</b></button><div class="module-content construction"><span>施工中</span></div></section>
 
     <section class="admin-module admin-side" data-admin-module="media">
@@ -124,7 +149,7 @@
             <button id="download" disabled>下载</button>
             <button id="hide" disabled>隐藏</button>
             <button id="delete" disabled>删除</button>
-            <input id="mediaSearch" class="media-search-input" type="search" maxlength="100" autocomplete="off" placeholder="搜索媒体、路径或拼音">
+            <input id="mediaSearch" class="media-search-input" type="search" maxlength="100" autocomplete="off" placeholder="请先进入 music、vido 或 lyrics 后搜索" disabled>
         </div>
 
         <section id="uploadProgress" class="upload-progress hidden" aria-live="polite">
@@ -161,6 +186,6 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260910-2"></script>
+    <script src="/static/js/admin.js?v=20260910-3"></script>
 </body>
 </html>

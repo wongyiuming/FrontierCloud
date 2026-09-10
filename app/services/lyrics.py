@@ -96,27 +96,107 @@ def validate_lyric(relative_path: str) -> tuple[str, Path]:
     return _safe_file(relative_path, "lyrics", LYRIC_EXTS)
 
 
-def _scan_catalog_sync() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    tracks: list[dict[str, Any]] = []
-    if MUSIC_ROOT.is_dir():
-        for path in MUSIC_ROOT.rglob("*"):
-            if path.is_file() and not path.is_symlink() and path.suffix.lower() in AUDIO_EXTS:
-                rel = path.relative_to(MEDIA_ROOT).as_posix()
-                if len(path.relative_to(MEDIA_ROOT).parts) in {3, 4}:
-                    tracks.append({"path": rel, "name": path.stem})
-    lyric_files: list[dict[str, Any]] = []
-    if LYRICS_ROOT.is_dir():
-        for path in LYRICS_ROOT.iterdir():
-            if path.is_file() and not path.is_symlink() and path.suffix.lower() in LYRIC_EXTS:
-                rel = path.relative_to(MEDIA_ROOT).as_posix()
-                lyric_files.append({"path": rel, "name": path.stem})
-    tracks.sort(key=lambda item: (item["name"].casefold(), item["path"].casefold()))
-    lyric_files.sort(key=lambda item: (item["name"].casefold(), item["path"].casefold()))
-    return tracks, lyric_files
+def _catalog_scope(relative_scope: str, kind: str) -> tuple[str, Path]:
+    normalized = str(relative_scope or "").replace("\\", "/").strip().strip("/")
+    parts = tuple(part for part in normalized.split("/") if part not in {"", "."})
+    root_name = "music" if kind == "track" else "lyrics"
+    max_depth = 3 if kind == "track" else 1
+    if (
+        not parts
+        or parts[0] != root_name
+        or len(parts) > max_depth
+        or any(part == ".." or "\x00" in part for part in parts)
+    ):
+        raise ValueError(
+            "禁止在 data/media 执行全局查询，请在 music 或 lyrics 文件树内选择目录"
+        )
+    current = (MEDIA_ROOT / normalized).resolve()
+    if (
+        not current.is_relative_to(MEDIA_ROOT)
+        or not current.exists()
+        or not current.is_dir()
+        or current.is_symlink()
+    ):
+        raise ValueError("查询目录不存在")
+    return current.relative_to(MEDIA_ROOT).as_posix(), current
 
 
-async def catalog() -> dict[str, Any]:
-    tracks, lyric_files = await asyncio.to_thread(_scan_catalog_sync)
+def _scan_catalog_scope_sync(
+    relative_scope: str,
+    current: Path,
+    kind: str,
+    query: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], int, bool]:
+    extensions = AUDIO_EXTS if kind == "track" else LYRIC_EXTS
+    valid_depths = {3, 4} if kind == "track" else {2}
+    directories = [
+        {
+            "name": child.name,
+            "path": child.relative_to(MEDIA_ROOT).as_posix(),
+        }
+        for child in current.iterdir()
+        if (
+            child.is_dir()
+            and not child.is_symlink()
+            and not child.name.startswith(".")
+            and len(child.relative_to(MEDIA_ROOT).parts) <= (3 if kind == "track" else 1)
+        )
+    ]
+    directories.sort(key=lambda item: item["name"].casefold())
+    matches: list[dict[str, Any]] = []
+    total = 0
+    for path in current.rglob("*"):
+        if (
+            not path.is_file()
+            or path.is_symlink()
+            or path.name.startswith(".")
+            or path.suffix.lower() not in extensions
+            or len(path.relative_to(MEDIA_ROOT).parts) not in valid_depths
+        ):
+            continue
+        total += 1
+        relative_path = path.relative_to(MEDIA_ROOT).as_posix()
+        search_text = media_search.build_search_text(path.stem, relative_path)
+        if query:
+            if not media_search.matches_search(search_text, query):
+                continue
+        elif path.parent != current:
+            continue
+        if len(matches) <= media_search.MAX_SEARCH_RESULTS:
+            matches.append({"path": relative_path, "name": path.stem})
+    matches.sort(key=lambda item: (item["name"].casefold(), item["path"].casefold()))
+    truncated = len(matches) > media_search.MAX_SEARCH_RESULTS
+    return matches[:media_search.MAX_SEARCH_RESULTS], directories, total, truncated
+
+
+async def catalog(
+    track_scope: str = "music",
+    lyric_scope: str = "lyrics",
+    track_query: str = "",
+    lyric_query: str = "",
+) -> dict[str, Any]:
+    normalized_track_query = media_search.normalized_query(track_query) if track_query else ""
+    normalized_lyric_query = media_search.normalized_query(lyric_query) if lyric_query else ""
+    track_scope, track_root = _catalog_scope(track_scope, "track")
+    lyric_scope, lyric_root = _catalog_scope(lyric_scope, "lyric")
+    track_scan, lyric_scan = await asyncio.gather(
+        asyncio.to_thread(
+            _scan_catalog_scope_sync,
+            track_scope,
+            track_root,
+            "track",
+            normalized_track_query,
+        ),
+        asyncio.to_thread(
+            _scan_catalog_scope_sync,
+            lyric_scope,
+            lyric_root,
+            "lyric",
+            normalized_lyric_query,
+        ),
+    )
+    tracks, track_directories, track_total, track_truncated = track_scan
+    lyric_files, lyric_directories, lyric_total, lyric_truncated = lyric_scan
     tracks = await media_objects.bind_items(
         tracks, "audio", path_key="path", id_key="media_id"
     )
@@ -126,17 +206,48 @@ async def catalog() -> dict[str, Any]:
     valid_tracks = {item["path"] for item in tracks}
     valid_lyrics = {item["path"] for item in lyric_files}
     async with engine.connect() as conn:
-        result = await conn.execute(text("""
+        relation_count = await conn.scalar(text("""
+            SELECT COUNT(*)
+            FROM media_lyric_links AS link
+            INNER JOIN media_objects AS media_object ON media_object.media_id=link.media_id
+            INNER JOIN media_objects AS lyric_object ON lyric_object.media_id=link.lyric_id
+            WHERE LEFT(media_object.media_path, CHAR_LENGTH(:track_scope))=:track_scope
+              AND SUBSTRING(media_object.media_path, CHAR_LENGTH(:track_scope) + 1, 1)='/'
+              AND LEFT(lyric_object.media_path, CHAR_LENGTH(:lyric_scope))=:lyric_scope
+              AND SUBSTRING(lyric_object.media_path, CHAR_LENGTH(:lyric_scope) + 1, 1)='/'
+        """), {
+            "track_scope": track_scope,
+            "lyric_scope": lyric_scope,
+        })
+        conditions: list[str] = []
+        parameters: dict[str, str] = {}
+        if valid_tracks:
+            placeholders = []
+            for index, path in enumerate(sorted(valid_tracks)):
+                key = f"track_{index}"
+                placeholders.append(f":{key}")
+                parameters[key] = path
+            conditions.append(f"media_object.media_path IN ({', '.join(placeholders)})")
+        if valid_lyrics:
+            placeholders = []
+            for index, path in enumerate(sorted(valid_lyrics)):
+                key = f"lyric_{index}"
+                placeholders.append(f":{key}")
+                parameters[key] = path
+            conditions.append(f"lyric_object.media_path IN ({', '.join(placeholders)})")
+        relation_rows = []
+        if conditions:
+            result = await conn.execute(text(f"""
             SELECT media_object.media_path, lyric_object.media_path AS lyric_path
             FROM media_lyric_links AS link
             INNER JOIN media_objects AS media_object ON media_object.media_id=link.media_id
             INNER JOIN media_objects AS lyric_object ON lyric_object.media_id=link.lyric_id
-        """))
-        rows = result.mappings().all()
+            WHERE {' OR '.join(conditions)}
+            """), parameters)
+            relation_rows = result.mappings().all()
     relations = [
         {"track": str(row["media_path"]), "lyric": str(row["lyric_path"])}
-        for row in rows
-        if str(row["media_path"]) in valid_tracks and str(row["lyric_path"]) in valid_lyrics
+        for row in relation_rows
     ]
     linked_counts: dict[str, int] = {}
     relation_by_track = {}
@@ -145,12 +256,14 @@ async def catalog() -> dict[str, Any]:
         linked_counts[relation["lyric"]] = linked_counts.get(relation["lyric"], 0) + 1
     for item in tracks:
         item["lyric_path"] = relation_by_track.get(item["path"], "")
-        item["search_text"] = media_search.build_search_text(item["name"], item["path"])
     for item in lyric_files:
         item["linked_count"] = linked_counts.get(item["path"], 0)
-        item["search_text"] = media_search.build_search_text(item["name"], item["path"])
     return {
-        "counts": {"tracks": len(tracks), "lyrics": len(lyric_files), "relations": len(relations)},
+        "scopes": {"track": track_scope, "lyric": lyric_scope},
+        "counts": {"tracks": track_total, "lyrics": lyric_total, "relations": int(relation_count or 0)},
+        "truncated": {"track": track_truncated, "lyric": lyric_truncated},
+        "track_directories": track_directories,
+        "lyric_directories": lyric_directories,
         "tracks": tracks,
         "lyrics": lyric_files,
         "relations": relations,

@@ -368,45 +368,73 @@ class MediaManager:
         return {"path": rel, "items": items}
 
     @staticmethod
-    def _search_catalog_sync(hidden: set[str]) -> list[dict]:
+    def _search_scope(relative_scope: str) -> tuple[str, Path, set[str]]:
+        requested_scope = str(relative_scope or "").replace("\\", "/").strip().strip("/")
+        if requested_scope in {"", "data", "data/media"}:
+            raise ValueError("禁止在 data/media 执行全局搜索，请先进入 music、vido 或 lyrics")
+        try:
+            scope = MediaManager.normalize_relative(relative_scope)
+        except HTTPException as exc:
+            raise ValueError(str(exc.detail)) from exc
+        current = resolve_safe_path(MEDIA_ROOT, scope)
+        parts = current.relative_to(MEDIA_ROOT).parts
+        if (
+            not parts
+            or parts[0] not in MANAGED_ROOTS
+            or (parts[0] == "lyrics" and len(parts) > 1)
+            or (parts[0] != "lyrics" and len(parts) > 3)
+        ):
+            raise ValueError("搜索目录不在受支持的媒体层级内")
+        if not current.exists() or not current.is_dir() or current.is_symlink():
+            raise ValueError("搜索目录不存在")
+        extensions = set(LYRIC_EXTS) if parts[0] == "lyrics" else MEDIA_TYPE_EXTS[parts[0]]
+        return scope, current, extensions
+
+    @staticmethod
+    def _search_catalog_sync(scope: str, current: Path, extensions: set[str], hidden: set[str]) -> list[dict]:
         items: list[dict] = []
-        for root_name, extensions in (*MEDIA_TYPE_EXTS.items(), ("lyrics", set(LYRIC_EXTS))):
-            root = MEDIA_ROOT / root_name
-            if not root.is_dir() or root.is_symlink():
+        root_name = scope.split("/", 1)[0]
+        for path in current.rglob("*"):
+            if not path.is_file() or path.is_symlink() or path.name.startswith("."):
                 continue
-            for path in root.rglob("*"):
-                if not path.is_file() or path.is_symlink() or path.name.startswith("."):
-                    continue
-                parts = path.relative_to(MEDIA_ROOT).parts
-                valid_depth = len(parts) == 2 if root_name == "lyrics" else len(parts) in {3, 4}
-                if not valid_depth or path.suffix.lower() not in extensions:
-                    continue
-                rel_path = path.relative_to(MEDIA_ROOT).as_posix()
-                is_hidden = any(
-                    "/".join(parts[:index]) in hidden
-                    for index in range(1, len(parts) + 1)
-                )
-                items.append({
-                    "name": path.name,
-                    "path": rel_path,
-                    "kind": "file",
-                    "size": path.stat().st_size,
-                    "hidden": is_hidden,
-                    "media": path.suffix.lower() in ALLOWED_EXTS,
-                    "hideable": False,
-                    "search_text": media_search.build_search_text(path.name, rel_path),
-                })
+            parts = path.relative_to(MEDIA_ROOT).parts
+            valid_depth = len(parts) == 2 if root_name == "lyrics" else len(parts) in {3, 4}
+            if not valid_depth or path.suffix.lower() not in extensions:
+                continue
+            rel_path = path.relative_to(MEDIA_ROOT).as_posix()
+            is_hidden = any(
+                "/".join(parts[:index]) in hidden
+                for index in range(1, len(parts) + 1)
+            )
+            items.append({
+                "name": path.name,
+                "path": rel_path,
+                "kind": "file",
+                "size": path.stat().st_size,
+                "hidden": is_hidden,
+                "media": path.suffix.lower() in ALLOWED_EXTS,
+                "hideable": False,
+                "search_text": media_search.build_search_text(path.name, rel_path),
+            })
         items.sort(key=lambda item: (item["name"].casefold(), item["path"].casefold()))
         return items
 
     @staticmethod
-    async def search_tree(query: str) -> dict:
+    async def search_tree(query: str, relative_scope: str) -> dict:
         normalized = media_search.normalized_query(query)
-        generation, catalog = await load_media_catalog("search", "admin:all")
+        scope, current, extensions = MediaManager._search_scope(relative_scope)
+        cache_identity = f"admin:{scope}"
+        generation, catalog = await load_media_catalog("search", cache_identity)
         if catalog is None:
             hidden = await MediaManager.hidden_paths()
-            catalog = await asyncio.to_thread(MediaManager._search_catalog_sync, hidden)
-            await store_media_catalog(generation, "search", "admin:all", catalog)
+            catalog = await asyncio.to_thread(
+                MediaManager._search_catalog_sync,
+                scope,
+                current,
+                extensions,
+                hidden,
+            )
+            await store_media_catalog(generation, "search", cache_identity, catalog)
         matches = [
             {key: value for key, value in item.items() if key != "search_text"}
             for item in catalog
@@ -414,7 +442,7 @@ class MediaManager:
         ]
         truncated = len(matches) > media_search.MAX_SEARCH_RESULTS
         return {
-            "path": "",
+            "path": scope,
             "query": query,
             "items": matches[:media_search.MAX_SEARCH_RESULTS],
             "truncated": truncated,

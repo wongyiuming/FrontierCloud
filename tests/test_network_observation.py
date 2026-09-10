@@ -13,6 +13,54 @@ from app.services import network_observation
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class _Rows:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self.rows
+
+
+class _Connection:
+    def __init__(self, rows=None, total=0):
+        self.executed = []
+        self.rows = rows or []
+        self.total = total
+
+    async def execute(self, statement, params=None):
+        self.executed.append((str(statement), params))
+        return _Rows(self.rows)
+
+    async def scalar(self, statement, params=None):
+        self.executed.append((str(statement), params))
+        return self.total
+
+
+class _Context:
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def __aenter__(self):
+        return self.connection
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class _Engine:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def begin(self):
+        return _Context(self.connection)
+
+    def connect(self):
+        return _Context(self.connection)
+
+
 class NetworkObservationTests(unittest.TestCase):
     def test_addresses_are_canonicalized_deduplicated_and_bounded(self):
         result = network_observation.normalize_observed_addresses([
@@ -67,7 +115,11 @@ class NetworkObservationTests(unittest.TestCase):
             "headers": [(b"x-real-ip", b"203.0.113.5")],
         }
         request = Request(scope)
-        with patch.object(network_observation.redis_client, "set", new=AsyncMock(return_value=True)):
+        connection = _Connection()
+        with (
+            patch.object(network_observation.redis_client, "set", new=AsyncMock(return_value=True)),
+            patch.object(network_observation, "engine", _Engine(connection)),
+        ):
             result = asyncio.run(
                 network_observation.record_observation(request, ["198.51.100.7"], None)
             )
@@ -75,6 +127,36 @@ class NetworkObservationTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "ok")
         self.assertEqual(scope["webrtc_observation"]["addresses"], ["198.51.100.7"])
         self.assertFalse(scope["webrtc_observation"]["matches_verified"])
+        self.assertIn("INSERT INTO webrtc_observation_events", connection.executed[0][0])
+        self.assertEqual(connection.executed[0][1][0]["client_ip"], "203.0.113.5")
+        self.assertEqual(connection.executed[0][1][0]["webrtc_ip"], "198.51.100.7")
+        self.assertIn("INSERT INTO webrtc_observation_summary", connection.executed[1][0])
+
+    def test_summary_can_filter_both_sides_of_the_relationship(self):
+        connection = _Connection(rows=[{
+            "client_ip": "203.0.113.5",
+            "webrtc_ip": "198.51.100.7",
+            "observation_count": 10,
+            "first_seen": "2026-09-01",
+            "last_seen": "2026-09-10",
+            "matching_count": 0,
+            "outcomes": "ok",
+        }], total=1)
+        with patch.object(network_observation, "engine", _Engine(connection)):
+            result = asyncio.run(network_observation.list_observation_summary(
+                public_ip="203.0.113.5",
+                webrtc_ip="198.51.100.7",
+            ))
+
+        self.assertEqual(result["pagination"]["total"], 1)
+        self.assertEqual(result["items"][0]["observation_count"], 10)
+        sql = "\n".join(statement for statement, _params in connection.executed)
+        self.assertIn("client_ip=:public_ip", sql)
+        self.assertIn("webrtc_ip=:webrtc_ip", sql)
+
+    def test_invalid_summary_ip_is_rejected_before_database_access(self):
+        with self.assertRaisesRegex(ValueError, "IP 地址无效"):
+            asyncio.run(network_observation.list_observation_summary(public_ip="invalid"))
 
 
 if __name__ == "__main__":

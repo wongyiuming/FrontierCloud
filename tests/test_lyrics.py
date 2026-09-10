@@ -96,6 +96,35 @@ class LyricUploadTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
+    def test_catalog_scope_rejects_global_media_root(self):
+        for scope, kind in (("", "track"), ("data/media", "track"), ("music", "lyric")):
+            with self.subTest(scope=scope, kind=kind), self.assertRaises(ValueError):
+                lyrics._catalog_scope(scope, kind)
+
+    def test_catalog_scan_browses_direct_children_and_searches_only_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            artist = root / "music" / "黃耀明"
+            nested = artist / "人山人海"
+            outside = root / "music" / "其他"
+            nested.mkdir(parents=True)
+            outside.mkdir(parents=True)
+            (artist / "春光乍洩.mp3").write_bytes(b"ID3")
+            (nested / "暗湧.mp3").write_bytes(b"ID3")
+            (outside / "暗湧.mp3").write_bytes(b"ID3")
+            with patch.object(lyrics, "MEDIA_ROOT", root):
+                items, directories, total, truncated = lyrics._scan_catalog_scope_sync(
+                    "music/黃耀明",
+                    artist,
+                    "track",
+                    lyrics.media_search.normalized_query("anyong"),
+                )
+
+        self.assertEqual([item["path"] for item in items], ["music/黃耀明/人山人海/暗湧.mp3"])
+        self.assertEqual([item["path"] for item in directories], ["music/黃耀明/人山人海"])
+        self.assertEqual(total, 2)
+        self.assertFalse(truncated)
+
     async def test_track_relation_replacement_is_one_database_transaction(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

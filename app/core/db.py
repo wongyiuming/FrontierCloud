@@ -211,6 +211,34 @@ async def init_db() -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
             await _commit_ddl(conn, """
+                CREATE TABLE IF NOT EXISTS webrtc_observation_events (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    client_ip VARCHAR(45) NOT NULL,
+                    webrtc_ip VARCHAR(45) NULL,
+                    outcome VARCHAR(32) NOT NULL,
+                    matches_verified TINYINT(1) NOT NULL,
+                    observed_at DATETIME(6) NOT NULL,
+                    INDEX idx_webrtc_client_time (client_ip, observed_at, id),
+                    INDEX idx_webrtc_observed_time (webrtc_ip, observed_at, id),
+                    INDEX idx_webrtc_recent (observed_at, id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
+            await _commit_ddl(conn, """
+                CREATE TABLE IF NOT EXISTS webrtc_observation_summary (
+                    client_ip VARCHAR(45) NOT NULL,
+                    webrtc_ip_key VARCHAR(45) NOT NULL,
+                    webrtc_ip VARCHAR(45) NULL,
+                    observation_count BIGINT UNSIGNED NOT NULL,
+                    matching_count BIGINT UNSIGNED NOT NULL,
+                    first_seen DATETIME(6) NOT NULL,
+                    last_seen DATETIME(6) NOT NULL,
+                    last_outcome VARCHAR(32) NOT NULL,
+                    PRIMARY KEY (client_ip, webrtc_ip_key),
+                    INDEX idx_webrtc_summary_observed (webrtc_ip, last_seen),
+                    INDEX idx_webrtc_summary_recent (last_seen)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
+            await _commit_ddl(conn, """
                 CREATE TABLE IF NOT EXISTS ip_security_audit_log (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
                     ip_address VARCHAR(45) NOT NULL,
