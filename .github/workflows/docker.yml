@@ -144,10 +144,6 @@ jobs:
           docker compose exec -T redis redis-cli GET security:auto-ban:203.0.113.77 | grep '203.0.113.77'
           curl -kfsS -b /tmp/admin-cookies.txt \
             https://ci.frontiercloud.local/api/v1/media/admin/security/blocks | grep '203.0.113.77'
-          curl -kfsSG -b /tmp/admin-cookies.txt \
-            --data-urlencode 'public_ip=203.0.113.77' \
-            https://ci.frontiercloud.local/api/v1/media/admin/network/observations \
-            | grep -E '"client_ip":"203\.0\.113\.77".*"webrtc_ip":null.*"invalid_request_count":6'
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -H 'Content-Type: application/json' -d '{"ip":"203.0.113.77"}' \
             https://ci.frontiercloud.local/api/v1/media/admin/security/unban | grep '"status":"ok"'

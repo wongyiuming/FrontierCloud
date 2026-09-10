@@ -128,7 +128,6 @@ FrontierCloud only exposes standard interfaces that an external system can consu
 - `/health/live` for process liveness.
 - `/health/ready` and `/health` for MySQL, Redis, and application readiness.
 - `/metrics` for Prometheus-compatible metrics; it requires the initialization-generated Bearer token from `/run/frontiercloud-secrets/metrics_token`.
-- The Admin WebRTC relation view aggregates successful browser probes together with public IPs permanently recorded by the security module for invalid API access. A security-only row deliberately shows no WebRTC IP because a request rejected before page execution cannot supply a browser ICE candidate.
 - stdout/stderr structured logs in JSON or text, with timestamp, level, component, request ID, trace ID, instance identity, and safe request context.
 
 The metrics token is static for the lifetime of the `runtime_secrets` volume: ordinary restarts and deployments neither rotate nor reprint it. A newly added token on an upgrade is announced without reprinting older Admin or database secrets. Deleting the volume destroys the token together with the other generated secrets and the next initialization creates a new one, so external collectors must then be updated.
