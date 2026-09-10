@@ -132,7 +132,7 @@ jobs:
           curl -kfsSG --data-urlencode 'track=music/ci-folder/one.wav' \
             https://ci.frontiercloud.local/api/v1/media/lyrics/content | grep '测试歌词第二行'
           docker compose exec -T redis redis-cli --scan \
-            --pattern 'media:catalog:v2:*:tracks:*' | grep 'media:catalog:v2:'
+            --pattern 'media:catalog:v2:*:tracks-v2:*' | grep 'media:catalog:v2:'
           curl -kfsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -H 'Content-Type: application/json' -d '{"mode":"random"}' \
             https://ci.frontiercloud.local/api/v1/media/admin/key/rotate | grep '"admin_key"'
