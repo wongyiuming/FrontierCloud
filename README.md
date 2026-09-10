@@ -55,6 +55,8 @@ Open the media home page, select the privilege-elevation control (`id="elevate"`
 - Expandable modules with one module open at a time, without changing URL.
 - IP state summaries, numeric IP ordering, manual release/permanent bans, and permanent allowlist management; the existing layout is retained.
 
+The public home, Admin media browser, and Lyrics relation browser all support the same bounded search behavior. Simplified Chinese, Traditional Chinese, and full pinyin share one normalized index, so `暗涌`, `暗湧`, and `anyong` can locate the same object. Results include the media path for disambiguation. This is substring matching over precomputed aliases, not an unbounded edit-distance algorithm; a query returns at most 200 results.
+
 The automatic security lifecycle is fixed: the first threshold violation blocks an IP for 24 hours, and the second violation permanently blacklists it. This timing is not configurable. An administrator may still explicitly release or allowlist an address in Admin WebUI.
 
 ### Lyrics
@@ -67,7 +69,7 @@ For an associated song, the audio player uses the full area above the heartbeat 
 
 ### Operator media tools
 
-The helpers under `scripts/auto_download/` are operator-owned tools, not application packages. They are excluded from the business image and never run in the Web lifecycle or CD. Install the workstation-only dependencies with `python -m pip install -e ".[tools]"`. Every automatic download filename and directory component is forcibly converted from Traditional to Simplified Chinese before portable-character cleaning and collision allocation; missing OpenCC is a hard failure rather than a silent fallback.
+The helpers under `scripts/auto_download/` are operator-owned tools, not application packages. They are excluded from the business image and never run in the Web lifecycle or CD. Install the workstation-only download dependency with `python -m pip install -e ".[tools]"`. Every automatic download filename and directory component is forcibly converted from Traditional to Simplified Chinese before portable-character cleaning and collision allocation; missing OpenCC is a hard failure rather than a silent fallback. These scripts do not own, lock, or govern files already inside the application's media library.
 
 Each IP is one object across the security page, including the allowlist. Filtering and pagination operate on current objects, not historical events. The IP sort control replaces the old time range: IPv4 is compared by its four numeric octets (`10.199.254.235 < 13.11.1.1`); IPv6 is compared by its 128-bit value, after IPv4 in ascending order. Allowlisted objects appear only in the allowlist section of the same paginated result. The statistics count all current objects, independently of the page/filter.
 
@@ -93,9 +95,13 @@ Allowlisting, manual release and expiration remove the edge rule. Updates normal
 
 Classified violations and state changes are durable MySQL audit records. Requests already rejected at the edge stay in Nginx stdout logs (`security_blocked=1`, `upstream_addr="-"`), not per-request MySQL writes: otherwise a blocked scanner would still cause backend/database load. Expiration is determined by each ban's stored `expires_at`; it does not require a page visit or a synthetic audit row. Investigation combines the database lifecycle with edge access logs when individual rejected requests are needed.
 
-## Audio playback caching
+## Media identity and playback caching
 
-Audio playback preloads the next item from the same page-local queue used by the Next control. Preloading starts after five seconds (earlier for short tracks), retries transient failures, and uses a completed Blob directly when switching. Score changes update displayed values; ordering is recalculated when opening a player page, not mid-queue. At most the current cached track and one upcoming track are retained, with a 128 MiB limit per speculative download. Oversized audio and videos use normal streaming. Offline switching requires the next download to have completed; early manual skips or interrupted downloads still require network access. The player does not automatically mute after inactivity.
+Playback scores, preferences, playback events, and lyric relations bind to the stable object ID in MySQL `media_objects`; a filesystem path is only the object's current locator. New objects receive random 256-bit IDs. During the first upgrade, an object with existing business data adopts its former path-derived ID so scores and lyric relations are preserved, after which the registry is authoritative. Visibility remains path-based because it is intentionally a directory/location policy.
+
+There is currently no file-move API or Admin move control. Do not move or rename managed files directly on the host: an out-of-band filesystem change cannot declare which old object the new path represents. A future move operation must update `media_objects.media_path` transactionally while retaining `media_id`; operator download manifests are not part of that lifecycle.
+
+Audio playback preloads the next item from the same page-local queue used by automatic, keyboard, media-key, and gesture switching. The legacy visible `up_music`/`next_music` buttons are removed; their toolbar space now searches the current playlist without changing its playback order. Preloading starts after five seconds (earlier for short tracks), retries transient failures, and uses a completed Blob directly when switching. Score changes update displayed values; ordering is recalculated when opening a player page, not mid-queue. At most the current cached track and one upcoming track are retained, with a 128 MiB limit per speculative download. Oversized audio and videos use normal streaming. Offline switching requires the next download to have completed; early manual skips or interrupted downloads still require network access. The player does not automatically mute after inactivity.
 
 Public media requests are path-validated and visibility-authorized by Web, then transferred by Nginx through an internal-only media location. Nginx `sendfile` and byte-range handling keep large audio/video bodies out of the Python worker while preserving seek and preload behavior. General public and API requests accept at most 64 KiB bodies; only authenticated Admin upload routes permit large request bodies, up to the application upload limit.
 
@@ -123,6 +129,7 @@ The project does not deploy or manage Prometheus, Grafana, Elasticsearch, Logsta
 ## Data lifecycle
 
 - Media: host `./data` directory.
+- Stable media and lyric object identities: MySQL `media_objects`.
 - Lyrics and their files: host `./data/media/lyrics`; track relationships: MySQL `media_lyric_links`.
 - MySQL: Docker `mysql_data` volume.
 - Redis: Docker `redis_data` volume.
