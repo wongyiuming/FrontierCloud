@@ -1,5 +1,7 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -10,11 +12,14 @@ import main
 
 class ObservabilityTests(unittest.IsolatedAsyncioTestCase):
     async def test_metrics_are_consumer_neutral_and_require_bearer_token(self):
-        with patch.object(main.settings, "METRICS_TOKEN", "test-metrics-secret"):
-            with self.assertRaises(HTTPException) as missing:
-                await main.metrics(None)
-            self.assertEqual(missing.exception.status_code, 404)
-            response = await main.metrics("Bearer test-metrics-secret")
+        with tempfile.TemporaryDirectory() as directory:
+            token_file = Path(directory) / "metrics_token"
+            token_file.write_text("test-metrics-secret\n", encoding="utf-8")
+            with patch("app.core.config.METRICS_TOKEN_FILE", token_file):
+                with self.assertRaises(HTTPException) as missing:
+                    await main.metrics(None)
+                self.assertEqual(missing.exception.status_code, 404)
+                response = await main.metrics("Bearer test-metrics-secret")
         body = bytes(response.body).decode("utf-8")
         self.assertIn("frontiercloud_http_requests_total", body)
         self.assertIn("frontiercloud_dependency_ready", body)

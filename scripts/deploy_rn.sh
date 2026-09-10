@@ -9,6 +9,12 @@ if [ "$(git branch --show-current)" != "dev" ]; then
     exit 1
 fi
 
+# Remove the retired public setting without printing its secret value.
+if [ -f .env ] && grep -q '^[[:space:]]*METRICS_TOKEN[[:space:]]*=' .env; then
+    sed -i '/^[[:space:]]*METRICS_TOKEN[[:space:]]*=/d' .env
+    echo "Removed obsolete METRICS_TOKEN from RN .env"
+fi
+
 python3 scripts/validate_env_contract.py
 docker compose config --quiet
 docker compose up -d --build --remove-orphans --wait --wait-timeout 240

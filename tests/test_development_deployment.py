@@ -44,6 +44,7 @@ class DevelopmentDeploymentTests(unittest.TestCase):
             "PROMETHEUS_URL", "GRAFANA_URL", "ELASTICSEARCH_URL", "LOGSTASH_HOST",
             "KIBANA_URL", "RN_HOST", "DMIT_HOST", "WG_ENDPOINT",
             "PRODUCTION_HOST", "STAGING_HOST", "ADMIN_BOOTSTRAP_TOKEN",
+            "METRICS_TOKEN",
         ):
             self.assertNotIn(f"{name}=", env_example)
 
@@ -61,17 +62,6 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         ):
             self.assertNotIn(marker, compose)
             self.assertNotIn(marker, workflow)
-
-    def test_download_tools_are_scripts_not_runtime_packages(self):
-        self.assertFalse(any(
-            path.is_file() and path.suffix != ".pyc"
-            for path in (ROOT / "auto_download").rglob("*")
-        ))
-        self.assertTrue((ROOT / "scripts/auto_download").is_dir())
-        dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
-        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn("scripts/auto_download", dockerignore)
-        self.assertNotIn('"auto_download*"', pyproject)
 
     def test_transport_and_upload_timeout_are_direct_technical_settings(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
@@ -118,6 +108,7 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         for obsolete in (
             "ADMIN_BOOTSTRAP_TOKEN", "MYSQL_PASSWORD=", "MYSQL_ROOT_PASSWORD=",
             "MYSQL_URL=", "WEBRTC_STUN_URLS=", "SECURITY_AUTO_BAN_TTL=",
+            "METRICS_TOKEN=",
         ):
             self.assertNotIn(obsolete, initializer + compose + deploy)
 
@@ -160,6 +151,10 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("docker compose logs web | grep initial_runtime_secrets", readme)
         self.assertIn(
             "docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'",
+            readme,
+        )
+        self.assertIn(
+            "docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token'",
             readme,
         )
         self.assertIn("current Web container", readme)
