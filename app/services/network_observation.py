@@ -158,13 +158,62 @@ async def list_observation_summary(
         clauses.append("webrtc_ip=:webrtc_ip")
         parameters["webrtc_ip"] = webrtc_ip
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    combined = """
+        WITH invalid_access AS (
+            SELECT
+                ip_address AS client_ip,
+                COUNT(*) AS invalid_request_count,
+                MIN(created_at) AS invalid_first_seen,
+                MAX(created_at) AS invalid_last_seen
+            FROM ip_security_audit_log
+            WHERE action='invalid_api'
+            GROUP BY ip_address
+        ), observations AS (
+            SELECT
+                summary.client_ip,
+                summary.webrtc_ip,
+                summary.observation_count,
+                CASE
+                    WHEN invalid.client_ip IS NULL THEN summary.first_seen
+                    ELSE LEAST(summary.first_seen, invalid.invalid_first_seen)
+                END AS first_seen,
+                CASE
+                    WHEN invalid.client_ip IS NULL THEN summary.last_seen
+                    ELSE GREATEST(summary.last_seen, invalid.invalid_last_seen)
+                END AS last_seen,
+                summary.matching_count,
+                summary.last_outcome AS outcomes,
+                COALESCE(invalid.invalid_request_count, 0) AS invalid_request_count
+            FROM webrtc_observation_summary summary
+            LEFT JOIN invalid_access invalid ON invalid.client_ip=summary.client_ip
+
+            UNION ALL
+
+            SELECT
+                invalid.client_ip,
+                NULL AS webrtc_ip,
+                0 AS observation_count,
+                invalid.invalid_first_seen AS first_seen,
+                invalid.invalid_last_seen AS last_seen,
+                0 AS matching_count,
+                'invalid_api' AS outcomes,
+                invalid.invalid_request_count
+            FROM invalid_access invalid
+            WHERE NOT EXISTS (
+                SELECT 1 FROM webrtc_observation_summary summary
+                WHERE summary.client_ip=invalid.client_ip
+            )
+        )
+    """
     async with engine.connect() as conn:
         total = await conn.scalar(text(f"""
+            {combined}
             SELECT COUNT(*)
-            FROM webrtc_observation_summary
+            FROM observations
             {where}
         """), parameters)
         result = await conn.execute(text(f"""
+            {combined}
             SELECT
                 client_ip,
                 webrtc_ip,
@@ -172,8 +221,9 @@ async def list_observation_summary(
                 first_seen,
                 last_seen,
                 matching_count,
-                last_outcome AS outcomes
-            FROM webrtc_observation_summary
+                outcomes,
+                invalid_request_count
+            FROM observations
             {where}
             ORDER BY last_seen DESC, client_ip ASC, webrtc_ip ASC
             LIMIT :limit OFFSET :offset
@@ -187,7 +237,7 @@ async def list_observation_summary(
         for field in ("first_seen", "last_seen"):
             if isinstance(item.get(field), datetime):
                 item[field] = item[field].replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
-        for field in ("observation_count", "matching_count"):
+        for field in ("observation_count", "matching_count", "invalid_request_count"):
             item[field] = int(item.get(field) or 0)
         items.append(item)
     return {

@@ -141,6 +141,7 @@ class NetworkObservationTests(unittest.TestCase):
             "last_seen": "2026-09-10",
             "matching_count": 0,
             "outcomes": "ok",
+            "invalid_request_count": 3,
         }], total=1)
         with patch.object(network_observation, "engine", _Engine(connection)):
             result = asyncio.run(network_observation.list_observation_summary(
@@ -150,9 +151,23 @@ class NetworkObservationTests(unittest.TestCase):
 
         self.assertEqual(result["pagination"]["total"], 1)
         self.assertEqual(result["items"][0]["observation_count"], 10)
+        self.assertEqual(result["items"][0]["invalid_request_count"], 3)
         sql = "\n".join(statement for statement, _params in connection.executed)
         self.assertIn("client_ip=:public_ip", sql)
         self.assertIn("webrtc_ip=:webrtc_ip", sql)
+        self.assertIn("FROM ip_security_audit_log", sql)
+        self.assertIn("WHERE action='invalid_api'", sql)
+        self.assertIn("UNION ALL", sql)
+
+    def test_admin_view_exposes_security_only_public_ips_without_inventing_webrtc_ips(self):
+        source = (ROOT / "app" / "services" / "network_observation.py").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "admin.js").read_text(encoding="utf-8")
+
+        self.assertIn("NULL AS webrtc_ip", source)
+        self.assertIn("NOT EXISTS", source)
+        self.assertIn("invalid_request_count", source)
+        self.assertIn("仅非法访问", script)
+        self.assertIn("非法 API", script)
 
     def test_invalid_summary_ip_is_rejected_before_database_access(self):
         with self.assertRaisesRegex(ValueError, "IP 地址无效"):

@@ -162,7 +162,7 @@ assert(adminHtml.includes('id="mediaSearch"'));
 assert(adminHtml.includes('id="securityPanel"'));
 assert(adminHtml.includes('id="banList"'));
 assert(adminHtml.includes('/static/css/admin.css?v=20260910-4'));
-assert(adminHtml.includes('/static/js/admin.js?v=20260910-4'));
+assert(adminHtml.includes('/static/js/admin.js?v=20260910-5'));
 assert(adminHtml.includes('id="randomKey"'));
 assert(adminHtml.includes('id="permanentBanForm"'));
 assert(adminHtml.match(/class="module-heading"/g).length === 6);

@@ -818,11 +818,14 @@ function renderNetworkObservations(data) {
         const pair = document.createElement('div');
         pair.className = 'network-pair';
         const observed = item.webrtc_ip || '未获取';
+        const probeCount = Number(item.observation_count || 0);
+        const invalidCount = Number(item.invalid_request_count || 0);
+        const accessState = invalidCount > 0 ? `非法 API ${invalidCount} 次` : '未发现非法 API';
         pair.innerHTML = `<strong>${escapeHtml(item.client_ip)}</strong> → ${escapeHtml(observed)}`
-            + `<div class="network-meta">首次 ${escapeHtml(item.first_seen || '-')} · 最近 ${escapeHtml(item.last_seen || '-')} · 结果 ${escapeHtml(item.outcomes || '-')}</div>`;
+            + `<div class="network-meta">首次 ${escapeHtml(item.first_seen || '-')} · 最近 ${escapeHtml(item.last_seen || '-')} · WebRTC ${escapeHtml(item.outcomes || '-')} · ${escapeHtml(accessState)}</div>`;
         const count = document.createElement('div');
         count.className = 'network-count';
-        count.textContent = `${item.observation_count || 0} 次`;
+        count.textContent = probeCount ? `${probeCount} 次探测` : '仅非法访问';
         row.append(pair, count);
         list.appendChild(row);
     }
@@ -831,7 +834,7 @@ function renderNetworkObservations(data) {
     }
     networkPage = data.pagination?.page || 1;
     networkPages = data.pagination?.pages || 1;
-    $('networkSummary').textContent = `聚合关系 ${data.pagination?.total || 0} 组；每个“公网 IP → WebRTC IP”只显示一行`;
+    $('networkSummary').textContent = `聚合关系 ${data.pagination?.total || 0} 组；含合法页面探测及安全模块记录的非法 API 访问`;
     $('networkPageInfo').textContent = `第 ${networkPage} / ${networkPages} 页`;
     $('networkPrev').disabled = networkPage <= 1;
     $('networkNext').disabled = networkPage >= networkPages;
