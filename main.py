@@ -170,7 +170,7 @@ app.include_router(api_v1_router, prefix="/api/v1")
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics(authorization: str | None = Header(None)):
-    configured = settings.METRICS_TOKEN
+    configured = settings.metrics_token
     prefix = "Bearer "
     supplied = authorization[len(prefix):] if authorization and authorization.startswith(prefix) else ""
     if not configured or not supplied or not secrets.compare_digest(configured, supplied):

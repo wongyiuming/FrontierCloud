@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.services import admin_service
 from app.services import ip_security
 from app.services import lyrics
+from app.services import network_observation
 from app.services.media_catalog_cache import invalidate_media_catalog
 from app.services.media_manager import MediaManager
 
@@ -148,6 +149,19 @@ async def admin_tree(
     return await MediaManager.list_tree(path)
 
 
+@router.get("/tree/search")
+async def admin_tree_search(
+    request: Request,
+    q: str = Query(..., min_length=1, max_length=100),
+    path: str = Query("", max_length=1024),
+    session_hash: str = Depends(require_session),
+):
+    try:
+        return await MediaManager.search_tree(q, path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 # ============================================================
 # 5. Single-file upload; browsers submit multi-file and folder jobs one file
 # at a time so progress remains accurate.
@@ -210,6 +224,7 @@ async def upload_lyric(
         await admin_service.audit(
             session_hash, "upload_lyric", 1, source, "success", saved_path, request,
         )
+        await invalidate_media_catalog()
         return {"path": saved_path}
     finally:
         await file.close()
@@ -218,9 +233,17 @@ async def upload_lyric(
 @router.get("/lyrics/catalog")
 async def lyric_catalog(
     request: Request,
+    track_path: str = Query("music", max_length=1024),
+    lyric_path: str = Query("lyrics", max_length=1024),
+    track_q: str = Query("", max_length=100),
+    lyric_q: str = Query("", max_length=100),
     session_hash: str = Depends(require_session),
 ):
-    return JSONResponse(await lyrics.catalog(), headers={"Cache-Control": "private, no-store"})
+    try:
+        result = await lyrics.catalog(track_path, lyric_path, track_q, lyric_q)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
 
 @router.post("/lyrics/relations")
@@ -402,6 +425,29 @@ async def security_whitelist_remove(
         raise HTTPException(status_code=400, detail="IP 地址无效") from exc
     await admin_service.audit(session_hash, "security_whitelist_remove", 1, ip, "success", "", request)
     return {"status": "ok", "ip": ip}
+
+
+@router.get("/network/observations")
+async def network_observations(
+    request: Request,
+    public_ip: str | None = Query(None, max_length=45),
+    webrtc_ip: str | None = Query(None, max_length=45),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=200),
+    session_hash: str = Depends(require_session),
+):
+    if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
+        raise HTTPException(status_code=426, detail="生产环境网络观测视图只允许通过 HTTPS 访问")
+    try:
+        result = await network_observation.list_observation_summary(
+            public_ip=public_ip,
+            webrtc_ip=webrtc_ip,
+            page=page,
+            page_size=page_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
 
 # ============================================================

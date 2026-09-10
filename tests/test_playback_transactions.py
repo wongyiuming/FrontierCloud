@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -72,6 +72,11 @@ class PlaybackTransactionTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch.object(playback, "engine", fake_engine),
                 patch.object(playback, "append_admin_log"),
+                patch.object(
+                    playback.media_objects,
+                    "ensure_object",
+                    new=AsyncMock(return_value="stable-media-id"),
+                ),
             ):
                 result = await playback.record_playback(
                     root,

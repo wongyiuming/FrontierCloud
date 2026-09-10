@@ -11,7 +11,7 @@ docker compose up -d --build --wait
 docker compose logs web
 ```
 
-The first initialization generates three independent strong random values: the Admin Key, the MySQL application password, and the MySQL root password. They live in the Docker `runtime_secrets` volume and are never written to the repository or `.env`. The first successful Web startup prints them once in the structured `initial_runtime_secrets` log entry:
+The first initialization generates four independent strong random values: the Admin Key, the MySQL application password, the MySQL root password, and the metrics Bearer token. They live in the Docker `runtime_secrets` volume and are never written to the repository or `.env`. The first successful Web startup prints them once in the structured `initial_runtime_secrets` log entry:
 
 ```bash
 docker compose logs web | grep initial_runtime_secrets
@@ -28,6 +28,9 @@ docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'
 # Current generated database passwords
 docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/mysql_password'
 docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/mysql_root_password'
+
+# Current metrics Bearer token
+docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token'
 ```
 
 These commands print secrets to the terminal, so run them only in a private administrator session and do not paste their output into tickets or logs.
@@ -43,7 +46,7 @@ SERVER_NAME=media.example.com
 
 The default certificate paths are `./certs/fullchain.pem` and `./certs/privkey.pem`. Enable the corresponding optional entries in `.env.example` to change them. Startup fails when TLS is enabled without a valid `SERVER_NAME`. HTTP mode has no required variables.
 
-The complete formal configuration contract is [`.env.example`](.env.example). Every optional variable remains commented, and omission selects the documented technical default. Database passwords and the Admin Key are initialization-generated runtime secrets, not environment variables. `.env` may contain only variables listed by that contract; CI and RN deployment reject unknown names before Compose starts.
+The complete formal configuration contract is [`.env.example`](.env.example). Every optional variable remains commented, and omission selects the documented technical default. Database passwords, the Admin Key, and the metrics token are initialization-generated runtime secrets, not environment variables. `.env` may contain only variables listed by that contract; CI and RN deployment reject unknown names before Compose starts. Remove the retired `METRICS_TOKEN` entry from existing non-RN `.env` files before upgrading; RN CD removes only that obsolete name automatically without printing its value.
 
 ## Admin WebUI
 
@@ -54,6 +57,13 @@ Open the media home page, select the privilege-elevation control (`id="elevate"`
 - Lyric upload and track-to-lyric relation editing.
 - Expandable modules with one module open at a time, without changing URL.
 - IP state summaries, numeric IP ordering, manual release/permanent bans, and permanent allowlist management; the existing layout is retained.
+- Aggregated public-IP-to-WebRTC-IP history with exact lookup from either side.
+
+The default Admin session idle lifetime is 180 minutes. `ADMIN_SESSION_TTL` can change that technical timeout without changing the long-lived Admin Key lifecycle. When the Admin Key module is opened, its title keeps a separate header row and all key-change controls stay in one compact row below it; a newly generated key is shown in a separate one-time overlay.
+
+Search exists only inside Admin WebUI. Every search is scoped to the currently selected file-tree directory and its descendants. The largest accepted media scope is `data/media/music`, `data/media/vido`, or the separate `data/media/lyrics` tree; `data/media` itself is rejected by the backend, even if a caller bypasses the UI. The media browser disables search at that global root and explains that a supported tree must be entered first. The Lyrics relation browser uses independent track and lyric trees and sends both current scopes to the backend. Public home and player views deliberately have no search UI or search endpoint.
+
+Simplified Chinese, Traditional Chinese, and full pinyin share one normalized index, so a title's Simplified spelling, Traditional spelling, and a query such as `anyong` can locate the same object. Results include the media path for disambiguation. This is substring matching over precomputed aliases, not an unbounded edit-distance algorithm; each scoped result list returns at most 200 files. Admin media, lyric, security, and WebRTC result lists expose persistent scrollbars when their contents exceed the available panel.
 
 The automatic security lifecycle is fixed: the first threshold violation blocks an IP for 24 hours, and the second violation permanently blacklists it. This timing is not configurable. An administrator may still explicitly release or allowlist an address in Admin WebUI.
 
@@ -61,13 +71,9 @@ The automatic security lifecycle is fixed: the first threshold violation blocks 
 
 Static lyrics live in `data/media/lyrics`, alongside `data/media/music` and `data/media/vido`. Upload them from the existing media-management upload menu. Lyrics are reference-only objects: they never appear as standalone items in the public media catalog and do not have a visibility toggle. The only supported format is UTF-8 `.lrc`, with a fixed 2 MiB limit. Standard timestamp tags, multiple timestamps on one line, and `[offset:+/-milliseconds]` are supported; metadata and empty timestamp lines are ignored.
 
-In the Lyrics module, the counters show current track, lyric, and relation totals. Select one track or lyric first and then enter linking mode. The graph displays only that selected object's edges, so a shared lyric does not turn the entire catalog into a spider web. A track has zero or one lyric; a lyric may be reused by any number of tracks. Saving a track relation replaces its earlier lyric. Saving from a lyric replaces the complete set of tracks that reference that lyric. Deleting a track, lyric, or containing directory removes its relationships in the same MySQL transaction as the existing media metadata cleanup.
+In the Lyrics module, browse the independent `music` and `lyrics` trees before searching. The counters describe the selected scopes, and the backend rejects any attempt to replace them with the global `data/media` root. Select one track or lyric first and then enter linking mode. The graph displays only that selected object's edges, so a shared lyric does not turn the entire catalog into a spider web. A track has zero or one lyric; a lyric may be reused by any number of tracks. Saving a track relation replaces its earlier lyric. Saving from a lyric replaces the complete set of tracks that reference that lyric. Deleting a track, lyric, or containing directory removes its relationships in the same MySQL transaction as the existing media metadata cleanup.
 
 For an associated song, the audio player uses the full area above the heartbeat line for a synchronized four-line LRC view: the previous line, current line, and next two lines. Lyrics advance as one continuous track with a gentle 480 ms upward slide instead of replacing all four rows at once; cue detection follows the foreground playback frame clock. Seeking renders the destination window directly so the interface does not animate through skipped lines. The audio playlist is on the right; the video playlist remains on the left. The old album-cover disc is not rendered. Fullscreen Lyrics opens a dedicated static three-column view without exposing a standalone lyric index. A song without a relation hides the inline lyric and keeps the fullscreen control disabled.
-
-### Operator media tools
-
-The helpers under `scripts/auto_download/` are operator-owned tools, not application packages. They are excluded from the business image and never run in the Web lifecycle or CD. Install the workstation-only dependencies with `python -m pip install -e ".[tools]"`. Every automatic download filename and directory component is forcibly converted from Traditional to Simplified Chinese before portable-character cleaning and collision allocation; missing OpenCC is a hard failure rather than a silent fallback.
 
 Each IP is one object across the security page, including the allowlist. Filtering and pagination operate on current objects, not historical events. The IP sort control replaces the old time range: IPv4 is compared by its four numeric octets (`10.199.254.235 < 13.11.1.1`); IPv6 is compared by its 128-bit value, after IPv4 in ascending order. Allowlisted objects appear only in the allowlist section of the same paginated result. The statistics count all current objects, independently of the page/filter.
 
@@ -93,9 +99,13 @@ Allowlisting, manual release and expiration remove the edge rule. Updates normal
 
 Classified violations and state changes are durable MySQL audit records. Requests already rejected at the edge stay in Nginx stdout logs (`security_blocked=1`, `upstream_addr="-"`), not per-request MySQL writes: otherwise a blocked scanner would still cause backend/database load. Expiration is determined by each ban's stored `expires_at`; it does not require a page visit or a synthetic audit row. Investigation combines the database lifecycle with edge access logs when individual rejected requests are needed.
 
-## Audio playback caching
+## Media identity and playback caching
 
-Audio playback preloads the next item from the same page-local queue used by the Next control. Preloading starts after five seconds (earlier for short tracks), retries transient failures, and uses a completed Blob directly when switching. Score changes update displayed values; ordering is recalculated when opening a player page, not mid-queue. At most the current cached track and one upcoming track are retained, with a 128 MiB limit per speculative download. Oversized audio and videos use normal streaming. Offline switching requires the next download to have completed; early manual skips or interrupted downloads still require network access. The player does not automatically mute after inactivity.
+Playback scores, preferences, playback events, and lyric relations bind to the stable object ID in MySQL `media_objects`; a filesystem path is only the object's current locator. New objects receive random 256-bit IDs. During the first upgrade, an object with existing business data adopts its former path-derived ID so scores and lyric relations are preserved, after which the registry is authoritative. Visibility remains path-based because it is intentionally a directory/location policy.
+
+There is currently no file-move API or Admin move control. Do not move or rename managed files directly on the host: an out-of-band filesystem change cannot declare which old object the new path represents. A future move operation must update `media_objects.media_path` transactionally while retaining `media_id`; operator download manifests are not part of that lifecycle.
+
+Audio playback preloads the next item from the same page-local queue used by automatic, keyboard, media-key, and gesture switching. The legacy visible `up_music`/`next_music` buttons are removed and are not replaced in public player views. Preloading starts after five seconds (earlier for short tracks), retries transient failures, and uses a completed Blob directly when switching. Score changes update displayed values; ordering is recalculated when opening a player page, not mid-queue. At most the current cached track and one upcoming track are retained, with a 128 MiB limit per speculative download. Oversized audio and videos use normal streaming. Offline switching requires the next download to have completed; early manual skips or interrupted downloads still require network access. The player does not automatically mute after inactivity.
 
 Public media requests are path-validated and visibility-authorized by Web, then transferred by Nginx through an internal-only media location. Nginx `sendfile` and byte-range handling keep large audio/video bodies out of the Python worker while preserving seek and preload behavior. General public and API requests accept at most 64 KiB bodies; only authenticated Admin upload routes permit large request bodies, up to the application upload limit.
 
@@ -109,20 +119,25 @@ stun:<SERVER_NAME>:<WEBRTC_STUN_PORT>
 
 The first probe starts with the initial page connection and repeats every 30 seconds by default. `WEBRTC_STUN_PORT` changes the port, and `WEBRTC_REPORT_COOLDOWN` changes the probe period. There is no `WEBRTC_STUN_URLS` setting.
 
+Accepted browser reports are permanent MySQL business records. `webrtc_observation_events` retains the detailed timeline. In the same database transaction, `webrtc_observation_summary` increments one row per public-IP/WebRTC-IP pair, including a same-address pair when no proxy changes the visible address and a null observed side when probing fails. The Admin WebRTC module reads only this compact summary, orders relationships by latest observation, and supports exact public-IP and WebRTC-IP filters independently or together. It never groups the unbounded event table during a page request. Records begin accumulating after this schema is deployed; older stdout logs are not retroactively imported.
+
 ## Observability boundary
 
 FrontierCloud only exposes standard interfaces that an external system can consume:
 
 - `/health/live` for process liveness.
 - `/health/ready` and `/health` for MySQL, Redis, and application readiness.
-- `/metrics` for Prometheus-compatible metrics; it is available only after configuring `METRICS_TOKEN` and requires its Bearer token.
+- `/metrics` for Prometheus-compatible metrics; it requires the initialization-generated Bearer token from `/run/frontiercloud-secrets/metrics_token`.
 - stdout/stderr structured logs in JSON or text, with timestamp, level, component, request ID, trace ID, instance identity, and safe request context.
+
+The metrics token is static for the lifetime of the `runtime_secrets` volume: ordinary restarts and deployments neither rotate nor reprint it. A newly added token on an upgrade is announced without reprinting older Admin or database secrets. Deleting the volume destroys the token together with the other generated secrets and the next initialization creates a new one, so external collectors must then be updated.
 
 The project does not deploy or manage Prometheus, Grafana, Elasticsearch, Logstash, Kibana, ELK, dashboards, scrape targets, or alert rules. It has no consumer-specific metrics or log coupling. Health and metrics probes are excluded from Nginx access logs, and Docker bridge peers are not repeated as business client fields.
 
 ## Data lifecycle
 
 - Media: host `./data` directory.
+- Stable media and lyric object identities: MySQL `media_objects`.
 - Lyrics and their files: host `./data/media/lyrics`; track relationships: MySQL `media_lyric_links`.
 - MySQL: Docker `mysql_data` volume.
 - Redis: Docker `redis_data` volume.

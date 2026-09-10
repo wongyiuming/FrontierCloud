@@ -16,10 +16,9 @@ dependencies = [
     "cryptography==50.0.1",
     "prometheus-client==0.26.0",
     "zipstream-ng==1.9.2",
+    "opencc==1.4.2",
+    "pypinyin==0.55.0",
 ]
-
-[project.optional-dependencies]
-tools = ["opencc==1.4.2", "yt-dlp[default]"]
 
 [build-system]
 requires = ["setuptools>=61.0"]

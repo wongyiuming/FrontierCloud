@@ -138,6 +138,18 @@ class SchemaMigrationTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("GENERATED ALWAYS AS", schema)
         self.assertIn("UNIQUE INDEX uq_ip_ban_active_ip", schema)
 
+    async def test_schema_declares_durable_webrtc_observations(self):
+        connection = _MigrationConnection()
+        with patch.object(db, "engine", _MigrationEngine(connection)):
+            await db.init_db()
+
+        schema = "\n".join(sql for sql, _params in connection.executed)
+        self.assertIn("CREATE TABLE IF NOT EXISTS webrtc_observation_events", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS webrtc_observation_summary", schema)
+        self.assertIn("idx_webrtc_client_time", schema)
+        self.assertIn("idx_webrtc_observed_time", schema)
+        self.assertIn("PRIMARY KEY (client_ip, webrtc_ip_key)", schema)
+
     async def test_close_db_disposes_the_connection_pool(self):
         fake_engine = MagicMock()
         fake_engine.dispose = AsyncMock()

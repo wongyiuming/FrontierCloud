@@ -11,6 +11,11 @@ from app.core.config import Settings
 
 
 class SecurityConfigurationTests(unittest.TestCase):
+    def test_admin_session_default_is_three_hours(self):
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings(_env_file=None)
+        self.assertEqual(settings.ADMIN_SESSION_TTL, 10_800)
+
     def test_http_has_zero_required_settings(self):
         with patch.dict(os.environ, {}, clear=True):
             settings = Settings(_env_file=None)

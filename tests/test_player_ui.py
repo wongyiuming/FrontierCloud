@@ -23,6 +23,11 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("const playbackSessionId = {{PLAYBACK_SESSION_ID}}", audio_template)
         self.assertIn("const PLAYER_KIND = 'audio'", audio_template)
         self.assertIn("const PLAYER_KIND = 'video'", video_template)
+        self.assertNotIn('id="playlistSearch"', audio_template + video_template)
+        self.assertNotIn("up_music", audio_template + video_template)
+        self.assertNotIn("next_music", audio_template + video_template)
+        self.assertIn("function playNext()", script)
+        self.assertIn("function playPrev()", script)
 
     def test_audio_and_video_players_use_independent_templates(self):
         api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")
@@ -142,6 +147,10 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn('id="elevate"', template)
         self.assertIn("/api/v1/media/admin/elevate", template)
         self.assertIn("提权", template)
+        self.assertNotIn('id="mediaSearch"', template)
+        self.assertNotIn("/api/v1/media/search", template)
+        api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")
+        self.assertNotIn('@router.get("/search")', api)
 
     def test_android_portrait_layout_stacks_player_above_sidebar(self):
         style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")

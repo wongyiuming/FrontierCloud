@@ -16,6 +16,7 @@ from app.services.media_catalog_cache import load_media_catalog, store_media_cat
 from app.services import playback
 from app.services import network_observation
 from app.services import lyrics
+from app.services import media_objects
 from app.core.config import settings
 
 router = APIRouter()
@@ -232,7 +233,6 @@ def _scan_media_files_by_category_sync(category_subpath, valid_exts, media_type,
         if _is_publicly_hidden(rel, hidden):
             continue
         result.append({
-            "media_id": playback.media_id_for_path(rel),
             "media_path": rel,
             "title": file_path.stem,
             "artist": "前沿视界",
@@ -245,7 +245,7 @@ def _scan_media_files_by_category_sync(category_subpath, valid_exts, media_type,
 
 async def scan_media_files_by_category(category_subpath, valid_exts, media_type):
     identity = f"{media_type}:{category_subpath}"
-    generation, cached = await load_media_catalog("tracks", identity)
+    generation, cached = await load_media_catalog("tracks-v2", identity)
     if cached is not None:
         return cached
     hidden = await _hidden_set()
@@ -256,7 +256,8 @@ async def scan_media_files_by_category(category_subpath, valid_exts, media_type)
         media_type,
         hidden,
     )
-    await store_media_catalog(generation, "tracks", identity, media_list)
+    media_list = await media_objects.bind_items(media_list, media_type)
+    await store_media_catalog(generation, "tracks-v2", identity, media_list)
     return media_list
 
 
@@ -403,7 +404,9 @@ async def _get_player_or_subcategories(
 
 
 @router.get("/music/category", response_class=HTMLResponse)
-async def get_music_player_page(path: str = Query(...)):
+async def get_music_player_page(
+    path: str = Query(...),
+):
     return await _get_player_or_subcategories(
         path,
         "music",
@@ -415,7 +418,9 @@ async def get_music_player_page(path: str = Query(...)):
 
 
 @router.get("/video/category", response_class=HTMLResponse)
-async def get_video_player_page(path: str = Query(...)):
+async def get_video_player_page(
+    path: str = Query(...),
+):
     return await _get_player_or_subcategories(
         path,
         "video",

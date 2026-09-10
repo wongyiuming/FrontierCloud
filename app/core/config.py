@@ -8,6 +8,7 @@ SECRET_DIR = Path("/run/frontiercloud-secrets")
 MYSQL_PASSWORD_FILE = SECRET_DIR / "mysql_password"
 MYSQL_ROOT_PASSWORD_FILE = SECRET_DIR / "mysql_root_password"
 ADMIN_KEY_FILE = SECRET_DIR / "admin_key"
+METRICS_TOKEN_FILE = SECRET_DIR / "metrics_token"
 
 
 def _read_secret(path: Path, fallback: str) -> str:
@@ -24,7 +25,7 @@ class Settings(BaseSettings):
     MYSQL_DATABASE: str = Field("office_automation", validation_alias="MYSQL_DATABASE")
     MYSQL_USER: str = Field("media_admin", validation_alias="MYSQL_USER")
     SERVER_NAME: str = Field("localhost", validation_alias="SERVER_NAME")
-    ADMIN_SESSION_TTL: int = Field(900, ge=1, validation_alias="ADMIN_SESSION_TTL")
+    ADMIN_SESSION_TTL: int = Field(10_800, ge=1, validation_alias="ADMIN_SESSION_TTL")
     ADMIN_MAX_FAILED_ATTEMPTS_PER_IP: int = Field(10, validation_alias="ADMIN_MAX_FAILED_ATTEMPTS_PER_IP")
     ADMIN_FAILED_WINDOW: int = Field(300, validation_alias="ADMIN_FAILED_WINDOW")
     ADMIN_MAX_UPLOAD_FILE_SIZE: int = Field(800 * 1024 * 1024, validation_alias="ADMIN_MAX_UPLOAD_FILE_SIZE")
@@ -38,7 +39,6 @@ class Settings(BaseSettings):
     MEDIA_CATALOG_CACHE_TTL: int = Field(300, validation_alias="MEDIA_CATALOG_CACHE_TTL")
     WEBRTC_STUN_PORT: int = Field(3478, ge=1, le=65535, validation_alias="WEBRTC_STUN_PORT")
     WEBRTC_REPORT_COOLDOWN: int = Field(30, ge=10, le=3600, validation_alias="WEBRTC_REPORT_COOLDOWN")
-    METRICS_TOKEN: str = Field("", validation_alias="METRICS_TOKEN")
     LOG_LEVEL: str = Field("INFO", validation_alias="LOG_LEVEL")
     LOG_FORMAT: str = Field("json", validation_alias="LOG_FORMAT")
     INSTANCE_NAME: str = Field("frontiercloud", validation_alias="INSTANCE_NAME")
@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     @property
     def ADMIN_CSRF_COOKIE_NAME(self) -> str:
         return "__Host-admin-csrf" if self.TLS_ENABLED else "admin_csrf"
+
+    @property
+    def metrics_token(self) -> str:
+        return _read_secret(METRICS_TOKEN_FILE, "")
 
     def webrtc_stun_urls(self) -> list[str]:
         return [f"stun:{self.SERVER_NAME}:{self.WEBRTC_STUN_PORT}"]

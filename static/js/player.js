@@ -698,16 +698,13 @@ function initGestureControl() {
     }
 }
 
-window.addEventListener('DOMContentLoaded', () => {
+function renderPlaylist() {
     const listContainer = document.getElementById('mediaList');
-
-    if (typeof currentMediaList === 'undefined' || currentMediaList.length === 0) {
-        listContainer.innerHTML = '<li style="padding:20px;color:#666;text-align:center;">该分类下暂无媒体数据</li>';
-        return;
-    }
-
-    listContainer.innerHTML = currentMediaList.map((item, index) => `
-        <li class="media-item ${index === 0 ? 'active' : ''}" data-media-id="${escapeHTML(item.media_id)}" onclick="selectMedia(${index})">
+    if (!listContainer) return;
+    const matches = currentMediaList
+        .map((item, index) => ({item, index}));
+    listContainer.innerHTML = matches.map(({item, index}) => `
+        <li class="media-item ${index === currentIndex ? 'active' : ''}" data-index="${index}" data-media-id="${escapeHTML(item.media_id)}" onclick="selectMedia(${index})">
             <img src="${escapeHTML(item.cover)}" alt="cover">
             <div class="media-info">
                 <div class="media-title">${escapeHTML(item.title)}</div>
@@ -734,8 +731,20 @@ window.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+}
 
-    initPlayer(currentMediaList[0], 0);
+window.addEventListener('DOMContentLoaded', () => {
+    const listContainer = document.getElementById('mediaList');
+
+    if (typeof currentMediaList === 'undefined' || currentMediaList.length === 0) {
+        listContainer.innerHTML = '<li style="padding:20px;color:#666;text-align:center;">该分类下暂无媒体数据</li>';
+        return;
+    }
+
+    const initialIndex = 0;
+    currentIndex = initialIndex;
+    renderPlaylist();
+    initPlayer(currentMediaList[initialIndex], initialIndex);
     initGestureControl();
     playbackReporter = setInterval(reportValidPlayback, 1000);
 });
@@ -763,10 +772,9 @@ window.addEventListener('resize', () => {
 });
 
 function selectMedia(index) {
+    const targetElement = document.querySelector(`.media-item[data-index="${index}"]`);
     const items = document.querySelectorAll('.media-item');
     items.forEach(item => item.classList.remove('active'));
-
-    const targetElement = items[index];
     if (targetElement) {
         targetElement.classList.add('active');
         targetElement.scrollIntoView({ block: 'nearest', behavior: 'auto' });

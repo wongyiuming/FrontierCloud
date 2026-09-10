@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from app.services import playback
 
@@ -87,9 +87,9 @@ class PlaybackPolicyTests(unittest.TestCase):
             track = category / "song.mp3"
             track.write_bytes(b"ID3")
 
-            normalized, media_id = playback.validate_media_path(root, "music/song.mp3")
+            normalized, validated = playback.validate_media_path(root, "music/song.mp3")
             self.assertEqual(normalized, "music/song.mp3")
-            self.assertEqual(media_id, playback.media_id_for_path(normalized))
+            self.assertEqual(validated, track.resolve())
             with self.assertRaises(ValueError):
                 playback.validate_media_path(root, "../outside.mp3")
 
@@ -117,7 +117,14 @@ class PlaybackIdempotencyTests(unittest.IsolatedAsyncioTestCase):
         (root / "music").mkdir()
         (root / "music" / "song.mp3").write_bytes(b"ID3")
         connection = _PlaybackConnection(insert_rowcount)
-        with patch.object(playback, "engine", _Engine(connection)):
+        with (
+            patch.object(playback, "engine", _Engine(connection)),
+            patch.object(
+                playback.media_objects,
+                "ensure_object",
+                new=AsyncMock(return_value="stable-media-id"),
+            ),
+        ):
             result = await playback.record_playback(
                 root,
                 "music/song.mp3",

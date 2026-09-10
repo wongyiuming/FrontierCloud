@@ -77,17 +77,19 @@ class MediaCatalogCacheTests(unittest.IsolatedAsyncioTestCase):
     async def test_track_cache_miss_scans_and_populates_redis(self):
         expected = [{"title": "from-filesystem"}]
         store = AsyncMock()
+        bound = [{"title": "from-filesystem", "media_id": "stable-id"}]
         with (
             patch.object(media, "load_media_catalog", new=AsyncMock(return_value=(4, None))),
             patch.object(media, "_hidden_set", new=AsyncMock(return_value=set())),
             patch.object(media.asyncio, "to_thread", new=AsyncMock(return_value=expected)) as to_thread,
+            patch.object(media.media_objects, "bind_items", new=AsyncMock(return_value=bound)),
             patch.object(media, "store_media_catalog", new=store),
         ):
             result = await media.scan_media_files_by_category("test", media.AUDIO_EXTS, "audio")
 
-        self.assertEqual(result, expected)
+        self.assertEqual(result, bound)
         to_thread.assert_awaited_once()
-        store.assert_awaited_once_with(4, "tracks", "audio:test", expected)
+        store.assert_awaited_once_with(4, "tracks-v2", "audio:test", bound)
 
 
 if __name__ == "__main__":

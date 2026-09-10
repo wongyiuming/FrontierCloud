@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.admin_log import append_admin_log
 from app.core.db import engine
+from app.services import media_objects
 from app.services.media_manager import ensure_media_mutations_ready, media_mutation_lock
 
 
@@ -30,11 +31,6 @@ def normalize_session_id(value: str | None) -> str:
         return str(uuid.UUID(value))
     except (ValueError, AttributeError) as exc:
         raise ValueError("Invalid playback session") from exc
-
-
-def media_id_for_path(relative_path: str) -> str:
-    normalized = str(relative_path).replace("\\", "/").lstrip("/")
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def valid_playback_threshold(duration: float) -> float:
@@ -85,12 +81,12 @@ async def attach_stats_and_sort(items: Iterable[dict[str, Any]], session_id: str
     return sort_media(enriched, session_id)
 
 
-def validate_media_path(media_root: Path, relative_path: str) -> tuple[str, str]:
+def validate_media_path(media_root: Path, relative_path: str) -> tuple[str, Path]:
     normalized = str(relative_path or "").replace("\\", "/").lstrip("/")
     target = (media_root / normalized).resolve()
     if not normalized or not target.is_relative_to(media_root.resolve()) or target.is_symlink() or not target.is_file():
         raise ValueError("Invalid media path")
-    return normalized, media_id_for_path(normalized)
+    return normalized, target
 
 
 async def _cleanup_expired_events(now: datetime) -> None:
@@ -122,8 +118,10 @@ async def record_playback(
     await _cleanup_expired_events(now)
     async with media_mutation_lock:
         ensure_media_mutations_ready()
-        normalized_path, media_id = validate_media_path(media_root, relative_path)
+        normalized_path, validated_path = validate_media_path(media_root, relative_path)
+        object_kind = "video" if validated_path.suffix.lower() in {".mp4", ".webm", ".mkv"} else "audio"
         async with engine.begin() as conn:
+            media_id = await media_objects.ensure_object(conn, normalized_path, object_kind)
             await conn.execute(
                 text("""
                     DELETE FROM media_playback_events
@@ -180,8 +178,10 @@ async def change_preference(media_root: Path, relative_path: str, delta: int) ->
     now = _utcnow()
     async with media_mutation_lock:
         ensure_media_mutations_ready()
-        normalized_path, media_id = validate_media_path(media_root, relative_path)
+        normalized_path, validated_path = validate_media_path(media_root, relative_path)
+        object_kind = "video" if validated_path.suffix.lower() in {".mp4", ".webm", ".mkv"} else "audio"
         async with engine.begin() as conn:
+            media_id = await media_objects.ensure_object(conn, normalized_path, object_kind)
             await conn.execute(
                 text("""
                     INSERT INTO media_playback_stats
