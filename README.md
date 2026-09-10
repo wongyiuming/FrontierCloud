@@ -11,7 +11,7 @@ docker compose up -d --build --wait
 docker compose logs web
 ```
 
-The first initialization generates three independent strong random values: the Admin Key, the MySQL application password, and the MySQL root password. They live in the Docker `runtime_secrets` volume and are never written to the repository or `.env`. The first successful Web startup prints them once in the structured `initial_runtime_secrets` log entry:
+The first initialization generates four independent strong random values: the Admin Key, the MySQL application password, the MySQL root password, and the metrics Bearer token. They live in the Docker `runtime_secrets` volume and are never written to the repository or `.env`. The first successful Web startup prints them once in the structured `initial_runtime_secrets` log entry:
 
 ```bash
 docker compose logs web | grep initial_runtime_secrets
@@ -28,6 +28,9 @@ docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'
 # Current generated database passwords
 docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/mysql_password'
 docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/mysql_root_password'
+
+# Current metrics Bearer token
+docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token'
 ```
 
 These commands print secrets to the terminal, so run them only in a private administrator session and do not paste their output into tickets or logs.
@@ -43,7 +46,7 @@ SERVER_NAME=media.example.com
 
 The default certificate paths are `./certs/fullchain.pem` and `./certs/privkey.pem`. Enable the corresponding optional entries in `.env.example` to change them. Startup fails when TLS is enabled without a valid `SERVER_NAME`. HTTP mode has no required variables.
 
-The complete formal configuration contract is [`.env.example`](.env.example). Every optional variable remains commented, and omission selects the documented technical default. Database passwords and the Admin Key are initialization-generated runtime secrets, not environment variables. `.env` may contain only variables listed by that contract; CI and RN deployment reject unknown names before Compose starts.
+The complete formal configuration contract is [`.env.example`](.env.example). Every optional variable remains commented, and omission selects the documented technical default. Database passwords, the Admin Key, and the metrics token are initialization-generated runtime secrets, not environment variables. `.env` may contain only variables listed by that contract; CI and RN deployment reject unknown names before Compose starts. Remove the retired `METRICS_TOKEN` entry from existing non-RN `.env` files before upgrading; RN CD removes only that obsolete name automatically without printing its value.
 
 ## Admin WebUI
 
@@ -55,7 +58,7 @@ Open the media home page, select the privilege-elevation control (`id="elevate"`
 - Expandable modules with one module open at a time, without changing URL.
 - IP state summaries, numeric IP ordering, manual release/permanent bans, and permanent allowlist management; the existing layout is retained.
 
-The public home, Admin media browser, and Lyrics relation browser all support the same bounded search behavior. Simplified Chinese, Traditional Chinese, and full pinyin share one normalized index, so a title's Simplified spelling, Traditional spelling, and a query such as `anyong` can locate the same object. Results include the media path for disambiguation. This is substring matching over precomputed aliases, not an unbounded edit-distance algorithm; a query returns at most 200 results.
+Search exists only inside Admin WebUI: the Admin media browser and Lyrics relation browser share the same bounded behavior. Public home and player views deliberately have no search UI or search endpoint. Simplified Chinese, Traditional Chinese, and full pinyin share one normalized index, so a title's Simplified spelling, Traditional spelling, and a query such as `anyong` can locate the same object. Results include the media path for disambiguation. This is substring matching over precomputed aliases, not an unbounded edit-distance algorithm; an Admin media query returns at most 200 results.
 
 The automatic security lifecycle is fixed: the first threshold violation blocks an IP for 24 hours, and the second violation permanently blacklists it. This timing is not configurable. An administrator may still explicitly release or allowlist an address in Admin WebUI.
 
@@ -66,10 +69,6 @@ Static lyrics live in `data/media/lyrics`, alongside `data/media/music` and `dat
 In the Lyrics module, the counters show current track, lyric, and relation totals. Select one track or lyric first and then enter linking mode. The graph displays only that selected object's edges, so a shared lyric does not turn the entire catalog into a spider web. A track has zero or one lyric; a lyric may be reused by any number of tracks. Saving a track relation replaces its earlier lyric. Saving from a lyric replaces the complete set of tracks that reference that lyric. Deleting a track, lyric, or containing directory removes its relationships in the same MySQL transaction as the existing media metadata cleanup.
 
 For an associated song, the audio player uses the full area above the heartbeat line for a synchronized four-line LRC view: the previous line, current line, and next two lines. Lyrics advance as one continuous track with a gentle 480 ms upward slide instead of replacing all four rows at once; cue detection follows the foreground playback frame clock. Seeking renders the destination window directly so the interface does not animate through skipped lines. The audio playlist is on the right; the video playlist remains on the left. The old album-cover disc is not rendered. Fullscreen Lyrics opens a dedicated static three-column view without exposing a standalone lyric index. A song without a relation hides the inline lyric and keeps the fullscreen control disabled.
-
-### Operator media tools
-
-The helpers under `scripts/auto_download/` are operator-owned tools, not application packages. They are excluded from the business image and never run in the Web lifecycle or CD. Install the workstation-only download dependency with `python -m pip install -e ".[tools]"`. Every automatic download filename and directory component is forcibly converted from Traditional to Simplified Chinese before portable-character cleaning and collision allocation; missing OpenCC is a hard failure rather than a silent fallback. These scripts do not own, lock, or govern files already inside the application's media library.
 
 Each IP is one object across the security page, including the allowlist. Filtering and pagination operate on current objects, not historical events. The IP sort control replaces the old time range: IPv4 is compared by its four numeric octets (`10.199.254.235 < 13.11.1.1`); IPv6 is compared by its 128-bit value, after IPv4 in ascending order. Allowlisted objects appear only in the allowlist section of the same paginated result. The statistics count all current objects, independently of the page/filter.
 
@@ -101,7 +100,7 @@ Playback scores, preferences, playback events, and lyric relations bind to the s
 
 There is currently no file-move API or Admin move control. Do not move or rename managed files directly on the host: an out-of-band filesystem change cannot declare which old object the new path represents. A future move operation must update `media_objects.media_path` transactionally while retaining `media_id`; operator download manifests are not part of that lifecycle.
 
-Audio playback preloads the next item from the same page-local queue used by automatic, keyboard, media-key, and gesture switching. The legacy visible `up_music`/`next_music` buttons are removed; their toolbar space now searches the current playlist without changing its playback order. Preloading starts after five seconds (earlier for short tracks), retries transient failures, and uses a completed Blob directly when switching. Score changes update displayed values; ordering is recalculated when opening a player page, not mid-queue. At most the current cached track and one upcoming track are retained, with a 128 MiB limit per speculative download. Oversized audio and videos use normal streaming. Offline switching requires the next download to have completed; early manual skips or interrupted downloads still require network access. The player does not automatically mute after inactivity.
+Audio playback preloads the next item from the same page-local queue used by automatic, keyboard, media-key, and gesture switching. The legacy visible `up_music`/`next_music` buttons are removed and are not replaced in public player views. Preloading starts after five seconds (earlier for short tracks), retries transient failures, and uses a completed Blob directly when switching. Score changes update displayed values; ordering is recalculated when opening a player page, not mid-queue. At most the current cached track and one upcoming track are retained, with a 128 MiB limit per speculative download. Oversized audio and videos use normal streaming. Offline switching requires the next download to have completed; early manual skips or interrupted downloads still require network access. The player does not automatically mute after inactivity.
 
 Public media requests are path-validated and visibility-authorized by Web, then transferred by Nginx through an internal-only media location. Nginx `sendfile` and byte-range handling keep large audio/video bodies out of the Python worker while preserving seek and preload behavior. General public and API requests accept at most 64 KiB bodies; only authenticated Admin upload routes permit large request bodies, up to the application upload limit.
 
@@ -121,8 +120,10 @@ FrontierCloud only exposes standard interfaces that an external system can consu
 
 - `/health/live` for process liveness.
 - `/health/ready` and `/health` for MySQL, Redis, and application readiness.
-- `/metrics` for Prometheus-compatible metrics; it is available only after configuring `METRICS_TOKEN` and requires its Bearer token.
+- `/metrics` for Prometheus-compatible metrics; it requires the initialization-generated Bearer token from `/run/frontiercloud-secrets/metrics_token`.
 - stdout/stderr structured logs in JSON or text, with timestamp, level, component, request ID, trace ID, instance identity, and safe request context.
+
+The metrics token is static for the lifetime of the `runtime_secrets` volume: ordinary restarts and deployments neither rotate nor reprint it. A newly added token on an upgrade is announced without reprinting older Admin or database secrets. Deleting the volume destroys the token together with the other generated secrets and the next initialization creates a new one, so external collectors must then be updated.
 
 The project does not deploy or manage Prometheus, Grafana, Elasticsearch, Logstash, Kibana, ELK, dashboards, scrape targets, or alert rules. It has no consumer-specific metrics or log coupling. Health and metrics probes are excluded from Nginx access logs, and Docker bridge peers are not repeated as business client fields.
 
