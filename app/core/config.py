@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     MYSQL_DATABASE: str = Field("office_automation", validation_alias="MYSQL_DATABASE")
     MYSQL_USER: str = Field("media_admin", validation_alias="MYSQL_USER")
     SERVER_NAME: str = Field("localhost", validation_alias="SERVER_NAME")
-    ADMIN_SESSION_TTL: int = Field(900, ge=1, validation_alias="ADMIN_SESSION_TTL")
+    ADMIN_SESSION_TTL: int = Field(10_800, ge=1, validation_alias="ADMIN_SESSION_TTL")
     ADMIN_MAX_FAILED_ATTEMPTS_PER_IP: int = Field(10, validation_alias="ADMIN_MAX_FAILED_ATTEMPTS_PER_IP")
     ADMIN_FAILED_WINDOW: int = Field(300, validation_alias="ADMIN_FAILED_WINDOW")
     ADMIN_MAX_UPLOAD_FILE_SIZE: int = Field(800 * 1024 * 1024, validation_alias="ADMIN_MAX_UPLOAD_FILE_SIZE")
