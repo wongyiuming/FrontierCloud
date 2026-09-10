@@ -3,7 +3,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.api.v1 import media
 from app.services import media_manager, media_search
 
 
@@ -27,30 +26,6 @@ class MediaSearchTests(unittest.TestCase):
             media_search.normalized_query("---")
         with self.assertRaises(ValueError):
             media_search.normalized_query("x" * 101)
-
-    def test_public_search_catalog_hides_hidden_media_and_includes_paths(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
-            music = root / "music"
-            video = root / "vido"
-            (music / "黃耀明" / "人山人海").mkdir(parents=True)
-            (music / "黃耀明" / "人山人海" / "暗湧.mp3").write_bytes(b"ID3")
-            (music / "隐藏").mkdir()
-            (music / "隐藏" / "秘密.mp3").write_bytes(b"ID3")
-            video.mkdir()
-            with (
-                patch.object(media, "MEDIA_ROOT", root),
-                patch.object(media, "MUSIC_ROOT", music),
-                patch.object(media, "VIDEO_ROOT", video),
-            ):
-                catalog = media._scan_public_search_catalog_sync({"music/隐藏"})
-
-        self.assertEqual(len(catalog), 1)
-        self.assertEqual(catalog[0]["display_path"], "/黃耀明/人山人海/暗湧.mp3")
-        self.assertIn("track=music%2F%E9%BB%83", catalog[0]["open_url"])
-        self.assertTrue(media_search.matches_search(
-            catalog[0]["search_text"], media_search.normalized_query("anyong")
-        ))
 
     def test_admin_search_catalog_includes_hidden_and_lyric_files(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -698,29 +698,17 @@ function initGestureControl() {
     }
 }
 
-function compactPlaylistQuery(value) {
-    return String(value || '').normalize('NFKC').toLocaleLowerCase()
-        .replace(/[^\p{L}\p{N}]+/gu, '');
-}
-
-function renderPlaylist(query = '') {
+function renderPlaylist() {
     const listContainer = document.getElementById('mediaList');
     if (!listContainer) return;
-    const normalized = compactPlaylistQuery(query);
     const matches = currentMediaList
-        .map((item, index) => ({item, index}))
-        .filter(({item}) => !normalized || String(item.search_text || '').includes(normalized));
-    if (!matches.length) {
-        listContainer.innerHTML = '<li class="playlist-empty">没有匹配的媒体</li>';
-        return;
-    }
+        .map((item, index) => ({item, index}));
     listContainer.innerHTML = matches.map(({item, index}) => `
         <li class="media-item ${index === currentIndex ? 'active' : ''}" data-index="${index}" data-media-id="${escapeHTML(item.media_id)}" onclick="selectMedia(${index})">
             <img src="${escapeHTML(item.cover)}" alt="cover">
             <div class="media-info">
                 <div class="media-title">${escapeHTML(item.title)}</div>
                 <div class="media-artist">${escapeHTML(item.artist)}</div>
-                <div class="media-path">媒体路径 /${escapeHTML(String(item.media_path || '').split('/').slice(1).join('/'))}</div>
                 <div class="media-stats"><span class="media-preference">喜好 ${item.preference > 0 ? '+' : ''}${item.preference}</span><span class="media-score">播放 ${item.play_score}</span></div>
             </div>
             <div class="preference-controls">
@@ -753,14 +741,9 @@ window.addEventListener('DOMContentLoaded', () => {
         return;
     }
 
-    const requestedIndex = typeof initialMediaPath === 'string'
-        ? currentMediaList.findIndex(item => item.media_path === initialMediaPath)
-        : -1;
-    const initialIndex = requestedIndex >= 0 ? requestedIndex : 0;
+    const initialIndex = 0;
     currentIndex = initialIndex;
     renderPlaylist();
-    const playlistSearch = document.getElementById('playlistSearch');
-    if (playlistSearch) playlistSearch.addEventListener('input', () => renderPlaylist(playlistSearch.value));
     initPlayer(currentMediaList[initialIndex], initialIndex);
     initGestureControl();
     playbackReporter = setInterval(reportValidPlayback, 1000);
@@ -789,15 +772,7 @@ window.addEventListener('resize', () => {
 });
 
 function selectMedia(index) {
-    let targetElement = document.querySelector(`.media-item[data-index="${index}"]`);
-    if (!targetElement) {
-        const playlistSearch = document.getElementById('playlistSearch');
-        if (playlistSearch?.value) {
-            playlistSearch.value = '';
-            renderPlaylist();
-            targetElement = document.querySelector(`.media-item[data-index="${index}"]`);
-        }
-    }
+    const targetElement = document.querySelector(`.media-item[data-index="${index}"]`);
     const items = document.querySelectorAll('.media-item');
     items.forEach(item => item.classList.remove('active'));
     if (targetElement) {

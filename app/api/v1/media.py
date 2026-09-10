@@ -7,7 +7,6 @@ import urllib.parse
 import uuid
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -17,7 +16,6 @@ from app.services.media_catalog_cache import load_media_catalog, store_media_cat
 from app.services import playback
 from app.services import network_observation
 from app.services import lyrics
-from app.services import media_search
 from app.services import media_objects
 from app.core.config import settings
 
@@ -241,7 +239,6 @@ def _scan_media_files_by_category_sync(category_subpath, valid_exts, media_type,
             "type": media_type,
             "url": f"/api/v1/media/stream?file_path={urllib.parse.quote(rel)}",
             "cover": "/favicon.ico",
-            "search_text": media_search.build_search_text(file_path.stem, rel),
         })
     return result
 
@@ -262,62 +259,6 @@ async def scan_media_files_by_category(category_subpath, valid_exts, media_type)
     media_list = await media_objects.bind_items(media_list, media_type)
     await store_media_catalog(generation, "tracks-v2", identity, media_list)
     return media_list
-
-
-def _scan_public_search_catalog_sync(hidden: set[str]) -> list[dict]:
-    results: list[dict] = []
-
-    def add_files(directory: Path, route_type: str, playback_type: str, valid_exts) -> None:
-        for file_path in _direct_media_files(directory, valid_exts):
-            rel = file_path.relative_to(MEDIA_ROOT).as_posix()
-            if _is_publicly_hidden(rel, hidden):
-                continue
-            parent = file_path.parent.relative_to(MEDIA_ROOT).as_posix()
-            display_path = "/" + "/".join(file_path.relative_to(MEDIA_ROOT).parts[1:])
-            results.append({
-                "title": file_path.stem,
-                "media_path": rel,
-                "display_path": display_path,
-                "type": playback_type,
-                "open_url": _category_url(route_type, parent)
-                + "&" + urllib.parse.urlencode({"track": rel}),
-                "search_text": media_search.build_search_text(file_path.stem, rel),
-            })
-
-    for root, route_type, playback_type, valid_exts in (
-        (MUSIC_ROOT, "music", "audio", AUDIO_EXTS),
-        (VIDEO_ROOT, "video", "video", VIDEO_EXTS),
-    ):
-        if not root.is_dir() or root.is_symlink():
-            continue
-        for category in root.iterdir():
-            if not category.is_dir() or category.is_symlink():
-                continue
-            rel_category = category.relative_to(MEDIA_ROOT).as_posix()
-            if _is_publicly_hidden(rel_category, hidden):
-                continue
-            add_files(category, route_type, playback_type, valid_exts)
-            for child in category.iterdir():
-                if child.is_dir() and not child.is_symlink():
-                    add_files(child, route_type, playback_type, valid_exts)
-
-    results.sort(key=lambda item: (item["title"].casefold(), item["media_path"].casefold()))
-    return results
-
-
-async def search_public_catalog(query: str) -> list[dict]:
-    normalized = media_search.normalized_query(query)
-    generation, catalog = await load_media_catalog("search", "public:all")
-    if catalog is None:
-        hidden = await _hidden_set()
-        catalog = await asyncio.to_thread(_scan_public_search_catalog_sync, hidden)
-        await store_media_catalog(generation, "search", "public:all", catalog)
-    matches = [
-        {key: value for key, value in item.items() if key != "search_text"}
-        for item in catalog
-        if media_search.matches_search(item.get("search_text", ""), normalized)
-    ]
-    return matches[:media_search.MAX_SEARCH_RESULTS]
 
 
 @lru_cache(maxsize=16)
@@ -377,18 +318,6 @@ async def refresh_media_interface():
     )
 
 
-@router.get("/search")
-async def search_public_media(q: str = Query(..., min_length=1, max_length=100)):
-    try:
-        results = await search_public_catalog(q)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(
-        {"results": results, "limit": media_search.MAX_SEARCH_RESULTS},
-        headers=NO_STORE_HEADERS,
-    )
-
-
 @router.get("/music", response_class=HTMLResponse)
 async def get_music_categories_page():
     html = load_html_template("category.html")
@@ -441,7 +370,6 @@ async def _get_player_or_subcategories(
     valid_exts,
     player_template: str,
     title_prefix: str,
-    initial_track: str = "",
 ) -> HTMLResponse:
     _, parts = _validated_public_directory(path, media_type)
     type_list_url = f"/api/v1/media/{media_type}"
@@ -471,7 +399,6 @@ async def _get_player_or_subcategories(
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape(back_url, quote=True))
     html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
     html = html.replace("{{PLAYBACK_SESSION_ID}}", safe_json_dumps(session_id))
-    html = html.replace("{{INITIAL_MEDIA_PATH}}", safe_json_dumps(initial_track))
     html = inject_page_runtime(html)
     return HTMLResponse(html, headers=NO_STORE_HEADERS)
 
@@ -479,7 +406,6 @@ async def _get_player_or_subcategories(
 @router.get("/music/category", response_class=HTMLResponse)
 async def get_music_player_page(
     path: str = Query(...),
-    track: Annotated[str, Query(max_length=1024)] = "",
 ):
     return await _get_player_or_subcategories(
         path,
@@ -488,14 +414,12 @@ async def get_music_player_page(
         AUDIO_EXTS,
         "audio-player.html",
         "前沿音乐",
-        track,
     )
 
 
 @router.get("/video/category", response_class=HTMLResponse)
 async def get_video_player_page(
     path: str = Query(...),
-    track: Annotated[str, Query(max_length=1024)] = "",
 ):
     return await _get_player_or_subcategories(
         path,
@@ -504,7 +428,6 @@ async def get_video_player_page(
         VIDEO_EXTS,
         "video-player.html",
         "前沿视讯",
-        track,
     )
 
 

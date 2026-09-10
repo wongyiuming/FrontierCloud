@@ -15,15 +15,11 @@
             <span>四大发明</span>
             <span class="header-actions"><a href="{{CATEGORY_LIST_URL}}" class="back-btn">← 返回分类</a></span>
         </div>
-        <div class="player-controls">
-            <input id="playlistSearch" class="playlist-search" type="search" maxlength="100" autocomplete="off" placeholder="搜索当前列表、路径或拼音">
-        </div>
         <ul id="mediaList" class="media-list"></ul>
     </div>
 
     <script>
         const currentMediaList = {{MEDIA_JSON}};
-        const initialMediaPath = {{INITIAL_MEDIA_PATH}};
         const playbackSessionId = {{PLAYBACK_SESSION_ID}};
         window.frontierCloudStunUrls = {{STUN_URLS_JSON}};
         window.frontierCloudWebrtcIntervalMs = {{WEBRTC_INTERVAL_MS}};
