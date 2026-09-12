@@ -43,8 +43,8 @@ class SecurityConfigurationTests(unittest.TestCase):
 
     def test_webrtc_url_is_always_derived_from_server_name_and_port(self):
         with patch.dict(os.environ, {}, clear=True):
-            settings = Settings(_env_file=None, SERVER_NAME="preproduction.example.com", WEBRTC_STUN_PORT=5349)
-        self.assertEqual(settings.webrtc_stun_urls(), ["stun:preproduction.example.com:5349"])
+            settings = Settings(_env_file=None, SERVER_NAME="media.example.com", WEBRTC_STUN_PORT=5349)
+        self.assertEqual(settings.webrtc_stun_urls(), ["stun:media.example.com:5349"])
 
     def test_log_contract_is_validated(self):
         with patch.dict(os.environ, {}, clear=True):

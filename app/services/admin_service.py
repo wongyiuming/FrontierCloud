@@ -77,7 +77,7 @@ def _fsync_directory(directory: Path) -> None:
         descriptor = os.open(str(directory), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         os.fsync(descriptor)
     except OSError:
-        # Directory fsync is unavailable on some development platforms. The
+        # Directory fsync is unavailable on some operating systems. The
         # key file itself has already been flushed and fsynced at this point.
         pass
     finally:

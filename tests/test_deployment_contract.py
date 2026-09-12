@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class DevelopmentDeploymentTests(unittest.TestCase):
+class DeploymentContractTests(unittest.TestCase):
     def test_runtime_dependencies_are_reproducibly_pinned(self):
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
         unpinned = [dependency for dependency in project["dependencies"] if "==" not in dependency]
@@ -70,6 +70,32 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertIn("TLS_ENABLED: ${TLS_ENABLED:-false}", compose)
         self.assertIn("UPLOAD_INACTIVITY_TIMEOUT: ${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}", compose)
         self.assertIn("client_body_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
+
+    def test_nginx_selects_transport_without_deployment_tiers(self):
+        selector = (ROOT / "nginx/15-select-tls.sh").read_text(encoding="utf-8")
+        self.assertIn('${TLS_ENABLED:-false}', selector)
+        self.assertIn("nginx_mode=https", selector)
+        self.assertIn("nginx_mode=http", selector)
+        self.assertIn('/etc/nginx/transport/$nginx_mode', selector)
+        for transport in ("http", "https"):
+            for name in ("extra-servers.conf", "public-listen.conf", "public-tls.conf"):
+                self.assertTrue((ROOT / "nginx/transport" / transport / name).is_file())
+        http = (ROOT / "nginx/transport/http/public-listen.conf").read_text(encoding="utf-8")
+        https = (ROOT / "nginx/transport/https/public-listen.conf").read_text(encoding="utf-8")
+        self.assertIn("listen 80 default_server", http)
+        self.assertIn("listen 443 ssl", https)
+        nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+        self.assertIn("/etc/nginx/runtime/extra-servers.conf", nginx)
+
+    def test_runtime_and_readme_do_not_define_deployment_tiers(self):
+        paths = [ROOT / "README.md", ROOT / "app/core/config.py", ROOT / "app/api/v1/admin.py"]
+        paths.extend(path for path in (ROOT / "nginx").rglob("*") if path.is_file())
+        for path in paths:
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertNotRegex(
+                    path.read_text(encoding="utf-8"),
+                    r"(?i)\b(?:production|preproduction|staging|development)\b|(?:生产|预发布|测试|开发)环境",
+                )
 
     def test_nginx_limits_large_bodies_to_upload_routes_and_sets_security_headers(self):
         nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
@@ -157,9 +183,9 @@ class DevelopmentDeploymentTests(unittest.TestCase):
             "docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token'",
             readme,
         )
-        self.assertIn("current Web container", readme)
+        self.assertIn("Container recreation can remove that log entry", readme)
         self.assertIn("persistent `runtime_secrets` volume", readme)
-        self.assertIn('privilege-elevation control (`id="elevate"`)', readme)
+        self.assertIn("privilege-elevation control", readme)
 
     def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")

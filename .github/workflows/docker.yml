@@ -19,7 +19,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Prepare CI certificates and environment
+      - name: Prepare CI certificates and configuration
         run: |
           mkdir -p certs data/media/music/ci-multiple
           sudo chown -R 10001:10001 data
@@ -50,13 +50,13 @@ jobs:
 
       - name: Run source configuration tests
         run: |
-          python3 -m unittest -v tests/test_development_deployment.py
+          python3 -m unittest -v tests/test_deployment_contract.py
 
       - name: Run unit and runtime tests
         run: |
           mapfile -t runtime_tests < <(
             find tests -maxdepth 1 -type f -name 'test_*.py' \
-              ! -name 'test_development_deployment.py' \
+              ! -name 'test_deployment_contract.py' \
               -printf '/app/%p\n' | sort
           )
           docker compose exec -T web python -m unittest -v "${runtime_tests[@]}"
