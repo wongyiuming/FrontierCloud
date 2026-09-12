@@ -171,13 +171,13 @@ jobs:
       github.event_name == 'push' &&
       github.ref == 'refs/heads/dev' &&
       github.repository == 'wongyiuming/FrontierCloud'
-    runs-on: [self-hosted, Linux, X64, rn-preproduction]
+    runs-on: [self-hosted, Linux, X64, rn]
     timeout-minutes: 20
     concurrency:
-      group: rn-preproduction
+      group: rn
       cancel-in-progress: false
     environment:
-      name: rn-preproduction
+      name: rn
     env:
       RN_DEPLOY_PATH: ${{ vars.RN_DEPLOY_PATH }}
     steps:

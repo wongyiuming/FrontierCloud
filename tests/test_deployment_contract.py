@@ -198,6 +198,10 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertNotIn("workflow_dispatch", workflow)
         self.assertIn("python3 scripts/validate_env_contract.py", workflow)
         self.assertIn("python3 scripts/validate_env_contract.py", deploy_script)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, rn]", deploy)
+        self.assertIn("group: rn", deploy)
+        self.assertIn("name: rn", deploy)
+        self.assertNotRegex(deploy, r"(?i)\b(?:production|preproduction|staging|development)\b")
 
 
 if __name__ == "__main__":
