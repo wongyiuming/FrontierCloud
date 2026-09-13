@@ -98,11 +98,10 @@ async def revoke(request: Request):
 
 @router.post("/heartbeat")
 async def heartbeat(request: Request):
-    relation = await authenticated(request)
-    summary = await catalog.summary()
-    # Successful authenticated ingress is liveness evidence for this one peer.
-    await state.heartbeat(relation["relationship_id"], True, summary=relation["summary"])
-    return summary
+    await authenticated(request)
+    # Only our own outbound probe establishes peer reachability. Incoming probes
+    # must not hide a peer whose HTTPS/media ingress is broken.
+    return await catalog.summary()
 
 
 @router.get("/catalog")

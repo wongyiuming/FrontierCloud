@@ -26,7 +26,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def command(*arguments, **kwargs):
-    result = subprocess.run(arguments, check=True, text=True, capture_output=True, **kwargs)
+    result = subprocess.run(arguments, text=True, capture_output=True, **kwargs)
+    if result.returncode:
+        print(result.stderr[-5000:], flush=True)
+        result.check_returncode()
     return result.stdout.strip()
 
 
@@ -429,6 +432,12 @@ def main():
             report["result"] = "passed"
         finally:
             arguments.output.write_text(json.dumps(report, indent=2))
+            if report.get("result") != "passed":
+                for node in nodes:
+                    try:
+                        logs = node.compose("logs", "--no-color", "--tail", "60", "web", "nginx")
+                        print("\n".join(line for line in logs.splitlines() if "initial_runtime_secrets" not in line), flush=True)
+                    except Exception: pass
             for node in reversed(nodes):
                 try: node.stop()
                 except Exception: pass

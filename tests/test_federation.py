@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, insert, select, update
 from starlette.requests import Request
 
 from app.api.internal_nodes import require_https
+from app.api import internal_nodes
 from app.services.federation import protocol as p, schema as s, routing
 from app.services.federation.catalog import Catalog, valid_payload
 from app.services.federation.state import State, vault_key
@@ -246,6 +247,11 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             runtime.start()
             self.assertIsNone(runtime.task)
             opened.assert_not_called()
+
+    async def test_incoming_heartbeat_cannot_mask_broken_peer_ingress(self):
+        with patch.object(internal_nodes, "authenticated", new=AsyncMock()), patch.object(internal_nodes.catalog, "summary", new=AsyncMock(return_value={"protocol": 1})), patch.object(internal_nodes.state, "heartbeat", new=AsyncMock()) as recorded:
+            self.assertEqual(await internal_nodes.heartbeat(None), {"protocol": 1})
+            recorded.assert_not_awaited()
 
 
 class ProtocolTests(unittest.TestCase):
