@@ -136,6 +136,7 @@ class Runtime:
                 self.wakeup.clear()
                 try:
                     await catalog.scan()
+                    await state.cleanup_playback_events()
                     relations = await state.list_relationships(include_revoked=True)
                     pending = [row for row in relations if row["state"] == "revoked" and not row["summary"].get("revocation_acknowledged")]
                     if state.node["role"] == "Standalone" and not pending:

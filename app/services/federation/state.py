@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 from cryptography.fernet import Fernet
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, insert, select, update, tuple_
 
 from app.core.config import SECRET_DIR
 from app.core.db import engine
@@ -250,6 +250,13 @@ class State:
             await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == identifier).values(**values))
             if values["status"] != row["status"]:
                 await self.log(conn, "relationship-status", "heartbeat", identifier, previous=row["status"], current=values["status"])
+
+    async def cleanup_playback_events(self):
+        async with self.database.begin() as conn:
+            expired = list((await conn.execute(select(s.events.c.session_id, s.events.c.resource_id).where(
+                s.events.c.expires_at <= int(time.time())).limit(500))).all())
+            if expired:
+                await conn.execute(delete(s.events).where(tuple_(s.events.c.session_id, s.events.c.resource_id).in_(expired)))
 
 
 state = State()

@@ -97,6 +97,9 @@ class Node:
                 elif volume.get("target") == "/var/www/certbot":
                     volume["source"] = str(certs / "acme")
         self.configuration.write_text(json.dumps(configuration))
+        # The private temporary parent remains 0700. Fixture directories need both
+        # the runner and the actual UID 10001 container to create/delete fixtures.
+        command("sudo", "chmod", "-R", "a+rwX", str(self.data))
         command("sudo", "chown", "-R", "10001:10001", str(self.data))
 
     def compose(self, *arguments):
@@ -429,6 +432,7 @@ def main():
             for node in reversed(nodes):
                 try: node.stop()
                 except Exception: pass
+            command("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(directory))
     print(json.dumps({"result": report.get("result", "failed"), "checks": report["checks"], "samples": len(report["samples"])}))
 
 
