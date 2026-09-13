@@ -18,6 +18,9 @@ from app.services import network_observation
 from app.services import lyrics
 from app.services import media_objects
 from app.core.config import settings
+from app.services.federation.state import state as node_state
+from app.services.federation.catalog import catalog as node_catalog
+from app.services.federation import routing as node_routing
 
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parents[3]
@@ -41,6 +44,7 @@ NO_STORE_HEADERS = {
 
 class PlaybackReport(BaseModel):
     media_path: str = Field(min_length=1, max_length=1024)
+    resource_id: str | None = Field(None, pattern=r"^[a-f0-9]{64}$")
     playback_session_id: str = Field(min_length=1, max_length=64)
     played_seconds: float = Field(gt=0, le=86400)
     duration: float = Field(gt=0, le=86400)
@@ -48,6 +52,7 @@ class PlaybackReport(BaseModel):
 
 class PreferenceChange(BaseModel):
     media_path: str = Field(min_length=1, max_length=1024)
+    resource_id: str | None = Field(None, pattern=r"^[a-f0-9]{64}$")
     delta: int
 
 
@@ -162,6 +167,12 @@ async def get_media_categories(media_type, valid_exts):
         return cached
     hidden = await _hidden_set()
     categories = await asyncio.to_thread(_get_media_categories_sync, media_type, valid_exts, hidden)
+    if node_state.node["role"] == "Master":
+        merged = {entry["name"]: entry for entry in categories}
+        for entry in await node_catalog.resources(root=_typed_media_root(media_type).name):
+            name = entry["path"].split("/")[1]
+            merged.setdefault(name, {"name": name, "url": _category_url(media_type, _typed_media_root(media_type).name + "/" + name)})
+        categories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
     await store_media_catalog(generation, "categories", media_type, categories)
     return categories
 
@@ -208,6 +219,14 @@ async def get_media_subcategories(media_type, category_subpath, valid_exts):
         valid_exts,
         hidden,
     )
+    if node_state.node["role"] == "Master":
+        merged = {entry["name"]: entry for entry in subcategories}
+        for entry in await node_catalog.resources(directory=category_subpath):
+            parts = entry["path"].split("/")
+            if len(parts) == 4:
+                name = parts[2]
+                merged.setdefault(name, {"name": name, "url": _category_url(media_type, category_subpath + "/" + name)})
+        subcategories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
     await store_media_catalog(generation, "subcategories", identity, subcategories)
     return subcategories
 
@@ -257,6 +276,8 @@ async def scan_media_files_by_category(category_subpath, valid_exts, media_type)
         hidden,
     )
     media_list = await media_objects.bind_items(media_list, media_type)
+    if node_state.node["role"] == "Master":
+        media_list.extend(await node_routing.directory_items(category_subpath))
     await store_media_catalog(generation, "tracks-v2", identity, media_list)
     return media_list
 
@@ -270,12 +291,21 @@ def load_html_template(filename: str) -> str:
 
 
 @router.get("/stream")
-async def stream_media_file(file_path: str = Query(...)):
+@router.head("/stream", include_in_schema=False)
+async def stream_media_file(file_path: str | None = None, resource_id: str | None = None):
+    if resource_id is not None:
+        return await node_routing.stream(resource_id, file_path)
+    if not file_path:
+        raise HTTPException(status_code=422, detail="file_path or resource_id is required")
     try:
         safe_path = resolve_safe_path(MEDIA_ROOT, file_path)
     except ValueError:
         raise HTTPException(status_code=403, detail="Forbidden path access")
     if safe_path.is_symlink() or not safe_path.is_file():
+        if node_state.node["role"] == "Master":
+            rows = [row for row in await node_catalog.resources(directory=file_path.rsplit("/", 1)[0]) if row["path"] == file_path]
+            if rows:
+                return await node_routing.stream(rows[0]["resource_id"], file_path)
         raise HTTPException(status_code=404, detail="Media file not found")
     rel_parts = safe_path.relative_to(MEDIA_ROOT).parts
     if len(rel_parts) not in {3, 4} or rel_parts[0] not in {"music", "vido"}:
@@ -370,13 +400,23 @@ async def _get_player_or_subcategories(
     valid_exts,
     player_template: str,
     title_prefix: str,
+    direct: bool = False,
 ) -> HTMLResponse:
-    _, parts = _validated_public_directory(path, media_type)
+    try:
+        _, parts = _validated_public_directory(path, media_type)
+    except HTTPException:
+        parts = tuple(path.split("/"))
+        if (node_state.node["role"] != "Master" or len(parts) not in (2, 3)
+                or parts[0] != _typed_media_root(media_type).name or any(not p or p.startswith(".") for p in parts)
+                or not await node_catalog.resources(directory=path)):
+            raise
     type_list_url = f"/api/v1/media/{media_type}"
     display_path = "/".join(parts[1:])
     if len(parts) == 2:
         subcategories = await get_media_subcategories(media_type, path, valid_exts)
-        if subcategories:
+        if subcategories and not direct:
+            if node_state.node["role"] == "Master" and await scan_media_files_by_category(path, valid_exts, playback_type):
+                subcategories = [{"name": "当前目录曲目", "url": _category_url(media_type, path) + "&direct=true"}] + subcategories
             return _render_subcategory_page(
                 f"{title_prefix} - {display_path}",
                 type_list_url,
@@ -388,12 +428,13 @@ async def _get_player_or_subcategories(
         back_url = _category_url(media_type, parent_path)
 
     session_id = str(uuid.uuid4())
-    media_list = await playback.attach_stats_and_sort(
-        await scan_media_files_by_category(path, valid_exts, playback_type),
-        session_id,
-    )
+    items = await scan_media_files_by_category(path, valid_exts, playback_type)
+    remote = [item for item in items if item.get("resource_id")]
+    media_list = await playback.attach_stats_and_sort([item for item in items if not item.get("resource_id")], session_id)
     if playback_type == "audio":
         media_list = await lyrics.attach_links(media_list)
+    if remote:
+        media_list = playback.sort_media(media_list + await node_routing.attach_master_stats(remote), session_id)
     html = load_html_template(player_template)
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"{title_prefix} - {display_path}"))
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape(back_url, quote=True))
@@ -406,6 +447,7 @@ async def _get_player_or_subcategories(
 @router.get("/music/category", response_class=HTMLResponse)
 async def get_music_player_page(
     path: str = Query(...),
+    direct: bool = False,
 ):
     return await _get_player_or_subcategories(
         path,
@@ -414,12 +456,14 @@ async def get_music_player_page(
         AUDIO_EXTS,
         "audio-player.html",
         "前沿音乐",
+        direct,
     )
 
 
 @router.get("/video/category", response_class=HTMLResponse)
 async def get_video_player_page(
     path: str = Query(...),
+    direct: bool = False,
 ):
     return await _get_player_or_subcategories(
         path,
@@ -428,16 +472,20 @@ async def get_video_player_page(
         VIDEO_EXTS,
         "video-player.html",
         "前沿视讯",
+        direct,
     )
 
 
 @router.get("/lyrics", response_class=HTMLResponse)
-async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024)):
+async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024), resource_id: str | None = None):
     try:
-        normalized_track, _track_path = lyrics.validate_track(track)
-        if _is_publicly_hidden(normalized_track, await _hidden_set()):
-            raise FileNotFoundError
-        _lyric_path, entries = await lyrics.load_for_track(normalized_track)
+        if resource_id:
+            entries = await node_routing.lyric_entries(resource_id, track)
+        else:
+            normalized_track, _track_path = lyrics.validate_track(track)
+            if _is_publicly_hidden(normalized_track, await _hidden_set()):
+                raise FileNotFoundError
+            _lyric_path, entries = await lyrics.load_for_track(normalized_track)
     except (ValueError, FileNotFoundError):
         raise HTTPException(status_code=404, detail="Lyrics not found")
     html = load_html_template("lyrics.html")
@@ -448,12 +496,15 @@ async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024)
 
 
 @router.get("/lyrics/content")
-async def get_lyrics_content(track: str = Query(..., min_length=1, max_length=1024)):
+async def get_lyrics_content(track: str = Query(..., min_length=1, max_length=1024), resource_id: str | None = None):
     try:
-        normalized_track, _track_path = lyrics.validate_track(track)
-        if _is_publicly_hidden(normalized_track, await _hidden_set()):
-            raise FileNotFoundError
-        _lyric_path, entries = await lyrics.load_for_track(normalized_track)
+        if resource_id:
+            entries = await node_routing.lyric_entries(resource_id, track)
+        else:
+            normalized_track, _track_path = lyrics.validate_track(track)
+            if _is_publicly_hidden(normalized_track, await _hidden_set()):
+                raise FileNotFoundError
+            _lyric_path, entries = await lyrics.load_for_track(normalized_track)
     except (ValueError, FileNotFoundError):
         raise HTTPException(status_code=404, detail="Lyrics not found")
     return JSONResponse({"entries": entries}, headers=NO_STORE_HEADERS)
@@ -462,6 +513,9 @@ async def get_lyrics_content(track: str = Query(..., min_length=1, max_length=10
 @router.post("/playback")
 async def report_playback(payload: PlaybackReport):
     try:
+        if payload.resource_id:
+            return await node_routing.mutate_stats(payload.resource_id, payload.media_path, session=payload.playback_session_id,
+                played=payload.played_seconds, duration=payload.duration)
         return await playback.record_playback(
             MEDIA_ROOT,
             payload.media_path,
@@ -476,6 +530,8 @@ async def report_playback(payload: PlaybackReport):
 @router.post("/preference")
 async def update_preference(payload: PreferenceChange):
     try:
+        if payload.resource_id:
+            return await node_routing.mutate_stats(payload.resource_id, payload.media_path, delta=payload.delta)
         return await playback.change_preference(MEDIA_ROOT, payload.media_path, payload.delta)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

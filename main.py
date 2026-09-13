@@ -30,6 +30,9 @@ from app.services.ip_security import initialize_ip_security_cache, retry_edge_pr
 from app.services.media_manager import recover_interrupted_media_deletions
 from app.services.runtime_secrets import announce_initial_secrets_once
 from app.services.upload_cleanup import cleanup_stale_upload_parts, run_stale_upload_cleanup
+from app.api.internal_nodes import router as internal_nodes_router
+from app.services.federation.state import state as node_state
+from app.services.federation.runtime import runtime as node_runtime
 
 
 install_upload_lifecycle_guard()
@@ -45,6 +48,10 @@ async def lifespan(app: FastAPI):
         await init_db()
         await recover_interrupted_media_deletions()
         await initialize_ip_security_cache()
+        await node_state.initialize()
+        pending_revocations = any(row["state"] == "revoked" and not row["summary"].get("revocation_acknowledged")
+                                  for row in await node_state.list_relationships(include_revoked=True))
+        node_runtime.start(revocations=pending_revocations)
         edge_projection_task = asyncio.create_task(retry_edge_projection(), name="edge-security-retry")
         announce_initial_secrets_once()
         await asyncio.to_thread(cleanup_stale_upload_parts)
@@ -54,6 +61,7 @@ async def lifespan(app: FastAPI):
         )
         yield
     finally:
+        await node_runtime.stop()
         if edge_projection_task is not None:
             edge_projection_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -73,6 +81,7 @@ app = FastAPI(
     openapi_url=None,
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.include_router(internal_nodes_router)
 
 QUIET_REQUEST_PATHS = frozenset({
     "/health",

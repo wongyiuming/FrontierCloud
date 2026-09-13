@@ -8,6 +8,7 @@ let playbackState = null;
 let playbackReporter = null;
 let inlineLyricsRequest = null;
 let inlineLyricsSequence = 0;
+let remoteRetrySequence = -1;
 const inlineLyricsCache = new Map();
 let activeLyricEntries = [];
 let activeLyricIndex = null;
@@ -185,6 +186,7 @@ async function reportValidPlayback() {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 media_path: media.media_path,
+                resource_id: media.resource_id || null,
                 playback_session_id: playbackSessionId,
                 played_seconds: reportingState.accumulated,
                 duration,
@@ -208,7 +210,7 @@ async function changePreference(index, delta) {
     const response = await fetch('/api/v1/media/preference', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({media_path: media.media_path, delta}),
+        body: JSON.stringify({media_path: media.media_path, resource_id: media.resource_id || null, delta}),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || '喜好调整失败');
@@ -356,7 +358,9 @@ async function loadInlineLyrics(media) {
         showSynchronizedLyrics([]);
         return;
     }
-    const cached = inlineLyricsCache.get(media.media_path);
+    const lyricIdentity = media.resource_id || media.media_id || media.media_path;
+    const ownerQuery = media.resource_id ? `&resource_id=${encodeURIComponent(media.resource_id)}` : '';
+    const cached = inlineLyricsCache.get(lyricIdentity);
     if (cached) {
         showSynchronizedLyrics(cached, art?.currentTime || 0);
         return;
@@ -364,7 +368,7 @@ async function loadInlineLyrics(media) {
     const controller = new AbortController();
     inlineLyricsRequest = controller;
     try {
-        const response = await fetch(`/api/v1/media/lyrics/content?track=${encodeURIComponent(media.media_path)}`, {
+        const response = await fetch(`/api/v1/media/lyrics/content?track=${encodeURIComponent(media.media_path)}${ownerQuery}`, {
             cache: 'no-store',
             signal: controller.signal,
         });
@@ -374,7 +378,7 @@ async function loadInlineLyrics(media) {
             .map(entry => ({time: Number(entry?.time), text: String(entry?.text || '')}))
             .filter(entry => Number.isFinite(entry.time) && entry.time >= 0 && entry.text)
             .sort((left, right) => left.time - right.time) : [];
-        inlineLyricsCache.set(media.media_path, entries);
+        inlineLyricsCache.set(lyricIdentity, entries);
         if (sequence === inlineLyricsSequence) showSynchronizedLyrics(entries, art?.currentTime || 0);
     } catch (error) {
         if (error.name !== 'AbortError' && sequence === inlineLyricsSequence) showSynchronizedLyrics([]);
@@ -402,7 +406,7 @@ function initPlayer(media, index) {
     if (lyricsLink) {
         lyricsLink.classList.toggle('unavailable', !media.has_lyrics);
         if (media.has_lyrics) {
-            lyricsLink.href = `/api/v1/media/lyrics?track=${encodeURIComponent(media.media_path)}`;
+            lyricsLink.href = `/api/v1/media/lyrics?track=${encodeURIComponent(media.media_path)}${media.resource_id ? `&resource_id=${encodeURIComponent(media.resource_id)}` : ''}`;
             lyricsLink.setAttribute('aria-label', `打开 ${media.title} 的歌词`);
         } else {
             lyricsLink.removeAttribute('href');
@@ -441,6 +445,7 @@ function initPlayer(media, index) {
     });
 
     art.on('play', () => {
+        remoteRetrySequence = -1;
         if (playbackState) playbackState.lastTick = performance.now();
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
         startLyricClock();
@@ -461,6 +466,26 @@ function initPlayer(media, index) {
             startLyricClock();
         }
         reportValidPlayback();
+    });
+
+    art.on('video:error', async () => {
+        const media = currentMediaList[currentIndex];
+        const sequence = playerSwitchSequence;
+        const video = art.video;
+        if (!media?.resource_id || activeObjectUrl || !video || remoteRetrySequence === sequence) return;
+        remoteRetrySequence = sequence;
+        const position = video.currentTime;
+        const resume = playbackState?.lastTick != null && !video.paused;
+        // Re-enter the owner's business route once to obtain a fresh capability.
+        video.src = media.url;
+        video.load();
+        const restore = () => {
+            if (playerSwitchSequence !== sequence) return;
+            video.currentTime = Math.min(position, Math.max(0, video.duration - 0.1));
+            if (resume) video.play().catch(() => { art.notice.show = '请点击播放继续'; });
+        };
+        video.addEventListener('loadedmetadata', restore, {once: true});
+        art.notice.show = '正在重新连接媒体';
     });
 
     art.on('video:ended', () => {

@@ -129,7 +129,18 @@
                 </div>
             </div>
         </section>
-        <section class="admin-module construction-module" data-admin-module="planned-three"><button class="module-heading" type="button" aria-expanded="false"><span><strong>待建设模块 C</strong><small>预留扩展空间</small></span><b>＋</b></button><div class="module-content construction"><span>施工中</span></div></section>
+        <section id="nodesPanel" class="admin-module nodes-panel" data-admin-module="nodes">
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>节点管理</strong><small>角色、配对关系及媒体链路测试</small></span><b>＋</b></button>
+            <div class="module-content nodes-content">
+                <div class="nodes-toolbar"><strong id="nodeIdentity">尚未加载</strong><button id="nodesRefresh" type="button">刷新</button></div>
+                <form id="nodePromotion" class="nodes-toolbar hidden"><select id="nodeRole" aria-label="节点角色"><option>Master</option><option>Slave</option></select><input id="nodeEndpoint" type="url" required placeholder="当前节点 HTTPS 根地址"><button type="submit">固定角色</button></form>
+                <div id="nodePairing" class="hidden"><div class="nodes-toolbar"><button id="nodeIssuePair" type="button">生成一次性配对包</button><button id="nodeImportPair" type="button">导入 Slave 配对包</button></div><textarea id="nodePairPackage" rows="4" aria-label="一次性配对包" placeholder="配对包只用于建立当前关系，五分钟后过期"></textarea></div>
+                <div class="nodes-table-scroll"><table class="nodes-table"><thead><tr><th>节点 / HTTPS 地址</th><th>状态 / RTT / 心跳</th><th>版本 / 同步 / 存储</th><th>当前关系操作</th></tr></thead><tbody id="nodeRelationships"></tbody></table></div>
+                <section id="nodeBusinessTest" class="hidden"><div class="nodes-toolbar"><select id="nodeTestRelationship" aria-label="测试关系"></select><select id="nodeTestResource" aria-label="测试媒体"></select><button id="nodeRunTest" type="button">HEAD / Range 测试</button><button id="nodeSeekTest" type="button">暂停 / Seek / 恢复</button><button id="nodeRestartTest" type="button">重新播放</button></div><video id="nodeTestPlayer" controls preload="metadata" crossorigin="anonymous"></video><pre id="nodeTestResult" aria-live="polite"></pre></section>
+                <form id="nodeReinitialize" class="nodes-toolbar hidden"><input id="nodeResetConfirmation" autocomplete="off" placeholder="输入当前节点 ID 确认重置"><button type="submit">重新初始化节点</button><span>撤销旧关系，保留媒体文件</span></form>
+                <div id="nodeOperationStatus" role="status"></div>
+            </div>
+        </section>
 
     <section class="admin-module admin-side" data-admin-module="media">
         <header class="admin-header">
@@ -187,5 +198,6 @@
     </div>
 
     <script src="/static/js/admin.js?v=20260910-4"></script>
+    <script src="/static/js/nodes.js?v=20260913-1"></script>
 </body>
 </html>

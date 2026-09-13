@@ -156,6 +156,7 @@ class State:
             if existing and existing["state"] != "revoked":
                 raise p.ProtocolError("该 Slave 已配对或正在配对；请先撤销旧关系")
             if existing:
+                await conn.execute(delete(s.catalog).where(s.catalog.c.relationship_id == existing["relationship_id"]))
                 await conn.execute(delete(s.relationships).where(s.relationships.c.relationship_id == existing["relationship_id"]))
             await conn.execute(insert(s.relationships).values(**self.relation_values(identifier, peer, credential, "downstream")))
             await self.log(conn, "pair-prepared", actor, identifier, peer_id=peer["node_id"])
