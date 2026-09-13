@@ -19,6 +19,7 @@ from app.services.federation import protocol as p, schema as s, routing
 from app.services.federation.catalog import Catalog, valid_payload
 from app.services.federation.state import State, vault_key
 from app.services.federation.runtime import Runtime
+from app.services.federation.transport import Transport
 
 
 class Connection:
@@ -168,6 +169,19 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(p.ProtocolError):
             await self.store.authenticate(new, "GET", path, b"")
 
+    async def test_future_timestamp_nonce_remains_used_at_window_boundary(self):
+        await self.slave()
+        identifier, credential, _, _ = await self.consumed()
+        await self.store.activate(identifier, "master")
+        now, path = int(time.time()), "/internal/v1/catalog"
+        with patch("app.services.federation.protocol.time.time", return_value=now + 60):
+            headers = {key.lower(): value for key, value in p.auth_headers(credential, identifier, "GET", path).items()}
+        with patch("app.services.federation.state.time.time", return_value=now):
+            await self.store.authenticate(headers, "GET", path, b"")
+        with patch("app.services.federation.state.time.time", return_value=now + 120):
+            with self.assertRaises(p.ProtocolError):
+                await self.store.authenticate(headers, "GET", path, b"")
+
     async def test_state_and_audit_rollback_together(self):
         with patch.object(self.store, "log", new=AsyncMock(side_effect=RuntimeError("audit unavailable"))):
             with self.assertRaises(RuntimeError):
@@ -255,6 +269,23 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(internal_nodes, "authenticated", new=AsyncMock()), patch.object(internal_nodes.catalog, "summary", new=AsyncMock(return_value={"protocol": 1})), patch.object(internal_nodes.state, "heartbeat", new=AsyncMock()) as recorded:
             self.assertEqual(await internal_nodes.heartbeat(None), {"protocol": 1})
             recorded.assert_not_awaited()
+
+
+class TransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_signed_incompatible_protocol_is_rejected(self):
+        private, identifier = p.new_key(), uuid.uuid4().hex
+        client = Transport()
+
+        async def incompatible_identity(origin, path):
+            return p.sign(private, {"node_id": identifier, "public_key": p.public_key(private),
+                "role": "Slave", "endpoint": origin, "challenge": path.split("=", 1)[1],
+                "protocol": p.PROTOCOL_VERSION + 1, "app_version": p.APP_VERSION})
+
+        with patch.object(client, "request", new=AsyncMock(side_effect=incompatible_identity)):
+            with self.assertRaises(p.ProtocolError):
+                await client.identity("https://slave.example.com", expected_id=identifier,
+                    expected_key=p.public_key(private), role="Slave")
+        self.assertIsNone(client.client)
 
 
 class ProtocolTests(unittest.TestCase):

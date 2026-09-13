@@ -244,7 +244,9 @@ class State:
                 s.requests.c.relationship_id == row["relationship_id"], s.requests.c.nonce == nonce))).first()
             if used:
                 raise p.ProtocolError("Replayed relationship request")
-            await conn.execute(insert(s.requests).values(relationship_id=row["relationship_id"], nonce=nonce, expires_at=now + 120))
+            # A future timestamp remains valid through the inclusive skew boundary.
+            await conn.execute(insert(s.requests).values(relationship_id=row["relationship_id"], nonce=nonce,
+                expires_at=now + 2 * p.AUTH_SKEW_SECONDS + 1))
         return row
 
     async def heartbeat(self, identifier: str, success: bool, rtt: int = 0, summary: dict | None = None):

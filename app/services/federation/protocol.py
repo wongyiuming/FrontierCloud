@@ -23,6 +23,7 @@ TOKEN_SECONDS = 300
 PAGE_SIZE = 100
 MAX_CONTROL_BYTES = 512 * 1024
 MAX_LYRIC_RESPONSE_BYTES = 5 * 1024 * 1024
+AUTH_SKEW_SECONDS = 60
 IDENTIFIER = re.compile(r"^[a-f0-9]{32}$")
 OBJECT_ID = re.compile(r"^[a-f0-9]{64}$")
 
@@ -109,7 +110,7 @@ def auth_headers(credential: str, relationship: str, method: str, path: str, bod
 def verify_auth(credential: str, headers, method: str, path: str, body: bytes, now: int) -> str:
     try:
         relationship, stamp, nonce = (headers[k] for k in ("x-node-relationship", "x-node-time", "x-node-nonce"))
-        if not IDENTIFIER.fullmatch(relationship) or not IDENTIFIER.fullmatch(nonce) or abs(now - int(stamp)) > 60:
+        if not IDENTIFIER.fullmatch(relationship) or not IDENTIFIER.fullmatch(nonce) or abs(now - int(stamp)) > AUTH_SKEW_SECONDS:
             raise ValueError()
         message = "\n".join((relationship, stamp, nonce, method.upper(), path, hashlib.sha256(body).hexdigest()))
         expected = hmac.new(decode(credential), message.encode(), hashlib.sha256).hexdigest()
