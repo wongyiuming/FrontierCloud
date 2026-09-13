@@ -344,7 +344,10 @@ def browser_checks(browser, master, slave, resource, mode):
     page.wait_for_function("document.querySelector('#nodeTestResource').options.length > 0")
     page.select_option('#nodeTestResource', resource["resource_id"])
     page.locator('#nodeRunTest').click()
-    page.wait_for_function("document.querySelector('#nodeTestResult').textContent.includes('通过')", timeout=60000)
+    page.wait_for_function("['通过', '失败'].some(value => document.querySelector('#nodeTestResult').textContent.includes(value))", timeout=60000)
+    diagnostic = json.loads(page.locator('#nodeTestResult').inner_text())
+    print(json.dumps({"browser_diagnostic": mode, **diagnostic}, ensure_ascii=False), flush=True)
+    assert diagnostic["result"] == "通过", diagnostic
     page.wait_for_function("document.querySelector('#nodeTestPlayer').readyState >= 1", timeout=60000)
     page.locator('#nodeSeekTest').click()
     page.wait_for_function("!document.querySelector('#nodeTestPlayer').paused", timeout=30000)
@@ -443,6 +446,12 @@ def main():
                     assert full.status_code == 200 and full.content == source
                     head = master.client.head(master.endpoint + url)
                     assert head.status_code == 200 and int(head.headers["content-length"]) == len(source) and not head.content
+                    if mode == "Direct":
+                        cors_head = master.client.head(master.endpoint + url, headers={"Origin": master.endpoint})
+                        print(json.dumps({"direct_cors_head": master.name, "status": cors_head.status_code,
+                                          "allow_origin": cors_head.headers.get("access-control-allow-origin"),
+                                          "vary": cors_head.headers.get("vary")}), flush=True)
+                        assert cors_head.status_code == 200 and cors_head.headers.get("access-control-allow-origin") == master.endpoint
                     partial = master.range(url, 4000, 4095)
                     assert partial.status_code == 206 and partial.content == source[4000:4096]
                     conditional = master.client.get(master.endpoint + url, headers={"If-None-Match": full.headers["etag"]})
