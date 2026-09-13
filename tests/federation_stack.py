@@ -177,11 +177,15 @@ class Node:
     def resources(self):
         return self.api(f"/api/v1/media/admin/nodes/{self.relation}/resources")["items"]
 
-    def wait_online(self):
+    def wait_online(self, after=0):
         def ready():
             rows = self.nodes()["relationships"]
-            return any(row["relationship_id"] == self.relation and row["status"] == "online" for row in rows) and bool(self.resources())
+            return any(row["relationship_id"] == self.relation and row["status"] == "online"
+                       and (row["last_heartbeat"] or 0) > after for row in rows) and bool(self.resources())
         wait_for(ready, description=f"{self.name} relationship recovery")
+
+    def relationship(self):
+        return next(row for row in self.nodes()["relationships"] if row["relationship_id"] == self.relation)
 
     def mode(self, value):
         self.api(f"/api/v1/media/admin/nodes/{self.relation}/mode", {"mode": value})
@@ -491,20 +495,26 @@ def main():
                     response = a.range(a.resource["url"])
                     assert response.status_code in (206, 502, 503, 504)
                 finally: b.netem(None)
+                previous_heartbeat = a.relationship()["last_heartbeat"] or 0
                 b.compose("restart", "web")
-                a.wait_online()
+                wait_for(lambda: b.client.get(b.endpoint + "/health/ready").status_code == 200)
+                a.wait_online(after=previous_heartbeat)
                 assert a.range(a.resource["url"]).status_code == 206
+                previous_heartbeat = a.relationship()["last_heartbeat"] or 0
                 a.compose("restart", "web")
                 wait_for(lambda: a.client.get(a.endpoint + "/health/ready").status_code == 200)
-                a.wait_online()
+                a.wait_online(after=previous_heartbeat)
+                assert a.range(a.resource["url"]).status_code == 206
                 assert len(a.resources()) == 107
                 fixture = b.data / f"media/music/shared/new-{cycle}.wav"
                 wav(fixture, seconds=1)
                 wait_for(lambda: any(item["path"].endswith(f"new-{cycle}.wav") for item in a.resources()), description="incremental addition")
                 b.api("/api/v1/media/admin/delete", {"paths": [f"music/shared/new-{cycle}.wav"]})
                 wait_for(lambda: not any(item["path"].endswith(f"new-{cycle}.wav") for item in a.resources()), description="incremental deletion")
+                repaired_version = a.relationship()["cursor"]
                 a.api(f"/api/v1/media/admin/nodes/{a.relation}/sync", {})
-                a.wait_online()
+                wait_for(lambda: a.relationship()["cursor"] >= repaired_version, description="full catalog repair convergence")
+                assert len(a.resources()) == 107
             report["checks"].append("three delay/loss/restart/add/delete/full-repair recovery cycles")
             a.compose("stop", "web")
             try:
