@@ -120,7 +120,8 @@ class Runtime:
             if relation["status"] != "online":
                 await transport.identity(relation["peer_endpoint"], expected_id=relation["peer_id"],
                     expected_key=relation["peer_key"], role="Slave" if relation["direction"] == "downstream" else "Master")
-            summary = await self.call(relation, "/internal/v1/heartbeat", {})
+            summary = await self.call(relation, "/internal/v1/heartbeat",
+                {"mode": relation["mode"]} if relation["direction"] == "downstream" else {})
             if summary.get("protocol") != p.PROTOCOL_VERSION:
                 raise p.ProtocolError("Heartbeat protocol mismatch")
             await state.heartbeat(identifier, True, int((time.monotonic() - start) * 1000), summary)

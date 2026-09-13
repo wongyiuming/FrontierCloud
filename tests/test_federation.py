@@ -125,6 +125,9 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(credential, other_credential)
         await self.store.activate(a, master["node_id"])
         await self.store.activate(b, "other")
+        await self.store.accept_mode(a, "Direct", master["node_id"])
+        self.assertEqual((await self.store.relationship(a))["mode"], "Direct")
+        self.assertEqual((await self.store.relationship(b))["mode"], "Relay")
         await self.store.revoke(a, "admin")
         self.assertEqual((await self.store.relationship(b))["state"], "active")
 

@@ -213,6 +213,19 @@ class State:
                 raise p.ProtocolError("No active relationship")
             await self.log(conn, "mode-changed", actor, identifier, mode=mode)
 
+    async def accept_mode(self, identifier: str, mode: str, actor: str):
+        if mode not in ("Relay", "Direct"):
+            raise p.ProtocolError("Invalid relationship mode")
+        async with self.database.begin() as conn:
+            node = await self.lock(conn)
+            if node["role"] != "Slave":
+                raise p.ProtocolError("Only Slave accepts an upstream's mode")
+            result = await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == identifier,
+                s.relationships.c.direction == "upstream", s.relationships.c.state == "active").values(mode=mode))
+            if not result.rowcount:
+                raise p.ProtocolError("No active upstream relationship")
+            await self.log(conn, "mode-accepted", actor, identifier, mode=mode)
+
     async def authenticate(self, headers, method: str, path: str, body: bytes, allow_pending=False, allow_revoked=False) -> dict:
         row = await self.relationship(headers.get("x-node-relationship", ""))
         allowed = {"active"} | ({"pending"} if allow_pending else set()) | ({"revoked"} if allow_revoked else set())

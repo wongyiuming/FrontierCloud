@@ -43,6 +43,7 @@ def control_path(request):
 async def authenticated(request, *, pending=False, revoked=False):
     require_https(request)
     body = await control_body(request)
+    request.state.node_control_body = body
     try:
         relation = await state.authenticate(request.headers, request.method, control_path(request), body,
             allow_pending=pending, allow_revoked=revoked)
@@ -98,7 +99,18 @@ async def revoke(request: Request):
 
 @router.post("/heartbeat")
 async def heartbeat(request: Request):
-    await authenticated(request)
+    relation = await authenticated(request)
+    if request is not None:
+        try:
+            value = json.loads(request.state.node_control_body or b"{}")
+            mode = value.get("mode")
+            if mode is not None:
+                if relation["direction"] != "upstream" or mode not in ("Relay", "Direct"):
+                    raise p.ProtocolError("Invalid relationship mode")
+                if mode != relation["mode"]:
+                    await state.accept_mode(relation["relationship_id"], mode, relation["peer_id"])
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise HTTPException(400, "Invalid heartbeat configuration") from exc
     # Only our own outbound probe establishes peer reachability. Incoming probes
     # must not hide a peer whose HTTPS/media ingress is broken.
     return await catalog.summary()
