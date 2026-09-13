@@ -10,6 +10,7 @@ import copy
 import json
 import os
 import re
+import socket
 import ssl
 import struct
 import subprocess
@@ -23,6 +24,12 @@ import httpx
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class Checks(list):
+    def append(self, value):
+        super().append(value)
+        print(json.dumps({"stage": value}), flush=True)
 
 
 def command(*arguments, **kwargs):
@@ -226,6 +233,19 @@ def wav(path, seconds=12, tone=500):
     command("sudo", "chown", "10001:10001", str(path))
 
 
+def browser_args(nodes):
+    from urllib.parse import urlsplit
+    hosts = {urlsplit(node.endpoint).hostname for node in nodes}
+    hosts.add("cdnjs.cloudflare.com")
+    mappings = []
+    for host in sorted(hosts):
+        addresses = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
+        mappings.append(f"MAP {host} {addresses[0][4][0]}")
+    # Use the same working DNS answers as the HTTPS control tests. Hostnames,
+    # SNI, and certificate validation stay intact; only browser DNS is explicit.
+    return ["--autoplay-policy=no-user-gesture-required", "--host-resolver-rules=" + ",".join(mappings)]
+
+
 def browser_checks(browser, master, slave, resource):
     context = browser.new_context()  # TLS errors are never ignored.
     context.add_cookies([{ "name": item.name, "value": item.value, "domain": item.domain,
@@ -263,7 +283,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("/tmp/federation-acceptance.json"))
     arguments = parser.parse_args()
     assert arguments.soak_seconds >= 310, "The acceptance soak must include real token expiration"
-    report, nodes = {"checks": [], "samples": []}, []
+    report, nodes = {"checks": Checks(), "samples": []}, []
     with tempfile.TemporaryDirectory(prefix="frontiercloud-acceptance-") as temporary:
         directory = Path(temporary)
         ca = directory / "ca.pem"
@@ -291,7 +311,12 @@ def main():
                 assert node.nodes()["node_id"] == node_id and node.nodes()["role"] == role
             report["checks"].append("durable roles and node IDs across reboot")
             package = a.pair(b)
+            a.wait_online()
+            assert len(a.nodes()["relationships"]) == 1 and len(b.nodes()["relationships"]) == 1
+            report["checks"].append("two-node Master/Slave topology")
             c.pair(b)
+            assert len(b.nodes()["relationships"]) == 2
+            assert c.endpoint not in json.dumps(a.nodes()) and a.endpoint not in json.dumps(c.nodes())
             c.api("/api/v1/media/admin/nodes/pair", {"package": package}, expected=409)
             for master in (a, c):
                 master.wait_online()
@@ -333,7 +358,7 @@ def main():
                     assert (urlsplit_origin(full.url) == master.endpoint) == (mode == "Relay")
             report["checks"].append("Relay/Direct content, HEAD, 206, ETag, If-Range, continuity")
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
+                browser = playwright.chromium.launch(args=browser_args(nodes))
                 for mode in ("Relay", "Direct"):
                     a.mode(mode)
                     browser_checks(browser, a, b, a.resource)
@@ -397,6 +422,17 @@ def main():
             start = time.monotonic()
             a.mode("Relay")
             large = next(item for item in a.resources() if item["path"].endswith("large.wav"))
+            # Keep one actual public player paused across capability expiry.
+            a.mode("Direct")
+            held_playwright = sync_playwright().start()
+            held_browser = held_playwright.chromium.launch(args=browser_args(nodes))
+            held_page = held_browser.new_page()
+            held_page.goto(a.endpoint + "/api/v1/media/music/category?path=music/shared", wait_until="domcontentloaded")
+            held_page.wait_for_function("typeof art !== 'undefined' && art && art.video", timeout=60000)
+            held_page.evaluate("id => { selectMedia(currentMediaList.findIndex(item => item.resource_id === id)); art.video.preload='metadata'; }", large["resource_id"])
+            held_page.wait_for_function("art.video.readyState >= 1", timeout=60000)
+            held_page.evaluate("art.video.pause()")
+            a.mode("Relay")
             baseline = a.measure()
             while time.monotonic() - start < arguments.soak_seconds:
                 with a.client.stream("GET", a.endpoint + large["url"]) as response:
@@ -411,6 +447,11 @@ def main():
                 assert sample["temporary"] == baseline["temporary"], "Master wrote temporary media"
                 time.sleep(15)
             assert a.client.get(expired_url).status_code == 401
+            a.mode("Direct")
+            held_page.evaluate("art.video.currentTime=1800; void art.video.play().catch(() => {})")
+            held_page.wait_for_function("art.video.currentTime >= 1800 && !art.video.paused && art.video.readyState >= 2", timeout=60000)
+            held_browser.close()
+            held_playwright.stop()
             for service in ("web", "nginx"):
                 first = report["samples"][-5]["master"][service]
                 last = report["samples"][-1]["master"][service]
@@ -418,7 +459,7 @@ def main():
                 assert last["fd"] - first["fd"] <= 8 and last["sockets"] - first["sockets"] <= 8, f"{service} FD/socket drift"
             a.mode("Direct")
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
+                browser = playwright.chromium.launch(args=browser_args(nodes))
                 browser_checks(browser, a, b, a.resource)
                 browser.close()
             report["checks"].append("310s large Relay cancellation soak; expired Direct rejected; browser resume; bounded RSS/FD/socket/tmp")

@@ -69,7 +69,7 @@ class Runtime:
         try:
             await self.notify_revocation(relation)
         except Exception:
-            logger.warning("Peer revocation pending", extra={"relationship_id": identifier})
+            logger.warning("Peer revocation pending", extra={"context": {"relationship_id": identifier}})
         self.start()
 
     async def notify_revocation(self, relation):
@@ -149,7 +149,7 @@ class Runtime:
                                 await self.tick(relation)
                             except Exception as exc:
                                 logger.warning("Node control operation deferred: %s", type(exc).__name__,
-                                               extra={"relationship_id": relation["relationship_id"]})
+                                               extra={"context": {"relationship_id": relation["relationship_id"]}})
                     await asyncio.gather(*(checked_tick(row) for row in relations if row["state"] != "revoked" or row in pending))
                 except Exception as exc:
                     logger.warning("Node inventory deferred: %s", type(exc).__name__)
