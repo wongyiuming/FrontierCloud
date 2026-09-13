@@ -239,6 +239,23 @@ print(json.dumps({key:sum(row[key] for row in rows) for key in ['rss','fd','sock
         if self.log: self.log.close()
         self.compose("down", "--volumes", "--remove-orphans")
 
+    def failure_diagnostics(self):
+        from urllib.parse import urlsplit
+        details = {"node": self.name, "endpoint": self.endpoint}
+        if self.endpoint:
+            try:
+                details["dns"] = sorted({row[4][0] for row in socket.getaddrinfo(urlsplit(self.endpoint).hostname, 443)})
+            except OSError as exc:
+                details["dns_error"] = str(exc)
+            try:
+                details["readiness_status"] = self.client.get(self.endpoint + "/health/ready").status_code
+            except httpx.HTTPError as exc:
+                details["readiness_error"] = str(exc)
+        path = self.directory / "tunnel.log"
+        if path.exists():
+            details["tunnel"] = path.read_text()[-4000:]
+        print(json.dumps({"network_diagnostics": details}), flush=True)
+
 
 def wav(path, seconds=12, tone=500):
     import math
@@ -473,6 +490,13 @@ def main():
                 a.api(f"/api/v1/media/admin/nodes/{a.relation}/sync", {})
                 a.wait_online()
             report["checks"].append("three delay/loss/restart/add/delete/full-repair recovery cycles")
+            a.compose("stop", "web")
+            try:
+                assert c.range(c.resource["url"]).status_code == 206
+                assert len(c.resources()) == 107
+            finally: a.compose("start", "web")
+            a.wait_online()
+            report["checks"].append("Master-A stopped; Master-C continues serving the same Slave independently")
             # Offline status retains catalog and revocation is independent of other Masters.
             b.compose("stop", "nginx")
             try:
@@ -502,6 +526,7 @@ def main():
             # real capability expiry, and browser seek after a long pause.
             a.mode("Direct")
             expired_url = a.client.get(a.endpoint + a.resource["url"], follow_redirects=False).headers["location"]
+            expiring_package = b.api("/api/v1/media/admin/nodes/pair-package", {})
             start = time.monotonic()
             a.mode("Relay")
             large = next(item for item in a.resources() if item["path"].endswith("large.wav"))
@@ -510,11 +535,20 @@ def main():
             held_playwright = sync_playwright().start()
             held_browser = held_playwright.chromium.launch(args=browser_args(nodes))
             held_page = held_browser.new_page()
+            held_routes = []
+            def held_route(request):
+                from urllib.parse import parse_qs, urlsplit
+                parsed = urlsplit(request.url)
+                if (urlsplit_origin(request.url) == a.endpoint and parsed.path == "/api/v1/media/stream"
+                        and parse_qs(parsed.query).get("resource_id") == [large["resource_id"]]):
+                    held_routes.append(request.url)
+            held_page.on("request", held_route)
             held_page.goto(a.endpoint + "/api/v1/media/music/category?path=music/shared", wait_until="domcontentloaded")
             held_page.wait_for_function("typeof art !== 'undefined' && art && art.video", timeout=60000)
             held_page.evaluate("id => { selectMedia(currentMediaList.findIndex(item => item.resource_id === id)); art.video.preload='metadata'; }", large["resource_id"])
             held_page.wait_for_function("art.video.readyState >= 1", timeout=60000)
             held_page.evaluate("art.video.pause()")
+            original_route_requests = len(held_routes)
             a.mode("Relay")
             baseline = a.measure()
             while time.monotonic() - start < arguments.soak_seconds:
@@ -530,9 +564,12 @@ def main():
                 assert sample["temporary"] == baseline["temporary"], "Master wrote temporary media"
                 time.sleep(15)
             assert a.client.get(expired_url).status_code == 401
+            expired_pair = a.api("/api/v1/media/admin/nodes/pair", {"package": expiring_package}, expected=409)
+            assert "过期" in expired_pair["detail"]
             a.mode("Direct")
             held_page.evaluate("art.video.currentTime=1800; void art.video.play().catch(() => {})")
             held_page.wait_for_function("art.video.currentTime >= 1800 && !art.video.paused && art.video.readyState >= 2", timeout=60000)
+            assert len(held_routes) > original_route_requests, "Long-pause resume never requested a fresh business route"
             held_browser.close()
             held_playwright.stop()
             held_browser, held_playwright = None, None
@@ -565,6 +602,7 @@ def main():
                 browser_network_failure(directory)
                 for node in nodes:
                     try:
+                        node.failure_diagnostics()
                         logs = node.compose("logs", "--no-color", "--tail", "60", "web", "nginx")
                         print("\n".join(line for line in logs.splitlines() if "initial_runtime_secrets" not in line), flush=True)
                     except Exception: pass
