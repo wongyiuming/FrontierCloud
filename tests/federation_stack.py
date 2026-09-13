@@ -595,7 +595,7 @@ def main():
             a.mode("Direct")
             held_page.evaluate("art.video.currentTime=1800; void art.video.play().catch(() => {})")
             try:
-                held_page.wait_for_function("art.video.currentTime >= 1800 && !art.video.paused && art.video.readyState >= 2", timeout=60000)
+                held_page.wait_for_function("art.video.currentTime >= 1805 && !art.video.paused && art.video.readyState >= 2", timeout=60000)
             finally:
                 report["browser_resume"] = held_page.evaluate("({position: art.video.currentTime, paused: art.video.paused, ready_state: art.video.readyState, media_error: art.video.error?.code || null})")
                 report["browser_resume"].update(original_requests=original_route_requests, resumed_requests=len(held_routes))
