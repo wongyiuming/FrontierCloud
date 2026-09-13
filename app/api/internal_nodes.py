@@ -94,8 +94,7 @@ async def confirm(request: Request):
 @router.post("/revoke")
 async def revoke(request: Request):
     relation = await authenticated(request, pending=True, revoked=True)
-    if relation["state"] != "revoked":
-        await state.revoke(relation["relationship_id"], relation["peer_id"])
+    await state.revoke(relation["relationship_id"], relation["peer_id"], peer_confirmed=True)
     from app.services.media_catalog_cache import invalidate_media_catalog
     await invalidate_media_catalog()
     return {"state": "revoked", "protocol": p.PROTOCOL_VERSION}

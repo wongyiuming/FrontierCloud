@@ -194,10 +194,13 @@ class State:
                 await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == identifier).values(state="active"))
                 await self.log(conn, "pair-activated", actor, identifier)
 
-    async def revoke(self, identifier: str, actor: str):
+    async def revoke(self, identifier: str, actor: str, *, peer_confirmed=False):
         async with self.database.begin() as conn:
             await self.lock(conn)
-            result = await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == identifier).values(state="revoked", status="offline"))
+            values = dict(state="revoked", status="offline")
+            if peer_confirmed:
+                values["summary"] = {"revocation_acknowledged": True}
+            result = await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == identifier).values(**values))
             if not result.rowcount:
                 raise p.ProtocolError("Unknown relationship")
             await self.log(conn, "relationship-revoked", actor, identifier)

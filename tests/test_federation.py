@@ -190,6 +190,24 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         await restarted.initialize()
         self.assertEqual(restarted.node["role"], "Standalone")
 
+    async def test_authenticated_peer_revocation_needs_no_reverse_notification(self):
+        from fastapi import FastAPI
+        import httpx
+        await self.slave()
+        identifier, credential, _, _ = await self.consumed()
+        await self.store.activate(identifier, "master")
+        application = FastAPI()
+        application.include_router(internal_nodes.router)
+        path, body = "/internal/v1/revoke", b"{}"
+        with patch.object(internal_nodes, "state", self.store), patch.object(internal_nodes.settings, "TLS_ENABLED", True), patch("app.services.media_catalog_cache.invalidate_media_catalog", new=AsyncMock()):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="https://slave.example.com") as client:
+                for _ in range(2):
+                    response = await client.post(path, content=body, headers=p.auth_headers(credential, identifier, "POST", path, body))
+                    self.assertEqual(response.status_code, 200)
+                    row = await self.store.relationship(identifier)
+                    self.assertEqual(row["state"], "revoked")
+                    self.assertTrue(row["summary"].get("revocation_acknowledged"))
+
     async def test_repair_preserves_unacknowledged_revocation_credentials(self):
         await self.store.promote("Master", "https://master.example.com", "admin")
         owner, old_id, new_id = peer("Slave"), uuid.uuid4().hex, uuid.uuid4().hex
