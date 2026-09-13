@@ -18,6 +18,7 @@ import tempfile
 import time
 import uuid
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -124,6 +125,18 @@ class Node:
     def start(self):
         self.compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "180")
         self.compose("exec", "-T", "nginx", "nginx", "-t")
+        trusted = ssl.create_default_context(cafile=str(self.ca))
+        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as connection:
+            with trusted.wrap_socket(connection, server_hostname=self.host):
+                pass
+        for context, hostname in ((ssl.create_default_context(), self.host), (trusted, "wrong.frontiercloud.local")):
+            try:
+                with socket.create_connection(("127.0.0.1", self.port), timeout=10) as connection:
+                    with context.wrap_socket(connection, server_hostname=hostname):
+                        pass
+            except ssl.SSLCertVerificationError:
+                continue
+            raise AssertionError("Untrusted CA or mismatched TLS hostname was accepted")
         self.log = open(self.directory / "tunnel.log", "w+")
         self.tunnel = subprocess.Popen(["cloudflared", "tunnel", "--no-autoupdate", "--protocol", "http2",
             "--url", f"https://127.0.0.1:{self.port}", "--origin-server-name", self.host,
@@ -240,10 +253,31 @@ def browser_args(nodes):
     mappings = []
     for host in sorted(hosts):
         addresses = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
-        mappings.append(f"MAP {host} {addresses[0][4][0]}")
+        mappings.append(f"{addresses[0][4][0]} {host}")
     # Use the same working DNS answers as the HTTPS control tests. Hostnames,
     # SNI, and certificate validation stay intact; only browser DNS is explicit.
-    return ["--autoplay-policy=no-user-gesture-required", "--host-resolver-rules=" + ",".join(mappings)]
+    command("sudo", "tee", "-a", "/etc/hosts", input="\n" + "\n".join(mappings) + "\n")
+    print(json.dumps({"browser_dns": mappings}), flush=True)
+    return ["--autoplay-policy=no-user-gesture-required", "--no-proxy-server", "--disable-quic",
+            "--log-net-log=" + str(nodes[0].directory.parent / "browser-network.json")]
+
+
+def browser_network_failure(directory):
+    path = directory / "browser-network.json"
+    if not path.exists():
+        return
+    try:
+        log = json.loads(path.read_text())
+        types = {value: key for key, value in log["constants"]["logEventTypes"].items()}
+        records = []
+        for event in log["events"]:
+            name, params = types.get(event["type"], ""), event.get("params", {})
+            if "HOST_RESOLVER" in name or "DNS" in name:
+                records.append({"type": name, "params": {key: value for key, value in params.items()
+                    if key in ("host", "hostname", "net_error", "addresses", "dns_query_type", "error")}})
+        print(json.dumps({"browser_network": records[-40:]}), flush=True)
+    except (ValueError, KeyError):
+        print(json.dumps({"browser_network": "incomplete network log"}), flush=True)
 
 
 def browser_checks(browser, master, slave, resource):
@@ -284,6 +318,8 @@ def main():
     arguments = parser.parse_args()
     assert arguments.soak_seconds >= 310, "The acceptance soak must include real token expiration"
     report, nodes = {"checks": Checks(), "samples": []}, []
+    held_playwright, held_browser = None, None
+    original_hosts = Path("/etc/hosts").read_text()
     with tempfile.TemporaryDirectory(prefix="frontiercloud-acceptance-") as temporary:
         directory = Path(temporary)
         ca = directory / "ca.pem"
@@ -302,6 +338,7 @@ def main():
                     wav(node.data / "media/music/shared/large.wav", seconds=2400)
                 node.start()
             a, b, c = nodes
+            report["checks"].append("trusted TLS succeeds; unknown CA and wrong hostname rejected on every node")
             for node, role in ((a, "Master"), (b, "Slave"), (c, "Master")):
                 node.promote(role)
                 node_id = node.nodes()["node_id"]
@@ -367,8 +404,9 @@ def main():
             # Idempotent stats are owned by each Master, independent of the same source file.
             session = str(uuid.uuid4())
             payload = {"media_path": a.resource["path"], "resource_id": a.resource["resource_id"], "playback_session_id": session, "played_seconds": 30, "duration": 60}
-            counted = [a.api("/api/v1/media/playback", payload)["counted"] for _ in range(3)]
-            assert counted == [True, False, False]
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                counted = list(executor.map(lambda _: a.api("/api/v1/media/playback", payload)["counted"], range(12)))
+            assert sum(counted) == 1
             a.api("/api/v1/media/preference", {"media_path": payload["media_path"], "resource_id": payload["resource_id"], "delta": 1})
             report["checks"].append("Master accounting idempotence and authoritative preference")
             # Repeated short faults exercise connection release and sync convergence.
@@ -398,6 +436,8 @@ def main():
             # Offline status retains catalog and revocation is independent of other Masters.
             b.compose("stop", "nginx")
             try:
+                unavailable = a.range(a.resource["url"])
+                assert unavailable.status_code in (502, 503, 504), "Broken media ingress did not surface an error"
                 wait_for(lambda: any(row["relationship_id"] == a.relation and row["status"] == "offline" for row in a.nodes()["relationships"]), seconds=180, description="offline relationship")
                 assert len(a.resources()) == 107
                 assert a.range(a.resource["url"]).status_code == 503
@@ -452,6 +492,7 @@ def main():
             held_page.wait_for_function("art.video.currentTime >= 1800 && !art.video.paused && art.video.readyState >= 2", timeout=60000)
             held_browser.close()
             held_playwright.stop()
+            held_browser, held_playwright = None, None
             for service in ("web", "nginx"):
                 first = report["samples"][-5]["master"][service]
                 last = report["samples"][-1]["master"][service]
@@ -472,8 +513,13 @@ def main():
             report["checks"].append("explicit reset revokes old relationships; media retained")
             report["result"] = "passed"
         finally:
+            if held_browser:
+                held_browser.close()
+            if held_playwright:
+                held_playwright.stop()
             arguments.output.write_text(json.dumps(report, indent=2))
             if report.get("result") != "passed":
+                browser_network_failure(directory)
                 for node in nodes:
                     try:
                         logs = node.compose("logs", "--no-color", "--tail", "60", "web", "nginx")
@@ -483,6 +529,7 @@ def main():
                 try: node.stop()
                 except Exception: pass
             command("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(directory))
+            command("sudo", "tee", "/etc/hosts", input=original_hosts)
     print(json.dumps({"result": report.get("result", "failed"), "checks": report["checks"], "samples": len(report["samples"])}))
 
 
