@@ -140,7 +140,7 @@ class Node:
         self.log = open(self.directory / "tunnel.log", "w+")
         self.tunnel = subprocess.Popen(["cloudflared", "tunnel", "--no-autoupdate", "--protocol", "http2",
             "--url", f"https://127.0.0.1:{self.port}", "--origin-server-name", self.host,
-            "--http-host-header", self.host, "--origin-ca-pool", str(self.ca)], stdout=self.log, stderr=subprocess.STDOUT)
+            "--origin-ca-pool", str(self.ca)], stdout=self.log, stderr=subprocess.STDOUT)
         def tunnel_url():
             self.log.flush()
             text = (self.directory / "tunnel.log").read_text()
@@ -150,6 +150,10 @@ class Node:
         self.client = httpx.Client(verify=ssl.create_default_context(), trust_env=False, timeout=20, follow_redirects=True)
         wait_for(lambda: self.client.get(self.endpoint + "/health/ready").status_code == 200,
                  description=f"{self.name} verified HTTPS readiness")
+        from urllib.parse import urljoin
+        redirect = self.client.get(self.endpoint + "/api/v1/media/admin", follow_redirects=False)
+        assert redirect.status_code == 301
+        assert urlsplit_origin(urljoin(self.endpoint, redirect.headers["location"])) == self.endpoint
         key = self.web("from app.core.config import ADMIN_KEY_FILE; print(ADMIN_KEY_FILE.read_text().strip())")
         response = self.client.post(self.endpoint + "/api/v1/media/admin/elevate", data={"token": key})
         assert response.status_code == 200, f"{self.name} admin login failed"
@@ -247,18 +251,7 @@ def wav(path, seconds=12, tone=500):
 
 
 def browser_args(nodes):
-    from urllib.parse import urlsplit
-    hosts = {urlsplit(node.endpoint).hostname for node in nodes}
-    hosts.add("cdnjs.cloudflare.com")
-    mappings = []
-    for host in sorted(hosts):
-        addresses = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
-        mappings.append(f"{addresses[0][4][0]} {host}")
-    # Use the same working DNS answers as the HTTPS control tests. Hostnames,
-    # SNI, and certificate validation stay intact; only browser DNS is explicit.
-    command("sudo", "tee", "-a", "/etc/hosts", input="\n" + "\n".join(mappings) + "\n")
-    print(json.dumps({"browser_dns": mappings}), flush=True)
-    return ["--autoplay-policy=no-user-gesture-required", "--no-proxy-server", "--disable-quic",
+    return ["--autoplay-policy=no-user-gesture-required",
             "--log-net-log=" + str(nodes[0].directory.parent / "browser-network.json")]
 
 
@@ -280,13 +273,56 @@ def browser_network_failure(directory):
         print(json.dumps({"browser_network": "incomplete network log"}), flush=True)
 
 
-def browser_checks(browser, master, slave, resource):
+def admin_page(browser, node):
     context = browser.new_context()  # TLS errors are never ignored.
     context.add_cookies([{ "name": item.name, "value": item.value, "domain": item.domain,
-        "path": item.path, "secure": item.secure, "httpOnly": item.name.endswith("session") } for item in master.client.cookies.jar])
+        "path": item.path, "secure": item.secure, "httpOnly": item.name.endswith("session") } for item in node.client.cookies.jar])
     page = context.new_page()
-    page.goto(master.endpoint + "/api/v1/media/admin", wait_until="domcontentloaded")
+    page.goto(node.endpoint + "/api/v1/media/admin", wait_until="domcontentloaded")
     page.locator('#nodesPanel .module-heading').click()
+    page.wait_for_function("document.querySelector('#nodeIdentity').textContent.includes(' / v')")
+    return context, page
+
+
+def browser_promote(browser, node, role):
+    context, page = admin_page(browser, node)
+    page.select_option('#nodeRole', role)
+    page.fill('#nodeEndpoint', node.endpoint)
+    page.locator('#nodePromotion button[type="submit"]').click()
+    page.wait_for_function("role => document.querySelector('#nodeIdentity').textContent.startsWith(role)", arg=role)
+    assert not page.locator('#nodePromotion').is_visible()
+    context.close()
+
+
+def browser_pair(browser, master, slave):
+    slave_context, slave_page = admin_page(browser, slave)
+    slave_page.locator('#nodeIssuePair').click()
+    slave_page.wait_for_function("document.querySelector('#nodePairPackage').value.includes('signature')")
+    package = json.loads(slave_page.input_value('#nodePairPackage'))
+    master_context, master_page = admin_page(browser, master)
+    master_page.fill('#nodePairPackage', json.dumps(package))
+    master_page.locator('#nodeImportPair').click()
+    master_page.wait_for_function("document.querySelector('#nodeOperationStatus').textContent === '已完成'", timeout=60000)
+    master_page.wait_for_function("document.querySelector('#nodeRelationships').rows.length === 1", timeout=60000)
+    master.relation = master.nodes()["relationships"][0]["relationship_id"]
+    slave_page.locator('#nodesRefresh').click()
+    slave_page.wait_for_function("count => document.querySelector('#nodeRelationships').rows.length === count", arg=len(slave.nodes()["relationships"]))
+    master_context.close()
+    slave_context.close()
+    return package
+
+
+def browser_revoke(browser, master):
+    context, page = admin_page(browser, master)
+    page.locator('#nodeRelationships button').filter(has_text='撤销关系').click()
+    page.wait_for_function("document.querySelector('#nodeRelationships').rows.length === 0", timeout=60000)
+    context.close()
+
+
+def browser_checks(browser, master, slave, resource, mode):
+    context, page = admin_page(browser, master)
+    page.select_option('#nodeRelationships select', mode)
+    page.wait_for_function("document.querySelector('#nodeOperationStatus').textContent === '已完成'")
     page.locator('#nodeTestResource').wait_for(state="visible")
     page.wait_for_function("document.querySelector('#nodeTestResource').options.length > 0")
     page.select_option('#nodeTestResource', resource["resource_id"])
@@ -304,6 +340,8 @@ def browser_checks(browser, master, slave, resource):
     page.wait_for_function("typeof art !== 'undefined' && art && art.video", timeout=60000)
     assert page.locator('.media-search-input, input[type="search"]').count() == 0
     assert page.locator(f'[data-media-id="{resource["resource_id"]}"]').count() == 1
+    page.evaluate("selectMedia(currentMediaList.findIndex(item => !item.resource_id))")
+    page.wait_for_function("art.video.currentTime > 0.1 && !art.video.paused", timeout=30000)
     page.evaluate("id => selectMedia(currentMediaList.findIndex(item => item.resource_id === id))", resource["resource_id"])
     page.wait_for_function("art.video.readyState >= 1", timeout=60000)
     page.evaluate("async () => { await art.video.play(); art.video.pause(); art.video.currentTime=6; await art.video.play(); }")
@@ -319,7 +357,6 @@ def main():
     assert arguments.soak_seconds >= 310, "The acceptance soak must include real token expiration"
     report, nodes = {"checks": Checks(), "samples": []}, []
     held_playwright, held_browser = None, None
-    original_hosts = Path("/etc/hosts").read_text()
     with tempfile.TemporaryDirectory(prefix="frontiercloud-acceptance-") as temporary:
         directory = Path(temporary)
         ca = directory / "ca.pem"
@@ -339,19 +376,22 @@ def main():
                 node.start()
             a, b, c = nodes
             report["checks"].append("trusted TLS succeeds; unknown CA and wrong hostname rejected on every node")
-            for node, role in ((a, "Master"), (b, "Slave"), (c, "Master")):
-                node.promote(role)
-                node_id = node.nodes()["node_id"]
-                # A node reboot retains role and ID; role interchange remains rejected.
-                node.compose("restart", "web")
-                wait_for(lambda: node.client.get(node.endpoint + "/health/ready").status_code == 200)
-                assert node.nodes()["node_id"] == node_id and node.nodes()["role"] == role
-            report["checks"].append("durable roles and node IDs across reboot")
-            package = a.pair(b)
-            a.wait_online()
-            assert len(a.nodes()["relationships"]) == 1 and len(b.nodes()["relationships"]) == 1
-            report["checks"].append("two-node Master/Slave topology")
-            c.pair(b)
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(args=browser_args(nodes))
+                for node, role in ((a, "Master"), (b, "Slave"), (c, "Master")):
+                    browser_promote(browser, node, role)
+                    node_id = node.nodes()["node_id"]
+                    # A node reboot retains role and ID; role interchange remains rejected.
+                    node.compose("restart", "web")
+                    wait_for(lambda: node.client.get(node.endpoint + "/health/ready").status_code == 200)
+                    assert node.nodes()["node_id"] == node_id and node.nodes()["role"] == role
+                report["checks"].append("browser role promotion; durable roles and node IDs across reboot")
+                package = browser_pair(browser, a, b)
+                a.wait_online()
+                assert len(a.nodes()["relationships"]) == 1 and len(b.nodes()["relationships"]) == 1
+                report["checks"].append("browser pairing and two-node Master/Slave topology")
+                browser_pair(browser, c, b)
+                browser.close()
             assert len(b.nodes()["relationships"]) == 2
             assert c.endpoint not in json.dumps(a.nodes()) and a.endpoint not in json.dumps(c.nodes())
             c.api("/api/v1/media/admin/nodes/pair", {"package": package}, expected=409)
@@ -398,7 +438,7 @@ def main():
                 browser = playwright.chromium.launch(args=browser_args(nodes))
                 for mode in ("Relay", "Direct"):
                     a.mode(mode)
-                    browser_checks(browser, a, b, a.resource)
+                    browser_checks(browser, a, b, a.resource, mode)
                 browser.close()
             report["checks"].append("Admin and real public browser playback, pause, seek, restart, both modes")
             # Idempotent stats are owned by each Master, independent of the same source file.
@@ -447,7 +487,10 @@ def main():
             a.mode("Direct")
             old_response = a.client.get(a.endpoint + a.resource["url"], follow_redirects=False)
             old_token_url = old_response.headers["location"]
-            a.api(f"/api/v1/media/admin/nodes/{a.relation}/revoke", {})
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(args=browser_args(nodes))
+                browser_revoke(browser, a)
+                browser.close()
             assert a.client.get(old_token_url).status_code == 401
             assert c.range(c.resource["url"]).status_code == 206
             a.pair(b)
@@ -501,7 +544,7 @@ def main():
             a.mode("Direct")
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(args=browser_args(nodes))
-                browser_checks(browser, a, b, a.resource)
+                browser_checks(browser, a, b, a.resource, "Direct")
                 browser.close()
             report["checks"].append("310s large Relay cancellation soak; expired Direct rejected; browser resume; bounded RSS/FD/socket/tmp")
             # Explicit Slave reset revokes all relationships but retains owned files.
@@ -529,7 +572,6 @@ def main():
                 try: node.stop()
                 except Exception: pass
             command("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(directory))
-            command("sudo", "tee", "/etc/hosts", input=original_hosts)
     print(json.dumps({"result": report.get("result", "failed"), "checks": report["checks"], "samples": len(report["samples"])}))
 
 
