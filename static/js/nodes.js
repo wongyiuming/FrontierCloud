@@ -16,7 +16,7 @@
         result.value = value; result.textContent = label; return result;
     };
     async function action(work) {
-        try { status('处理中'); await work(); status('已完成'); await refresh(); }
+        try { status('处理中'); await work(); await refresh(); status('已完成'); }
         catch (error) { status(error.message); }
     }
     function button(label, work) {
@@ -73,11 +73,13 @@
     }
     async function loadResources() {
         const identifier = element('nodeTestRelationship').value;
-        const select = element('nodeTestResource'); select.replaceChildren(); resources = [];
+        const select = element('nodeTestResource'); const selected = select.value;
+        select.replaceChildren(); resources = [];
         if (!identifier) return;
         const result = await api(`/api/v1/media/admin/nodes/${identifier}/resources`);
         resources = result.items;
         for (const resource of resources) select.appendChild(option(resource.resource_id, resource.path));
+        if (resources.some(resource => resource.resource_id === selected)) select.value = selected;
     }
     const selectedResource = () => resources.find(resource => resource.resource_id === element('nodeTestResource').value);
     const report = value => { element('nodeTestResult').textContent = JSON.stringify(value, null, 2); };

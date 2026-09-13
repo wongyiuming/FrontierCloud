@@ -348,7 +348,8 @@ def browser_checks(browser, master, slave, resource, mode):
     diagnostic = json.loads(page.locator('#nodeTestResult').inner_text())
     print(json.dumps({"browser_diagnostic": mode, **diagnostic}, ensure_ascii=False), flush=True)
     assert diagnostic["result"] == "通过", diagnostic
-    page.wait_for_function("document.querySelector('#nodeTestPlayer').readyState >= 1", timeout=60000)
+    assert diagnostic["configured_mode"] == mode and diagnostic["actual_route"] == mode
+    page.wait_for_function("document.querySelector('#nodeTestPlayer').readyState >= 1 && document.querySelector('#nodeTestPlayer').duration >= 19", timeout=60000)
     page.locator('#nodeSeekTest').click()
     page.wait_for_function("!document.querySelector('#nodeTestPlayer').paused", timeout=30000)
     page.locator('#nodeRestartTest').click()
