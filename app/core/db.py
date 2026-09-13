@@ -401,6 +401,9 @@ async def init_db() -> None:
             from app.services.federation.schema import migration_statements
             for statement in migration_statements():
                 await _commit_ddl(conn, statement)
+            if not await _index_exists(conn, "node_media_catalog", "idx_node_catalog_path"):
+                await _commit_ddl(conn, "CREATE INDEX idx_node_catalog_path ON node_media_catalog (path(191))")
+            await conn.commit()
         except BaseException:
             try:
                 await conn.rollback()

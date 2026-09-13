@@ -48,6 +48,8 @@ def _inventory(root, hidden):
             if not directory.is_dir() or directory.is_symlink() or directory.name.startswith("."):
                 continue
             for candidate in directory.iterdir():
+                if candidate.name.startswith("."):
+                    continue
                 candidates = candidate.iterdir() if candidate.is_dir() and not candidate.is_symlink() else (candidate,)
                 for file in candidates:
                     if file.is_symlink() or not file.is_file() or file.name.startswith(".") or file.suffix.lower() not in extensions:

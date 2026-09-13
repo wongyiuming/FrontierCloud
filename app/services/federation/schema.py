@@ -2,7 +2,7 @@
 from sqlalchemy import (BigInteger, Column, Integer, JSON, MetaData, String,
                         Table, Text, UniqueConstraint, Index)
 from sqlalchemy.dialects import mysql
-from sqlalchemy.schema import CreateTable
+from sqlalchemy.schema import CreateTable, CreateIndex
 
 metadata = MetaData()
 
@@ -79,6 +79,7 @@ catalog = Table("node_media_catalog", metadata,
     Column("payload", JSON, nullable=False),
     UniqueConstraint("owner_id", "object_id", name="uq_node_catalog_identity"))
 Index("idx_node_catalog_relationship", catalog.c.relationship_id)
+Index("idx_node_catalog_path", catalog.c.path, mysql_length=191)
 
 stats = Table("node_playback_stats", metadata,
     Column("resource_id", String(64), primary_key=True),
@@ -95,9 +96,12 @@ Index("idx_node_playback_expiry", events.c.expires_at)
 def migration_statements():
     # MySQL DDL commits individually under the existing schema migration lock.
     for table in metadata.sorted_tables:
-        table.dialect_options["mysql"].update(engine="InnoDB", charset="utf8mb4", collation="utf8mb4_bin")
+        table.dialect_options["mysql"].update(engine="InnoDB", charset="utf8mb4", collate="utf8mb4_bin")
         statement = str(CreateTable(table, if_not_exists=True).compile(dialect=mysql.dialect()))
         position = statement.rfind(")")
-        indexes = "".join(f",\n INDEX {index.name} ({', '.join(column.name for column in index.columns)})"
-                          for index in sorted(table.indexes, key=lambda item: item.name))
+        indexes = ""
+        for index in sorted(table.indexes, key=lambda item: item.name):
+            statement_index = str(CreateIndex(index).compile(dialect=mysql.dialect()))
+            columns = statement_index[statement_index.index("("):]
+            indexes += f",\n INDEX {index.name} {columns}"
         yield statement[:position] + indexes + "\n" + statement[position:]

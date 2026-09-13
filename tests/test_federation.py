@@ -255,6 +255,12 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_mysql_schema_uses_collate_and_bounded_path_prefix_index(self):
+        statements = list(s.migration_statements())
+        self.assertTrue(all("COLLATE=utf8mb4_bin" in statement for statement in statements))
+        self.assertTrue(all("COLLATION=" not in statement for statement in statements))
+        self.assertTrue(any("INDEX idx_node_catalog_path (path(191))" in statement for statement in statements))
+
     def test_media_token_binds_owner_resource_master_relation_and_expiry(self):
         credential = secrets.token_urlsafe(48)
         now = int(time.time())
