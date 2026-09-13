@@ -265,6 +265,16 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(runtime.task)
             opened.assert_not_called()
 
+    async def test_fixed_role_cannot_start_with_tls_disabled_or_reset_itself(self):
+        await self.store.promote("Master", "https://master.example.com", "admin")
+        runtime = Runtime()
+        with patch("app.services.federation.runtime.state", self.store), patch("app.services.federation.runtime.settings.TLS_ENABLED", False), patch("app.services.federation.runtime.transport.open") as opened:
+            with self.assertRaises(p.ProtocolError):
+                runtime.start()
+            opened.assert_not_called()
+        self.assertIsNone(runtime.task)
+        self.assertEqual(self.store.node["role"], "Master")
+
     async def test_incoming_heartbeat_cannot_mask_broken_peer_ingress(self):
         with patch.object(internal_nodes, "authenticated", new=AsyncMock()), patch.object(internal_nodes.catalog, "summary", new=AsyncMock(return_value={"protocol": 1})), patch.object(internal_nodes.state, "heartbeat", new=AsyncMock()) as recorded:
             self.assertEqual(await internal_nodes.heartbeat(None), {"protocol": 1})
@@ -272,6 +282,27 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_remote_media_entry_rejects_untrusted_http(self):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import Response
+        from app.api.v1 import media
+        application = FastAPI()
+        application.include_router(media.router, prefix="/media")
+        routed = AsyncMock(return_value=Response(status_code=307))
+        lyrics = AsyncMock(return_value=[])
+        with patch.object(routing, "stream", new=routed), patch.object(routing, "lyric_entries", new=lyrics), patch.object(internal_nodes.settings, "TLS_ENABLED", True):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://master.example.com") as client:
+                paths = ["/media/stream?resource_id=" + "a" * 64] + ["/media/" + suffix + "?track=music/same/song.wav&resource_id=" + "a" * 64 for suffix in ("lyrics", "lyrics/content")]
+                for path in paths:
+                    response = await client.get(path, headers={"X-Forwarded-Proto": "https"})
+                    self.assertEqual(response.status_code, 403)
+                routed.assert_not_awaited()
+                lyrics.assert_not_awaited()
+                response = await client.get("https://master.example.com" + paths[0])
+                self.assertEqual(response.status_code, 307)
+        routed.assert_awaited_once()
+
     async def test_signed_incompatible_protocol_is_rejected(self):
         private, identifier = p.new_key(), uuid.uuid4().hex
         client = Transport()

@@ -18,6 +18,7 @@ from app.services import network_observation
 from app.services import lyrics
 from app.services import media_objects
 from app.core.config import settings
+from app.api.internal_nodes import require_https
 from app.services.federation.state import state as node_state
 from app.services.federation.catalog import catalog as node_catalog
 from app.services.federation import routing as node_routing
@@ -292,8 +293,9 @@ def load_html_template(filename: str) -> str:
 
 @router.get("/stream")
 @router.head("/stream", include_in_schema=False)
-async def stream_media_file(file_path: str | None = None, resource_id: str | None = None):
+async def stream_media_file(file_path: str | None = None, resource_id: str | None = None, request: Request = None):
     if resource_id is not None:
+        require_https(request)
         return await node_routing.stream(resource_id, file_path)
     if not file_path:
         raise HTTPException(status_code=422, detail="file_path or resource_id is required")
@@ -305,6 +307,7 @@ async def stream_media_file(file_path: str | None = None, resource_id: str | Non
         if node_state.node["role"] == "Master":
             rows = [row for row in await node_catalog.resources(directory=file_path.rsplit("/", 1)[0]) if row["path"] == file_path]
             if rows:
+                require_https(request)
                 return await node_routing.stream(rows[0]["resource_id"], file_path)
         raise HTTPException(status_code=404, detail="Media file not found")
     rel_parts = safe_path.relative_to(MEDIA_ROOT).parts
@@ -477,9 +480,10 @@ async def get_video_player_page(
 
 
 @router.get("/lyrics", response_class=HTMLResponse)
-async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024), resource_id: str | None = None):
+async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024), resource_id: str | None = None, request: Request = None):
     try:
         if resource_id:
+            require_https(request)
             entries = await node_routing.lyric_entries(resource_id, track)
         else:
             normalized_track, _track_path = lyrics.validate_track(track)
@@ -496,9 +500,10 @@ async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024)
 
 
 @router.get("/lyrics/content")
-async def get_lyrics_content(track: str = Query(..., min_length=1, max_length=1024), resource_id: str | None = None):
+async def get_lyrics_content(track: str = Query(..., min_length=1, max_length=1024), resource_id: str | None = None, request: Request = None):
     try:
         if resource_id:
+            require_https(request)
             entries = await node_routing.lyric_entries(resource_id, track)
         else:
             normalized_track, _track_path = lyrics.validate_track(track)

@@ -8,6 +8,8 @@ import time
 import uuid
 from contextlib import suppress
 
+from app.core.config import settings
+
 from . import protocol as p
 from .catalog import catalog
 from .state import state
@@ -22,6 +24,8 @@ class Runtime:
         self.wakeup = asyncio.Event()
 
     def start(self, *, revocations=False):
+        if state.node["role"] != "Standalone" and not settings.TLS_ENABLED:
+            raise p.ProtocolError("固定为 Master/Slave 的节点必须启用有效 HTTPS；请恢复 TLS_ENABLED 后启动，不会自动重置角色")
         if (state.node["role"] != "Standalone" or revocations) and (self.task is None or self.task.done()):
             transport.open()
             self.task = asyncio.create_task(self.run(), name="node-control")

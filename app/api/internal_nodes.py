@@ -20,6 +20,8 @@ router = APIRouter(prefix="/internal/v1", include_in_schema=False)
 
 
 def require_https(request: Request):
+    if request is None:
+        raise HTTPException(403, "节点资源需要经过 HTTPS 业务入口")
     forwarded = request.headers.get("x-forwarded-proto", "")
     trusted = resolve_client_identity(request.scope).from_trusted_proxy
     if not settings.TLS_ENABLED or not (request.url.scheme == "https" or (trusted and forwarded == "https")):

@@ -54,7 +54,7 @@ Provide a matching certificate at `certs/fullchain.pem` and private key at `cert
 
 ## Data and operations
 
-Media lives under host `./data`; MySQL, Redis, and secrets use `mysql_data`, `redis_data`, and `runtime_secrets` volumes. Back up the database and secrets together: node roles, identities, credentials, and catalogs persist there. Restarts and rebuilds retain roles; only explicit Admin reinitialization resets one. Ordinary `docker compose down` preserves them; `down --volumes` destroys database and secret volumes.
+Media lives under host `./data`; MySQL, Redis, and secrets use `mysql_data`, `redis_data`, and `runtime_secrets` volumes. Back up the database and secrets together: node roles, identities, credentials, and catalogs persist there. Restarts and rebuilds retain roles; only explicit Admin reinitialization resets one. Fixed Master/Slave roles require TLS on restart; disabling TLS fails startup instead of resetting or downgrading the role. Ordinary `docker compose down` preserves them; `down --volumes` destroys database and secret volumes.
 
 Do not rename or move managed files directly: paths locate objects, but cannot declare identity changes. No move API is currently provided. Deletion uses a MySQL journal and temporary quarantine; do not manually remove pending recovery data. If recovery blocks mutations, restore MySQL and restart Web. Shared-media multi-worker/multi-replica operation is not supported by this recovery mechanism.
 
