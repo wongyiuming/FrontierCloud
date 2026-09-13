@@ -26,7 +26,7 @@ if [ "$tls_enabled" != "true" ]; then
 fi
 server_name="$(docker compose exec -T nginx printenv SERVER_NAME)"
 health_attempt=0
-until curl -kfsS --resolve "$server_name:443:127.0.0.1" \
+until curl -fsS --resolve "$server_name:443:127.0.0.1" \
     "https://$server_name/health/ready" | grep '"status":"ready"'; do
     health_attempt=$((health_attempt + 1))
     if [ "$health_attempt" -ge 30 ]; then

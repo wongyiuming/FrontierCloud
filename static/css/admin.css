@@ -290,3 +290,16 @@ button:disabled { cursor: not-allowed; opacity: .35; }
     .network-filter-form { grid-template-columns: 1fr 1fr; }
     .lyrics-browser { grid-template-columns: 1fr; }
 }
+/* Node controls use the existing exclusive expandable module layout. */
+.nodes-content { min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 12px; }
+.nodes-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+.nodes-toolbar input { min-width: 180px; flex: 1; }
+.nodes-content textarea { width: 100%; box-sizing: border-box; resize: vertical; max-height: 240px; overflow: auto; }
+.nodes-table-scroll { overflow: auto; max-height: 340px; scrollbar-gutter: stable; }
+.nodes-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.nodes-table th, .nodes-table td { padding: 8px; border-bottom: 1px solid #d1d5db; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.nodes-table td:first-child { min-width: 220px; }
+.nodes-table button, .nodes-table select { margin: 3px; }
+#nodeTestResource { max-width: 55vw; }
+#nodeTestPlayer { width: min(100%, 480px); max-height: 230px; background: #111; }
+#nodeTestResult { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

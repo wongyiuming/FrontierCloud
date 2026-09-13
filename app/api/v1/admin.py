@@ -311,7 +311,7 @@ async def security_blocks(
     session_hash: str = Depends(require_session),
 ):
     if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
-        raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
+        raise HTTPException(status_code=426, detail="已启用 TLS，安全控制台只允许通过 HTTPS 访问")
     try:
         result = await ip_security.list_security_summary(
             ip_filter=ip,
@@ -333,7 +333,7 @@ async def security_unban(
     session_hash: str = Depends(require_session),
 ):
     if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
-        raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
+        raise HTTPException(status_code=426, detail="已启用 TLS，安全控制台只允许通过 HTTPS 访问")
     try:
         ip = await ip_security.unban_ip(str(payload.get("ip", "")), session_hash)
     except ValueError as exc:
@@ -349,7 +349,7 @@ async def security_reban(
     session_hash: str = Depends(require_session),
 ):
     if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
-        raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
+        raise HTTPException(status_code=426, detail="已启用 TLS，安全控制台只允许通过 HTTPS 访问")
     reason = payload.get("reason", "")
     if not isinstance(reason, str):
         raise HTTPException(status_code=400, detail="封禁原因无效")
@@ -376,7 +376,7 @@ async def security_permanent_ban(
     session_hash: str = Depends(require_session),
 ):
     if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
-        raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
+        raise HTTPException(status_code=426, detail="已启用 TLS，安全控制台只允许通过 HTTPS 访问")
     reason = payload.get("reason", "")
     if not isinstance(reason, str):
         raise HTTPException(status_code=400, detail="拉黑原因无效")
@@ -399,7 +399,7 @@ async def security_whitelist(
     session_hash: str = Depends(require_session),
 ):
     if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
-        raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
+        raise HTTPException(status_code=426, detail="已启用 TLS，安全控制台只允许通过 HTTPS 访问")
     note = payload.get("note", "")
     if not isinstance(note, str):
         raise HTTPException(status_code=400, detail="备注无效")
@@ -418,7 +418,7 @@ async def security_whitelist_remove(
     session_hash: str = Depends(require_session),
 ):
     if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
-        raise HTTPException(status_code=426, detail="生产环境安全控制台只允许通过 HTTPS 访问")
+        raise HTTPException(status_code=426, detail="已启用 TLS，安全控制台只允许通过 HTTPS 访问")
     try:
         ip = await ip_security.remove_whitelist(str(payload.get("ip", "")), session_hash)
     except ValueError as exc:
@@ -437,7 +437,7 @@ async def network_observations(
     session_hash: str = Depends(require_session),
 ):
     if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
-        raise HTTPException(status_code=426, detail="生产环境网络观测视图只允许通过 HTTPS 访问")
+        raise HTTPException(status_code=426, detail="已启用 TLS，网络观测视图只允许通过 HTTPS 访问")
     try:
         result = await network_observation.list_observation_summary(
             public_ip=public_ip,

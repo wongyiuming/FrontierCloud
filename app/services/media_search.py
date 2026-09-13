@@ -13,6 +13,11 @@ _to_simplified = OpenCC("t2s")
 _to_traditional = OpenCC("s2t")
 
 
+def simplify_filename(value: str) -> str:
+    """Clean new upload names without touching existing managed objects."""
+    return _to_simplified.convert(value)
+
+
 def compact_search_text(value: str) -> str:
     """Normalize one query without applying expensive fuzzy matching."""
     normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
