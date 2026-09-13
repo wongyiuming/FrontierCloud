@@ -130,4 +130,43 @@ for (const failure of ['network', 'status', 'truncated']) {
     assert.equal(track.children[2].className, 'sync-lyric current');
 }
 
+{
+    const p = playerContext(async () => new Response('unused'));
+    let localErrors = 0, reloads = 0, resumes = 0, restore;
+    p.context.Artplayer = class {
+        constructor(option) {
+            this.e = {};
+            this.url = option.url;
+            this.notice = {};
+            this.loading = {};
+            this.mask = {};
+            this.controls = {};
+            this.video = {
+                currentTime: 1800, duration: 2400, paused: false,
+                load() { reloads += 1; },
+                async play() { resumes += 1; },
+                addEventListener(event, listener) { if (event === 'loadedmetadata') restore = listener; },
+            };
+            this.on('video:error', () => { localErrors += 1; });
+        }
+        on(name, fn) { (this.e[name] ||= []).push({fn}); }
+        off(name) { delete this.e[name]; }
+        emit(name) { for (const listener of [...(this.e[name] || [])]) listener.fn(); }
+        async play() {}
+    };
+    p.run('art=null; initPlayer(currentMediaList[0],0); art.emit("video:error")');
+    assert.equal(localErrors, 1);
+    p.run('currentMediaList[1].resource_id="owner-b-object"; initPlayer(currentMediaList[1],1); playbackState.lastTick=performance.now(); art.emit("video:error")');
+    assert.equal(localErrors, 1);
+    assert.equal(reloads, 1);
+    assert.equal(p.run('art.video.src'), '/b');
+    restore();
+    assert.equal(p.run('art.video.currentTime'), 1800);
+    assert.equal(resumes, 1);
+    p.run('art.emit("video:error")');
+    assert.equal(reloads, 1);
+    assert.equal(p.run('art.loading.show'), false);
+    assert.equal(p.run('art.notice.show'), '媒体暂不可用，请稍后重试');
+}
+
 console.log('player-cache-smoke-ok');

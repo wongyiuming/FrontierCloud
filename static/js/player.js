@@ -444,6 +444,15 @@ function initPlayer(media, index) {
         fullscreenWeb: true,
     });
 
+    // Artplayer 5.1.1 registers a delayed URL reset in its error listener.
+    // Keep that listener for local media; owner routes use one recovery path.
+    const localErrorListeners = art.e['video:error'].slice();
+    art.off('video:error');
+    art.on('video:error', error => {
+        if (currentMediaList[currentIndex]?.resource_id && !activeObjectUrl) return;
+        for (const listener of localErrorListeners) listener.fn.call(listener.ctx, error);
+    });
+
     art.on('play', () => {
         remoteRetrySequence = -1;
         if (playbackState) playbackState.lastTick = performance.now();
@@ -472,7 +481,14 @@ function initPlayer(media, index) {
         const media = currentMediaList[currentIndex];
         const sequence = playerSwitchSequence;
         const video = art.video;
-        if (!media?.resource_id || activeObjectUrl || !video || remoteRetrySequence === sequence) return;
+        if (!media?.resource_id || activeObjectUrl || !video) return;
+        if (remoteRetrySequence === sequence) {
+            art.loading.show = false;
+            art.mask.show = true;
+            art.controls.show = true;
+            art.notice.show = '媒体暂不可用，请稍后重试';
+            return;
+        }
         remoteRetrySequence = sequence;
         const position = video.currentTime;
         const resume = playbackState?.lastTick != null && !video.paused;
