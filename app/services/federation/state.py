@@ -155,6 +155,8 @@ class State:
             existing = (await conn.execute(select(s.relationships).where(s.relationships.c.peer_id == peer["node_id"]))).mappings().first()
             if existing and existing["state"] != "revoked":
                 raise p.ProtocolError("该 Slave 已配对或正在配对；请先撤销旧关系")
+            if existing and not existing["summary"].get("revocation_acknowledged"):
+                raise p.ProtocolError("旧关系撤销通知尚未确认；恢复节点通信后重试配对")
             if existing:
                 await conn.execute(delete(s.catalog).where(s.catalog.c.relationship_id == existing["relationship_id"]))
                 await conn.execute(delete(s.relationships).where(s.relationships.c.relationship_id == existing["relationship_id"]))

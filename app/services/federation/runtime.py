@@ -53,6 +53,10 @@ class Runtime:
                 expected_key=package["public_key"], role="Slave")
         except (KeyError, TypeError) as exc:
             raise p.ProtocolError("Invalid pairing package") from exc
+        for old in await state.list_relationships(include_revoked=True):
+            if (old["peer_id"] == peer["node_id"] and old["state"] == "revoked"
+                    and not old["summary"].get("revocation_acknowledged")):
+                await self.notify_revocation(old)
         identifier, credential = uuid.uuid4().hex, secrets.token_urlsafe(48)
         await state.prepare(identifier, peer, credential, actor)
         relation = await state.relationship(identifier)

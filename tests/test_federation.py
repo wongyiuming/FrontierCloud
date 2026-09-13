@@ -190,6 +190,24 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         await restarted.initialize()
         self.assertEqual(restarted.node["role"], "Standalone")
 
+    async def test_repair_preserves_unacknowledged_revocation_credentials(self):
+        await self.store.promote("Master", "https://master.example.com", "admin")
+        owner, old_id, new_id = peer("Slave"), uuid.uuid4().hex, uuid.uuid4().hex
+        credential = secrets.token_urlsafe(48)
+        await self.store.prepare(old_id, owner, credential, "admin")
+        await self.store.activate(old_id, "admin")
+        await self.store.revoke(old_id, "admin")
+        with self.assertRaises(p.ProtocolError):
+            await self.store.prepare(new_id, owner, secrets.token_urlsafe(48), "admin")
+        old = await self.store.relationship(old_id)
+        self.assertEqual(self.store.unseal(old["credential"]), credential)
+        self.assertEqual(old["state"], "revoked")
+        async with self.database.begin() as conn:
+            await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == old_id)
+                               .values(summary={"revocation_acknowledged": True}))
+        await self.store.prepare(new_id, owner, secrets.token_urlsafe(48), "admin")
+        self.assertEqual((await self.store.relationship(new_id))["state"], "pending")
+
     async def test_catalog_distinguishes_same_path_and_rejects_stale_cursor(self):
         await self.store.promote("Master", "https://master.example.com", "admin")
         relations = []
