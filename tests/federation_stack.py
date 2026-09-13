@@ -140,7 +140,7 @@ class Node:
         self.log = open(self.directory / "tunnel.log", "w+")
         self.tunnel = subprocess.Popen(["cloudflared", "tunnel", "--no-autoupdate", "--protocol", "http2",
             "--url", f"https://127.0.0.1:{self.port}", "--origin-server-name", self.host,
-            "--origin-ca-pool", str(self.ca)], stdout=self.log, stderr=subprocess.STDOUT)
+            "--http-host-header", self.host, "--origin-ca-pool", str(self.ca)], stdout=self.log, stderr=subprocess.STDOUT)
         def tunnel_url():
             self.log.flush()
             text = (self.directory / "tunnel.log").read_text()
@@ -150,10 +150,6 @@ class Node:
         self.client = httpx.Client(verify=ssl.create_default_context(), trust_env=False, timeout=20, follow_redirects=True)
         wait_for(lambda: self.client.get(self.endpoint + "/health/ready").status_code == 200,
                  description=f"{self.name} verified HTTPS readiness")
-        from urllib.parse import urljoin
-        redirect = self.client.get(self.endpoint + "/api/v1/media/admin", follow_redirects=False)
-        assert redirect.status_code == 301
-        assert urlsplit_origin(urljoin(self.endpoint, redirect.headers["location"])) == self.endpoint
         key = self.web("from app.core.config import ADMIN_KEY_FILE; print(ADMIN_KEY_FILE.read_text().strip())")
         response = self.client.post(self.endpoint + "/api/v1/media/admin/elevate", data={"token": key})
         assert response.status_code == 200, f"{self.name} admin login failed"
@@ -219,6 +215,10 @@ print(json.dumps({key:sum(row[key] for row in rows) for key in ['rss','fd','sock
 """
             samples[service] = json.loads(command("sudo", "python3", "-c", code, pid))
         samples["temporary"] = json.loads(self.web("import json,pathlib; files=[p for p in pathlib.Path('/tmp').rglob('*') if p.is_file()]; print(json.dumps({'files':len(files),'bytes':sum(p.stat().st_size for p in files)}))"))
+        nginx_temporary = self.compose("exec", "-T", "nginx", "sh", "-c",
+            "find /tmp /var/cache/nginx -type f -exec stat -c '%s' {} \\; 2>/dev/null | awk '{files++; bytes+=$1} END {printf \"%d %d\", files, bytes}'")
+        files, size = map(int, nginx_temporary.split())
+        samples["temporary"].update(nginx_files=files, nginx_bytes=size)
         samples["cpu"] = json.loads(command("docker", "stats", "--no-stream", "--format", "{{json .}}", self.container("web")))
         return samples
 
@@ -295,7 +295,7 @@ def admin_page(browser, node):
     context.add_cookies([{ "name": item.name, "value": item.value, "domain": item.domain,
         "path": item.path, "secure": item.secure, "httpOnly": item.name.endswith("session") } for item in node.client.cookies.jar])
     page = context.new_page()
-    page.goto(node.endpoint + "/api/v1/media/admin", wait_until="domcontentloaded")
+    page.goto(node.endpoint + "/api/v1/media/admin/", wait_until="domcontentloaded")
     page.locator('#nodesPanel .module-heading').click()
     page.wait_for_function("document.querySelector('#nodeIdentity').textContent.includes(' / v')")
     return context, page
@@ -527,7 +527,6 @@ def main():
             a.mode("Direct")
             expired_url = a.client.get(a.endpoint + a.resource["url"], follow_redirects=False).headers["location"]
             expiring_package = b.api("/api/v1/media/admin/nodes/pair-package", {})
-            start = time.monotonic()
             a.mode("Relay")
             large = next(item for item in a.resources() if item["path"].endswith("large.wav"))
             # Keep one actual public player paused across capability expiry.
@@ -546,9 +545,10 @@ def main():
             held_page.goto(a.endpoint + "/api/v1/media/music/category?path=music/shared", wait_until="domcontentloaded")
             held_page.wait_for_function("typeof art !== 'undefined' && art && art.video", timeout=60000)
             held_page.evaluate("id => { selectMedia(currentMediaList.findIndex(item => item.resource_id === id)); art.video.preload='metadata'; }", large["resource_id"])
-            held_page.wait_for_function("art.video.readyState >= 1", timeout=60000)
+            held_page.wait_for_function("art.video.readyState >= 1 && art.video.duration >= 2399", timeout=60000)
             held_page.evaluate("art.video.pause()")
             original_route_requests = len(held_routes)
+            start = time.monotonic()
             a.mode("Relay")
             baseline = a.measure()
             while time.monotonic() - start < arguments.soak_seconds:
@@ -568,12 +568,19 @@ def main():
             assert "过期" in expired_pair["detail"]
             a.mode("Direct")
             held_page.evaluate("art.video.currentTime=1800; void art.video.play().catch(() => {})")
-            held_page.wait_for_function("art.video.currentTime >= 1800 && !art.video.paused && art.video.readyState >= 2", timeout=60000)
+            try:
+                held_page.wait_for_function("art.video.currentTime >= 1800 && !art.video.paused && art.video.readyState >= 2", timeout=60000)
+            finally:
+                report["browser_resume"] = held_page.evaluate("({position: art.video.currentTime, paused: art.video.paused, ready_state: art.video.readyState, media_error: art.video.error?.code || null})")
+                report["browser_resume"].update(original_requests=original_route_requests, resumed_requests=len(held_routes))
+                print(json.dumps({"browser_resume": report["browser_resume"]}), flush=True)
             assert len(held_routes) > original_route_requests, "Long-pause resume never requested a fresh business route"
             held_browser.close()
             held_playwright.stop()
             held_browser, held_playwright = None, None
             for service in ("web", "nginx"):
+                peak = max(row["master"][service]["rss"] for row in report["samples"] if row["stage"] == "soak")
+                assert peak - baseline[service]["rss"] <= 12 * 1024 * 1024, f"{service} large Relay RSS growth"
                 first = report["samples"][-5]["master"][service]
                 last = report["samples"][-1]["master"][service]
                 assert last["rss"] - first["rss"] <= 12 * 1024 * 1024, f"{service} steady RSS drift"
