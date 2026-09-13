@@ -257,8 +257,11 @@ class State:
                 return
             now = int(time.time())
             if success:
+                recovered = row["status"] != "online" and row["last_heartbeat"] != 0
+                peer_summary = dict(summary or {})
+                peer_summary["recovered_at"] = now if recovered else row["summary"].get("recovered_at", 0)
                 values = dict(status="online", failures=0, last_heartbeat=now, rtt_ms=max(0, rtt),
-                    recoveries=row["recoveries"] + int(row["status"] != "online" and row["last_heartbeat"] != 0), summary=summary or {})
+                    recoveries=row["recoveries"] + int(recovered), summary=peer_summary)
             else:
                 values = dict(failures=row["failures"] + 1,
                     status="offline" if now - row["last_heartbeat"] >= p.OFFLINE_SECONDS else "degraded")

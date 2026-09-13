@@ -275,6 +275,24 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(runtime.task)
         self.assertEqual(self.store.node["role"], "Master")
 
+    async def test_recovery_timestamp_survives_later_healthy_heartbeats(self):
+        await self.slave()
+        identifier, _, _, _ = await self.consumed()
+        await self.store.activate(identifier, "master")
+        now = int(time.time())
+        with patch("app.services.federation.state.time.time", return_value=now):
+            await self.store.heartbeat(identifier, True, 10, {"media_count": 2})
+        with patch("app.services.federation.state.time.time", return_value=now + 30):
+            await self.store.heartbeat(identifier, False)
+        with patch("app.services.federation.state.time.time", return_value=now + 35):
+            await self.store.heartbeat(identifier, True, 11, {"media_count": 3})
+        with patch("app.services.federation.state.time.time", return_value=now + 60):
+            await self.store.heartbeat(identifier, True, 12, {"media_count": 4})
+        relation = await self.store.relationship(identifier)
+        self.assertEqual(relation["summary"].get("recovered_at"), now + 35)
+        self.assertEqual(relation["recoveries"], 1)
+        self.assertEqual(relation["summary"]["media_count"], 4)
+
     async def test_incoming_heartbeat_cannot_mask_broken_peer_ingress(self):
         with patch.object(internal_nodes, "authenticated", new=AsyncMock()), patch.object(internal_nodes.catalog, "summary", new=AsyncMock(return_value={"protocol": 1})), patch.object(internal_nodes.state, "heartbeat", new=AsyncMock()) as recorded:
             self.assertEqual(await internal_nodes.heartbeat(None), {"protocol": 1})

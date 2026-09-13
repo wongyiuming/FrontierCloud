@@ -29,7 +29,7 @@
         loading = true;
         try {
             node = await api('/api/v1/media/admin/nodes');
-            element('nodeIdentity').textContent = `${node.role} · ${node.node_id} · ${node.app_version} / v${node.protocol}`;
+            element('nodeIdentity').textContent = `${node.role} · ${node.node_id} · ${node.app_version} / v${node.protocol}${node.endpoint ? ' · ' + node.endpoint : ''}`;
             visible('nodePromotion', node.role === 'Standalone');
             visible('nodePairing', node.role !== 'Standalone');
             visible('nodeIssuePair', node.role === 'Slave');
@@ -44,9 +44,10 @@
                 const row = document.createElement('tr');
                 const heartbeat = relation.last_heartbeat ? new Date(relation.last_heartbeat * 1000).toLocaleString() : '尚无心跳';
                 const summary = relation.summary || {};
+                const recovered = summary.recovered_at ? new Date(summary.recovered_at * 1000).toLocaleString() : '-';
                 for (const text of [
                     `${relation.peer_id}\n${relation.peer_endpoint}`,
-                    `${relation.state} / ${relation.status}\n${relation.rtt_ms} ms · ${heartbeat}\n失败 ${relation.failures} / 恢复 ${relation.recoveries}`,
+                    `${relation.state} / ${relation.status}\n${relation.rtt_ms} ms · ${heartbeat}\n失败 ${relation.failures} / 恢复 ${relation.recoveries} · ${recovered}`,
                     `${summary.app_version || relation.peer_version} / v${relation.protocol}\n同步 ${relation.cursor} / ${summary.catalog_version || 0} · 媒体 ${summary.media_count || 0}\n可用空间 ${summary.storage_free == null ? '-' : (summary.storage_free / 1073741824).toFixed(2) + ' GiB'}`,
                 ]) {
                     const cell = document.createElement('td'); cell.textContent = text; cell.style.whiteSpace = 'pre-line'; row.appendChild(cell);
