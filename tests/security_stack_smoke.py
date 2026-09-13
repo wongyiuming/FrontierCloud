@@ -7,6 +7,7 @@ import json
 import subprocess
 import time
 import uuid
+from pathlib import Path
 
 
 def run(*args):
@@ -41,6 +42,9 @@ def main():
     run("docker", "run", "-d", "--name", name, "--network", network,
         "--entrypoint", "python", details["Image"], "-c", "import time; time.sleep(300)")
     try:
+        ca_path = Path('certs/fullchain.pem')
+        if ca_path.is_file():
+            run("docker", "cp", str(ca_path.resolve()), name + ":/tmp/frontiercloud-ca.pem")
         client = json.loads(run("docker", "inspect", name))[0]
         ip = client["NetworkSettings"]["Networks"][network]["IPAddress"]
         fixtures = [ip, "10.199.254.235", "13.11.1.1", "2001:db8::7391"]
@@ -59,10 +63,15 @@ print('fixtures-unused')
             # The configured host and TLS mode are non-secret deployment settings.
             scheme = "https" if config["tls"] else "http"
             code = f"""
-import ssl,urllib.request,urllib.error
-req=urllib.request.Request('{scheme}://nginx{path}',headers={{'Host':{config['host']!r},'X-Real-IP':'127.0.0.1'}})
+import ssl,socket,urllib.request,urllib.error
+resolver=socket.getaddrinfo
+socket.getaddrinfo=lambda host,*args,**kwargs: resolver('nginx' if host=={config['host']!r} else host,*args,**kwargs)
+req=urllib.request.Request('{scheme}://{config['host']}{path}',headers={{'X-Real-IP':'127.0.0.1'}})
 try:
-    with urllib.request.urlopen(req,context=ssl._create_unverified_context(),timeout=10) as r: print(r.status)
+    context=ssl.create_default_context()
+    from pathlib import Path
+    if Path('/tmp/frontiercloud-ca.pem').is_file(): context.load_verify_locations('/tmp/frontiercloud-ca.pem')
+    with urllib.request.urlopen(req,context=context,timeout=10) as r: print(r.status)
 except urllib.error.HTTPError as e: print(e.code)
 """
             return int(run("docker", "exec", name, "python", "-c", code))
