@@ -453,6 +453,12 @@ def main():
                                           "allow_origin": cors_head.headers.get("access-control-allow-origin"),
                                           "vary": cors_head.headers.get("vary")}), flush=True)
                         assert cors_head.status_code == 200 and cors_head.headers.get("access-control-allow-origin") == master.endpoint
+                        capability = master.client.get(master.endpoint + url, follow_redirects=False).headers["location"]
+                        other = c if master is a else a
+                        assert master.client.head(capability, headers={"Origin": other.endpoint}).status_code == 403
+                        preflight = master.client.options(capability, headers={"Origin": master.endpoint,
+                            "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "Range, If-Range"})
+                        assert preflight.status_code == 200 and preflight.headers.get("access-control-allow-origin") == master.endpoint
                     partial = master.range(url, 4000, 4095)
                     assert partial.status_code == 206 and partial.content == source[4000:4096]
                     conditional = master.client.get(master.endpoint + url, headers={"If-None-Match": full.headers["etag"]})
