@@ -154,7 +154,7 @@ class MediaManager:
 
     @staticmethod
     def validate_name(name: str) -> str:
-        name = os.path.basename(name or "").strip()
+        name = media_search.simplify_filename(os.path.basename(name or "").strip())
         if not name or name in {".", ".."} or "\x00" in name:
             raise HTTPException(status_code=400, detail="非法文件名")
         if len(name) > settings.ADMIN_MAX_FILENAME_LENGTH:

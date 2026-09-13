@@ -205,6 +205,21 @@ class MediaDeleteTransactionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FolderUploadTransactionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_new_upload_names_are_simplified_without_renaming_existing_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            album = root / "music" / "album"
+            album.mkdir(parents=True)
+            original = album / "暗湧.wav"
+            original.write_bytes(b"RIFForiginalWAVEfmt ")
+            upload = UploadFile(filename="暗湧.wav", file=io.BytesIO(b"RIFFnew-WAVEfmt "))
+            with patch.object(media_manager, "MEDIA_ROOT", root):
+                path = await media_manager.MediaManager.upload_one(upload, album)
+            await upload.close()
+            self.assertEqual(path, "music/album/暗涌.wav")
+            self.assertEqual(original.read_bytes(), b"RIFForiginalWAVEfmt ")
+            self.assertTrue((album / "暗涌.wav").exists())
+
     async def test_invalid_upload_does_not_leave_new_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
