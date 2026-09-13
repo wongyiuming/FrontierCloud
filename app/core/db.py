@@ -398,6 +398,9 @@ async def init_db() -> None:
                     INDEX idx_media_lyric_updated_at (updated_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
+            from app.services.federation.schema import migration_statements
+            for statement in migration_statements():
+                await _commit_ddl(conn, statement)
         except BaseException:
             try:
                 await conn.rollback()
