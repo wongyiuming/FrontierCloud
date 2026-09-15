@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from cryptography.fernet import Fernet
+from fastapi import HTTPException
 from sqlalchemy import event, insert, select, text, update
 from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.requests import Request
@@ -123,8 +124,8 @@ async def main():
             await store.revoke(relation_id, "fixture")
             try:
                 await remote(identifiers[0], str(uuid.uuid4()))
-            except ValueError:
-                pass
+            except HTTPException as exc:
+                assert exc.status_code == 404
             else:
                 raise AssertionError("revoked relationship accepted playback")
 
