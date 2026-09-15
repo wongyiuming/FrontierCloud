@@ -133,7 +133,8 @@ class PublicMediaHierarchyTests(unittest.IsolatedAsyncioTestCase):
         track = artist / "song.mp3"
         track.write_bytes(b"ID3payload")
 
-        with patch.object(media, "_hidden_set", new=AsyncMock(return_value=set())):
+        with patch.object(media, "_local_stream_metadata", new=AsyncMock(return_value={
+                "resource_id": "a" * 64, "owner_id": "b" * 32, "media_id": "c" * 64})):
             response = await media.stream_media_file("music/artist/song.mp3")
 
         self.assertEqual(response.body, b"")

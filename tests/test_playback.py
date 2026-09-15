@@ -27,7 +27,7 @@ class _PlaybackConnection:
         sql = str(statement)
         if "INSERT IGNORE INTO media_playback_events" in sql:
             return _Result(rowcount=self.insert_rowcount)
-        if "INSERT INTO media_playback_stats" in sql:
+        if "SET play_score=play_score + 1" in sql:
             self.increment_count += 1
             return _Result()
         if "SELECT play_score" in sql:
@@ -82,16 +82,27 @@ class PlaybackPolicyTests(unittest.TestCase):
     def test_media_path_validation_rejects_escape_and_accepts_real_file(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            category = root / "music"
-            category.mkdir()
+            category = root / "music" / "artist"
+            category.mkdir(parents=True)
             track = category / "song.mp3"
             track.write_bytes(b"ID3")
 
-            normalized, validated = playback.validate_media_path(root, "music/song.mp3")
-            self.assertEqual(normalized, "music/song.mp3")
+            normalized, validated = playback.validate_media_path(root, "music/artist/song.mp3")
+            self.assertEqual(normalized, "music/artist/song.mp3")
             self.assertEqual(validated, track.resolve())
             with self.assertRaises(ValueError):
                 playback.validate_media_path(root, "../outside.mp3")
+
+    def test_statistics_reject_nonmedia_roots_extensions_and_invalid_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path in ("lyrics/song.lrc", "music/song.mp3", "music/artist/song.lrc",
+                         "music/artist/.song.mp3", "vido/artist/song.mp3", "music/artist/sub/deep/song.mp3"):
+                file = root / path
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(b"data")
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    playback.validate_media_path(root, path)
 
     def test_session_ids_are_canonical_uuids(self):
         value = playback.normalize_session_id("D8088F10-4238-4A62-96F8-F5DD9C981FC1")
@@ -114,8 +125,8 @@ class PlaybackIdempotencyTests(unittest.IsolatedAsyncioTestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
-        (root / "music").mkdir()
-        (root / "music" / "song.mp3").write_bytes(b"ID3")
+        (root / "music" / "artist").mkdir(parents=True)
+        (root / "music" / "artist" / "song.mp3").write_bytes(b"ID3")
         connection = _PlaybackConnection(insert_rowcount)
         with (
             patch.object(playback, "engine", _Engine(connection)),
@@ -127,7 +138,7 @@ class PlaybackIdempotencyTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await playback.record_playback(
                 root,
-                "music/song.mp3",
+                "music/artist/song.mp3",
                 "d8088f10-4238-4a62-96f8-f5dd9c981fc1",
                 played_seconds=20,
                 duration=40,

@@ -5,7 +5,7 @@ import inspect
 import re
 import time
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -16,7 +16,7 @@ from app.services import ip_security as s
 
 async def main():
     prefix = "fc_security_test_" + uuid.uuid4().hex[:12] + "_"
-    tables = ["ip_auto_ban_events", "ip_permanent_whitelist", "ip_security_locks", "ip_security_audit_log"]
+    tables = ["ip_auto_ban_events", "ip_permanent_whitelist", "ip_security_locks", "ip_security_audit_log", "ip_security_projection"]
     created = []
     async with db.engine.connect() as physical:
         class FixtureConnection:
@@ -49,6 +49,8 @@ async def main():
                 await conn.execute(text(ddl.replace("CREATE TABLE IF NOT EXISTS", "CREATE TABLE", 1)))
                 created.append(table)
                 await conn.commit()
+            await conn.execute(text("INSERT INTO ip_security_projection(singleton,generation,published_generation) VALUES (1,0,0)"))
+            await conn.commit()
 
             class TemporaryEngine:
                 @asynccontextmanager
@@ -63,11 +65,15 @@ async def main():
                         yield conn
 
             @asynccontextmanager
-            async def unlocked():
+            async def unlocked(*_args, **_kwargs):
                 yield
 
-            cache = AsyncMock()
-            cache.sismember.return_value = False
+            cache = MagicMock()
+            cache.set = AsyncMock(return_value=True)
+            cache.delete = AsyncMock(return_value=1)
+            pipeline = MagicMock()
+            pipeline.execute = AsyncMock(return_value=[True] * 6)
+            cache.pipeline.return_value = pipeline
             with (patch.object(s, "engine", TemporaryEngine()),
                   patch.object(s, "redis_client", cache),
                   patch.object(s, "_security_state_guard", unlocked),
@@ -106,13 +112,12 @@ async def main():
                         raise AssertionError("Expected audit failure")
                 assert (await s.list_security_summary(ip_filter="10.199.254.235"))["events"][0]["active"]
                 assert await conn.scalar(text("SELECT COUNT(*) FROM ip_security_audit_log")) == before
-                cache.eval.return_value = [6, int(time.time() * 1000)]
-                await s.record_invalid_api("203.0.113.99", "GET", "/invalid", "fixture")
+                for _ in range(6):
+                    await s.record_invalid_api("203.0.113.99", "GET", "/invalid", "fixture")
                 assert (await s.list_security_summary(ip_filter="203.0.113.99"))["events"][0]["ban_kind"] == "auto"
                 await s.unban_ip("203.0.113.99", "a" * 64)
                 await s.record_invalid_api("203.0.113.99", "GET", "/invalid", "fixture")
                 assert (await s.list_security_summary(ip_filter="203.0.113.99"))["events"][0]["ban_kind"] == "permanent"
-                cache.eval.return_value = [1, int(time.time() * 1000)]
                 await s.record_invalid_api("203.0.113.98", "GET", "/invalid", "fixture")
                 assert (await s.list_security_summary(ip_filter="203.0.113.98"))["events"][0]["status"] == "observed"
             await conn.rollback()

@@ -158,6 +158,25 @@ class NetworkObservationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "IP 地址无效"):
             asyncio.run(network_observation.list_observation_summary(public_ip="invalid"))
 
+    def test_failed_old_request_releases_only_its_own_cooldown_reservation(self):
+        class FailedConnection(_Connection):
+            async def execute(self, *_args, **_kwargs):
+                raise RuntimeError("database unavailable")
+
+        request = Request({"type": "http", "client": ("203.0.113.5", 32000), "headers": []})
+        cache = AsyncMock()
+        cache.set.return_value = True
+        # The script reports no deletion when a subsequent request owns the key.
+        cache.eval.return_value = 0
+        with patch.object(network_observation, "redis_client", cache), \
+             patch.object(network_observation, "engine", _Engine(FailedConnection())), \
+             patch.object(network_observation.secrets, "token_hex", return_value="old-reservation"):
+            with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+                asyncio.run(network_observation.record_observation(request, ["203.0.113.5"], None))
+        cache.eval.assert_awaited_once_with(network_observation.RELEASE_RESERVATION,
+            1, network_observation.REPORT_PREFIX + "203.0.113.5", "old-reservation")
+        cache.delete.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -181,7 +181,7 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
         fake_redis = AsyncMock()
         fake_redis.sismember.return_value = False
         fake_redis.eval.return_value = [6, now_ms - 1000]
-        connection = _FakeConnection([0, 0, 0])
+        connection = _FakeConnection([0, 5, 0, 0, 0, 0])
 
         async def run_transaction(operation, **_kwargs):
             return await operation(connection)
@@ -208,7 +208,7 @@ class AutoBanThresholdTests(unittest.IsolatedAsyncioTestCase):
         fake_redis = AsyncMock()
         fake_redis.sismember.return_value = False
         fake_redis.eval.return_value = [6, now_ms - 1000]
-        connection = _FakeConnection([0, 0, 1])
+        connection = _FakeConnection([0, 5, 0, 0, 0, 1])
 
         async def run_transaction(operation, **_kwargs):
             return await operation(connection)

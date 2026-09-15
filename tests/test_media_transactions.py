@@ -200,8 +200,8 @@ class MediaDeleteTransactionTests(unittest.IsolatedAsyncioTestCase):
             if "media_visibility" in sql or "media_playback_stats" in sql
         ]
         self.assertTrue(metadata)
-        self.assertTrue(all(" LIKE " not in sql.upper() for sql, _params in metadata))
-        self.assertTrue(any(params.get("prefix") == "music/a_b/" for _sql, params in metadata))
+        self.assertTrue(all("ESCAPE '!'" in sql for sql, _params in metadata))
+        self.assertTrue(any(params.get("pattern") == "music/a!_b/%" for _sql, params in metadata))
 
 
 class FolderUploadTransactionTests(unittest.IsolatedAsyncioTestCase):

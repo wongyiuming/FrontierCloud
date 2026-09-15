@@ -65,12 +65,13 @@ class PlaybackTransactionTests(unittest.IsolatedAsyncioTestCase):
     async def test_housekeeping_failure_does_not_rollback_valid_playback(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "music").mkdir()
-            (root / "music" / "song.mp3").write_bytes(b"ID3")
+            (root / "music" / "artist").mkdir(parents=True)
+            (root / "music" / "artist" / "song.mp3").write_bytes(b"ID3")
             playback_connection = _PlaybackConnection()
             fake_engine = _Engine([_CleanupFailureConnection(), playback_connection])
             with (
                 patch.object(playback, "engine", fake_engine),
+                patch.object(playback, "_next_cleanup_at", 0.0),
                 patch.object(playback, "append_admin_log"),
                 patch.object(
                     playback.media_objects,
@@ -80,7 +81,7 @@ class PlaybackTransactionTests(unittest.IsolatedAsyncioTestCase):
             ):
                 result = await playback.record_playback(
                     root,
-                    "music/song.mp3",
+                    "music/artist/song.mp3",
                     "d8088f10-4238-4a62-96f8-f5dd9c981fc1",
                     played_seconds=20,
                     duration=40,
@@ -88,16 +89,48 @@ class PlaybackTransactionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["counted"])
         self.assertEqual(fake_engine.begin_count, 2)
-        exact_delete = playback_connection.executed[0]
-        self.assertIn("playback_session_id=:session_id", exact_delete[0])
-        self.assertIn("media_id=:media_id", exact_delete[0])
+        self.assertFalse(any("DELETE FROM media_playback_events" in sql for sql, _ in playback_connection.executed))
 
     async def test_expired_current_event_is_deleted_in_accounting_transaction(self):
-        source = __import__("inspect").getsource(playback.record_playback)
-        delete_at = source.index("playback_session_id=:session_id")
-        insert_at = source.index("INSERT IGNORE INTO media_playback_events")
-        self.assertLess(delete_at, insert_at)
-        self.assertIn("AND expires_at <= :now", source)
+        class ExpiredConnection(_PlaybackConnection):
+            inserts = 0
+
+            async def execute(self, statement, params=None):
+                sql = str(statement)
+                result = await super().execute(statement, params)
+                if "INSERT IGNORE INTO media_playback_events" in sql:
+                    self.inserts += 1
+                    return _Result(rowcount=0 if self.inserts == 1 else 1)
+                if "DELETE FROM media_playback_events" in sql:
+                    return _Result(rowcount=1)
+                return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "music/artist/song.mp3"
+            track.parent.mkdir(parents=True)
+            track.write_bytes(b"ID3")
+            conn = ExpiredConnection()
+            with patch.object(playback, "engine", _Engine([conn])), \
+                 patch.object(playback, "_cleanup_expired_events", new=AsyncMock()), \
+                 patch.object(playback.media_objects, "ensure_object", new=AsyncMock(return_value="a" * 64)):
+                result = await playback.record_playback(root, "music/artist/song.mp3",
+                    "d8088f10-4238-4a62-96f8-f5dd9c981fc1", 30, 60)
+        self.assertTrue(result["counted"])
+        sequence = [sql for sql, _ in conn.executed if "media_playback_events" in sql]
+        self.assertEqual(len(sequence), 3)
+        self.assertIn("INSERT IGNORE", sequence[0])
+        self.assertIn("expires_at <= :now", sequence[1])
+        self.assertIn("INSERT IGNORE", sequence[2])
+
+    async def test_expiry_housekeeping_is_reserved_once_per_thirty_seconds(self):
+        conn = _PlaybackConnection()
+        fake_engine = _Engine([conn])
+        with patch.object(playback, "engine", fake_engine), patch.object(playback, "_next_cleanup_at", 0.0), \
+             patch.object(playback.time, "monotonic", side_effect=[100.0, 100.1, 129.9, 130.0]):
+            for _ in range(4):
+                await playback._cleanup_expired_events(playback._utcnow())
+        self.assertEqual(fake_engine.begin_count, 2)
 
 
 if __name__ == "__main__":

@@ -103,6 +103,7 @@ jobs:
       - name: Test IP summaries and edge enforcement against the running stack
         run: |
           docker compose exec -T web python -m tests.security_mysql_smoke
+          docker compose exec -T web python -m tests.sql_concurrency_smoke
           python3 tests/security_stack_smoke.py
 
       - name: Test public and admin flows

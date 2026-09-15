@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, patch
 
 from cryptography.fernet import Fernet
 from sqlalchemy import create_engine, insert, select, update
+from sqlalchemy.dialects.mysql.dml import Insert as MySQLInsert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from starlette.requests import Request
 
 from app.api.internal_nodes import require_https
@@ -27,6 +29,26 @@ class Connection:
         self.connection = connection
 
     async def execute(self, statement, parameters=None):
+        if isinstance(statement, MySQLInsert):
+            # Exercise the same unique-key semantics with SQLite's equivalent
+            # syntax; real MySQL locking is covered by sql_concurrency_smoke.
+            values = statement.compile().params
+            names = statement.table.columns.keys()
+            rows, index = [], 0
+            while any(f"{name}_m{index}" in values for name in names):
+                rows.append({name: values[f"{name}_m{index}"] for name in names if f"{name}_m{index}" in values})
+                index += 1
+            if not rows:
+                rows = [{name: values[name] for name in names if name in values}]
+            converted = sqlite_insert(statement.table).values(rows)
+            if statement._post_values_clause is not None:
+                columns = [column.name for column in statement.table.primary_key]
+                converted = converted.on_conflict_do_update(index_elements=columns,
+                    set_={name: converted.excluded[name] for name in rows[0] if name not in columns}
+                    if statement.table != s.stats else {"resource_id": converted.excluded.resource_id})
+            else:
+                converted = converted.prefix_with("OR IGNORE")
+            statement = converted
         return self.connection.execute(statement, parameters or {})
 
 
@@ -274,6 +296,9 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         await self.store.activate(identifier, "admin")
         relation = await self.store.relationship(identifier)
         resource = dict(resource_id="a" * 64, relationship_id=identifier, path="music/same/song.wav", payload=media_payload())
+        async with self.database.begin() as conn:
+            await conn.execute(insert(s.catalog).values(**resource, owner_id=relation["peer_id"], object_id="b" * 64,
+                version=1, deleted=0))
         resolve = AsyncMock(return_value=(resource, relation))
         with patch.object(routing, "state", self.store), patch.object(routing, "resolve", resolve):
             session = str(uuid.uuid4())
@@ -300,6 +325,48 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             runtime.start()
             self.assertIsNone(runtime.task)
             opened.assert_not_called()
+
+    async def test_inventory_scan_does_not_block_heartbeats_and_stop_awaits_it(self):
+        await self.slave()
+        runtime = Runtime()
+        started, cancelled, heartbeat = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def blocked_scan():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        async def tick(_relation):
+            await started.wait()
+            heartbeat.set()
+
+        relation = {"state": "active", "relationship_id": "a" * 32}
+        with patch("app.services.federation.runtime.state", self.store), \
+             patch("app.services.federation.runtime.settings.TLS_ENABLED", True), \
+             patch("app.services.federation.runtime.catalog.scan", new=AsyncMock(side_effect=blocked_scan)), \
+             patch.object(self.store, "cleanup_playback_events", new=AsyncMock()), \
+             patch.object(self.store, "list_relationships", new=AsyncMock(return_value=[relation])), \
+             patch.object(runtime, "tick", new=AsyncMock(side_effect=tick)), \
+             patch("app.services.federation.runtime.transport.open"), \
+             patch("app.services.federation.runtime.transport.close", new=AsyncMock()):
+            runtime.start()
+            try:
+                await asyncio.wait_for(heartbeat.wait(), 1)
+                self.assertFalse(cancelled.is_set())
+            finally:
+                await runtime.stop()
+            self.assertTrue(cancelled.is_set())
+            self.assertIsNone(runtime.scan_task)
+
+    async def test_catalog_page_uses_committed_snapshot_without_scanning(self):
+        await self.slave()
+        catalog = Catalog(self.store)
+        with patch.object(catalog, "scan", new=AsyncMock(side_effect=AssertionError("page cannot scan"))):
+            page = await catalog.page(0, None)
+        self.assertTrue(page["complete"])
+        self.assertEqual(page["items"], [])
 
     async def test_fixed_role_cannot_start_with_tls_disabled_or_reset_itself(self):
         await self.store.promote("Master", "https://master.example.com", "admin")
