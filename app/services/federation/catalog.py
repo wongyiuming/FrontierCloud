@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import mimetypes
 import shutil
 import time
 from pathlib import PurePosixPath
 
-from sqlalchemy import delete, insert, select, update, text, func
+from sqlalchemy import case, select, update, text, func
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from app.services import media_objects
 from app.services.media_manager import media_mutation_lock, ensure_media_mutations_ready
@@ -40,6 +40,7 @@ def valid_payload(payload: dict) -> dict:
 
 def _inventory(root, hidden):
     # Filesystem metadata only; no hashing or reading hosted media.
+    hidden = set(hidden)
     for kind, extensions in (("music", {".mp3", ".m4a", ".flac", ".wav"}), ("vido", {".mp4", ".webm", ".mkv"})):
         base = root / kind
         if not base.exists():
@@ -55,7 +56,8 @@ def _inventory(root, hidden):
                     if file.is_symlink() or not file.is_file() or file.name.startswith(".") or file.suffix.lower() not in extensions:
                         continue
                     relative = file.relative_to(root).as_posix()
-                    if any(relative == entry or relative.startswith(entry + "/") for entry in hidden):
+                    parts = relative.split("/")
+                    if any("/".join(parts[:length]) in hidden for length in range(1, len(parts) + 1)):
                         continue
                     try:
                         info = file.stat()
@@ -89,10 +91,11 @@ class Catalog:
             if not force and time.monotonic() - self.last_scan < 30:
                 return
             from app.api.v1.media import MEDIA_ROOT, _hidden_set
-            hidden = await _hidden_set()
             seen = set()
-            async with media_mutation_lock:
+            node_id = self.store.node["node_id"]
+            async with media_mutation_lock.shared():
                 ensure_media_mutations_ready()
+                hidden = await _hidden_set()
                 iterator = _inventory(MEDIA_ROOT, hidden)
                 while batch := await asyncio.to_thread(_next_batch, iterator):
                     objects = []
@@ -103,12 +106,15 @@ class Catalog:
                     placeholders = ",".join(":" + name for name in params)
                     async with self.store.database.begin() as conn:
                         identity = await self.store.lock(conn)
+                        if identity["node_id"] != node_id or identity["role"] == "Standalone":
+                            return  # An explicit reset must stop publication by the old scan.
                         scores = {row["media_id"]: dict(row) for row in (await conn.execute(text(
                             f"SELECT media_id, play_score, preference FROM media_playback_stats WHERE media_id IN ({placeholders})"), params)).mappings()}
                         lyric_ids = set((await conn.execute(text(
                             f"SELECT media_id FROM media_lyric_links WHERE media_id IN ({placeholders})"), params)).scalars())
                         existing = {row["object_id"]: dict(row) for row in (await conn.execute(select(s.exports).where(s.exports.c.object_id.in_(identifiers)))).mappings()}
                         version = identity["catalog_version"]
+                        changes = []
                         for item in objects:
                             original = item["media_id"]
                             seen.add(original)
@@ -120,22 +126,33 @@ class Catalog:
                             if previous and previous["fingerprint"] == fingerprint and not previous["deleted"]:
                                 continue
                             version += 1
-                            values = dict(path=payload["path"], version=version, deleted=0, fingerprint=fingerprint, payload=payload)
-                            if previous:
-                                await conn.execute(update(s.exports).where(s.exports.c.object_id == original).values(**values))
-                            else:
-                                await conn.execute(insert(s.exports).values(object_id=original, **values))
-                        await conn.execute(update(s.identity).where(s.identity.c.singleton == 1).values(catalog_version=version))
+                            changes.append(dict(object_id=original, path=payload["path"], version=version,
+                                                deleted=0, fingerprint=fingerprint, payload=payload))
+                        if changes:
+                            statement = mysql_insert(s.exports).values(changes)
+                            await conn.execute(statement.on_duplicate_key_update(**{
+                                name: statement.inserted[name] for name in ("path", "version", "deleted", "fingerprint", "payload")
+                            }))
+                            await conn.execute(update(s.identity).where(s.identity.c.singleton == 1).values(catalog_version=version))
                 # Tombstones retain IDs so retries and offline nodes cannot resurrect deletion.
                 async with self.store.database.begin() as conn:
                     identity = await self.store.lock(conn)
+                    if identity["node_id"] != node_id or identity["role"] == "Standalone":
+                        return
                     version = identity["catalog_version"]
                     rows = (await conn.execute(select(s.exports.c.object_id).where(s.exports.c.deleted == 0))).scalars()
+                    tombstones = {}
                     for original in rows:
                         if original not in seen:
                             version += 1
-                            await conn.execute(update(s.exports).where(s.exports.c.object_id == original).values(deleted=1, version=version))
-                    await conn.execute(update(s.identity).where(s.identity.c.singleton == 1).values(catalog_version=version))
+                            tombstones[original] = version
+                    identifiers = list(tombstones)
+                    for start in range(0, len(identifiers), p.PAGE_SIZE):
+                        batch_ids = identifiers[start:start + p.PAGE_SIZE]
+                        await conn.execute(update(s.exports).where(s.exports.c.object_id.in_(batch_ids)).values(
+                            deleted=1, version=case({original: tombstones[original] for original in batch_ids}, value=s.exports.c.object_id)))
+                    if tombstones:
+                        await conn.execute(update(s.identity).where(s.identity.c.singleton == 1).values(catalog_version=version))
             self.last_scan = time.monotonic()
             disk = await asyncio.to_thread(shutil.disk_usage, MEDIA_ROOT)
             self.storage = {"storage_total": disk.total, "storage_used": disk.used, "storage_free": disk.free}
@@ -143,7 +160,8 @@ class Catalog:
     async def page(self, cursor: int, head: int | None):
         if cursor < 0 or (head is not None and head < cursor):
             raise p.ProtocolError("Invalid sync cursor")
-        await self.scan()
+        # Runtime owns inventory refresh. Serving a committed page never waits for
+        # a full filesystem scan or delays a peer's heartbeats behind that scan.
         async with self.store.database.connect() as conn:
             current = (await conn.execute(select(s.identity.c.catalog_version))).scalar_one()
             if head is None:
@@ -177,20 +195,27 @@ class Catalog:
         except (KeyError, TypeError, ValueError) as exc:
             raise p.ProtocolError("Invalid, unordered or mismatched catalog page") from exc
         async with self.store.database.begin() as conn:
-            await self.store.lock(conn)
-            current = (await conn.execute(select(s.relationships).where(s.relationships.c.relationship_id == relation["relationship_id"]))).mappings().one()
-            if current["state"] != "active" or current["cursor"] != requested_cursor:
+            current = (await conn.execute(select(s.relationships).where(
+                s.relationships.c.relationship_id == relation["relationship_id"]).with_for_update())).mappings().first()
+            if not current or current["state"] != "active" or current["cursor"] != requested_cursor:
                 raise p.ProtocolError("Catalog relationship revoked or cursor changed")
+            existing = {row["resource_id"]: dict(row) for row in (await conn.execute(
+                select(s.catalog.c.resource_id, s.catalog.c.version, s.catalog.c.relationship_id).where(
+                    s.catalog.c.resource_id.in_([identifier for identifier, _item, _payload in parsed])))).mappings()}
+            changes = []
             for identifier, item, payload in parsed:
-                existing = (await conn.execute(select(s.catalog.c.version).where(s.catalog.c.resource_id == identifier))).scalar_one_or_none()
-                if existing is not None and existing >= item["version"]:
+                previous = existing.get(identifier)
+                if (previous and previous["relationship_id"] == relation["relationship_id"]
+                        and previous["version"] >= item["version"]):
                     continue
-                values = dict(owner_id=relation["peer_id"], object_id=item["object_id"], relationship_id=relation["relationship_id"],
-                    path=payload["path"], version=item["version"], deleted=int(bool(item["deleted"])), payload=payload)
-                if existing is None:
-                    await conn.execute(insert(s.catalog).values(resource_id=identifier, **values))
-                else:
-                    await conn.execute(update(s.catalog).where(s.catalog.c.resource_id == identifier).values(**values))
+                changes.append(dict(resource_id=identifier, owner_id=relation["peer_id"], object_id=item["object_id"],
+                    relationship_id=relation["relationship_id"], path=payload["path"], version=item["version"],
+                    deleted=int(bool(item["deleted"])), payload=payload))
+            if changes:
+                statement = mysql_insert(s.catalog).values(changes)
+                await conn.execute(statement.on_duplicate_key_update(**{
+                    name: statement.inserted[name] for name in ("owner_id", "object_id", "relationship_id", "path", "version", "deleted", "payload")
+                }))
             await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == relation["relationship_id"]).values(cursor=cursor))
         return cursor
 

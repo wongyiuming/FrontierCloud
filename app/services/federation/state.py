@@ -15,6 +15,7 @@ from app.core.config import SECRET_DIR
 from app.core.db import engine
 from . import protocol as p
 from . import schema as s
+from app.core.logging_config import request_id_context, trace_id_context
 
 
 def vault_key(directory: Path) -> bytes:
@@ -79,6 +80,11 @@ class State:
                                "app_version": p.APP_VERSION})
 
     async def log(self, conn, action: str, actor: str, relationship: str | None = None, **detail):
+        request_id, trace_id = request_id_context.get(), trace_id_context.get()
+        if request_id:
+            detail["request_id"] = request_id
+        if trace_id:
+            detail["trace_id"] = trace_id
         await conn.execute(insert(s.audit).values(audit_id=uuid.uuid4().hex, action=action,
             relationship_id=relationship, actor=actor[:128], detail=detail, created_at=int(time.time())))
 

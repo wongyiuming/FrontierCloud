@@ -121,9 +121,16 @@ def verify_auth(credential: str, headers, method: str, path: str, body: bytes, n
         raise ProtocolError("Invalid or expired relationship authentication") from exc
 
 
-def media_token(credential: str, relationship: str, master: str, owner: str, original: str, now: int) -> str:
-    payload = encode(canonical({"r": relationship, "m": master, "o": owner, "i": original,
-                                "e": now + TOKEN_SECONDS, "v": PROTOCOL_VERSION}))
+def media_token(credential: str, relationship: str, master: str, owner: str, original: str, now: int,
+                *, request_id: str | None = None, trace_id: str | None = None) -> str:
+    value = {"r": relationship, "m": master, "o": owner, "i": original,
+             "e": now + TOKEN_SECONDS, "v": PROTOCOL_VERSION}
+    # Optional signed provenance joins Direct and Relay transfers to the issuing
+    # request without trusting public headers or logging the capability itself.
+    for name, identifier in (("request_id", request_id), ("trace_id", trace_id)):
+        if isinstance(identifier, str) and IDENTIFIER.fullmatch(identifier) and identifier != "0" * 32:
+            value[name] = identifier
+    payload = encode(canonical(value))
     return payload + "." + encode(hmac.new(decode(credential), payload.encode(), hashlib.sha256).digest())
 
 
@@ -139,6 +146,10 @@ def verify_media_token(credential: str, token: str, now: int) -> dict:
         resource_id(value["o"], value["i"])
         if not IDENTIFIER.fullmatch(value["r"]) or not IDENTIFIER.fullmatch(value["m"]):
             raise ValueError()
+        for name in ("request_id", "trace_id"):
+            if name in value and (not isinstance(value[name], str) or not IDENTIFIER.fullmatch(value[name])
+                                  or value[name] == "0" * 32):
+                raise ValueError()
         return value
     except Exception as exc:
         raise ProtocolError("Invalid or expired media capability") from exc

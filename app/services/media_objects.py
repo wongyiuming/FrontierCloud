@@ -93,6 +93,7 @@ async def ensure_object(
         text("""
             SELECT media_id FROM media_objects
             WHERE path_locator=:path_locator AND BINARY media_path=BINARY :media_path
+            FOR SHARE
         """),
         {"path_locator": locator, "media_path": normalized},
     )
@@ -117,15 +118,16 @@ async def ensure_objects(items: Iterable[tuple[str, str]]) -> dict[str, str]:
         for offset in range(0, len(values), size):
             yield values[offset:offset + size]
 
-    async def lookup(conn: AsyncConnection, paths: list[str]) -> dict[str, str]:
+    async def lookup(conn: AsyncConnection, paths: list[str], *, current: bool = False) -> dict[str, str]:
         found: dict[str, str] = {}
         locators = {_path_locator(path): path for path in paths}
-        for locator_chunk in chunks(list(locators)):
+        for locator_chunk in chunks(sorted(locators)):
             placeholders = ", ".join(f":locator_{index}" for index in range(len(locator_chunk)))
             params = {f"locator_{index}": value for index, value in enumerate(locator_chunk)}
             result = await conn.execute(text(
                 "SELECT media_id, media_path, path_locator FROM media_objects "
-                f"WHERE path_locator IN ({placeholders})"
+                f"WHERE path_locator IN ({placeholders}) ORDER BY path_locator"
+                + (" FOR SHARE" if current else "")
             ), params)
             for row in result.mappings().all():
                 path = str(row["media_path"])
@@ -133,7 +135,7 @@ async def ensure_objects(items: Iterable[tuple[str, str]]) -> dict[str, str]:
                     found[path] = str(row["media_id"])
         return found
 
-    paths = list(requested_by_path)
+    paths = sorted(requested_by_path, key=_path_locator)
     async with engine.begin() as conn:
         resolved = await lookup(conn, paths)
         missing = [path for path in paths if path not in resolved]
@@ -171,7 +173,9 @@ async def ensure_objects(items: Iterable[tuple[str, str]]) -> dict[str, str]:
                 (media_id, object_kind, media_path, path_locator, created_at, updated_at)
                 VALUES (:media_id, :object_kind, :media_path, :path_locator, :now, :now)
             """), registrations)
-            resolved.update(await lookup(conn, missing))
+            # INSERT IGNORE may wait for another transaction's registration.
+            # A current read sees that winner even under REPEATABLE READ.
+            resolved.update(await lookup(conn, missing, current=True))
         if len(resolved) != len(paths):
             raise RuntimeError("Could not register every media object")
     return resolved

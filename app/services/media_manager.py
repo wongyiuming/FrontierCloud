@@ -5,15 +5,16 @@ import re
 import shutil
 import tempfile
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Awaitable, Callable, Iterable
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import text
 from zipstream import ZIP_STORED, ZipStream
 
-from app.core.async_lock import LoopLocalAsyncLock
+from app.core.async_lock import LoopLocalAsyncRWLock
 from app.core.config import settings
 from app.core.db import engine
 from app.core.admin_log import append_admin_log
@@ -40,8 +41,62 @@ LYRICS_ROOT = (MEDIA_ROOT / "lyrics").resolve()
 LYRICS_ROOT.mkdir(parents=True, exist_ok=True)
 
 DELETE_QUARANTINE_PREFIX = ".delete-"
-media_mutation_lock = LoopLocalAsyncLock()
+media_mutation_lock = LoopLocalAsyncRWLock()
 _RECOVERY_REQUIRED_ROOTS: set[Path] = set()
+_LAYOUT_CACHE: OrderedDict = OrderedDict()
+_MAX_LAYOUT_CACHE_ENTRIES = 256
+MutationAudit = Callable[[object, str, int, dict], Awaitable[None]]
+
+
+def _directory_stamp(path: Path) -> tuple:
+    info = path.stat()
+    return info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns
+
+
+def _layout_conflict(category: Path, flat: bool, extensions: set[str]) -> bool:
+    """Cache layout evidence, including child changes when testing flat uploads."""
+    key = category, flat
+    stamp = _directory_stamp(category) if category.is_dir() else None
+    cached = _LAYOUT_CACHE.get(key)
+    if cached and cached[0] == stamp:
+        try:
+            unchanged = all(_directory_stamp(path) == previous for path, previous in cached[1])
+        except FileNotFoundError:
+            unchanged = False
+        if unchanged:
+            _LAYOUT_CACHE.move_to_end(key)
+            return cached[2]
+    conflict = False
+    children = []
+    if stamp is not None:
+        with os.scandir(category) as entries:
+            for entry in entries:
+                if flat:
+                    if entry.is_dir(follow_symlinks=False):
+                        children.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False) and Path(entry.name).suffix.lower() in extensions:
+                    conflict = True
+                    break
+    dependencies = []
+    if flat:
+        for child in children:
+            dependencies.append((child, _directory_stamp(child)))
+            with os.scandir(child) as entries:
+                if any(entry.is_file(follow_symlinks=False) and Path(entry.name).suffix.lower() in extensions for entry in entries):
+                    conflict = True
+    _LAYOUT_CACHE[key] = stamp, dependencies, conflict
+    _LAYOUT_CACHE.move_to_end(key)
+    while len(_LAYOUT_CACHE) > _MAX_LAYOUT_CACHE_ENTRIES:
+        _LAYOUT_CACHE.popitem(last=False)
+    return conflict
+
+
+def _refresh_flat_layout_after_publish(category: Path) -> None:
+    """Publishing a flat file cannot create nested media; preserve that evidence."""
+    key = category, True
+    cached = _LAYOUT_CACHE.get(key)
+    if cached and not cached[2]:
+        _LAYOUT_CACHE[key] = _directory_stamp(category), cached[1], False
 
 
 def _sync_media_directory(directory: Path) -> None:
@@ -78,6 +133,11 @@ async def _finish_media_cleanup(task: asyncio.Task) -> None:
 
 def resolve_safe_path(base_dir: Path, sub_path: str) -> Path:
     clean = str(sub_path or "").replace("\\", "/").lstrip("/\\")
+    raw = base_dir
+    for part in Path(clean).parts:
+        raw = raw / part
+        if raw.is_symlink():
+            raise ValueError("Symlink paths are not managed media objects")
     target = (base_dir / clean).resolve()
     if not target.is_relative_to(base_dir.resolve()):
         raise ValueError("Invalid path")
@@ -100,7 +160,8 @@ class MediaManager:
     @staticmethod
     def _layout_parts(path: Path) -> tuple[str, ...]:
         try:
-            return path.resolve().relative_to(MEDIA_ROOT).parts
+            relative = path.relative_to(MEDIA_ROOT)
+            return resolve_safe_path(MEDIA_ROOT, relative.as_posix()).relative_to(MEDIA_ROOT).parts
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="非法媒体路径") from exc
 
@@ -125,19 +186,10 @@ class MediaManager:
 
         category_dir = MEDIA_ROOT / parts[0] / parts[1]
         allowed_exts = MEDIA_TYPE_EXTS[parts[0]]
-        direct_media = any(
-            child.is_file() and not child.is_symlink() and child.suffix.lower() in allowed_exts
-            for child in category_dir.iterdir()
-        ) if category_dir.is_dir() else False
-        nested_media = any(
-            nested.is_file() and not nested.is_symlink() and nested.suffix.lower() in allowed_exts
-            for child in category_dir.iterdir()
-            if child.is_dir() and not child.is_symlink()
-            for nested in child.iterdir()
-        ) if category_dir.is_dir() else False
-        if len(parts) == 3 and nested_media:
+        conflict = _layout_conflict(category_dir, len(parts) == 3, allowed_exts)
+        if len(parts) == 3 and conflict:
             raise HTTPException(status_code=409, detail="该分类已使用子目录，禁止在分类目录直接上传媒体")
-        if len(parts) == 4 and direct_media:
+        if len(parts) == 4 and conflict:
             raise HTTPException(status_code=409, detail="该分类已有直接媒体，禁止再使用子目录存放媒体")
 
     @staticmethod
@@ -154,7 +206,7 @@ class MediaManager:
 
     @staticmethod
     def validate_name(name: str) -> str:
-        name = media_search.simplify_filename(os.path.basename(name or "").strip())
+        name = media_search.simplify_filename(os.path.basename(str(name or "").replace("\\", "/")).strip())
         if not name or name in {".", ".."} or "\x00" in name:
             raise HTTPException(status_code=400, detail="非法文件名")
         if len(name) > settings.ADMIN_MAX_FILENAME_LENGTH:
@@ -180,7 +232,7 @@ class MediaManager:
         return bool(checker and checker(head))
 
     @staticmethod
-    async def upload_one(upload: UploadFile, target_dir: Path) -> str:
+    async def upload_one(upload: UploadFile, target_dir: Path, *, audit: MutationAudit | None = None) -> str:
         name = MediaManager.validate_name(upload.filename or "")
         ext = Path(name).suffix.lower()
         if ext not in ALLOWED_EXTS:
@@ -216,9 +268,9 @@ class MediaManager:
                     total += len(chunk)
                     if total > settings.ADMIN_MAX_UPLOAD_FILE_SIZE:
                         raise HTTPException(status_code=413, detail="上传失败，文件过大")
-                    out.write(chunk)
+                    await asyncio.to_thread(out.write, chunk)
                 out.flush()
-                os.fsync(out.fileno())
+                await asyncio.to_thread(os.fsync, out.fileno())
             if total == 0 or not MediaManager._signature_ok(ext, head):
                 raise HTTPException(status_code=400, detail="上传失败，文件内容不是受支持的媒体格式")
             async with media_mutation_lock:
@@ -226,6 +278,9 @@ class MediaManager:
                 if destination.exists():
                     raise HTTPException(status_code=409, detail="上传失败，目标位置已存在同名文件")
                 MediaManager._validate_media_destination(destination)
+                if audit is not None:
+                    async with engine.begin() as conn:
+                        await audit(conn, "pending", 1, {"path": destination.relative_to(MEDIA_ROOT).as_posix()})
                 missing = target_dir
                 while missing != MEDIA_ROOT and not missing.exists():
                     created_dirs.append(missing)
@@ -243,6 +298,11 @@ class MediaManager:
                         detail="上传失败，目标位置已存在同名文件",
                     ) from exc
                 published = True
+                parts = MediaManager._layout_parts(destination)
+                if len(parts) == 3:
+                    _refresh_flat_layout_after_publish(target_dir)
+            if audit is not None:
+                await audit(None, "success", 1, {"path": destination.relative_to(MEDIA_ROOT).as_posix()})
             return str(destination.relative_to(MEDIA_ROOT).as_posix())
         finally:
             tmp.unlink(missing_ok=True)
@@ -254,7 +314,7 @@ class MediaManager:
                         break
 
     @staticmethod
-    async def upload_lyric(upload: UploadFile) -> str:
+    async def upload_lyric(upload: UploadFile, *, audit: MutationAudit | None = None) -> str:
         from app.services.lyrics import parse_lrc_bytes
 
         name = MediaManager.validate_name(upload.filename or "")
@@ -291,6 +351,9 @@ class MediaManager:
                 ensure_media_mutations_ready()
                 if destination.exists():
                     raise HTTPException(status_code=409, detail="上传失败，已存在同名歌词")
+                if audit is not None:
+                    async with engine.begin() as conn:
+                        await audit(conn, "pending", 1, {"path": destination.relative_to(MEDIA_ROOT).as_posix()})
                 LYRICS_ROOT.mkdir(parents=True, exist_ok=True)
                 tmp.chmod(0o644)
                 try:
@@ -298,6 +361,8 @@ class MediaManager:
                 except FileExistsError as exc:
                     raise HTTPException(status_code=409, detail="上传失败，已存在同名歌词") from exc
                 published = True
+            if audit is not None:
+                await audit(None, "success", 1, {"path": destination.relative_to(MEDIA_ROOT).as_posix()})
             return destination.relative_to(MEDIA_ROOT).as_posix()
         finally:
             tmp.unlink(missing_ok=True)
@@ -324,7 +389,10 @@ class MediaManager:
         if not base.exists() or not base.is_dir():
             raise HTTPException(status_code=404, detail="目标目录不存在")
 
-        destination_dir = (base / nested).resolve() if nested else base.resolve()
+        try:
+            destination_dir = resolve_safe_path(base, nested)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="非法上传目录") from exc
         MediaManager._validate_upload_directory(destination_dir)
         MediaManager._validate_media_destination(destination_dir / name)
         return destination_dir, name
@@ -455,7 +523,7 @@ class MediaManager:
             return {str(row[0]) for row in result.fetchall()}
 
     @staticmethod
-    async def set_hidden(paths: list[str], hidden: bool) -> None:
+    async def set_hidden(paths: list[str], hidden: bool, *, audit: MutationAudit | None = None) -> None:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         async with media_mutation_lock:
             ensure_media_mutations_ready()
@@ -472,12 +540,9 @@ class MediaManager:
                             {"p": rel, "t": now},
                         )
                     else:
-                        prefix = rel + "/"
-                        await conn.execute(text("""
-                            DELETE FROM media_visibility
-                            WHERE BINARY relative_path=BINARY :p
-                               OR BINARY LEFT(relative_path, CHAR_LENGTH(:prefix))=BINARY :prefix
-                        """), {"p": rel, "prefix": prefix})
+                        await conn.execute(text("DELETE FROM media_visibility WHERE " + MediaManager._path_scope("relative_path", True)), MediaManager._path_params(rel))
+                if audit is not None:
+                    await audit(conn, "success", len(paths), {})
 
     @staticmethod
     async def _collect(paths: Iterable[str]) -> list[tuple[str, Path]]:
@@ -488,7 +553,10 @@ class MediaManager:
             if rel in seen:
                 continue
             seen.add(rel)
-            p = resolve_safe_path(MEDIA_ROOT, rel)
+            try:
+                p = resolve_safe_path(MEDIA_ROOT, rel)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"非法对象路径: {rel}") from exc
             if not p.exists() or p.is_symlink():
                 raise HTTPException(status_code=404, detail=f"对象不存在: {rel}")
             parts = p.relative_to(MEDIA_ROOT).parts
@@ -523,25 +591,25 @@ class MediaManager:
         return selected
 
     @staticmethod
+    def _path_params(rel: str) -> dict:
+        prefix = rel + "/"
+        return {"p": rel, "prefix": prefix, "pattern": prefix.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"}
+
+    @staticmethod
+    def _path_scope(column: str, directory: bool) -> str:
+        exact = f"({column}=:p AND BINARY {column}=BINARY :p)"
+        if not directory:
+            return exact
+        # The indexed equality/LIKE prefilter remains sargable. Binary checks
+        # retain exact path semantics on legacy case-insensitive tables.
+        return f"({exact} OR ({column} LIKE :pattern ESCAPE '!' AND BINARY LEFT({column}, CHAR_LENGTH(:prefix))=BINARY :prefix))"
+
+    @staticmethod
     async def _delete_metadata(conn, rel: str, is_directory: bool) -> None:
-        params = {"p": rel, "prefix": rel + "/"}
-        if is_directory:
-            object_scope = """
-                BINARY object.media_path=BINARY :p
-                OR BINARY LEFT(object.media_path, CHAR_LENGTH(:prefix))=BINARY :prefix
-            """
-            event_scope = """
-                BINARY stats.media_path=BINARY :p
-                OR BINARY LEFT(stats.media_path, CHAR_LENGTH(:prefix))=BINARY :prefix
-            """
-            stats_scope = """
-                BINARY media_path=BINARY :p
-                OR BINARY LEFT(media_path, CHAR_LENGTH(:prefix))=BINARY :prefix
-            """
-        else:
-            object_scope = "BINARY object.media_path=BINARY :p"
-            event_scope = "BINARY stats.media_path=BINARY :p"
-            stats_scope = "BINARY media_path=BINARY :p"
+        params = MediaManager._path_params(rel)
+        object_scope = MediaManager._path_scope("object.media_path", is_directory)
+        event_scope = MediaManager._path_scope("stats.media_path", is_directory)
+        stats_scope = MediaManager._path_scope("media_path", is_directory)
 
         await conn.execute(text(f"""
             DELETE events
@@ -555,14 +623,13 @@ class MediaManager:
             INNER JOIN media_objects AS object ON object.media_id=stats.media_id
             WHERE {object_scope}
         """), params)
-        await conn.execute(text(f"""
-            DELETE link
-            FROM media_lyric_links AS link
-            LEFT JOIN media_objects AS media_object ON media_object.media_id=link.media_id
-            LEFT JOIN media_objects AS lyric_object ON lyric_object.media_id=link.lyric_id
-            WHERE {object_scope.replace('object.', 'media_object.')}
-               OR {object_scope.replace('object.', 'lyric_object.')}
-        """), params)
+        for linked_id in ("media_id", "lyric_id"):
+            await conn.execute(text(f"""
+                DELETE link
+                FROM media_lyric_links AS link
+                INNER JOIN media_objects AS object ON object.media_id=link.{linked_id}
+                WHERE {object_scope}
+            """), params)
         await conn.execute(text(f"""
             DELETE events
             FROM media_playback_events AS events
@@ -573,25 +640,10 @@ class MediaManager:
             text(f"DELETE FROM media_playback_stats WHERE {stats_scope}"),
             params,
         )
+        for column in ("media_path", "lyric_path"):
+            await conn.execute(text("DELETE FROM media_lyric_links WHERE " + MediaManager._path_scope(column, is_directory)), params)
         if is_directory:
-            await conn.execute(text("""
-                DELETE FROM media_lyric_links
-                WHERE BINARY media_path=BINARY :p
-                   OR BINARY LEFT(media_path, CHAR_LENGTH(:prefix))=BINARY :prefix
-                   OR BINARY lyric_path=BINARY :p
-                   OR BINARY LEFT(lyric_path, CHAR_LENGTH(:prefix))=BINARY :prefix
-            """), params)
-        else:
-            await conn.execute(text("""
-                DELETE FROM media_lyric_links
-                WHERE BINARY media_path=BINARY :p OR BINARY lyric_path=BINARY :p
-            """), params)
-        if is_directory:
-            await conn.execute(text("""
-                DELETE FROM media_visibility
-                WHERE BINARY relative_path=BINARY :p
-                   OR BINARY LEFT(relative_path, CHAR_LENGTH(:prefix))=BINARY :prefix
-            """), params)
+            await conn.execute(text("DELETE FROM media_visibility WHERE " + MediaManager._path_scope("relative_path", True)), params)
         await conn.execute(text(f"""
             DELETE object FROM media_objects AS object WHERE {object_scope}
         """), params)
@@ -663,7 +715,7 @@ class MediaManager:
             append_admin_log(f"[MEDIA_DELETE] committed cleanup deferred operation={operation_id}: {exc}")
 
     @staticmethod
-    async def delete(paths: list[str]) -> int:
+    async def delete(paths: list[str], *, audit: MutationAudit | None = None) -> int:
         async with media_mutation_lock:
             ensure_media_mutations_ready()
             objects = MediaManager._deduplicate_objects(await MediaManager._collect(paths))
@@ -687,6 +739,8 @@ class MediaManager:
                     "manifest": json.dumps(manifest, ensure_ascii=False),
                     "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
                 })
+                if audit is not None:
+                    await audit(conn, "pending", len(objects), {"operation_id": operation_id, "manifest": manifest})
 
             try:
                 quarantine.mkdir(mode=0o700)
@@ -708,6 +762,8 @@ class MediaManager:
                         SET state='committed'
                         WHERE operation_id=:operation_id
                     """), {"operation_id": operation_id})
+                    if audit is not None:
+                        await audit(conn, "success", len(objects), {"operation_id": operation_id})
             except BaseException:
                 cleanup_task = asyncio.create_task(
                     MediaManager._reconcile_failed_delete(operation_id, quarantine, manifest)

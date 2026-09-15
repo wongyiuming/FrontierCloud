@@ -205,6 +205,8 @@ async def init_db() -> None:
                     detail TEXT NULL,
                     client_ip VARCHAR(45) NULL,
                     user_agent VARCHAR(512) NULL,
+                    request_id VARCHAR(128) NULL,
+                    trace_id CHAR(32) NULL,
                     created_at DATETIME(6) NOT NULL,
                     INDEX idx_audit_created_at (created_at),
                     INDEX idx_audit_action (action)
@@ -245,15 +247,28 @@ async def init_db() -> None:
                     action VARCHAR(32) NOT NULL,
                     detail JSON NOT NULL,
                     session_id_hash CHAR(64) NULL,
+                    request_id VARCHAR(128) NULL,
+                    trace_id CHAR(32) NULL,
                     created_at DATETIME(6) NOT NULL,
                     INDEX idx_ip_security_timeline (ip_address, created_at, id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
             await _commit_ddl(conn, """
                 CREATE TABLE IF NOT EXISTS ip_security_locks (
-                    ip_address VARCHAR(45) NOT NULL PRIMARY KEY
+                    ip_address VARCHAR(45) NOT NULL PRIMARY KEY,
+                    projection_dirty TINYINT NOT NULL DEFAULT 0,
+                    INDEX idx_ip_projection_dirty (projection_dirty, ip_address)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
+            await _commit_ddl(conn, """
+                CREATE TABLE IF NOT EXISTS ip_security_projection (
+                    singleton TINYINT NOT NULL PRIMARY KEY,
+                    generation BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                    published_generation BIGINT UNSIGNED NOT NULL DEFAULT 0
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
+            await conn.execute(text("INSERT IGNORE INTO ip_security_projection(singleton) VALUES (1)"))
+            await conn.commit()
             await _commit_ddl(conn, """
                 CREATE TABLE IF NOT EXISTS ip_auto_ban_events (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -398,11 +413,34 @@ async def init_db() -> None:
                     INDEX idx_media_lyric_updated_at (updated_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
+            if not await _column_exists(conn, "ip_security_locks", "projection_dirty"):
+                await _commit_ddl(conn, "ALTER TABLE ip_security_locks ADD COLUMN projection_dirty TINYINT NOT NULL DEFAULT 0")
+            for table_name in ("admin_audit_log", "ip_security_audit_log"):
+                for column_name, definition in (("request_id", "VARCHAR(128) NULL"), ("trace_id", "CHAR(32) NULL")):
+                    exists = await _column_exists(conn, table_name, column_name)
+                    await conn.commit()
+                    if not exists:
+                        await _commit_ddl(conn, f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+            for table_name, index_name, columns in (
+                ("media_playback_events", "idx_playback_event_media", "media_id"),
+                ("media_objects", "idx_media_objects_path", "media_path(191)"),
+                ("media_playback_stats", "idx_playback_path", "media_path(191)"),
+                ("media_lyric_links", "idx_media_lyric_path", "media_path(191)"),
+                ("media_lyric_links", "idx_lyric_path", "lyric_path(191)"),
+                ("ip_security_locks", "idx_ip_projection_dirty", "projection_dirty, ip_address"),
+                ("ip_security_audit_log", "idx_ip_security_violation_count", "ip_address, action, created_at, id"),
+            ):
+                exists = await _index_exists(conn, table_name, index_name)
+                await conn.commit()
+                if not exists:
+                    await _commit_ddl(conn, f"CREATE INDEX {index_name} ON {table_name} ({columns})")
             from app.services.federation.schema import migration_statements
             for statement in migration_statements():
                 await _commit_ddl(conn, statement)
             if not await _index_exists(conn, "node_media_catalog", "idx_node_catalog_path"):
                 await _commit_ddl(conn, "CREATE INDEX idx_node_catalog_path ON node_media_catalog (path(191))")
+            if not await _index_exists(conn, "node_playback_events", "idx_node_playback_resource"):
+                await _commit_ddl(conn, "CREATE INDEX idx_node_playback_resource ON node_playback_events (resource_id)")
             await conn.commit()
         except BaseException:
             try:

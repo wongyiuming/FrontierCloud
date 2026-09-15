@@ -149,8 +149,7 @@ def announce_initial_secrets_once() -> None:
     logger.warning(
         "initial_runtime_secrets",
         extra={"context": {
-            name: managed[name].read_text(encoding="utf-8").strip()
-            for name in sorted(names)
+            "secret_files": {name: str(managed[name]) for name in sorted(names)},
         }},
     )
     ANNOUNCE_MARKER.unlink(missing_ok=True)
