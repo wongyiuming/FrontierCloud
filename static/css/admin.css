@@ -359,12 +359,12 @@ select { color-scheme: dark; }
 .lyrics-browser input { min-width: 0; padding: 7px 9px; }
 .lyrics-pathbar { margin-bottom: 7px; padding: 6px 8px; overflow: hidden; color: #8296ad; font: 10px/1.4 var(--mono); text-overflow: ellipsis; white-space: nowrap; background: #0d1723; border: 1px solid #202f42; border-radius: 5px; }
 .lyrics-object-list { display: flex; max-height: 28vh; flex-direction: column; gap: 5px; overflow: auto; }
-.lyrics-object { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px; color: #c7d8e8; text-align: left; background: #121d2b; border-color: #2d4359; }
-.lyrics-object span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lyrics-object-label { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.lyrics-object-label strong { overflow: hidden; text-overflow: ellipsis; }
-.lyrics-object-label small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; }
-.lyrics-object small { color: #718aa2; }
+.lyrics-object { display: grid; min-height: 56px; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px; color: #c7d8e8; text-align: left; background: #121d2b; border-color: #2d4359; }
+.lyrics-object-label { display: flex; min-width: 0; align-self: stretch; justify-content: center; flex-direction: column; gap: 3px; overflow: visible; white-space: normal; }
+.lyrics-object-label strong,
+.lyrics-object-label small { display: block; min-width: 0; overflow: hidden; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.lyrics-object-label small { color: var(--muted); font-size: 10px; }
+.lyrics-object > small { align-self: center; overflow: hidden; color: #718aa2; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .lyrics-object.selected { color: #fff; background: #30265a; border-color: #a58bff; box-shadow: inset 3px 0 var(--violet); }
 .lyrics-object.linked { border-color: #62cf94; box-shadow: inset 3px 0 var(--green); }
 .lyrics-directory { border-color: #425b74; }
