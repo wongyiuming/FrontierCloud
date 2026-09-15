@@ -165,6 +165,12 @@ class DeploymentContractTests(unittest.TestCase):
         ):
             self.assertNotIn(obsolete, initializer + compose + deploy)
 
+    def test_runtime_secret_initializer_never_logs_secret_values(self):
+        initializer = (ROOT / "app/services/runtime_secrets.py").read_text(encoding="utf-8")
+        self.assertIn('"secret_names": sorted(names)', initializer)
+        self.assertNotIn('"context": {', initializer)
+        self.assertNotIn("managed[name].read_text(encoding=\"utf-8\").strip()", initializer)
+
     def test_env_contract_validator_rejects_unknown_names_without_printing_values(self):
         validator = ROOT / "scripts/validate_env_contract.py"
         with tempfile.TemporaryDirectory() as directory:
@@ -201,7 +207,7 @@ class DeploymentContractTests(unittest.TestCase):
 
     def test_readme_documents_runtime_secret_recovery_after_web_recreation(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Startup logs identify their files without printing secret values", readme)
+        self.assertIn("Startup logs list newly created secret names without printing values", readme)
         self.assertIn(
             "docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'",
             readme,
@@ -224,7 +230,8 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("github.event_name == 'push'", deploy)
         self.assertIn("github.ref == 'refs/heads/dev'", deploy)
         self.assertNotIn("refs/heads/main", deploy)
-        self.assertNotIn("workflow_dispatch", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("workflow_dispatch", deploy)
         self.assertIn("python3 scripts/validate_env_contract.py", workflow)
         self.assertIn("python3 scripts/validate_env_contract.py", deploy_script)
         self.assertIn("runs-on: [self-hosted, Linux, X64, rn]", deploy)

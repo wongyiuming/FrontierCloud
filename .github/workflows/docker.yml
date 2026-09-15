@@ -2,18 +2,24 @@ name: Build and Test Docker Compose
 
 permissions:
   contents: read
-  deployments: write
 
 on:
   push:
-    branches: ["dev", "main"]
+    branches: ["dev"]
   pull_request:
     branches: ["main"]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
 
 jobs:
   test-cluster:
+    if: github.event_name != 'pull_request' || github.head_ref != 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    concurrency:
+      group: ${{ github.workflow }}-ci-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -42,8 +48,12 @@ jobs:
 
   test-compose:
     needs: test-cluster
+    if: github.event_name != 'pull_request' || github.head_ref != 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: ${{ github.workflow }}-ci-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
 
     steps:
       - name: Checkout code
@@ -208,6 +218,9 @@ jobs:
       github.event_name == 'push' &&
       github.ref == 'refs/heads/dev' &&
       github.repository == 'wongyiuming/FrontierCloud'
+    permissions:
+      contents: read
+      deployments: write
     runs-on: [self-hosted, Linux, X64, rn]
     timeout-minutes: 20
     concurrency:

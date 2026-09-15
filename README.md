@@ -12,7 +12,7 @@ docker compose up -d --build --wait
 
 Open `http://localhost`. Put audio in `data/media/music`, video in `data/media/vido`, and UTF-8 LRC lyrics in `data/media/lyrics`, or upload through Admin WebUI.
 
-Initialization generates an Admin Key, two MySQL passwords, and a metrics Bearer token in the persistent `runtime_secrets` volume. Startup logs identify their files without printing secret values. Read the current key or token with:
+Initialization generates an Admin Key, two MySQL passwords, and a metrics Bearer token in the persistent `runtime_secrets` volume. Startup logs list newly created secret names without printing values. Read the current key or token with:
 
 ```bash
 docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'

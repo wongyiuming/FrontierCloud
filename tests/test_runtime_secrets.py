@@ -91,9 +91,9 @@ class RuntimeSecretsTests(unittest.TestCase):
                     runtime_secrets.announce_initial_secrets_once()
 
             self.assertTrue(metrics_path.read_text(encoding="utf-8").strip())
-            context = warning.call_args.kwargs["extra"]["context"]
-            self.assertEqual(context, {"secret_files": {"metrics_token": str(metrics_path)}})
-            self.assertNotIn(metrics_path.read_text(encoding="utf-8").strip(), str(context))
+            extra = warning.call_args.kwargs["extra"]
+            self.assertEqual(extra, {"secret_names": ["metrics_token"]})
+            self.assertNotIn(metrics_path.read_text(encoding="utf-8").strip(), str(extra))
             self.assertFalse(marker.exists())
             self.assertTrue(initialized.exists())
 
