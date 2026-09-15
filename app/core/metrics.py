@@ -49,7 +49,9 @@ class MetricsMiddleware:
             await self.app(scope, receive, send)
             return
 
-        method = str(scope.get("method", "UNKNOWN"))[:16]
+        method = str(scope.get("method", "UNKNOWN")).upper()
+        if method not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT"}:
+            method = "OTHER"
         status_code = 500
         started = time.perf_counter()
         HTTP_IN_PROGRESS.labels(method=method).inc()

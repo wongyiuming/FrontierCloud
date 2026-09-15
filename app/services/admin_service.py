@@ -14,12 +14,14 @@ from fastapi import HTTPException, Request, Response
 from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.async_lock import LoopLocalAsyncLock
 from app.core.client_ip import client_ip
 from app.core.config import ADMIN_KEY_FILE, settings
 from app.core.db import engine
 from app.core.redis import redis_client
+from app.core.logging_config import request_id_context, trace_id_context
 
 SESSION_PREFIX = "admin:session:"
 FAIL_PREFIX = "admin:fail:"
@@ -165,9 +167,11 @@ async def verify_admin_key(key: str, request: Request) -> str:
     # Parallel requests therefore cannot all pass a stale pre-check together.
     failed = await _failed_attempt_count(fail_key, increment=True)
     if failed > settings.ADMIN_MAX_FAILED_ATTEMPTS_PER_IP:
+        await audit(None, "admin_login", 0, "", "rate_limited", "", request)
         raise HTTPException(status_code=429, detail={"code": "ADMIN_RATE_LIMITED", "message": "验证请求过于频繁，请稍后再试"})
     valid = 1 <= len(key) <= 512 and secrets.compare_digest(_hash(key), _hash(_read_admin_key()))
     if not valid:
+        await audit(None, "admin_login", 0, "", "rejected", "invalid_key", request)
         raise HTTPException(status_code=403, detail={"code": "ADMIN_KEY_INVALID", "message": "Admin Key 无效，请检查输入"})
     await redis_client.delete(fail_key)
     return _hash(key)
@@ -185,6 +189,7 @@ async def create_session(key_hash: str, request: Request, response: Response) ->
                         secure=settings.ADMIN_COOKIE_SECURE, samesite=settings.ADMIN_COOKIE_SAMESITE, path="/")
     response.set_cookie(settings.ADMIN_CSRF_COOKIE_NAME, csrf, max_age=settings.ADMIN_SESSION_TTL, httponly=False,
                         secure=settings.ADMIN_COOKIE_SECURE, samesite=settings.ADMIN_COOKIE_SAMESITE, path="/")
+    await audit(session_hash, "admin_login", 1, "", "success", "", request)
 
 
 async def require_admin(request: Request) -> str:
@@ -204,7 +209,10 @@ async def require_admin(request: Request) -> str:
     if not secrets.compare_digest(data.get("key_hash", ""), _hash(_read_admin_key())):
         await redis_client.delete(redis_key)
         raise HTTPException(status_code=401, detail="Admin Key 已变更，请使用新 Key 重新登录")
-    await redis_client.expire(redis_key, settings.ADMIN_SESSION_TTL)
+    if not await redis_client.expire(redis_key, settings.ADMIN_SESSION_TTL):
+        raise HTTPException(status_code=401, detail="特权模式已失效，请重新登录")
+    request.scope["admin_authenticated"] = True
+    request.scope["admin_session_cookie"] = session
     return session_hash
 
 
@@ -237,29 +245,44 @@ async def rotate_admin_key(session_hash: str, custom_key: str | None, confirmati
 
 
 async def logout_admin(request: Request, response: Response) -> None:
+    request.scope["admin_authenticated"] = False
     session = request.cookies.get(settings.ADMIN_COOKIE_NAME)
     if session:
         await redis_client.delete(SESSION_PREFIX + _hash(session))
+        await audit(_hash(session), "admin_logout", 1, "", "success", "", request)
     response.delete_cookie(settings.ADMIN_COOKIE_NAME, path="/")
     response.delete_cookie(settings.ADMIN_CSRF_COOKIE_NAME, path="/")
 
 
 async def audit(session_hash: Optional[str], action: str, target_count: int, source_summary: str,
-                result: str, detail: str, request: Request) -> None:
+                result: str, detail: str, request: Request,
+                *, conn: AsyncConnection | None = None) -> None:
+    """Passed connections preserve atomicity; post-action failures retain evidence."""
+    values = {"sid": session_hash, "action": action[:64], "count": target_count,
+              "summary": source_summary[:10000], "result": result[:32], "detail": detail[:10000],
+              "ip": _client_ip(request), "ua": _ua(request), "created": _now(),
+              "request_id": request.scope.get("request_id") or request_id_context.get() or None,
+              "trace_id": request.scope.get("trace_id") or trace_id_context.get() or None}
+    statement = text("""
+        INSERT INTO admin_audit_log
+        (session_id_hash, action, target_count, source_summary, result, detail,
+         client_ip, user_agent, created_at, request_id, trace_id)
+        VALUES (:sid, :action, :count, :summary, :result, :detail,
+                :ip, :ua, :created, :request_id, :trace_id)
+    """)
+    if conn is not None:
+        await conn.execute(statement, values)
+        return
     try:
-        async with engine.begin() as conn:
-            await conn.execute(text("""
-                INSERT INTO admin_audit_log
-                (session_id_hash, action, target_count, source_summary, result, detail, client_ip, user_agent, created_at)
-                VALUES (:sid, :action, :count, :summary, :result, :detail, :ip, :ua, :created)
-            """), {"sid": session_hash, "action": action[:64], "count": target_count,
-                     "summary": source_summary[:10000], "result": result[:32], "detail": detail[:10000],
-                     "ip": _client_ip(request), "ua": _ua(request), "created": _now()})
+        async with engine.begin() as audit_conn:
+            await audit_conn.execute(statement, values)
     except SQLAlchemyError as exc:
         # Audit is a side channel for filesystem and Redis actions. Do not
         # report an already committed action as failed solely because the
         # separate audit insert was unavailable.
         logger.exception(
             "admin_audit_write_failed",
-            extra={"context": {"action": action[:64], "error": str(exc)}},
+            extra={"context": {
+                "audit_evidence": values, "error": str(exc), "durable_audit": False,
+            }},
         )

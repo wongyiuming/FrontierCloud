@@ -73,7 +73,8 @@ def parse_lrc_bytes(payload: bytes) -> list[dict[str, Any]]:
 
 def _safe_file(relative_path: str, root_name: str, extensions: set[str]) -> tuple[str, Path]:
     normalized = str(relative_path or "").replace("\\", "/").strip().lstrip("/")
-    candidate = (MEDIA_ROOT / normalized).resolve()
+    from app.services.media_manager import resolve_safe_path
+    candidate = resolve_safe_path(MEDIA_ROOT, normalized)
     parts = candidate.relative_to(MEDIA_ROOT).parts if candidate.is_relative_to(MEDIA_ROOT) else ()
     expected_depths = {3, 4} if root_name == "music" else {2}
     if (
@@ -110,7 +111,8 @@ def _catalog_scope(relative_scope: str, kind: str) -> tuple[str, Path]:
         raise ValueError(
             "禁止在 data/media 执行全局查询，请在 music 或 lyrics 文件树内选择目录"
         )
-    current = (MEDIA_ROOT / normalized).resolve()
+    from app.services.media_manager import resolve_safe_path
+    current = resolve_safe_path(MEDIA_ROOT, normalized)
     if (
         not current.is_relative_to(MEDIA_ROOT)
         or not current.exists()
@@ -270,7 +272,7 @@ async def catalog(
     }
 
 
-async def replace_relations(origin_kind: str, origin_path: str, linked_paths: list[str]) -> int:
+async def replace_relations(origin_kind: str, origin_path: str, linked_paths: list[str], *, audit=None) -> int:
     if origin_kind not in {"track", "lyric"}:
         raise ValueError("关联起点类型无效")
     if not isinstance(linked_paths, list) or len(linked_paths) > 10_000:
@@ -330,6 +332,8 @@ async def replace_relations(origin_kind: str, origin_path: str, linked_paths: li
                     "lyric_path": lyric,
                     "now": now,
                 })
+            if audit is not None:
+                await audit(conn, "success", len(pairs), {"origin_kind": origin_kind, "origin_path": origin_path})
     return len(pairs)
 
 

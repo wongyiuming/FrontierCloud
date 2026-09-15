@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import secrets
-import time
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, suppress, nullcontext
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypeVar
@@ -21,6 +19,7 @@ from app.core.client_ip import is_security_exempt, normalize_ip
 from app.core.config import settings
 from app.core.db import engine
 from app.core.redis import redis_client
+from app.core.logging_config import request_id_context, trace_id_context
 from app.services.edge_security import publish_edge_snapshot
 
 
@@ -28,6 +27,7 @@ VIOLATION_PREFIX = "security:invalid-api:"
 BAN_PREFIX = "security:auto-ban:"
 WHITELIST_KEY = "security:ip-whitelist"
 CACHE_READY_KEY = "security:cache-ready"
+DIRTY_IP_PREFIX = "security:dirty-ip:"
 CACHE_LOCK_KEY = "security:cache-lock"
 FIRST_BAN_SECONDS = 24 * 60 * 60
 PERMANENT_EXPIRES_AT = datetime(9999, 12, 31, 23, 59, 59)
@@ -39,19 +39,6 @@ _LOCAL_SECURITY_LOCK = LoopLocalAsyncLock()
 _CACHE_LOCK: ContextVar[Any] = ContextVar("ip_security_cache_lock", default=None)
 _MutationResult = TypeVar("_MutationResult")
 _edge_projection_dirty = False
-
-_SLIDING_WINDOW_SCRIPT = """
-local key = KEYS[1]
-local now_ms = tonumber(ARGV[1])
-local cutoff_ms = now_ms - tonumber(ARGV[2])
-redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff_ms)
-redis.call('ZADD', key, now_ms, ARGV[3])
-local count = redis.call('ZCARD', key)
-local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
-redis.call('EXPIRE', key, tonumber(ARGV[4]))
-return {count, oldest[2] or now_ms}
-"""
-
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -80,17 +67,26 @@ async def _renew_security_lock(distributed_lock, owner_task: asyncio.Task) -> No
 
 
 @asynccontextmanager
-async def _security_state_guard():
+async def _security_state_guard(ip: str | None = None):
     """Serialize cache rebuilds and state transitions across tasks and workers."""
-    async with _LOCAL_SECURITY_LOCK:
+    async with (_LOCAL_SECURITY_LOCK if ip is None else nullcontext()):
         distributed_lock = redis_client.lock(
-            CACHE_LOCK_KEY,
+            CACHE_LOCK_KEY if ip is None else CACHE_LOCK_KEY + ":" + ip,
             timeout=CACHE_LOCK_TIMEOUT_SECONDS,
             blocking_timeout=CACHE_LOCK_WAIT_SECONDS,
             thread_local=False,
             raise_on_release_error=False,
         )
-        async with distributed_lock:
+        try:
+            acquired = await distributed_lock.acquire()
+        except RedisError:
+            # Durable per-IP MySQL locks still serialize authoritative changes.
+            # Redis outages must not disable durable evidence or enforcement.
+            yield
+            return
+        if not acquired:
+            raise RedisError("Security state lock acquisition timed out")
+        try:
             owner_task = asyncio.current_task()
             if owner_task is None:
                 raise RuntimeError("Security cache mutation has no owning task")
@@ -106,12 +102,18 @@ async def _security_state_guard():
                 renewal_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await renewal_task
+        finally:
+            with suppress(RedisError):
+                await distributed_lock.release()
 
 
 async def _hydrate_ip_security_cache() -> None:
     """Replace the Redis projection with one coherent MySQL snapshot."""
     now = _utcnow()
-    async with engine.connect() as conn:
+    async with engine.begin() as conn:
+        # Full recovery alone takes the generation row lock. Ordinary writers
+        # can otherwise update independent addresses concurrently.
+        await conn.scalar(text("SELECT generation FROM ip_security_projection WHERE singleton=1 FOR UPDATE"))
         whitelist_rows = await conn.execute(text("SELECT ip_address FROM ip_permanent_whitelist"))
         ban_rows = await conn.execute(text("""
             SELECT ip_address, trigger_count, window_started_at, banned_at, expires_at,
@@ -121,54 +123,54 @@ async def _hydrate_ip_security_cache() -> None:
             ORDER BY banned_at DESC
         """), {"now": now})
 
-    whitelist = [str(row[0]) for row in whitelist_rows.fetchall()]
-    active_bans: dict[str, dict[str, Any]] = {}
-    for row in ban_rows.mappings().all():
-        active_bans.setdefault(str(row["ip_address"]), dict(row))
+        whitelist = [str(row[0]) for row in whitelist_rows.fetchall()]
+        active_bans: dict[str, dict[str, Any]] = {}
+        for row in ban_rows.mappings().all():
+            active_bans.setdefault(str(row["ip_address"]), dict(row))
 
-    stale_ban_keys = [key async for key in redis_client.scan_iter(match=BAN_PREFIX + "*")]
-    pipe = redis_client.pipeline(transaction=True)
-    distributed_lock = _CACHE_LOCK.get()
-    if distributed_lock is not None:
-        try:
-            await pipe.watch(CACHE_LOCK_KEY)
-            stored_token = await pipe.get(CACHE_LOCK_KEY)
-            if isinstance(stored_token, str):
-                stored_token = stored_token.encode()
-            if stored_token is None or stored_token != distributed_lock.local.token:
-                raise RedisError("Security cache lock ownership was lost")
-            pipe.multi()
-        except BaseException:
-            await pipe.reset()
-            raise
-    pipe.delete(WHITELIST_KEY)
-    pipe.delete("security:auto-bans:recent")
-    if stale_ban_keys:
-        pipe.delete(*stale_ban_keys)
-    if whitelist:
-        pipe.sadd(WHITELIST_KEY, *whitelist)
-    for ip, event in active_bans.items():
-        permanent = str(event.get("ban_kind")) == "permanent"
-        payload = {
-            "ip": ip,
-            "trigger_count": int(event["trigger_count"]),
-            "window_started_at": event["window_started_at"].isoformat(),
-            "banned_at": event["banned_at"].isoformat(),
-            "expires_at": event["expires_at"].isoformat(),
-            "last_method": event["last_method"],
-            "last_path": event["last_path"],
-            "ban_kind": event["ban_kind"],
-            "permanent": permanent,
-        }
-        if permanent:
-            pipe.set(_ban_key(ip), json.dumps(payload, ensure_ascii=False))
-        else:
-            expires_at = event["expires_at"].replace(tzinfo=timezone.utc)
-            expires_at_ms = int(expires_at.timestamp() * 1000 + 0.999)
-            pipe.set(_ban_key(ip), json.dumps(payload, ensure_ascii=False))
-            pipe.pexpireat(_ban_key(ip), expires_at_ms)
-    pipe.set(CACHE_READY_KEY, "1")
-    await pipe.execute()
+        stale_ban_keys = [key async for key in redis_client.scan_iter(match=BAN_PREFIX + "*")]
+        pipe = redis_client.pipeline(transaction=True)
+        distributed_lock = _CACHE_LOCK.get()
+        if distributed_lock is not None:
+            try:
+                await pipe.watch(CACHE_LOCK_KEY)
+                stored_token = await pipe.get(CACHE_LOCK_KEY)
+                if isinstance(stored_token, str):
+                    stored_token = stored_token.encode()
+                if stored_token is None or stored_token != distributed_lock.local.token:
+                    raise RedisError("Security cache lock ownership was lost")
+                pipe.multi()
+            except BaseException:
+                await pipe.reset()
+                raise
+        pipe.delete(WHITELIST_KEY)
+        pipe.delete("security:auto-bans:recent")
+        if stale_ban_keys:
+            pipe.delete(*stale_ban_keys)
+        if whitelist:
+            pipe.sadd(WHITELIST_KEY, *whitelist)
+        for ip, event in active_bans.items():
+            permanent = str(event.get("ban_kind")) == "permanent"
+            payload = {
+                "ip": ip,
+                "trigger_count": int(event["trigger_count"]),
+                "window_started_at": event["window_started_at"].isoformat(),
+                "banned_at": event["banned_at"].isoformat(),
+                "expires_at": event["expires_at"].isoformat(),
+                "last_method": event["last_method"],
+                "last_path": event["last_path"],
+                "ban_kind": event["ban_kind"],
+                "permanent": permanent,
+            }
+            if permanent:
+                pipe.set(_ban_key(ip), json.dumps(payload, ensure_ascii=False))
+            else:
+                expires_at = event["expires_at"].replace(tzinfo=timezone.utc)
+                expires_at_ms = int(expires_at.timestamp() * 1000 + 0.999)
+                pipe.set(_ban_key(ip), json.dumps(payload, ensure_ascii=False))
+                pipe.pexpireat(_ban_key(ip), expires_at_ms)
+        pipe.set(CACHE_READY_KEY, "1")
+        await pipe.execute()
 
 
 async def initialize_ip_security_cache() -> None:
@@ -181,21 +183,39 @@ async def initialize_ip_security_cache() -> None:
 async def _refresh_edge_projection() -> None:
     global _edge_projection_dirty
     _edge_projection_dirty = True
+    async with engine.connect() as conn:
+        generation = await conn.scalar(text("SELECT generation FROM ip_security_projection WHERE singleton=1"))
     await publish_edge_snapshot()
+    async with engine.begin() as conn:
+        await conn.execute(text("""
+            UPDATE ip_security_projection SET published_generation=:generation
+            WHERE singleton=1 AND generation >= :generation
+        """), {"generation": int(generation or 0)})
     _edge_projection_dirty = False
 
 
 async def retry_edge_projection() -> None:
-    """Retry failed publications without polling MySQL when the state is clean."""
+    """Batch policy publication; the durable generation survives failed writers."""
     while True:
-        await asyncio.sleep(5)
-        if _edge_projection_dirty:
-            try:
+        await asyncio.sleep(1)
+        try:
+            async with engine.connect() as conn:
+                pending = await conn.scalar(text("""
+                    SELECT generation > published_generation
+                    FROM ip_security_projection WHERE singleton=1
+                """))
+            if _edge_projection_dirty or pending:
                 async with _security_state_guard():
-                    if _edge_projection_dirty:
-                        await _refresh_edge_projection()
-            except Exception as exc:
-                append_admin_log(f"[IP_SECURITY] edge projection retry failed: {exc}")
+                    await _refresh_edge_projection()
+            async with engine.connect() as conn:
+                dirty = (await conn.execute(text(
+                    "SELECT ip_address FROM ip_security_locks WHERE projection_dirty=1 ORDER BY ip_address LIMIT 200"
+                ))).scalars().all()
+            for ip in dirty:
+                async with _security_state_guard(str(ip)):
+                    await _project_ip(str(ip))
+        except Exception as exc:
+            append_admin_log(f"[IP_SECURITY] edge projection retry failed: {exc}")
 
 
 async def ensure_ip_security_cache() -> None:
@@ -228,39 +248,101 @@ async def _audit_ip(conn: AsyncConnection, ip: str, action: str,
     """Append investigation evidence in the same transaction as the transition."""
     await conn.execute(text("""
         INSERT INTO ip_security_audit_log
-        (ip_address, action, detail, session_id_hash, created_at)
-        VALUES (:ip, :action, :detail, :session, :now)
+        (ip_address, action, detail, session_id_hash, created_at, request_id, trace_id)
+        VALUES (:ip, :action, :detail, :session, :now, :request_id, :trace_id)
     """), {"ip": ip, "action": action,
            "detail": json.dumps(detail, ensure_ascii=False),
-           "session": session, "now": _utcnow()})
+           "session": session, "now": _utcnow(),
+           "request_id": request_id_context.get() or None, "trace_id": trace_id_context.get() or None})
 
+
+async def _project_ip(ip: str) -> None:
+    """Refresh just this address, never SCAN or rewrite unrelated bans."""
+    async with engine.begin() as conn:
+        await _lock_ip_state(conn, ip)
+        block = await _mysql_block_fallback(ip, conn=conn)
+        whitelisted = await conn.scalar(text(
+            "SELECT 1 FROM ip_permanent_whitelist WHERE ip_address=:ip LIMIT 1"
+        ), {"ip": ip})
+        pipe = redis_client.pipeline(transaction=True)
+        distributed_lock = _CACHE_LOCK.get()
+        if distributed_lock is not None:
+            try:
+                await pipe.watch(distributed_lock.name)
+                token = await pipe.get(distributed_lock.name)
+                if isinstance(token, str):
+                    token = token.encode()
+                if token != distributed_lock.local.token:
+                    raise RedisError("Per-IP projection lock ownership was lost")
+                pipe.multi()
+            except BaseException:
+                await pipe.reset()
+                raise
+        if whitelisted:
+            pipe.sadd(WHITELIST_KEY, ip)
+        else:
+            pipe.srem(WHITELIST_KEY, ip)
+        if block:
+            pipe.set(_ban_key(ip), json.dumps(block, ensure_ascii=False))
+            if not block["permanent"]:
+                expires = datetime.fromisoformat(block["expires_at"]).replace(tzinfo=timezone.utc)
+                pipe.pexpireat(_ban_key(ip), int(expires.timestamp() * 1000 + 0.999))
+        else:
+            pipe.delete(_ban_key(ip))
+        pipe.delete(DIRTY_IP_PREFIX + ip)
+        await pipe.execute()
+
+
+        await conn.execute(text(
+            "UPDATE ip_security_locks SET projection_dirty=0 WHERE ip_address=:ip"
+        ), {"ip": ip})
 
 async def _run_state_transaction(
     operation: Callable[[AsyncConnection], Awaitable[_MutationResult]],
     *,
+    ip: str | None = None,
     clear_violations_for: str | None = None,
+    policy_changed: Callable[[_MutationResult], bool] | None = None,
 ) -> _MutationResult:
-    """Commit MySQL while Redis is dirty, then rebuild the cache projection."""
+    """Commit state/audit/edge generation together, then project one IP."""
     global _edge_projection_dirty
-    async with _security_state_guard():
-        await redis_client.delete(CACHE_READY_KEY)
-        _edge_projection_dirty = True
+    async with _security_state_guard(ip):
+        try:
+            if ip is None:
+                await redis_client.delete(CACHE_READY_KEY)
+            else:
+                await redis_client.set(DIRTY_IP_PREFIX + ip, "1")
+        except RedisError:
+            pass
         try:
             async with engine.begin() as conn:
                 result = await operation(conn)
+                if ip is not None:
+                    await conn.execute(text(
+                        "UPDATE ip_security_locks SET projection_dirty=1 WHERE ip_address=:ip"
+                    ), {"ip": ip})
+                changed = policy_changed(result) if policy_changed else True
+                if changed:
+                    await conn.execute(text("""
+                        UPDATE ip_security_projection SET generation=generation+1
+                        WHERE singleton=1
+                    """))
+                    _edge_projection_dirty = True
         except Exception:
-            await _refresh_after_failed_mutation()
+            if ip is None:
+                await _refresh_after_failed_mutation()
+            else:
+                with suppress(RedisError, SQLAlchemyError):
+                    await _project_ip(ip)
             raise
-
-        try:
-            await _refresh_edge_projection()
-        except Exception as exc:
-            append_admin_log(f"[IP_SECURITY] MySQL committed; edge projection retry pending: {exc}")
 
         try:
             if clear_violations_for is not None:
                 await redis_client.delete(_violation_key(clear_violations_for))
-            await _hydrate_ip_security_cache()
+            if ip is None:
+                await _hydrate_ip_security_cache()
+            else:
+                await _project_ip(ip)
         except Exception as exc:
             # MySQL is authoritative.  Leaving CACHE_READY_KEY absent makes
             # request-time lookups fall back to MySQL until rehydration works.
@@ -271,9 +353,9 @@ async def _run_state_transaction(
         return result
 
 
-async def _mysql_block_fallback(ip: str) -> dict[str, Any] | None:
+async def _mysql_block_fallback(ip: str, *, conn: AsyncConnection | None = None) -> dict[str, Any] | None:
     now = _utcnow()
-    async with engine.connect() as conn:
+    async def read(conn):
         whitelisted = await conn.scalar(
             text("SELECT 1 FROM ip_permanent_whitelist WHERE ip_address=:ip LIMIT 1"),
             {"ip": ip},
@@ -288,20 +370,25 @@ async def _mysql_block_fallback(ip: str) -> dict[str, Any] | None:
             ORDER BY banned_at DESC LIMIT 1
         """), {"ip": ip, "now": now})
         row = result.mappings().first()
-    if not row:
-        return None
-    return {
-        "ip": str(row["ip_address"]),
-        "trigger_count": int(row["trigger_count"]),
-        "window_started_at": row["window_started_at"].isoformat(),
-        "banned_at": row["banned_at"].isoformat(),
-        "expires_at": row["expires_at"].isoformat(),
-        "last_method": row["last_method"],
-        "last_path": row["last_path"],
-        "ban_kind": row["ban_kind"],
-        "permanent": str(row["ban_kind"]) == "permanent",
-    }
+        if not row:
+            return None
+        return {
+            "ip": str(row["ip_address"]),
+            "trigger_count": int(row["trigger_count"]),
+            "window_started_at": row["window_started_at"].isoformat(),
+            "banned_at": row["banned_at"].isoformat(),
+            "expires_at": row["expires_at"].isoformat(),
+            "last_method": row["last_method"],
+            "last_path": row["last_path"],
+            "ban_kind": row["ban_kind"],
+            "permanent": str(row["ban_kind"]) == "permanent",
+        }
 
+
+    if conn is not None:
+        return await read(conn)
+    async with engine.connect() as connection:
+        return await read(connection)
 
 async def get_ip_block(ip: str) -> dict[str, Any] | None:
     if is_security_exempt(ip):
@@ -310,10 +397,11 @@ async def get_ip_block(ip: str) -> dict[str, Any] | None:
         await ensure_ip_security_cache()
         pipe = redis_client.pipeline(transaction=True)
         pipe.exists(CACHE_READY_KEY)
+        pipe.exists(DIRTY_IP_PREFIX + ip)
         pipe.sismember(WHITELIST_KEY, ip)
         pipe.get(_ban_key(ip))
-        cache_ready, whitelisted, payload = await pipe.execute()
-        if not cache_ready:
+        cache_ready, dirty, whitelisted, payload = await pipe.execute()
+        if not cache_ready or dirty:
             return await _mysql_block_fallback(ip)
         if whitelisted or not payload:
             return None
@@ -338,38 +426,43 @@ async def get_ip_block(ip: str) -> dict[str, Any] | None:
 async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -> int:
     if is_security_exempt(ip):
         return 0
-    try:
-        await ensure_ip_security_cache()
-        if await redis_client.sismember(WHITELIST_KEY, ip):
-            return 0
-        now_ms = int(time.time() * 1000)
-        result = await redis_client.eval(
-            _SLIDING_WINDOW_SCRIPT,
-            1,
-            _violation_key(ip),
-            now_ms,
-            settings.SECURITY_INVALID_API_WINDOW * 1000,
-            f"{now_ms}:{secrets.token_hex(6)}",
-            settings.SECURITY_INVALID_API_WINDOW,
-        )
-        count = int(result[0])
-        window_started_at = datetime.fromtimestamp(float(result[1]) / 1000, timezone.utc).replace(tzinfo=None)
-    except (RedisError, SQLAlchemyError, TypeError, ValueError) as exc:
-        append_admin_log(f"[IP_SECURITY] invalid API counter failed for {ip}: {exc}")
-        return 0
-
-    evidence = {"method": method[:16], "path": path[:2048],
-                "user_agent": user_agent[:512], "window_count": count}
-    if count <= settings.SECURITY_INVALID_API_LIMIT:
-        async with engine.begin() as conn:
-            await _audit_ip(conn, ip, "invalid_api", evidence)
-        return count
-
     now = _utcnow()
+    count = 0
+    window_started_at = now
+    evidence = {"method": method[:16], "path": path[:2048],
+                "user_agent": user_agent[:512], "window_count": 0}
 
     async def create_ban(conn: AsyncConnection) -> tuple[str, datetime] | None:
+        nonlocal count, window_started_at
         await _lock_ip_state(conn, ip)
+        if await conn.scalar(text(
+            "SELECT 1 FROM ip_permanent_whitelist WHERE ip_address=:ip LIMIT 1 FOR UPDATE"
+        ), {"ip": ip}):
+            return None
+        # Only the latest threshold+1 events are needed. MySQL owns both the
+        # evidence and its count, including requests seen while Redis is down.
+        count = int(await conn.scalar(text("""
+            SELECT COUNT(*) FROM (
+                SELECT id FROM ip_security_audit_log
+                WHERE ip_address=:ip AND action='invalid_api' AND created_at > :cutoff
+                ORDER BY created_at DESC, id DESC LIMIT :limit
+            ) AS recent
+        """), {"ip": ip, "cutoff": now - timedelta(seconds=settings.SECURITY_INVALID_API_WINDOW),
+                 "limit": settings.SECURITY_INVALID_API_LIMIT + 1}) or 0) + 1
+        evidence["window_count"] = count
         await _audit_ip(conn, ip, "invalid_api", evidence)
+        if count <= settings.SECURITY_INVALID_API_LIMIT:
+            return None
+        earliest = await conn.scalar(text("""
+            SELECT MIN(created_at) FROM (
+                SELECT created_at FROM ip_security_audit_log
+                WHERE ip_address=:ip AND action='invalid_api' AND created_at > :cutoff
+                ORDER BY created_at DESC, id DESC LIMIT :limit
+            ) AS recent
+        """), {"ip": ip, "cutoff": now - timedelta(seconds=settings.SECURITY_INVALID_API_WINDOW),
+                 "limit": settings.SECURITY_INVALID_API_LIMIT + 1})
+        if isinstance(earliest, datetime):
+            window_started_at = earliest
         await conn.execute(text("""
             UPDATE ip_auto_ban_events
             SET status='expired'
@@ -418,7 +511,7 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
         return ban_kind, expires_at
 
     try:
-        created = await _run_state_transaction(create_ban)
+        created = await _run_state_transaction(create_ban, ip=ip, policy_changed=lambda result: result is not None)
     except (RedisError, SQLAlchemyError) as exc:
         append_admin_log(f"[IP_SECURITY] failed to persist ban for {ip}: {exc}")
         return count
@@ -445,7 +538,7 @@ async def unban_ip(ip_value: str, session_hash: str, status: str = "unbanned") -
         """), {"status": status, "now": now, "session": session_hash, "ip": ip})
         await _audit_ip(conn, ip, "unban", {"status": status}, session_hash)
 
-    await _run_state_transaction(release_ban, clear_violations_for=ip)
+    await _run_state_transaction(release_ban, ip=ip, clear_violations_for=ip)
     return ip
 
 
@@ -500,7 +593,7 @@ async def manual_ban_ip(ip_value: str, session_hash: str, reason: str) -> dict[s
         }, session_hash)
         return int(inserted.lastrowid)
 
-    event_id = await _run_state_transaction(create_manual_ban)
+    event_id = await _run_state_transaction(create_manual_ban, ip=ip)
     append_admin_log(
         f"[IP_SECURITY] manually banned ip={ip} event_id={event_id} "
         f"expires_at={expires_at.isoformat()} reason={reason[:128]}"
@@ -557,7 +650,7 @@ async def manual_permanent_ban_ip(ip_value: str, session_hash: str, reason: str)
         }, session_hash)
         return int(inserted.lastrowid)
 
-    event_id = await _run_state_transaction(create_permanent_ban, clear_violations_for=ip)
+    event_id = await _run_state_transaction(create_permanent_ban, ip=ip, clear_violations_for=ip)
     append_admin_log(
         f"[IP_SECURITY] permanently banned ip={ip} event_id={event_id} reason={reason[:128]}"
     )
@@ -583,7 +676,7 @@ async def add_whitelist(ip_value: str, session_hash: str, note: str = "") -> str
         """), {"now": now, "session": session_hash, "ip": ip})
         await _audit_ip(conn, ip, "whitelist_add", {"note": note[:255]}, session_hash)
 
-    await _run_state_transaction(whitelist_and_release, clear_violations_for=ip)
+    await _run_state_transaction(whitelist_and_release, ip=ip, clear_violations_for=ip)
     return ip
 
 
@@ -595,7 +688,7 @@ async def remove_whitelist(ip_value: str, session_hash: str | None = None) -> st
         await conn.execute(text("DELETE FROM ip_permanent_whitelist WHERE ip_address=:ip"), {"ip": ip})
         await _audit_ip(conn, ip, "whitelist_remove", {}, session_hash)
 
-    await _run_state_transaction(remove, clear_violations_for=ip)
+    await _run_state_transaction(remove, ip=ip, clear_violations_for=ip)
     return ip
 
 

@@ -21,6 +21,7 @@ logger = logging.getLogger("frontiercloud.nodes")
 class Runtime:
     def __init__(self):
         self.task = None
+        self.scan_task = None
         self.wakeup = asyncio.Event()
 
     def start(self, *, revocations=False):
@@ -37,7 +38,25 @@ class Runtime:
             with suppress(asyncio.CancelledError):
                 await self.task
             self.task = None
+        await self.stop_scan()
         await transport.close()
+
+    async def stop_scan(self):
+        if self.scan_task:
+            self.scan_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.scan_task
+            self.scan_task = None
+
+    async def scan_inventory(self):
+        try:
+            await catalog.scan()
+        except Exception as exc:
+            logger.warning("Node inventory deferred: %s", type(exc).__name__)
+
+    def schedule_scan(self):
+        if state.node["role"] != "Standalone" and (self.scan_task is None or self.scan_task.done()):
+            self.scan_task = asyncio.create_task(self.scan_inventory(), name="node-inventory")
 
     async def call(self, relation: dict, path: str, value=None):
         return await transport.request(relation["peer_endpoint"], path,
@@ -144,12 +163,14 @@ class Runtime:
             while True:
                 self.wakeup.clear()
                 try:
-                    await catalog.scan()
+                    self.schedule_scan()
                     await state.cleanup_playback_events()
                     relations = await state.list_relationships(include_revoked=True)
                     pending = [row for row in relations if row["state"] == "revoked" and not row["summary"].get("revocation_acknowledged")]
                     if state.node["role"] == "Standalone" and not pending:
                         break
+                    if state.node["role"] == "Standalone":
+                        await self.stop_scan()
                     semaphore = asyncio.Semaphore(4)
                     async def checked_tick(relation):
                         async with semaphore:
@@ -166,6 +187,7 @@ class Runtime:
                 except TimeoutError:
                     pass
         finally:
+            await self.stop_scan()
             await transport.close()
 
 

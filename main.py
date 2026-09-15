@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -8,7 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 from contextlib import suppress
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -18,7 +19,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from app.api.v1.endpoints import router as api_v1_router
 from app.core.admin_log import sanitize_log_value
 from app.core.config import settings
-from app.core.client_ip import client_ip
+from app.core.client_ip import client_ip, resolve_client_identity
 from app.core.db import close_db, init_db
 from app.core.logging_config import bind_request_context, configure_logging, reset_request_context
 from app.core.metrics import MetricsMiddleware
@@ -105,17 +106,17 @@ class RealIPLogMiddleware:
 
         start = time.perf_counter()
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
-        supplied_request_id = headers.get(b"x-request-id", b"").decode("ascii", errors="ignore")
-        request_id = supplied_request_id[:128] if supplied_request_id else uuid.uuid4().hex
-        traceparent = headers.get(b"traceparent", b"").decode("ascii", errors="ignore")[:256]
+        supplied_request_id = headers.get(b"x-request-id", b"").decode("ascii", errors="replace")
+        request_id = (supplied_request_id if resolve_client_identity(scope).from_trusted_proxy
+                      and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", supplied_request_id)
+                      else uuid.uuid4().hex)
+        traceparent = headers.get(b"traceparent", b"").decode("ascii", errors="replace")
         trace_parts = traceparent.split("-")
-        trace_id = (
-            trace_parts[1]
-            if len(trace_parts) >= 4
-            and len(trace_parts[1]) == 32
-            and all(character in "0123456789abcdef" for character in trace_parts[1])
-            else ""
-        )
+        valid_trace = (re.fullmatch(r"00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}", traceparent)
+                       and trace_parts[1] != "0" * 32 and trace_parts[2] != "0" * 16)
+        trace_id = trace_parts[1] if valid_trace else uuid.uuid4().hex
+        scope["request_id"] = request_id
+        scope["trace_id"] = trace_id
         context_tokens = bind_request_context(request_id, trace_id)
         verified_client_ip = scope.get("verified_client_ip") or client_ip(scope)
         status_code = 500
@@ -125,6 +126,26 @@ class RealIPLogMiddleware:
             if message["type"] == "http.response.start":
                 status_code = message["status"]
                 message.setdefault("headers", []).append((b"x-request-id", request_id.encode("ascii")))
+                audit_trace = (scope.get("media_audit") or {}).get("trace_id") or trace_id
+                if audit_trace and not any(name.lower() == b"x-audit-trace-id" for name, _value in message["headers"]):
+                    message["headers"].append((b"x-audit-trace-id", audit_trace.encode("ascii")))
+                if scope.get("admin_authenticated"):
+                    # Cookie expiry must slide with the authenticated Redis idle TTL.
+                    cookie_response = Response()
+                    cookie_response.set_cookie(
+                        settings.ADMIN_COOKIE_NAME, scope["admin_session_cookie"],
+                        max_age=settings.ADMIN_SESSION_TTL, httponly=True,
+                        secure=settings.ADMIN_COOKIE_SECURE, samesite=settings.ADMIN_COOKIE_SAMESITE, path="/",
+                    )
+                    cookies = Request(scope).cookies
+                    csrf = cookies.get(settings.ADMIN_CSRF_COOKIE_NAME)
+                    if csrf:
+                        cookie_response.set_cookie(
+                            settings.ADMIN_CSRF_COOKIE_NAME, csrf, max_age=settings.ADMIN_SESSION_TTL,
+                            secure=settings.ADMIN_COOKIE_SECURE, samesite=settings.ADMIN_COOKIE_SAMESITE, path="/",
+                        )
+                    message["headers"].extend((name, value) for name, value in cookie_response.raw_headers
+                                              if name == b"set-cookie")
             await send(message)
 
         try:
@@ -133,7 +154,7 @@ class RealIPLogMiddleware:
             elapsed = (time.perf_counter() - start) * 1000
             method = sanitize_log_value(scope.get("method", ""), 16)
             path = sanitize_log_value(scope.get("path", ""), 2048)
-            if path not in QUIET_REQUEST_PATHS:
+            if path not in QUIET_REQUEST_PATHS or status_code >= 400:
                 raw_query = scope.get("query_string", b"")
                 raw_target = path + (("?" + raw_query.decode("utf-8", errors="replace")) if raw_query else "")
                 observation = scope.get("webrtc_observation") or {}
@@ -150,6 +171,8 @@ class RealIPLogMiddleware:
                         "webrtc_ip": webrtc_ip,
                         "webrtc_match": bool(observation.get("matches_verified")) if observation else None,
                         "webrtc_outcome": sanitize_log_value(observation.get("outcome", "-"), 32) if observation else None,
+                        "media_audit": scope.get("media_audit"),
+                        "range": sanitize_log_value(headers.get(b"range", b"").decode("ascii", errors="replace"), 256) or None,
                     }},
                 )
             reset_request_context(context_tokens)
@@ -171,9 +194,9 @@ def render_query_log(target: str) -> str:
         return sanitize_log_value(target, 4000)
 
 
-app.add_middleware(RealIPLogMiddleware)
 app.add_middleware(IPSecurityMiddleware)
 app.add_middleware(MetricsMiddleware)
+app.add_middleware(RealIPLogMiddleware)
 app.include_router(api_v1_router, prefix="/api/v1")
 
 

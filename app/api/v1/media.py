@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import bindparam, text
 
 from app.services.media_catalog_cache import load_media_catalog, store_media_catalog
 from app.services import playback
@@ -18,10 +19,13 @@ from app.services import network_observation
 from app.services import lyrics
 from app.services import media_objects
 from app.core.config import settings
+from app.core.db import engine
 from app.api.internal_nodes import require_https
 from app.services.federation.state import state as node_state
 from app.services.federation.catalog import catalog as node_catalog
 from app.services.federation import routing as node_routing
+from app.services.federation import protocol as node_protocol
+from app.services.media_manager import ensure_media_mutations_ready, media_mutation_lock
 
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parents[3]
@@ -268,15 +272,17 @@ async def scan_media_files_by_category(category_subpath, valid_exts, media_type)
     generation, cached = await load_media_catalog("tracks-v2", identity)
     if cached is not None:
         return cached
-    hidden = await _hidden_set()
-    media_list = await asyncio.to_thread(
-        _scan_media_files_by_category_sync,
-        category_subpath,
-        valid_exts,
-        media_type,
-        hidden,
-    )
-    media_list = await media_objects.bind_items(media_list, media_type)
+    async with media_mutation_lock.shared():
+        ensure_media_mutations_ready()
+        hidden = await _hidden_set()
+        media_list = await asyncio.to_thread(
+            _scan_media_files_by_category_sync,
+            category_subpath,
+            valid_exts,
+            media_type,
+            hidden,
+        )
+        media_list = await media_objects.bind_items(media_list, media_type)
     if node_state.node["role"] == "Master":
         media_list.extend(await node_routing.directory_items(category_subpath))
     await store_media_catalog(generation, "tracks-v2", identity, media_list)
@@ -296,19 +302,55 @@ def load_html_template(filename: str) -> str:
 async def stream_media_file(file_path: str | None = None, resource_id: str | None = None, request: Request = None):
     if resource_id is not None:
         require_https(request)
-        return await node_routing.stream(resource_id, file_path)
+        response = await node_routing.stream(resource_id, file_path)
+        _bind_response_media_audit(request, response)
+        return response
     if not file_path:
         raise HTTPException(status_code=422, detail="file_path or resource_id is required")
+    async with media_mutation_lock.shared():
+        ensure_media_mutations_ready()
+        return await _local_stream_response(file_path, request)
+
+
+def _bind_response_media_audit(request: Request | None, response: Response) -> None:
+    if request is not None:
+        request.scope["media_audit"] = {
+            "resource_id": response.headers.get("X-Media-Resource-ID", ""),
+            "owner_id": response.headers.get("X-Media-Owner-ID", ""),
+            "media_id": response.headers.get("X-Media-Object-ID", ""),
+        }
+
+
+async def _local_stream_metadata(relative_path: str, object_kind: str) -> dict[str, str]:
+    # Range requests inspect only the exact file and its supported ancestors.
+    # The caller's shared mutation guard excludes deletion while binding an ID.
+    parts = relative_path.split("/")
+    ancestors = ["/".join(parts[:index]) for index in range(1, len(parts) + 1)]
+    async with engine.begin() as conn:
+        hidden = await conn.scalar(text("""
+            SELECT EXISTS(SELECT 1 FROM media_visibility
+                          WHERE hidden=1 AND relative_path IN :ancestors)
+        """).bindparams(bindparam("ancestors", expanding=True)), {"ancestors": ancestors})
+        if hidden:
+            raise HTTPException(status_code=404, detail="Media file not found")
+        media_id = await media_objects.ensure_object(conn, relative_path, object_kind)
+    owner_id = node_state.node["node_id"]
+    return {"resource_id": node_protocol.resource_id(owner_id, media_id), "owner_id": owner_id, "media_id": media_id}
+
+
+async def _local_stream_response(file_path: str, request: Request | None) -> Response:
     try:
         safe_path = resolve_safe_path(MEDIA_ROOT, file_path)
     except ValueError:
         raise HTTPException(status_code=403, detail="Forbidden path access")
     if safe_path.is_symlink() or not safe_path.is_file():
         if node_state.node["role"] == "Master":
-            rows = [row for row in await node_catalog.resources(directory=file_path.rsplit("/", 1)[0]) if row["path"] == file_path]
+            rows = await node_catalog.resources(path=file_path)
             if rows:
                 require_https(request)
-                return await node_routing.stream(rows[0]["resource_id"], file_path)
+                response = await node_routing.stream(rows[0]["resource_id"], file_path)
+                _bind_response_media_audit(request, response)
+                return response
         raise HTTPException(status_code=404, detail="Media file not found")
     rel_parts = safe_path.relative_to(MEDIA_ROOT).parts
     if len(rel_parts) not in {3, 4} or rel_parts[0] not in {"music", "vido"}:
@@ -316,10 +358,10 @@ async def stream_media_file(file_path: str | None = None, resource_id: str | Non
     allowed_exts = AUDIO_EXTS if rel_parts[0] == "music" else VIDEO_EXTS
     if safe_path.suffix.lower() not in allowed_exts:
         raise HTTPException(status_code=403, detail="Forbidden media type")
-    hidden = await _hidden_set()
     rel = safe_path.relative_to(MEDIA_ROOT).as_posix()
-    if _is_publicly_hidden(rel, hidden):
-        raise HTTPException(status_code=404, detail="Media file not found")
+    metadata = await _local_stream_metadata(rel, "audio" if rel_parts[0] == "music" else "video")
+    if request is not None:
+        request.scope["media_audit"] = metadata
     content_type = mimetypes.guess_type(safe_path.name)[0] or "application/octet-stream"
     return Response(
         media_type=content_type,
@@ -329,6 +371,9 @@ async def stream_media_file(file_path: str | None = None, resource_id: str | Non
                 + urllib.parse.quote(rel, safe="/")
             ),
             "Cache-Control": "public, max-age=86400",
+            "X-Media-Resource-ID": metadata["resource_id"],
+            "X-Media-Owner-ID": metadata["owner_id"],
+            "X-Media-Object-ID": metadata["media_id"],
         },
     )
 

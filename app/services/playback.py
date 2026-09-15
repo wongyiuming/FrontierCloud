@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from sqlalchemy import text
@@ -18,6 +19,7 @@ from app.services.media_manager import ensure_media_mutations_ready, media_mutat
 PLAYBACK_EVENT_TTL_DAYS = 7
 MIN_PREFERENCE = -2
 MAX_PREFERENCE = 7
+_next_cleanup_at = 0.0
 
 
 def _utcnow() -> datetime:
@@ -83,6 +85,17 @@ async def attach_stats_and_sort(items: Iterable[dict[str, Any]], session_id: str
 
 def validate_media_path(media_root: Path, relative_path: str) -> tuple[str, Path]:
     normalized = str(relative_path or "").replace("\\", "/").lstrip("/")
+    parts = PurePosixPath(normalized).parts
+    extensions = {"music": {".mp3", ".m4a", ".flac", ".wav"}, "vido": {".mp4", ".webm", ".mkv"}}
+    if (len(parts) not in (3, 4) or normalized != "/".join(parts)
+            or any(part.startswith(".") for part in parts) or parts[0] not in extensions
+            or PurePosixPath(normalized).suffix.lower() not in extensions[parts[0]]):
+        raise ValueError("Invalid media path")
+    candidate = media_root
+    for part in parts:
+        candidate /= part
+        if candidate.is_symlink():
+            raise ValueError("Invalid media path")
     target = (media_root / normalized).resolve()
     if not normalized or not target.is_relative_to(media_root.resolve()) or target.is_symlink() or not target.is_file():
         raise ValueError("Invalid media path")
@@ -91,12 +104,20 @@ def validate_media_path(media_root: Path, relative_path: str) -> tuple[str, Path
 
 async def _cleanup_expired_events(now: datetime) -> None:
     """Keep housekeeping failures outside the playback accounting transaction."""
+    global _next_cleanup_at
+    clock = time.monotonic()
+    if clock < _next_cleanup_at:
+        return
+    # Reserve before awaiting; concurrent reports do not enqueue more cleanups.
+    _next_cleanup_at = clock + 30
     try:
         async with engine.begin() as conn:
-            await conn.execute(
+            removed = await conn.execute(
                 text("DELETE FROM media_playback_events WHERE expires_at <= :now LIMIT 1000"),
                 {"now": now},
             )
+        if removed.rowcount == 1000:
+            _next_cleanup_at = time.monotonic() + 1
     except SQLAlchemyError as exc:
         append_admin_log(f"[PLAYBACK] expired-event cleanup deferred: {exc}")
 
@@ -116,50 +137,50 @@ async def record_playback(
     expires_at = now + timedelta(days=PLAYBACK_EVENT_TTL_DAYS)
     counted = False
     await _cleanup_expired_events(now)
-    async with media_mutation_lock:
+    async with media_mutation_lock.shared():
         ensure_media_mutations_ready()
         normalized_path, validated_path = validate_media_path(media_root, relative_path)
         object_kind = "video" if validated_path.suffix.lower() in {".mp4", ".webm", ".mkv"} else "audio"
         async with engine.begin() as conn:
             media_id = await media_objects.ensure_object(conn, normalized_path, object_kind)
+            # Lock just this object's stats before accounting. Different media can
+            # proceed together; file deletion still waits for the shared guard.
             await conn.execute(
                 text("""
-                    DELETE FROM media_playback_events
-                    WHERE playback_session_id=:session_id
-                      AND media_id=:media_id
-                      AND expires_at <= :now
+                    INSERT INTO media_playback_stats
+                    (media_id, media_path, play_score, preference, created_at, updated_at)
+                    VALUES (:media_id, :media_path, 0, 0, :now, :now)
+                    ON DUPLICATE KEY UPDATE media_path=VALUES(media_path)
                 """),
-                {"session_id": normalized_session, "media_id": media_id, "now": now},
+                {"media_id": media_id, "media_path": normalized_path, "now": now},
             )
-            inserted = await conn.execute(
-                text("""
+            event_statement = text("""
                     INSERT IGNORE INTO media_playback_events
                     (playback_session_id, media_id, counted_at, expires_at)
                     VALUES (:session_id, :media_id, :counted_at, :expires_at)
-                """),
-                {
-                    "session_id": normalized_session,
-                    "media_id": media_id,
-                    "counted_at": now,
-                    "expires_at": expires_at,
-                },
-            )
+                """)
+            event_parameters = {"session_id": normalized_session, "media_id": media_id,
+                                "counted_at": now, "expires_at": expires_at}
+            inserted = await conn.execute(event_statement, event_parameters)
+            if inserted.rowcount != 1:
+                # Never DELETE a missing key before insertion: InnoDB gap locks
+                # would make otherwise unrelated resources block one another.
+                expired = await conn.execute(text("""
+                    DELETE FROM media_playback_events
+                    WHERE playback_session_id=:session_id AND media_id=:media_id
+                      AND expires_at <= :now
+                """), {"session_id": normalized_session, "media_id": media_id, "now": now})
+                if expired.rowcount == 1:
+                    inserted = await conn.execute(event_statement, event_parameters)
             if inserted.rowcount == 1:
                 counted = True
                 await conn.execute(
-                    text("""
-                        INSERT INTO media_playback_stats
-                        (media_id, media_path, play_score, preference, created_at, updated_at)
-                        VALUES (:media_id, :media_path, 1, 0, :now, :now)
-                        ON DUPLICATE KEY UPDATE
-                            media_path=VALUES(media_path),
-                            play_score=play_score + 1,
-                            updated_at=VALUES(updated_at)
-                    """),
-                    {"media_id": media_id, "media_path": normalized_path, "now": now},
+                    text("""UPDATE media_playback_stats SET play_score=play_score + 1,
+                            updated_at=:now WHERE media_id=:media_id"""),
+                    {"media_id": media_id, "now": now},
                 )
             result = await conn.execute(
-                text("SELECT play_score, preference FROM media_playback_stats WHERE media_id=:media_id"),
+                text("SELECT play_score, preference FROM media_playback_stats WHERE media_id=:media_id FOR UPDATE"),
                 {"media_id": media_id},
             )
             row = result.mappings().first()
@@ -176,7 +197,7 @@ async def change_preference(media_root: Path, relative_path: str, delta: int) ->
     if delta not in {-1, 1}:
         raise ValueError("Preference delta must be -1 or 1")
     now = _utcnow()
-    async with media_mutation_lock:
+    async with media_mutation_lock.shared():
         ensure_media_mutations_ready()
         normalized_path, validated_path = validate_media_path(media_root, relative_path)
         object_kind = "video" if validated_path.suffix.lower() in {".mp4", ".webm", ".mkv"} else "audio"
@@ -202,7 +223,7 @@ async def change_preference(media_root: Path, relative_path: str, delta: int) ->
                 },
             )
             result = await conn.execute(
-                text("SELECT play_score, preference FROM media_playback_stats WHERE media_id=:media_id"),
+                text("SELECT play_score, preference FROM media_playback_stats WHERE media_id=:media_id FOR UPDATE"),
                 {"media_id": media_id},
             )
             row = result.mappings().first()

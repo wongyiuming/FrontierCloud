@@ -1,4 +1,4 @@
-FROM nginx:1.26-alpine
+FROM nginx:1.30.4-alpine
 
 # Remove the bundled default server.
 RUN rm /etc/nginx/conf.d/default.conf

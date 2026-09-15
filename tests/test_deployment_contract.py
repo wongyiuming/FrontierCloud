@@ -113,12 +113,39 @@ class DeploymentContractTests(unittest.TestCase):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
         self.assertIn("access_log /dev/stdout structured if=$access_loggable", nginx)
-        self.assertIn("~^/health(?:/|$) 0", nginx)
-        self.assertIn("=/metrics 0", nginx)
+        self.assertIn("~^/health(?:/|$) 1", nginx)
+        self.assertIn("=/metrics 1", nginx)
+        self.assertIn('map "$quiet_success_path:$status" $access_loggable', nginx)
+        self.assertIn('"~^1:2[0-9][0-9]$" 0', nginx)
         self.assertIn("error_log /dev/stderr warn", nginx)
         self.assertIn('"request_id"', nginx)
         self.assertIn('"trace_id"', nginx)
         self.assertNotIn("/var/log/nginx", nginx + compose)
+
+    def test_edge_logs_verified_media_identity_and_transfer_results_without_capabilities(self):
+        nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+        log_format = nginx.split("log_format structured", 1)[1].split("access_log", 1)[0]
+        for field in ("media_resource_id", "media_owner_id", "media_object_id", "parent_request_id",
+                      "range", "content_range", "bytes_sent", "status", "request_completion"):
+            self.assertIn('"' + field + '"', log_format)
+        self.assertIn("map $request_uri $logged_path", nginx)
+        self.assertNotIn("$request_uri", log_format)
+        self.assertNotIn("$relay_token", log_format)
+        self.assertNotIn("$args", log_format)
+        self.assertIn("proxy_set_header X-Media-Capability $relay_token", nginx)
+        self.assertNotIn("?token=$relay_token", nginx)
+
+    def test_nginx_uses_a_current_patched_stable_image(self):
+        dockerfile = (ROOT / "nginx/Dockerfile").read_text(encoding="utf-8")
+        self.assertTrue(dockerfile.startswith("FROM nginx:1.30.4-alpine\n"))
+
+    def test_external_player_script_has_verified_integrity_and_cors(self):
+        expected = "sha384-u9JL6zwTLTwPvEjiiGwzo+cVKf/PW1DHkEFwhCt4RWdD2Pr0fFf2/jZTwLCSv/5K"
+        for filename in ("audio-player.html", "video-player.html"):
+            template = (ROOT / "static/media" / filename).read_text(encoding="utf-8")
+            script = next(tag for tag in re.findall(r"<script\b[^>]*>", template) if "cdnjs.cloudflare.com" in tag)
+            self.assertIn(f'integrity="{expected}"', script)
+            self.assertIn('crossorigin="anonymous"', script)
 
     def test_duplicate_uvicorn_access_log_is_disabled(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
@@ -137,6 +164,12 @@ class DeploymentContractTests(unittest.TestCase):
             "METRICS_TOKEN=",
         ):
             self.assertNotIn(obsolete, initializer + compose + deploy)
+
+    def test_runtime_secret_initializer_never_logs_secret_values(self):
+        initializer = (ROOT / "app/services/runtime_secrets.py").read_text(encoding="utf-8")
+        self.assertIn('"secret_names": sorted(names)', initializer)
+        self.assertNotIn('"context": {', initializer)
+        self.assertNotIn("managed[name].read_text(encoding=\"utf-8\").strip()", initializer)
 
     def test_env_contract_validator_rejects_unknown_names_without_printing_values(self):
         validator = ROOT / "scripts/validate_env_contract.py"
@@ -174,7 +207,7 @@ class DeploymentContractTests(unittest.TestCase):
 
     def test_readme_documents_runtime_secret_recovery_after_web_recreation(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("docker compose logs web | grep initial_runtime_secrets", readme)
+        self.assertIn("Startup logs list newly created secret names without printing values", readme)
         self.assertIn(
             "docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'",
             readme,
@@ -183,7 +216,9 @@ class DeploymentContractTests(unittest.TestCase):
             "docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token'",
             readme,
         )
-        self.assertIn("Container recreation can remove that log entry", readme)
+        runtime = (ROOT / "app" / "services" / "runtime_secrets.py").read_text(encoding="utf-8")
+        self.assertNotIn('"admin_key": secrets.admin_key', runtime)
+        self.assertNotIn('"metrics_token": secrets.metrics_token', runtime)
         self.assertIn("persistent `runtime_secrets` volume", readme)
         self.assertIn("privilege-elevation control", readme)
 
@@ -195,7 +230,8 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("github.event_name == 'push'", deploy)
         self.assertIn("github.ref == 'refs/heads/dev'", deploy)
         self.assertNotIn("refs/heads/main", deploy)
-        self.assertNotIn("workflow_dispatch", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("workflow_dispatch", deploy)
         self.assertIn("python3 scripts/validate_env_contract.py", workflow)
         self.assertIn("python3 scripts/validate_env_contract.py", deploy_script)
         self.assertIn("runs-on: [self-hosted, Linux, X64, rn]", deploy)

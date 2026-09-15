@@ -17,6 +17,7 @@ from fastapi import (
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from app.core.config import settings
+from app.core.db import engine
 from app.services import admin_service
 from app.services import ip_security
 from app.services import lyrics
@@ -30,6 +31,37 @@ router = APIRouter()
 
 async def require_session(request: Request) -> str:
     return await admin_service.require_admin(request)
+
+
+def _mutation_audit(session_hash: str, action: str, paths: list[str], request: Request):
+    """Keep all targets, split into bounded rows, and share business transactions."""
+    targets = list(paths)
+
+    async def write(conn, result: str, count: int, detail: dict):
+        nonlocal targets
+        detail = dict(detail)
+        manifest = detail.pop("manifest", None)
+        if manifest is not None:
+            targets = [item["relative_path"] for item in manifest]
+        if detail.get("path"):
+            targets = [detail["path"]]
+        detail["affected_total"] = count
+        # A path has at most the supported depth and filename lengths; packing
+        # by serialized length avoids silently truncating large batch evidence.
+        batches, batch = [], []
+        for path in targets:
+            if batch and len(json.dumps(batch + [path], ensure_ascii=False)) > 8000:
+                batches.append(batch)
+                batch = []
+            batch.append(path)
+        batches.append(batch)
+        for batch in batches:
+            await admin_service.audit(
+                session_hash, action, len(batch), json.dumps(batch, ensure_ascii=False),
+                result, json.dumps(detail, ensure_ascii=False), request, conn=conn,
+            )
+
+    return write
 
 
 def secure_admin_transport(request: Request) -> bool:
@@ -184,23 +216,20 @@ async def upload_item(
     ] = None,
     session_hash: str = Depends(require_session),
 ):
+    source = relative_path or file.filename or ""
     try:
-        if relative_path:
-            target, upload_name = MediaManager.folder_upload_target(target_dir, relative_path)
-            file.filename = upload_name
-            source = relative_path
-        else:
-            target = MediaManager.validate_destination_dir(target_dir)
-            source = file.filename or ""
-
         try:
-            saved_path = await MediaManager.upload_one(file, target)
+            if relative_path:
+                target, upload_name = MediaManager.folder_upload_target(target_dir, relative_path)
+                file.filename = upload_name
+            else:
+                target = MediaManager.validate_destination_dir(target_dir)
+            saved_path = await MediaManager.upload_one(file, target, audit=_mutation_audit(session_hash, "upload_item", [source], request))
         except HTTPException as exc:
             await admin_service.audit(session_hash, "upload_item", 1, source, "failed", str(exc.detail), request)
             raise
 
         await invalidate_media_catalog()
-        await admin_service.audit(session_hash, "upload_item", 1, source, "success", saved_path, request)
         return {"path": saved_path}
     finally:
         await file.close()
@@ -215,15 +244,12 @@ async def upload_lyric(
     source = file.filename or ""
     try:
         try:
-            saved_path = await MediaManager.upload_lyric(file)
+            saved_path = await MediaManager.upload_lyric(file, audit=_mutation_audit(session_hash, "upload_lyric", [source], request))
         except HTTPException as exc:
             await admin_service.audit(
                 session_hash, "upload_lyric", 1, source, "failed", str(exc.detail), request,
             )
             raise
-        await admin_service.audit(
-            session_hash, "upload_lyric", 1, source, "success", saved_path, request,
-        )
         await invalidate_media_catalog()
         return {"path": saved_path}
     finally:
@@ -242,6 +268,7 @@ async def lyric_catalog(
     try:
         result = await lyrics.catalog(track_path, lyric_path, track_q, lyric_q)
     except ValueError as exc:
+        await admin_service.audit(session_hash, "lyric_relations", len(linked_paths), str(payload.get("origin_path", "")), "failed", str(exc), request)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
@@ -264,18 +291,11 @@ async def lyric_relations(
             str(payload.get("origin_kind", "")),
             str(payload.get("origin_path", "")),
             linked_paths,
+            audit=_mutation_audit(session_hash, "lyric_relations", linked_paths, request),
         )
     except ValueError as exc:
+        await admin_service.audit(session_hash, "lyric_relations", len(linked_paths), str(payload.get("origin_path", "")), "failed", str(exc), request)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await admin_service.audit(
-        session_hash,
-        "lyric_relations",
-        count,
-        str(payload.get("origin_path", "")),
-        "success",
-        json.dumps(linked_paths, ensure_ascii=False),
-        request,
-    )
     return {"status": "ok", "relations": count}
 
 
@@ -289,12 +309,15 @@ async def admin_key_rotate(
     if mode not in {"random", "custom"}:
         raise HTTPException(status_code=400, detail="Admin Key 生成模式无效")
     try:
+        async with engine.begin() as conn:
+            await admin_service.audit(session_hash, "admin_key_rotate", 1, mode, "pending", "", request, conn=conn)
         new_key = await admin_service.rotate_admin_key(
             session_hash,
             None if mode == "random" else str(payload.get("key", "")),
             None if mode == "random" else str(payload.get("confirmation", "")),
         )
     except ValueError as exc:
+        await admin_service.audit(session_hash, "admin_key_rotate", 1, mode, "failed", str(exc), request)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await admin_service.audit(session_hash, "admin_key_rotate", 1, mode, "success", "", request)
     return JSONResponse({"status": "ok", "admin_key": new_key}, headers={"Cache-Control": "private, no-store"})
@@ -473,23 +496,13 @@ async def delete_objects(
             detail="请选择合法对象",
         )
 
-    count = await MediaManager.delete(
-        paths,
-    )
+    try:
+        count = await MediaManager.delete(paths, audit=_mutation_audit(session_hash, "delete", paths, request))
+    except HTTPException as exc:
+        await _mutation_audit(session_hash, "delete", paths, request)(None, "failed", len(paths), {"reason": str(exc.detail)})
+        raise
     await invalidate_media_catalog()
 
-    await admin_service.audit(
-        session_hash,
-        "delete",
-        len(paths),
-        json.dumps(
-            paths,
-            ensure_ascii=False,
-        ),
-        "success",
-        f"deleted={count}",
-        request,
-    )
 
     return {
         "deleted": count,
@@ -523,24 +536,14 @@ async def hide_objects(
             detail="隐藏参数无效",
         )
 
-    await MediaManager.set_hidden(
-        paths,
-        hidden,
-    )
+    action = "hide" if hidden else "unhide"
+    try:
+        await MediaManager.set_hidden(paths, hidden, audit=_mutation_audit(session_hash, action, paths, request))
+    except HTTPException as exc:
+        await _mutation_audit(session_hash, action, paths, request)(None, "failed", len(paths), {"reason": str(exc.detail)})
+        raise
     await invalidate_media_catalog()
 
-    await admin_service.audit(
-        session_hash,
-        "hide" if hidden else "unhide",
-        len(paths),
-        json.dumps(
-            paths,
-            ensure_ascii=False,
-        ),
-        "success",
-        "",
-        request,
-    )
 
     return {
         "status": "ok",

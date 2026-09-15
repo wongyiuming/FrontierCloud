@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import time
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import HTTPException
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 
+from app.core.logging_config import request_id_context, trace_id_context
 from app.services import playback
 from . import protocol as p
 from . import schema as s
@@ -33,16 +35,19 @@ async def resolve(identifier: str, path: str | None = None):
 
 async def stream(identifier: str, path=None):
     row, relation = await resolve(identifier, path)
+    provenance = {"X-Media-Resource-ID": row["resource_id"], "X-Media-Owner-ID": row["owner_id"],
+                  "X-Media-Object-ID": row["object_id"]}
     token = p.media_token(state.unseal(relation["credential"]), relation["relationship_id"],
-        state.node["node_id"], row["owner_id"], row["object_id"], int(time.time()))
+        state.node["node_id"], row["owner_id"], row["object_id"], int(time.time()),
+        request_id=request_id_context.get(), trace_id=trace_id_context.get())
     upstream_path = "/internal/v1/media/" + row["object_id"] + "?" + urlencode({"token": token})
     if relation["mode"] == "Direct":
         return RedirectResponse(relation["peer_endpoint"] + upstream_path, status_code=307,
-                                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+                                headers={**provenance, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
     parsed = urlsplit(p.endpoint(relation["peer_endpoint"]))
     # Only a validated catalog relationship creates this internal Nginx destination.
     internal = f"/_relay_media/{parsed.hostname}/{parsed.port or 443}/{row['object_id']}/{token}"
-    return Response(headers={"X-Accel-Redirect": internal, "Cache-Control": "no-store"})
+    return Response(headers={**provenance, "X-Accel-Redirect": internal, "Cache-Control": "no-store"})
 
 
 async def lyric_entries(identifier: str, path=None):
@@ -97,25 +102,33 @@ async def mutate_stats(identifier, path, *, delta=None, session=None, played=Non
             raise p.ProtocolError("Playback threshold not reached")
     now, counted = int(time.time()), False
     async with state.database.begin() as conn:
-        await state.lock(conn)
-        # Preserve each object's identity and serialize concurrent preferences/counts.
+        # Shared trust protects revocation without serializing unrelated resources.
         current_relation = (await conn.execute(select(s.relationships.c.state).where(
-            s.relationships.c.relationship_id == row["relationship_id"]))).scalar_one()
+            s.relationships.c.relationship_id == row["relationship_id"]).with_for_update(read=True))).scalar_one_or_none()
         if current_relation != "active":
             raise p.ProtocolError("Relationship revoked")
-        values = (await conn.execute(select(s.stats).where(s.stats.c.resource_id == identifier))).mappings().first()
-        if values is None:
-            values = dict(resource_id=identifier, play_score=row["payload"]["play_score"], preference=row["payload"]["preference"], updated_at=now)
-            await conn.execute(insert(s.stats).values(**values))
-        else:
-            values = dict(values)
+        owned = (await conn.execute(select(s.catalog.c.payload).where(s.catalog.c.resource_id == identifier,
+            s.catalog.c.relationship_id == row["relationship_id"], s.catalog.c.deleted == 0).with_for_update(read=True))).scalar_one_or_none()
+        if owned is None:
+            raise p.ProtocolError("Media object no longer available")
+        # A unique-key upsert acquires just this resource's row, including first use.
+        await conn.execute(mysql_insert(s.stats).values(resource_id=identifier,
+            play_score=owned["play_score"], preference=owned["preference"], updated_at=now)
+            .on_duplicate_key_update(resource_id=identifier))
+        values = dict((await conn.execute(select(s.stats).where(
+            s.stats.c.resource_id == identifier).with_for_update())).mappings().one())
         if delta is not None:
             values["preference"] = max(-2, min(7, values["preference"] + delta))
         if session is not None:
-            await conn.execute(delete(s.events).where(s.events.c.session_id == session, s.events.c.resource_id == identifier, s.events.c.expires_at <= now))
-            already = (await conn.execute(select(s.events.c.session_id).where(s.events.c.session_id == session, s.events.c.resource_id == identifier))).first()
-            if not already:
-                await conn.execute(insert(s.events).values(session_id=session, resource_id=identifier, expires_at=now + 604800))
+            event = mysql_insert(s.events).values(session_id=session, resource_id=identifier,
+                expires_at=now + 604800).prefix_with("IGNORE")
+            inserted = await conn.execute(event)
+            if inserted.rowcount != 1:
+                expired = await conn.execute(delete(s.events).where(s.events.c.session_id == session,
+                    s.events.c.resource_id == identifier, s.events.c.expires_at <= now))
+                if expired.rowcount == 1:
+                    inserted = await conn.execute(event)
+            if inserted.rowcount == 1:
                 values["play_score"] += 1
                 counted = True
         values["updated_at"] = now

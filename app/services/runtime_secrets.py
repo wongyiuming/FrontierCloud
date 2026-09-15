@@ -148,10 +148,7 @@ def announce_initial_secrets_once() -> None:
     names = _pending_announcement_names(set(managed))
     logger.warning(
         "initial_runtime_secrets",
-        extra={"context": {
-            name: managed[name].read_text(encoding="utf-8").strip()
-            for name in sorted(names)
-        }},
+        extra={"secret_names": sorted(names)},
     )
     ANNOUNCE_MARKER.unlink(missing_ok=True)
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import time
 
 from fastapi import APIRouter, HTTPException, Request
@@ -70,6 +71,22 @@ async def pair(request: Request):
         value = json.loads(await control_body(request))
         private = state.unseal(state.node["private_key"])
         package = p.verify(p.public_key(private), value["package"])
+        now = int(time.time())
+        if (state.node["role"] != "Slave" or package["node_id"] != state.node["node_id"]
+                or package["protocol"] != p.PROTOCOL_VERSION
+                or not isinstance(package["expires_at"], int) or isinstance(package["expires_at"], bool)
+                or package["expires_at"] <= now or not p.IDENTIFIER.fullmatch(package["nonce"])
+                or not p.IDENTIFIER.fullmatch(value["relationship_id"])
+                or len(p.decode(value["credential"])) != 48):
+            raise p.ProtocolError("Invalid or expired pairing package")
+        # Reject retained, consumed or expired packages before outbound I/O.
+        # consume() rechecks and reserves the package in its final transaction;
+        # no database lock is held while verifying the remote HTTPS identity.
+        async with state.database.connect() as conn:
+            issued = (await conn.execute(select(s.pairs).where(s.pairs.c.nonce == package["nonce"]))).mappings().first()
+        if (not issued or issued["state"] != "issued" or issued["expires_at"] <= now
+                or not secrets.compare_digest(issued["token_hash"], p.digest(package["token"]))):
+            raise p.ProtocolError("Pairing package unavailable")
         master_payload = value["master"]["payload"]
         master = await transport.identity(master_payload["endpoint"], expected_id=master_payload["node_id"],
             expected_key=master_payload["public_key"], role="Master")
@@ -150,9 +167,15 @@ async def owned_lyrics(request: Request, original: str):
 
 
 @router.api_route("/media/{original}", methods=["GET", "HEAD", "OPTIONS"])
-async def owned_media(request: Request, original: str, token: str):
+async def owned_media(request: Request, original: str, token: str | None = None):
     require_https(request)
     try:
+        header_token = request.headers.get("x-media-capability")
+        if token and header_token and token != header_token:
+            raise p.ProtocolError("Conflicting media capabilities")
+        token = token or header_token
+        if not isinstance(token, str):
+            raise p.ProtocolError("Missing media capability")
         # Decode only the lookup ID, then authenticate the entire capability.
         hint = json.loads(p.decode(token.split(".", 1)[0]))
         relation = await state.relationship(hint["r"])
@@ -162,6 +185,11 @@ async def owned_media(request: Request, original: str, token: str):
             raise p.ProtocolError("Media relationship mismatch")
     except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(401, "Media capability invalid or expired") from exc
+    resource_id = p.resource_id(payload["o"], original)
+    request.scope["media_audit"] = {
+        "resource_id": resource_id, "owner_id": payload["o"], "media_id": original,
+        "parent_request_id": payload.get("request_id", ""), "trace_id": payload.get("trace_id", ""),
+    }
     origin = request.headers.get("origin")
     cors = {"Cache-Control": "no-store", "Vary": "Origin"}
     if origin:
@@ -175,4 +203,8 @@ async def owned_media(request: Request, original: str, token: str):
     from app.api.v1.media import stream_media_file
     response = await stream_media_file(await owned_path(original))
     response.headers.update(cors)
+    response.headers.update({
+        "X-Media-Resource-ID": resource_id, "X-Media-Owner-ID": payload["o"], "X-Media-Object-ID": original,
+        "X-Media-Parent-Request-ID": payload.get("request_id", ""), "X-Audit-Trace-ID": payload.get("trace_id", ""),
+    })
     return response

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import secrets
 from datetime import datetime, timezone
 from typing import Iterable
 
@@ -16,6 +17,12 @@ from app.core.redis import redis_client
 
 REPORT_PREFIX = "webrtc:observation:"
 ALLOWED_FAILURES = {"unsupported", "disabled", "timeout", "no_srflx", "ice_error"}
+RELEASE_RESERVATION = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
 
 
 def _utcnow() -> datetime:
@@ -59,11 +66,12 @@ async def record_observation(
         "outcome": outcome,
     }
     cooldown_key = REPORT_PREFIX + identity.ip
+    reservation = secrets.token_hex(16)
     cooldown_acquired = False
     try:
         accepted = await redis_client.set(
             cooldown_key,
-            "1",
+            reservation,
             ex=max(1, settings.WEBRTC_REPORT_COOLDOWN - 1),
             nx=True,
         )
@@ -89,6 +97,9 @@ async def record_observation(
         "matches_verified": False,
         "observed_at": _utcnow(),
     }]
+    # Reports from one public IP can overlap during Redis failure or long waits.
+    # Acquire summary keys consistently rather than in candidate arrival order.
+    rows.sort(key=lambda row: str(row["webrtc_ip"] or ""))
     try:
         async with engine.begin() as conn:
             await conn.execute(text("""
@@ -107,8 +118,9 @@ async def record_observation(
                 ON DUPLICATE KEY UPDATE
                     observation_count=observation_count + 1,
                     matching_count=matching_count + VALUES(matching_count),
-                    last_seen=VALUES(last_seen),
-                    last_outcome=VALUES(last_outcome)
+                    first_seen=LEAST(first_seen, VALUES(first_seen)),
+                    last_outcome=IF(VALUES(last_seen) >= last_seen, VALUES(last_outcome), last_outcome),
+                    last_seen=GREATEST(last_seen, VALUES(last_seen))
             """), [
                 {**row, "webrtc_ip_key": row["webrtc_ip"] or ""}
                 for row in rows
@@ -116,7 +128,7 @@ async def record_observation(
     except BaseException:
         if cooldown_acquired:
             try:
-                await redis_client.delete(cooldown_key)
+                await redis_client.eval(RELEASE_RESERVATION, 1, cooldown_key, reservation)
             except RedisError:
                 pass
         raise

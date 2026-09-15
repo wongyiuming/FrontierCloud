@@ -17,6 +17,19 @@ from app.services import admin_service
 from app.services import media_manager
 
 
+class _AuditContext:
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class _AuditEngine:
+    def begin(self):
+        return _AuditContext()
+
+
 class _FakeRedis:
     def __init__(self):
         self.values = {}
@@ -100,6 +113,11 @@ def _request(method="POST", cookies=None, headers=None):
 
 
 class AdminKeyLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        audit = patch.object(admin_service, "audit", new=AsyncMock())
+        self.audit = audit.start()
+        self.addCleanup(audit.stop)
+
     async def test_persistent_key_has_no_redis_ttl_and_validates_directly(self):
         fake = _FakeRedis()
         with tempfile.TemporaryDirectory() as directory:
@@ -188,6 +206,7 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
             upload = UploadFile(filename="一.wav", file=io.BytesIO(self._wav_bytes(b"one")))
             with (
                 patch.object(media_manager, "MEDIA_ROOT", root),
+                patch.object(media_manager, "engine", _AuditEngine()),
                 patch.object(admin.admin_service, "audit", new=AsyncMock()),
                 patch.object(admin, "invalidate_media_catalog", new=AsyncMock()),
             ):
@@ -230,6 +249,7 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
             upload = UploadFile(filename="one.wav", file=io.BytesIO(self._wav_bytes(b"one")))
             with (
                 patch.object(media_manager, "MEDIA_ROOT", root),
+                patch.object(media_manager, "engine", _AuditEngine()),
                 patch.object(media_manager.os, "link", side_effect=FileExistsError()),
             ):
                 with self.assertRaises(HTTPException) as raised:
@@ -246,6 +266,7 @@ class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
             destination.mkdir(parents=True)
             with (
                 patch.object(media_manager, "MEDIA_ROOT", root),
+                patch.object(media_manager, "engine", _AuditEngine()),
                 patch.object(admin.admin_service, "audit", new=AsyncMock()),
                 patch.object(admin, "invalidate_media_catalog", new=AsyncMock()),
             ):

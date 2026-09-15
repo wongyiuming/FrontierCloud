@@ -87,6 +87,11 @@ class _Lock:
 
 
 class AdminRedisTransactionTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        audit = patch.object(admin_service, "audit", new=AsyncMock())
+        self.audit = audit.start()
+        self.addCleanup(audit.stop)
+
     async def test_failure_counter_lua_repairs_a_missing_ttl_atomically(self):
         fake = _Redis()
         redis_key = admin_service.FAIL_PREFIX + "203.0.113.8"
@@ -207,6 +212,29 @@ class _FailingAuditEngine:
 
 
 class AdminAuditTransactionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shared_transaction_audit_failure_propagates(self):
+        connection = _FailingAuditConnection()
+        with patch.object(admin_service.logger, "exception") as logged:
+            with self.assertRaises(SQLAlchemyError):
+                await admin_service.audit("actor", "hide", 1, "music/a", "success", "", _request(), conn=connection)
+        logged.assert_not_called()
+
+    async def test_post_action_audit_failure_retains_investigation_evidence(self):
+        request = _request()
+        request.scope.update(request_id="request-123", trace_id="a" * 32)
+        with (
+            patch.object(admin_service, "engine", _FailingAuditEngine()),
+            patch.object(admin_service.logger, "exception") as logged,
+        ):
+            await admin_service.audit("actor", "delete", 2, "music/a", "success", "operation=123", request)
+        evidence = logged.call_args.kwargs["extra"]["context"]["audit_evidence"]
+        self.assertEqual(evidence["sid"], "actor")
+        self.assertEqual(evidence["ip"], "203.0.113.8")
+        self.assertEqual(evidence["summary"], "music/a")
+        self.assertEqual(evidence["detail"], "operation=123")
+        self.assertEqual(evidence["request_id"], "request-123")
+        self.assertEqual(evidence["trace_id"], "a" * 32)
+
     async def test_audit_outage_does_not_reverse_an_already_committed_action(self):
         with (
             patch.object(admin_service, "engine", _FailingAuditEngine()),
