@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import secrets
 import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +27,8 @@ from app.core.logging_config import request_id_context, trace_id_context
 
 SESSION_PREFIX = "admin:session:"
 FAIL_PREFIX = "admin:fail:"
+TEMPORARY_KEY_PREFIX = "admin:temporary-key:"
+TEMPORARY_KEY_MINUTES = {15, 30, 60, 120}
 logger = logging.getLogger("frontiercloud.admin")
 _ADMIN_KEY_ROTATION_LOCK = LoopLocalAsyncLock()
 ADMIN_KEY_ROTATION_LOCK_KEY = "admin:key:rotation-lock"
@@ -45,6 +49,22 @@ end
 return count
 """
 
+_REDEEM_TEMPORARY_KEY_SCRIPT = """
+local value = redis.call('GET', KEYS[1])
+if not value then
+    return false
+end
+redis.call('DEL', KEYS[1])
+return value
+"""
+
+
+@dataclass(frozen=True)
+class AdminCredential:
+    key_hash: str
+    idle_ttl: int
+    kind: str
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -64,10 +84,14 @@ async def _failed_attempt_count(redis_key: str, *, increment: bool) -> int:
     ))
 
 
-async def _store_session(redis_key: str, mapping: dict[str, str]) -> None:
+async def _store_session(
+    redis_key: str,
+    mapping: dict[str, str],
+    idle_ttl: int = settings.ADMIN_SESSION_TTL,
+) -> None:
     pipe = redis_client.pipeline(transaction=True)
     pipe.hset(redis_key, mapping=mapping)
-    pipe.expire(redis_key, settings.ADMIN_SESSION_TTL)
+    pipe.expire(redis_key, idle_ttl)
     results = await pipe.execute()
     if len(results) < 2 or not results[-1]:
         raise RedisError("Failed to persist the admin session TTL")
@@ -116,9 +140,14 @@ async def _replace_admin_sessions(current_session_key: str, new_key_hash: str) -
         async for redis_key in redis_client.scan_iter(match=SESSION_PREFIX + "*")
         if redis_key != current_session_key
     ]
+    temporary_key_keys = [
+        redis_key async for redis_key in redis_client.scan_iter(match=TEMPORARY_KEY_PREFIX + "*")
+    ]
     pipe = redis_client.pipeline(transaction=True)
     if other_session_keys:
         pipe.unlink(*other_session_keys)
+    if temporary_key_keys:
+        pipe.unlink(*temporary_key_keys)
     pipe.hset(current_session_key, mapping={"key_hash": new_key_hash})
     pipe.expire(current_session_key, settings.ADMIN_SESSION_TTL)
     results = await pipe.execute()
@@ -159,7 +188,12 @@ def _ua(request: Request) -> str:
     return request.headers.get("User-Agent", "")[:512]
 
 
-async def verify_admin_key(key: str, request: Request) -> str:
+async def _verify_admin_credential(
+    key: str,
+    request: Request,
+    *,
+    allow_temporary: bool,
+) -> AdminCredential:
     key = (key or "").strip()
     ip = _client_ip(request)
     fail_key = FAIL_PREFIX + ip
@@ -169,27 +203,99 @@ async def verify_admin_key(key: str, request: Request) -> str:
     if failed > settings.ADMIN_MAX_FAILED_ATTEMPTS_PER_IP:
         await audit(None, "admin_login", 0, "", "rate_limited", "", request)
         raise HTTPException(status_code=429, detail={"code": "ADMIN_RATE_LIMITED", "message": "验证请求过于频繁，请稍后再试"})
-    valid = 1 <= len(key) <= 512 and secrets.compare_digest(_hash(key), _hash(_read_admin_key()))
-    if not valid:
+    supplied_hash = _hash(key) if 1 <= len(key) <= 512 else ""
+    persistent_hash = _hash(_read_admin_key())
+    if supplied_hash and secrets.compare_digest(supplied_hash, persistent_hash):
+        credential = AdminCredential(persistent_hash, settings.ADMIN_SESSION_TTL, "persistent")
+    else:
+        credential = None
+    if credential is None and allow_temporary and supplied_hash:
+        serialized = await redis_client.eval(
+            _REDEEM_TEMPORARY_KEY_SCRIPT,
+            1,
+            TEMPORARY_KEY_PREFIX + supplied_hash,
+        )
+        if serialized:
+            try:
+                payload = json.loads(serialized)
+                idle_ttl = int(payload["idle_ttl"])
+                owner_key_hash = str(payload["key_hash"])
+                if (
+                    idle_ttl in {minutes * 60 for minutes in TEMPORARY_KEY_MINUTES}
+                    and secrets.compare_digest(owner_key_hash, persistent_hash)
+                ):
+                    credential = AdminCredential(persistent_hash, idle_ttl, "temporary")
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                credential = None
+    if credential is None:
         await audit(None, "admin_login", 0, "", "rejected", "invalid_key", request)
         raise HTTPException(status_code=403, detail={"code": "ADMIN_KEY_INVALID", "message": "Admin Key 无效，请检查输入"})
     await redis_client.delete(fail_key)
-    return _hash(key)
+    return credential
 
 
-async def create_session(key_hash: str, request: Request, response: Response) -> None:
+async def verify_admin_key(key: str, request: Request) -> str:
+    credential = await _verify_admin_credential(key, request, allow_temporary=False)
+    return credential.key_hash
+
+
+async def redeem_admin_credential(key: str, request: Request) -> AdminCredential:
+    return await _verify_admin_credential(key, request, allow_temporary=True)
+
+
+async def issue_temporary_admin_key(
+    session_hash: str,
+    minutes: int,
+) -> str:
+    if minutes not in TEMPORARY_KEY_MINUTES:
+        raise ValueError("临时 Admin Key 有效期必须为 15、30、60 或 120 分钟")
+    idle_ttl = minutes * 60
+    payload = json.dumps({
+        "key_hash": _hash(_read_admin_key()),
+        "idle_ttl": idle_ttl,
+        "issued_by_session_hash": session_hash,
+        "created_at": _now().isoformat(),
+    }, separators=(",", ":"))
+    for _attempt in range(3):
+        temporary_key = secrets.token_urlsafe(32)
+        stored = await redis_client.set(
+            TEMPORARY_KEY_PREFIX + _hash(temporary_key),
+            payload,
+            ex=idle_ttl,
+            nx=True,
+        )
+        if stored:
+            return temporary_key
+    raise RedisError("Failed to allocate a unique temporary Admin Key")
+
+
+async def create_session(
+    key_hash: str,
+    request: Request,
+    response: Response,
+    *,
+    idle_ttl: int | None = None,
+    credential_kind: str = "persistent",
+) -> None:
+    idle_ttl = settings.ADMIN_SESSION_TTL if idle_ttl is None else idle_ttl
     session = secrets.token_urlsafe(32)
     session_hash = _hash(session)
     await _store_session(
         SESSION_PREFIX + session_hash,
-        {"key_hash": key_hash, "created_at": _now().isoformat()},
+        {
+            "key_hash": key_hash,
+            "created_at": _now().isoformat(),
+            "idle_ttl": str(idle_ttl),
+            "credential_kind": credential_kind,
+        },
+        idle_ttl,
     )
     csrf = secrets.token_urlsafe(32)
-    response.set_cookie(settings.ADMIN_COOKIE_NAME, session, max_age=settings.ADMIN_SESSION_TTL, httponly=True,
+    response.set_cookie(settings.ADMIN_COOKIE_NAME, session, max_age=idle_ttl, httponly=True,
                         secure=settings.ADMIN_COOKIE_SECURE, samesite=settings.ADMIN_COOKIE_SAMESITE, path="/")
-    response.set_cookie(settings.ADMIN_CSRF_COOKIE_NAME, csrf, max_age=settings.ADMIN_SESSION_TTL, httponly=False,
+    response.set_cookie(settings.ADMIN_CSRF_COOKIE_NAME, csrf, max_age=idle_ttl, httponly=False,
                         secure=settings.ADMIN_COOKIE_SECURE, samesite=settings.ADMIN_COOKIE_SAMESITE, path="/")
-    await audit(session_hash, "admin_login", 1, "", "success", "", request)
+    await audit(session_hash, "admin_login", 1, credential_kind, "success", f"idle_ttl={idle_ttl}", request)
 
 
 async def require_admin(request: Request) -> str:
@@ -209,10 +315,24 @@ async def require_admin(request: Request) -> str:
     if not secrets.compare_digest(data.get("key_hash", ""), _hash(_read_admin_key())):
         await redis_client.delete(redis_key)
         raise HTTPException(status_code=401, detail="Admin Key 已变更，请使用新 Key 重新登录")
-    if not await redis_client.expire(redis_key, settings.ADMIN_SESSION_TTL):
+    credential_kind = data.get("credential_kind", "persistent")
+    if credential_kind == "temporary":
+        try:
+            idle_ttl = int(data.get("idle_ttl", ""))
+        except (TypeError, ValueError):
+            idle_ttl = 0
+        if idle_ttl not in {minutes * 60 for minutes in TEMPORARY_KEY_MINUTES}:
+            await redis_client.delete(redis_key)
+            raise HTTPException(status_code=401, detail="临时特权会话无效，请重新登录")
+    else:
+        credential_kind = "persistent"
+        idle_ttl = settings.ADMIN_SESSION_TTL
+    if not await redis_client.expire(redis_key, idle_ttl):
         raise HTTPException(status_code=401, detail="特权模式已失效，请重新登录")
     request.scope["admin_authenticated"] = True
     request.scope["admin_session_cookie"] = session
+    request.scope["admin_session_ttl"] = idle_ttl
+    request.scope["admin_credential_kind"] = credential_kind
     return session_hash
 
 

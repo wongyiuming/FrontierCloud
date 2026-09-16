@@ -5,10 +5,12 @@ import main
 
 
 class RequestLoggingTests(unittest.IsolatedAsyncioTestCase):
-    async def _run(self, scope, status=200, authenticated=False):
+    async def _run(self, scope, status=200, authenticated=False, session_ttl=None):
         async def app(request_scope, _receive, send):
             if authenticated:
                 request_scope.update(admin_authenticated=True, admin_session_cookie="session-value")
+                if session_ttl is not None:
+                    request_scope["admin_session_ttl"] = session_ttl
             await send({"type": "http.response.start", "status": status, "headers": []})
             await send({"type": "http.response.body", "body": b"{}"})
         messages = []
@@ -56,6 +58,15 @@ class RequestLoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(cookies), 2)
         self.assertTrue(all(f"Max-Age={main.settings.ADMIN_SESSION_TTL}" in value for value in cookies))
         self.assertTrue(any("HttpOnly" in value and main.settings.ADMIN_COOKIE_NAME in value for value in cookies))
+
+    async def test_temporary_admin_response_refreshes_its_shorter_idle_window(self):
+        csrf_name = main.settings.ADMIN_CSRF_COOKIE_NAME
+        scope = {"type": "http", "method": "GET", "path": "/admin/status", "headers": [
+            (b"cookie", (csrf_name + "=csrf-value").encode())
+        ], "client": ("127.0.0.1", 1)}
+        messages, _logged = await self._run(scope, authenticated=True, session_ttl=900)
+        cookies = [value.decode() for name, value in messages[0]["headers"] if name == b"set-cookie"]
+        self.assertTrue(all("Max-Age=900" in value for value in cookies))
 
     async def test_request_log_contains_safe_structured_context(self):
         async def app(scope, _receive, send):

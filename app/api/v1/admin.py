@@ -73,7 +73,7 @@ def secure_admin_transport(request: Request) -> bool:
 
 
 # ============================================================
-# 1. Persistent Admin Key to admin session
+# 1. Persistent or one-time Admin Key to admin session
 # ============================================================
 
 @router.post("/elevate")
@@ -82,15 +82,17 @@ async def elevate(
     response: Response,
     token: str = Form(...),
 ):
-    key_hash = await admin_service.verify_admin_key(
+    credential = await admin_service.redeem_admin_credential(
         token,
         request,
     )
 
     await admin_service.create_session(
-        key_hash,
+        credential.key_hash,
         request,
         response,
+        idle_ttl=credential.idle_ttl,
+        credential_kind=credential.kind,
     )
 
     return {
@@ -165,6 +167,10 @@ async def admin_status(
             "max_lyric_file_size": MediaManager.LYRIC_MAX_BYTES,
         },
         "csrf_cookie_name": settings.ADMIN_CSRF_COOKIE_NAME,
+        "credential_kind": request.scope.get("admin_credential_kind", "persistent"),
+        "session_idle_minutes": int(
+            request.scope.get("admin_session_ttl", settings.ADMIN_SESSION_TTL)
+        ) // 60,
     }
 
 
@@ -305,6 +311,8 @@ async def admin_key_rotate(
     payload: dict,
     session_hash: str = Depends(require_session),
 ):
+    if request.scope.get("admin_credential_kind") != "persistent":
+        raise HTTPException(status_code=403, detail="临时 Admin Key 会话不能修改长期 Admin Key")
     mode = payload.get("mode")
     if mode not in {"random", "custom"}:
         raise HTTPException(status_code=400, detail="Admin Key 生成模式无效")
@@ -321,6 +329,42 @@ async def admin_key_rotate(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await admin_service.audit(session_hash, "admin_key_rotate", 1, mode, "success", "", request)
     return JSONResponse({"status": "ok", "admin_key": new_key}, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/key/temporary")
+async def admin_temporary_key(
+    request: Request,
+    payload: dict,
+    session_hash: str = Depends(require_session),
+):
+    if request.scope.get("admin_credential_kind") != "persistent":
+        raise HTTPException(status_code=403, detail="临时 Admin Key 会话不能继续签发临时 Key")
+    try:
+        minutes = int(payload.get("minutes", 15))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="临时 Admin Key 有效期无效") from exc
+    try:
+        temporary_key = await admin_service.issue_temporary_admin_key(session_hash, minutes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await admin_service.audit(
+        session_hash,
+        "temporary_admin_key_issue",
+        1,
+        f"{minutes}m",
+        "success",
+        "single_use=true",
+        request,
+    )
+    return JSONResponse(
+        {
+            "status": "ok",
+            "admin_key": temporary_key,
+            "minutes": minutes,
+            "single_use": True,
+        },
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.get("/security/blocks")
