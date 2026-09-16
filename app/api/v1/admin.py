@@ -373,6 +373,10 @@ async def security_blocks(
     ip: str | None = Query(None, max_length=45),
     status: str | None = Query(None, max_length=32),
     ip_order: str = Query("asc", pattern="^(asc|desc)$"),
+    sort_order: str | None = Query(
+        None,
+        pattern="^(ip_asc|ip_desc|last_attack_desc|last_attack_asc)$",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=200),
     session_hash: str = Depends(require_session),
@@ -386,6 +390,7 @@ async def security_blocks(
             page=page,
             page_size=page_size,
             ip_order=ip_order,
+            sort_order=sort_order,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

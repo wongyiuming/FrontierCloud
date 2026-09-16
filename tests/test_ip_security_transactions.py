@@ -104,6 +104,7 @@ class SecurityStateTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(engine.transaction.committed)
         events = [params for statement, params in connection.executed if "INSERT INTO ip_security_audit_log" in statement]
         self.assertEqual([event["action"] for event in events], ["invalid_api", "automatic_ban"])
+        self.assertTrue(any("INSERT INTO ip_security_summary" in sql for sql, _params in connection.executed))
         self.assertTrue(any("INSERT INTO ip_auto_ban_events" in sql for sql, _params in connection.executed))
 
     async def test_independent_ips_enter_state_guard_concurrently(self):

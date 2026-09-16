@@ -41,6 +41,8 @@ class _MigrationConnection:
             return 1
         if "CHECK_CLAUSE" in sql:
             return self.preference_check
+        if "COUNT(*) FROM ip_security_summary" in sql:
+            return 1
         raise AssertionError(f"Unexpected scalar query: {sql}")
 
     async def execute(self, statement, params=None):
@@ -149,6 +151,8 @@ class SchemaMigrationTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("idx_webrtc_client_time", schema)
         self.assertIn("idx_webrtc_observed_time", schema)
         self.assertIn("PRIMARY KEY (client_ip, webrtc_ip_key)", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS ip_security_summary", schema)
+        self.assertIn("idx_ip_security_last_attack", schema)
 
     async def test_close_db_disposes_the_connection_pool(self):
         fake_engine = MagicMock()

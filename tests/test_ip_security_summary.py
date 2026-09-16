@@ -39,7 +39,8 @@ class SummaryTests(unittest.IsolatedAsyncioTestCase):
         rows.mappings.return_value.all.return_value = [
             {"ip_address": "10.199.254.235", "status": "whitelisted", "note": "trusted"},
             {"ip_address": "13.11.1.1", "status": "active", "ban_count": 8,
-             "ban_kind": "permanent", "reason": "repeat"},
+             "ban_kind": "permanent", "reason": "repeat", "attack_count": 12,
+             "last_attack_at": "2026-09-16T00:00:00Z"},
             {"ip_address": "2001:db8::1", "status": "observed", "ban_count": 0,
              "ban_kind": None, "reason": None},
         ]
@@ -57,10 +58,33 @@ class SummaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(set(ips)), 3)
         self.assertEqual(result["pagination"]["total"], 3)
         self.assertEqual(result["events"][0]["ban_count"], 8)
+        self.assertEqual(result["events"][0]["attack_count"], 12)
         self.assertNotIn("banned_at", result["events"][0])
         sql, params = conn.execute.call_args.args
         self.assertIn("INET6_ATON(ip_address) desc", str(sql))
         self.assertEqual(params["offset"], 2)
+        statements = "\n".join(str(call.args[0]) for call in conn.execute.call_args_list)
+        self.assertIn("ip_security_summary", statements)
+        self.assertIn("last_attack_at", statements)
+
+    async def test_last_attack_order_keeps_null_times_last(self):
+        count, stats, rows = MagicMock(), MagicMock(), MagicMock()
+        count.scalar_one.return_value = 0
+        stats.mappings.return_value.one.return_value = {"active_count": 0, "whitelist_count": 0}
+        rows.mappings.return_value.all.return_value = []
+        conn = AsyncMock()
+        conn.execute.side_effect = [count, stats, rows]
+
+        @asynccontextmanager
+        async def connect():
+            yield conn
+
+        with patch.object(ip_security, "engine") as engine:
+            engine.connect = connect
+            await ip_security.list_security_summary(sort_order="last_attack_desc")
+        sql = str(conn.execute.call_args_list[-1].args[0])
+        self.assertIn("(last_attack_at IS NULL) ASC", sql)
+        self.assertIn("last_attack_at DESC", sql)
 
     async def test_sort_direction_is_validated_before_interpolation(self):
         with self.assertRaises(ValueError):

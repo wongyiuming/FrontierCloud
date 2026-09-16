@@ -16,7 +16,7 @@ from app.services import ip_security as s
 
 async def main():
     prefix = "fc_security_test_" + uuid.uuid4().hex[:12] + "_"
-    tables = ["ip_auto_ban_events", "ip_permanent_whitelist", "ip_security_locks", "ip_security_audit_log", "ip_security_projection"]
+    tables = ["ip_auto_ban_events", "ip_permanent_whitelist", "ip_security_locks", "ip_security_audit_log", "ip_security_summary", "ip_security_projection"]
     created = []
     async with db.engine.connect() as physical:
         class FixtureConnection:
@@ -98,7 +98,7 @@ async def main():
                 assert (await s.list_security_summary(ip_filter="13.11.1.1", status_filter="active"))["pagination"]["total"] == 0
                 await s.remove_whitelist("13.11.1.1", "a" * 64)
                 result = await s.list_security_summary(ip_filter="13.11.1.1")
-                assert result["events"][0]["status"] == "unbanned"
+                assert result["events"][0]["status"] == "history"
                 assert result["events"][0]["ban_count"] == 4
                 actions = (await conn.execute(text("SELECT action FROM ip_security_audit_log WHERE ip_address='13.11.1.1' ORDER BY created_at,id"))).scalars().all()
                 assert actions[-2:] == ["whitelist_add", "whitelist_remove"]
