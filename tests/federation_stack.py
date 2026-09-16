@@ -516,6 +516,8 @@ def main():
                 wait_for(lambda: a.relationship()["cursor"] >= repaired_version, description="full catalog repair convergence")
                 assert len(a.resources()) == 107
             report["checks"].append("three delay/loss/restart/add/delete/full-repair recovery cycles")
+            wait_for(lambda: len(c.resources()) == 107,
+                     description="independent Master catalog convergence")
             a.compose("stop", "web")
             try:
                 assert c.range(c.resource["url"]).status_code == 206
