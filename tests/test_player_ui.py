@@ -37,12 +37,26 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("html = load_html_template(player_template)", api)
         self.assertFalse((ROOT / "static" / "media" / "player.html").exists())
 
+    def test_player_runtime_is_native_and_has_no_artplayer_dependency(self):
+        script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
+        templates = "\n".join(
+            (ROOT / "static" / "media" / name).read_text(encoding="utf-8")
+            for name in ("audio-player.html", "video-player.html")
+        )
+
+        self.assertIn("class FrontierPlayer", script)
+        self.assertIn("new FrontierPlayer({", script)
+        self.assertIn("<video class=\"art-video\"", script)
+        self.assertNotIn("new Artplayer", script)
+        self.assertNotIn("art.e['video:error']", script)
+        self.assertNotIn("cdnjs.cloudflare.com/ajax/libs/artplayer", templates)
+
     def test_progress_hit_area_is_large_and_excluded_from_page_gestures(self):
         script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
         style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
 
         self.assertIn("--art-progress-height: 26px", style)
-        self.assertIn(".art-control-progress-inner { height: 8px", style)
+        self.assertIn(".art-control-progress-inner { width: 100%; height: 8px", style)
         self.assertIn("function isGestureControl(target)", script)
         self.assertIn(".art-control-progress", script)
         self.assertIn("let pointerId = null", script)
