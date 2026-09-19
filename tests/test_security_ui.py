@@ -23,8 +23,14 @@ class SecurityUIContractTests(unittest.TestCase):
         self.assertIn("event.reason", script)
         self.assertNotIn("securityScopeFilter", html)
         self.assertNotIn("securityDate", script)
-        self.assertIn('value="asc"', html)
-        self.assertIn('value="desc"', html)
+        for value in ("ip_asc", "ip_desc", "last_attack_desc", "last_attack_asc"):
+            self.assertIn(f'value="{value}"', html)
+        for value in ("active", "observed", "history", "permanent", "whitelisted"):
+            self.assertIn(f'value="{value}"', html)
+        self.assertNotIn('value="expired"', html)
+        self.assertNotIn('value="unbanned"', html)
+        self.assertIn("event.last_attack_at", script)
+        self.assertIn("event.attack_count", script)
 
     def test_single_expanded_module_and_permanent_ban_controls_are_exposed(self):
         html = (ROOT / "static" / "media" / "admin.html").read_text(encoding="utf-8")
@@ -39,6 +45,21 @@ class SecurityUIContractTests(unittest.TestCase):
         self.assertIn("/api/v1/media/admin/security/permanent-ban", script)
         self.assertIn("overflow-y: scroll", style)
         self.assertIn("scrollbar-width: auto", style)
+
+    def test_temporary_key_and_both_grouped_network_views_are_exposed(self):
+        html = (ROOT / "static" / "media" / "admin.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "admin.js").read_text(encoding="utf-8")
+        style = (ROOT / "static" / "css" / "admin.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="temporaryKeyForm"', html)
+        self.assertIn('value="15" selected', html)
+        self.assertIn('value="120"', html)
+        self.assertIn("/api/v1/media/admin/key/temporary", script)
+        self.assertIn('data-network-view="pairs"', html)
+        self.assertIn('data-network-view="public"', html)
+        self.assertIn('data-network-view="webrtc"', html)
+        self.assertIn("function renderNetworkGroups", script)
+        self.assertIn(".network-branch::before", style)
 
 
 if __name__ == "__main__":

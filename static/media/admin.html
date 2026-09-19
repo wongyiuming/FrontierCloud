@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿视界 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260910-4">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260916-1">
 </head>
 <body>
     <main class="admin-console">
@@ -13,17 +13,26 @@
             <button id="logout" type="button">退出特权</button>
         </div>
         <section class="admin-module key-panel" data-admin-module="key">
-            <button class="module-heading" type="button" aria-expanded="false"><span><strong>Admin Key</strong><small>Key 长期有效；轮换后其他登录会立即失效。新 Key 只显示一次。</small></span><b>＋</b></button>
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>Admin Key</strong><small>长期 Key 可轮换；临时 Key 单次使用并建立所选时长的滑动会话。</small></span><b>＋</b></button>
             <div class="module-content">
               <div class="key-actions">
                 <button id="randomKey" type="button">生成随机强 Key</button>
                 <form id="customKeyForm">
                     <input id="customKey" type="password" minlength="16" maxlength="512" autocomplete="new-password" placeholder="自定义新 Key（至少 16 个字符）" required>
                     <input id="customKeyConfirm" type="password" minlength="16" maxlength="512" autocomplete="new-password" placeholder="再次输入确认" required>
-                    <button type="submit">确认更换</button>
+                    <button id="customKeySubmit" type="submit">确认更换</button>
+                </form>
+                <form id="temporaryKeyForm" class="temporary-key-form">
+                    <select id="temporaryKeyMinutes" aria-label="临时 Admin Key 滑动会话有效期">
+                        <option value="15" selected>15 分钟</option>
+                        <option value="30">30 分钟</option>
+                        <option value="60">60 分钟</option>
+                        <option value="120">120 分钟</option>
+                    </select>
+                    <button id="temporaryKey" type="submit">生成一次性临时 Key</button>
                 </form>
               </div>
-              <div id="newKeyResult" class="new-key-result hidden" aria-live="polite"><strong>请立即保存新 Admin Key</strong><code id="newKeyValue"></code><button id="copyKey" type="button">复制</button><button id="dismissKey" type="button">关闭</button></div>
+              <div id="newKeyResult" class="new-key-result hidden" aria-live="polite"><strong id="newKeyTitle">请立即保存新 Admin Key</strong><code id="newKeyValue"></code><small id="newKeyDetail"></small><button id="copyKey" type="button">复制</button><button id="dismissKey" type="button">关闭</button></div>
             </div>
         </section>
 
@@ -57,15 +66,17 @@
                     <input id="securityIpFilter" type="text" maxlength="45" autocomplete="off" placeholder="精确 IP（可选）">
                     <select id="securityStatusFilter">
                         <option value="">全部状态</option>
-                        <option value="active">active</option>
-                        <option value="expired">expired</option>
-                        <option value="unbanned">unbanned</option>
-                        <option value="whitelisted">whitelisted</option>
-                        <option value="observed">observed</option>
+                        <option value="active">当前封禁</option>
+                        <option value="observed">攻击观察中（未封禁）</option>
+                        <option value="history">历史封禁过</option>
+                        <option value="permanent">已永久封禁</option>
+                        <option value="whitelisted">白名单</option>
                     </select>
-                    <select id="securityIpOrder" aria-label="IP 数值排序">
-                        <option value="asc">IP 从小到大</option>
-                        <option value="desc">IP 从大到小</option>
+                    <select id="securityIpOrder" aria-label="IP 或最后攻击时间排序">
+                        <option value="ip_asc">IP 从小到大</option>
+                        <option value="ip_desc">IP 从大到小</option>
+                        <option value="last_attack_desc">最近攻击优先</option>
+                        <option value="last_attack_asc">最早攻击优先</option>
                     </select>
                     <button type="submit">查询</button>
                 </form>
@@ -121,6 +132,11 @@
                     <button id="networkReset" type="button">最近访问</button>
                 </form>
                 <div id="networkSummary" class="network-summary">尚未加载</div>
+                <div id="networkViewSwitch" class="network-view-switch" role="group" aria-label="WebRTC 关系展示方式">
+                    <button type="button" class="selected" data-network-view="pairs">逐条关系</button>
+                    <button type="button" data-network-view="public">公网 IP → WebRTC IP</button>
+                    <button type="button" data-network-view="webrtc">WebRTC IP → 公网 IP</button>
+                </div>
                 <div id="networkList" class="network-list"></div>
                 <div class="network-pagination">
                     <button id="networkPrev" type="button">上一页</button>
@@ -197,7 +213,7 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260910-4"></script>
+    <script src="/static/js/admin.js?v=20260916-1"></script>
     <script src="/static/js/nodes.js?v=20260913-3"></script>
 </body>
 </html>

@@ -504,6 +504,7 @@ async def network_observations(
     request: Request,
     public_ip: str | None = Query(None, max_length=45),
     webrtc_ip: str | None = Query(None, max_length=45),
+    view: str = Query("pairs", pattern="^(pairs|public|webrtc)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=200),
     session_hash: str = Depends(require_session),
@@ -511,12 +512,21 @@ async def network_observations(
     if settings.ADMIN_COOKIE_SECURE and not secure_admin_transport(request):
         raise HTTPException(status_code=426, detail="已启用 TLS，网络观测视图只允许通过 HTTPS 访问")
     try:
-        result = await network_observation.list_observation_summary(
-            public_ip=public_ip,
-            webrtc_ip=webrtc_ip,
-            page=page,
-            page_size=page_size,
-        )
+        if view == "pairs":
+            result = await network_observation.list_observation_summary(
+                public_ip=public_ip,
+                webrtc_ip=webrtc_ip,
+                page=page,
+                page_size=page_size,
+            )
+        else:
+            result = await network_observation.list_grouped_observation_summary(
+                view,
+                public_ip=public_ip,
+                webrtc_ip=webrtc_ip,
+                page=page,
+                page_size=page_size,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(result, headers={"Cache-Control": "private, no-store"})

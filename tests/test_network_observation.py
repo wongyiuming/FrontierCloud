@@ -158,6 +158,56 @@ class NetworkObservationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "IP 地址无效"):
             asyncio.run(network_observation.list_observation_summary(public_ip="invalid"))
 
+    def test_grouped_view_returns_complete_one_to_many_relationships(self):
+        class SequencedConnection(_Connection):
+            def __init__(self):
+                super().__init__(total=1)
+                self.results = [
+                    [{
+                        "group_key": "203.0.113.5",
+                        "observation_count": 12,
+                        "first_seen": "2026-09-01",
+                        "last_seen": "2026-09-16",
+                    }],
+                    [
+                        {"client_ip": "203.0.113.5", "webrtc_ip": "198.51.100.7",
+                         "observation_count": 7, "matching_count": 0,
+                         "first_seen": "2026-09-01", "last_seen": "2026-09-16", "outcomes": "ok"},
+                        {"client_ip": "203.0.113.5", "webrtc_ip": "198.51.100.8",
+                         "observation_count": 5, "matching_count": 0,
+                         "first_seen": "2026-09-02", "last_seen": "2026-09-15", "outcomes": "ok"},
+                    ],
+                ]
+
+            async def execute(self, statement, params=None):
+                self.executed.append((str(statement), params))
+                return _Rows(self.results.pop(0))
+
+        connection = SequencedConnection()
+        with patch.object(network_observation, "engine", _Engine(connection)):
+            result = asyncio.run(network_observation.list_grouped_observation_summary(
+                "public", public_ip="203.0.113.5",
+            ))
+
+        self.assertEqual(result["view"], "public")
+        self.assertEqual(result["pagination"]["total"], 1)
+        self.assertEqual(result["groups"][0]["observation_count"], 12)
+        self.assertEqual(
+            [item["webrtc_ip"] for item in result["groups"][0]["relations"]],
+            ["198.51.100.7", "198.51.100.8"],
+        )
+        sql = "\n".join(statement for statement, _params in connection.executed)
+        self.assertIn("GROUP BY client_ip", sql)
+        self.assertIn("client_ip IN (:group_0)", sql)
+
+    def test_reverse_grouping_rejects_missing_webrtc_identity_rows(self):
+        connection = _Connection(rows=[], total=0)
+        with patch.object(network_observation, "engine", _Engine(connection)):
+            result = asyncio.run(network_observation.list_grouped_observation_summary("webrtc"))
+        self.assertEqual(result["groups"], [])
+        sql = "\n".join(statement for statement, _params in connection.executed)
+        self.assertIn("webrtc_ip IS NOT NULL", sql)
+
     def test_failed_old_request_releases_only_its_own_cooldown_reservation(self):
         class FailedConnection(_Connection):
             async def execute(self, *_args, **_kwargs):
