@@ -246,10 +246,15 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RN_DEPLOY_PATH"
-          test "$(git branch --show-current)" = dev
-          test -z "$(git status --porcelain --untracked-files=no)"
+          tracked_changes="$(git status --porcelain --untracked-files=no)"
+          if [ -n "$tracked_changes" ]; then
+            echo "::error::RN checkout has tracked changes; deployment refused"
+            printf '%s\n' "$tracked_changes"
+            exit 1
+          fi
           git fetch --no-tags origin dev
           test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          git switch dev
           git merge --ff-only "$GITHUB_SHA"
           sh scripts/deploy_rn.sh
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
