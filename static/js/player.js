@@ -68,6 +68,7 @@ class FrontierMediaPlayer {
         this._hideTimer = null;
         this._draggingProgress = false;
         this._webFullscreen = false;
+        this._playRequested = false;
         this.container.replaceChildren();
         this.container.insertAdjacentHTML('beforeend', `
             <div class="art-video-player">
@@ -155,7 +156,7 @@ class FrontierMediaPlayer {
         this.video.addEventListener('playing', () => { this.loading.show = false; this.notice.show = false; this._syncPlaybackUi(); this._scheduleControlsHide(); });
         this.video.addEventListener('play', () => { this._syncPlaybackUi(); this.controls.show = true; });
         this.video.addEventListener('pause', () => { this._syncPlaybackUi(); this._showControls(); });
-        this.video.addEventListener('ended', () => { this._syncPlaybackUi(); this._showControls(); });
+        this.video.addEventListener('ended', () => { this._playRequested = false; this._syncPlaybackUi(); this._showControls(); });
         this.video.addEventListener('timeupdate', () => this._syncTime());
         this.video.addEventListener('durationchange', () => this._syncTime());
         this.video.addEventListener('progress', () => this._syncBuffered());
@@ -333,8 +334,15 @@ class FrontierMediaPlayer {
         this.container.classList.toggle('art-fullscreen', document.fullscreenElement === this.container);
     }
 
-    play() { return this.video.play(); }
-    pause() { this.video.pause(); }
+    play() {
+        this._playRequested = true;
+        const result = this.video.play();
+        return result.catch(error => {
+            if (error?.name === 'NotAllowedError') this._playRequested = false;
+            throw error;
+        });
+    }
+    pause() { this._playRequested = false; this.video.pause(); }
 
     get url() { return this._url; }
     set url(value) {
@@ -352,6 +360,7 @@ class FrontierMediaPlayer {
     }
     get duration() { return Number.isFinite(this.video.duration) ? this.video.duration : 0; }
     get playing() { return !this.video.paused && !this.video.ended; }
+    get playRequested() { return this._playRequested; }
     get title() { return this._title; }
     set title(value) {
         this._title = String(value || '');
@@ -781,7 +790,7 @@ function bindPlayerBusinessEvents() {
         }
         remoteRetrySequence = sequence;
         const position = video.currentTime;
-        const resume = playbackState?.lastTick != null && !video.paused;
+        const resume = art.playRequested;
         video.src = media.url;
         video.load();
         const restore = () => {

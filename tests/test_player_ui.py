@@ -50,6 +50,8 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("? FrontierAudioPlayer", script)
         self.assertIn(": FrontierVideoPlayer", script)
         self.assertIn("<video class=\"art-video\"", script)
+        self.assertIn("get playRequested()", script)
+        self.assertIn("const resume = art.playRequested", script)
         self.assertNotIn("new Artplayer", script)
         self.assertNotIn("art.e['video:error']", script)
         self.assertNotIn("cdnjs.cloudflare.com/ajax/libs/artplayer", templates)

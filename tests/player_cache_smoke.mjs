@@ -138,7 +138,7 @@ for (const failure of ['network', 'status', 'truncated']) {
     p.context.restoreRef = listener => { restore = listener; };
     p.run(`
         art = {
-            e: {}, notice: {}, loading: {}, mask: {}, controls: {}, url: '/b',
+            e: {}, notice: {}, loading: {}, mask: {}, controls: {}, url: '/b', playRequested: true,
             video: {
                 currentTime: 1800, duration: 2400, paused: false,
                 load() { reloadsRef(); },
