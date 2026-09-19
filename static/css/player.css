@@ -3,11 +3,41 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .audio-player-page { flex-direction: row; }
 .player-section { flex: 3; background: #000; position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; overflow: hidden; touch-action: none; }
 .artplayer-app { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
-.artplayer-app .art-video-player { --art-progress-height: 26px; --art-bottom-gap: 8px; }
-.artplayer-app .art-bottom .art-progress .art-control-progress { min-height: 26px; touch-action: none; }
-.artplayer-app .art-bottom .art-progress .art-control-progress .art-control-progress-inner { height: 8px; border-radius: 4px; overflow: visible; }
+.artplayer-app button, .artplayer-app input { font: inherit; }
+.artplayer-app svg { width: 22px; height: 22px; fill: currentColor; pointer-events: none; }
+.artplayer-app .art-video-player { --art-progress-height: 26px; --art-bottom-gap: 8px; width: 100%; height: 100%; position: relative; overflow: hidden; background: #000; color: #fff; user-select: none; }
+.artplayer-app .art-video { width: 100%; height: 100%; display: block; background: #000; object-fit: cover; }
+.audio-player-page .artplayer-app .art-video { opacity: 0; pointer-events: none; }
+.art-title { position: absolute; top: 16px; left: 18px; right: 18px; z-index: 4; overflow: hidden; color: rgba(255,255,255,.92); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 2px #000; pointer-events: none; }
+.audio-player-page .art-title { display: none; }
+.art-mask { position: absolute; top: 50%; left: 50%; z-index: 5; width: 62px; height: 62px; transform: translate(-50%, -50%); place-items: center; padding: 0; color: #fff; background: rgba(0,0,0,.55); border: 0; border-radius: 50%; cursor: pointer; backdrop-filter: blur(3px); }
+.art-mask svg { width: 34px; height: 34px; margin-left: 3px; }
+.art-loading { position: absolute; inset: 0; z-index: 6; place-items: center; pointer-events: none; }
+.art-loading span { width: 38px; height: 38px; border: 3px solid rgba(255,255,255,.25); border-top-color: #fff; border-radius: 50%; animation: artSpin .8s linear infinite; }
+@keyframes artSpin { to { transform: rotate(360deg); } }
+.art-notice { position: absolute; top: 16%; left: 50%; z-index: 9; max-width: min(80%, 520px); transform: translateX(-50%); padding: 8px 13px; color: #fff; font-size: 13px; text-align: center; background: rgba(0,0,0,.72); border-radius: 4px; pointer-events: none; }
+.art-bottom { position: absolute; right: 0; bottom: 0; left: 0; z-index: 8; padding: 0 12px var(--art-bottom-gap); background: linear-gradient(to top, rgba(0,0,0,.78), rgba(0,0,0,.35) 62%, transparent); opacity: 1; visibility: visible; transform: translateY(0); transition: opacity .22s ease, visibility .22s ease, transform .22s ease; }
+.art-bottom[hidden] { display: block; opacity: 0; visibility: hidden; transform: translateY(8px); pointer-events: none; }
+.art-progress { width: 100%; }
+.artplayer-app .art-bottom .art-progress .art-control-progress { min-height: 26px; display: flex; align-items: center; cursor: pointer; touch-action: none; outline: none; }
+.artplayer-app .art-bottom .art-progress .art-control-progress .art-control-progress-inner { width: 100%; height: 8px; position: relative; overflow: visible; background: rgba(255,255,255,.26); border-radius: 4px; transition: height .12s ease; }
 .artplayer-app .art-bottom .art-progress .art-control-progress:hover .art-control-progress-inner,
 .artplayer-app .art-bottom .art-progress .art-control-progress:focus-within .art-control-progress-inner { height: 10px; }
+.art-progress-loaded, .art-progress-played { height: 100%; position: absolute; top: 0; left: 0; border-radius: inherit; pointer-events: none; }
+.art-progress-loaded { background: rgba(255,255,255,.2); }
+.art-progress-played { background: #f00; }
+.art-progress-indicator { width: 14px; height: 14px; position: absolute; top: 50%; transform: translate(-50%, -50%) scale(0); background: #fff; border-radius: 50%; box-shadow: 0 0 2px rgba(0,0,0,.45); transition: transform .12s ease; pointer-events: none; }
+.art-control-progress:hover .art-progress-indicator, .art-control-progress:focus .art-progress-indicator { transform: translate(-50%, -50%) scale(1); }
+.art-controls, .art-controls-left, .art-controls-right, .art-volume { display: flex; align-items: center; }
+.art-controls { min-height: 40px; justify-content: space-between; gap: 10px; }
+.art-controls-left, .art-controls-right { gap: 6px; }
+.art-control { width: 36px; height: 36px; display: grid; place-items: center; padding: 0; color: #fff; background: transparent; border: 0; border-radius: 4px; cursor: pointer; opacity: .92; }
+.art-control:hover, .art-control:focus-visible { background: rgba(255,255,255,.12); opacity: 1; outline: none; }
+.art-time { min-width: 82px; color: rgba(255,255,255,.9); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.art-volume { gap: 2px; }
+.art-volume-range { width: 76px; accent-color: #fff; cursor: pointer; }
+.art-fullscreen-web { position: fixed !important; inset: 0 !important; z-index: 2147483000 !important; width: 100vw !important; height: 100vh !important; background: #000; }
+.player-web-fullscreen { overflow: hidden !important; }
 .audio-player-page .artplayer-app .art-bottom { opacity: 1 !important; visibility: visible !important; transform: translateY(0) !important; }
 .audio-player-page .artplayer-app .art-bottom .art-progress { opacity: 1 !important; visibility: visible !important; }
 .inline-lyrics { --sync-lyric-font-size: 42px; position: absolute; top: 3%; right: 3%; bottom: calc(25% + 32px); left: 3%; z-index: 7; display: flex; align-items: stretch; justify-content: center; overflow: hidden; pointer-events: none; }
