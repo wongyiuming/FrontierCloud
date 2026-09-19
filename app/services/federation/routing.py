@@ -66,7 +66,7 @@ async def lyric_entries(identifier: str, path=None):
 def item(row):
     payload = row["payload"]
     return {"media_id": row["resource_id"], "resource_id": row["resource_id"], "media_path": row["path"],
-            "title": row["path"].rsplit("/", 1)[-1].rsplit(".", 1)[0], "artist": "前沿视界", "type": payload["type"],
+            "title": row["path"].rsplit("/", 1)[-1].rsplit(".", 1)[0], "artist": "前沿娱乐", "type": payload["type"],
             "url": "/api/v1/media/stream?" + urlencode({"file_path": row["path"], "resource_id": row["resource_id"]}),
             # The existing cover is a static product icon, not a media attachment.
             "cover": "/favicon.ico", "has_lyrics": payload["has_lyrics"],

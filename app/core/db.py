@@ -254,6 +254,28 @@ async def init_db() -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
             await _commit_ddl(conn, """
+                CREATE TABLE IF NOT EXISTS ip_security_summary (
+                    ip_address VARCHAR(45) NOT NULL PRIMARY KEY,
+                    attack_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                    last_attack_at DATETIME(6) NULL,
+                    INDEX idx_ip_security_last_attack (last_attack_at, ip_address)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
+            summary_rows = await conn.scalar(text("SELECT COUNT(*) FROM ip_security_summary"))
+            await conn.commit()
+            if not summary_rows:
+                await conn.execute(text("""
+                    INSERT INTO ip_security_summary (ip_address, attack_count, last_attack_at)
+                    SELECT ip_address, COUNT(*), MAX(created_at)
+                    FROM ip_security_audit_log
+                    WHERE action='invalid_api'
+                    GROUP BY ip_address
+                    ON DUPLICATE KEY UPDATE
+                        attack_count=VALUES(attack_count),
+                        last_attack_at=VALUES(last_attack_at)
+                """))
+                await conn.commit()
+            await _commit_ddl(conn, """
                 CREATE TABLE IF NOT EXISTS ip_security_locks (
                     ip_address VARCHAR(45) NOT NULL PRIMARY KEY,
                     projection_dirty TINYINT NOT NULL DEFAULT 0,

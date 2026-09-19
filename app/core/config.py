@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     ADMIN_SESSION_TTL: int = Field(10_800, ge=1, validation_alias="ADMIN_SESSION_TTL")
     ADMIN_MAX_FAILED_ATTEMPTS_PER_IP: int = Field(10, validation_alias="ADMIN_MAX_FAILED_ATTEMPTS_PER_IP")
     ADMIN_FAILED_WINDOW: int = Field(300, validation_alias="ADMIN_FAILED_WINDOW")
-    ADMIN_MAX_UPLOAD_FILE_SIZE: int = Field(800 * 1024 * 1024, validation_alias="ADMIN_MAX_UPLOAD_FILE_SIZE")
+    ADMIN_MAX_UPLOAD_FILE_SIZE: int = Field(17 * 512 * 1024 * 1024, validation_alias="ADMIN_MAX_UPLOAD_FILE_SIZE")
     ADMIN_UPLOAD_INACTIVITY_TIMEOUT: int = Field(300, ge=1, validation_alias="ADMIN_UPLOAD_INACTIVITY_TIMEOUT")
     ADMIN_MAX_UPLOAD_TASK_FILES: int = Field(5000, validation_alias="ADMIN_MAX_UPLOAD_TASK_FILES")
     ADMIN_MAX_BATCH_FILES: int = Field(200, validation_alias="ADMIN_MAX_BATCH_FILES")
@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field("INFO", validation_alias="LOG_LEVEL")
     LOG_FORMAT: str = Field("json", validation_alias="LOG_FORMAT")
     INSTANCE_NAME: str = Field("frontiercloud", validation_alias="INSTANCE_NAME")
+    PUBLIC_BIND_ADDRESS: str = Field("0.0.0.0", validation_alias="PUBLIC_BIND_ADDRESS")
     TRUSTED_PROXY_NETWORKS: str = Field("172.16.0.0/12", validation_alias="TRUSTED_PROXY_NETWORKS")
     SECURITY_EXEMPT_NETWORKS: str = Field("127.0.0.0/8,::1/128", validation_alias="SECURITY_EXEMPT_NETWORKS")
     SECURITY_INVALID_API_LIMIT: int = Field(5, validation_alias="SECURITY_INVALID_API_LIMIT")
@@ -74,6 +75,14 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if normalized not in {"json", "text"}:
             raise ValueError("LOG_FORMAT must be json or text")
+        return normalized
+
+    @field_validator("PUBLIC_BIND_ADDRESS")
+    @classmethod
+    def validate_public_bind_address(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized not in {"0.0.0.0", "::"}:
+            raise ValueError("PUBLIC_BIND_ADDRESS must be 0.0.0.0 or ::")
         return normalized
 
     @property

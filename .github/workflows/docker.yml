@@ -118,13 +118,13 @@ jobs:
 
       - name: Test public and admin flows
         run: |
-          curl -fsSL https://ci.frontiercloud.local/ | grep "前沿视界"
+          curl -fsSL https://ci.frontiercloud.local/ | grep "前沿娱乐"
           curl -fsS https://ci.frontiercloud.local/health/live | grep '"status":"healthy"'
           curl -fsS https://ci.frontiercloud.local/health/ready | grep '"status":"ready"'
           generated_metrics_token=$(docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token')
           curl -fsS https://ci.frontiercloud.local/metrics \
             -H "Authorization: Bearer $generated_metrics_token" | grep 'frontiercloud_http_requests_total'
-          curl -fsS https://ci.frontiercloud.local/api/v1/media/ | grep "前沿视界"
+          curl -fsS https://ci.frontiercloud.local/api/v1/media/ | grep "前沿娱乐"
           test "$(curl -sS -o /dev/null -w '%{http_code}' https://ci.frontiercloud.local/api/v1/media/admin/)" = 401
 
           ADMIN_KEY=$(docker compose exec -T web python -c "from app.core.config import ADMIN_KEY_FILE; print(ADMIN_KEY_FILE.read_text().strip())")
@@ -246,10 +246,31 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RN_DEPLOY_PATH"
-          test "$(git branch --show-current)" = dev
-          test -z "$(git status --porcelain --untracked-files=no)"
           git fetch --no-tags origin dev
           test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          mapfile -d '' tracked_paths < <(git diff --name-only -z HEAD)
+          if [ "${#tracked_paths[@]}" -gt 0 ]; then
+            tested_content=true
+            for path in "${tracked_paths[@]}"; do
+              if ! git diff --quiet "$GITHUB_SHA" -- "$path"; then
+                tested_content=false
+                break
+              fi
+            done
+            if [ "$tested_content" = true ]; then
+              printf 'RN checkout already contains tested content; reconciling %s\n' "${tracked_paths[@]}"
+              git restore --source=HEAD --staged --worktree -- "${tracked_paths[@]}"
+            elif [ "${#tracked_paths[@]}" -eq 1 ] && [ "${tracked_paths[0]}" = nginx/nginx.conf ]; then
+              git stash push -m "rn-preserved-nginx-before-$GITHUB_SHA" -- nginx/nginx.conf
+              echo "::warning::Preserved RN-local nginx/nginx.conf as stash $(git rev-parse refs/stash)"
+            else
+              echo "::error::RN checkout has tracked changes that differ from the tested commit; deployment refused"
+              git status --short --untracked-files=no
+              exit 1
+            fi
+          fi
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git switch dev
           git merge --ff-only "$GITHUB_SHA"
           sh scripts/deploy_rn.sh
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"

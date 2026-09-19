@@ -10,6 +10,7 @@ let securityPage = 1;
 let securityPages = 1;
 let networkPage = 1;
 let networkPages = 1;
+let networkView = 'pairs';
 let lyricCatalog = null;
 let lyricOrigin = null;
 let lyricLinking = false;
@@ -646,7 +647,7 @@ function renderSecurityList(data) {
     }
     for (const event of data.events || []) {
         const row = document.createElement('div');
-        row.className = `security-row${event.active ? ' active' : ''}${event.whitelisted ? ' whitelisted' : ''}`;
+        row.className = `security-row ${event.status || ''}${event.active ? ' active' : ''}${event.whitelisted ? ' whitelisted' : ''}`;
         const main = document.createElement('div');
         main.className = 'security-row-main';
         const ip = document.createElement('div');
@@ -654,9 +655,14 @@ function renderSecurityList(data) {
         ip.textContent = event.ip;
         const meta = document.createElement('div');
         meta.className = 'security-meta';
-        const statuses = {active: '封禁中', expired: '已到期', unbanned: '已解封', observed: '已记录'};
-        const kind = event.active ? (event.ban_kind === 'permanent' ? ' · 永久' : ' · 临时') : '';
-        meta.textContent = `${statuses[event.status] || event.status}${kind} · 累计封禁 ${event.ban_count || 0} 次`;
+        const statuses = {
+            active: '当前封禁',
+            observed: '攻击观察中（未封禁）',
+            history: '历史封禁过',
+            permanent: '已永久封禁',
+        };
+        const lastAttack = event.last_attack_at || '无攻击时间';
+        meta.textContent = `${statuses[event.status] || event.status} · 攻击 ${event.attack_count || 0} 次 · 最近攻击 ${lastAttack} · 累计封禁 ${event.ban_count || 0} 次`;
         const path = document.createElement('div');
         path.className = 'security-path';
         path.textContent = event.reason || '';
@@ -718,7 +724,8 @@ function renderSecurityList(data) {
         ip.textContent = entry.ip;
         const meta = document.createElement('div');
         meta.className = 'security-meta';
-        meta.textContent = entry.note || '永久白名单';
+        const lastAttack = entry.last_attack_at || '无攻击时间';
+        meta.textContent = `白名单 · 攻击 ${entry.attack_count || 0} 次 · 最近攻击 ${lastAttack} · ${entry.note || '无备注'}`;
         main.append(ip, meta);
         const actions = document.createElement('div');
         actions.className = 'security-actions';
@@ -741,7 +748,7 @@ async function loadSecurityStatus(force = false) {
     securityLoading = true;
     try {
         const params = new URLSearchParams({
-            ip_order: $('securityIpOrder').value,
+            sort_order: $('securityIpOrder').value,
             page: String(securityPage),
             page_size: '100',
         });
@@ -809,9 +816,11 @@ $('permanentBanForm').onsubmit = async event => {
     }
 };
 
-function renderNetworkObservations(data) {
-    const list = $('networkList');
-    list.innerHTML = '';
+function networkTimeLine(item) {
+    return `首次 ${escapeHtml(item.first_seen || '-')} · 最近 ${escapeHtml(item.last_seen || '-')}`;
+}
+
+function renderNetworkPairList(list, data) {
     for (const item of data.items || []) {
         const row = document.createElement('div');
         row.className = 'network-row';
@@ -819,26 +828,62 @@ function renderNetworkObservations(data) {
         pair.className = 'network-pair';
         const observed = item.webrtc_ip || '未获取';
         pair.innerHTML = `<strong>${escapeHtml(item.client_ip)}</strong> → ${escapeHtml(observed)}`
-            + `<div class="network-meta">首次 ${escapeHtml(item.first_seen || '-')} · 最近 ${escapeHtml(item.last_seen || '-')} · 结果 ${escapeHtml(item.outcomes || '-')}</div>`;
+            + `<div class="network-meta">${networkTimeLine(item)} · 结果 ${escapeHtml(item.outcomes || '-')}</div>`;
         const count = document.createElement('div');
         count.className = 'network-count';
         count.textContent = `${item.observation_count || 0} 次`;
         row.append(pair, count);
         list.appendChild(row);
     }
+}
+
+function renderNetworkGroups(list, data) {
+    const reverse = data.view === 'webrtc';
+    for (const group of data.groups || []) {
+        const card = document.createElement('section');
+        card.className = 'network-group';
+        const header = document.createElement('div');
+        header.className = 'network-group-header';
+        header.innerHTML = `<div><strong>${escapeHtml(group.key)}</strong><small>${networkTimeLine(group)}</small></div>`
+            + `<span>${group.observation_count || 0} 次 · ${group.relations?.length || 0} 个关联</span>`;
+        const branches = document.createElement('div');
+        branches.className = 'network-branches';
+        for (const relation of group.relations || []) {
+            const child = document.createElement('div');
+            child.className = 'network-branch';
+            const target = reverse ? relation.client_ip : (relation.webrtc_ip || '未获取');
+            child.innerHTML = `<div><strong>${escapeHtml(target)}</strong><small>${networkTimeLine(relation)}</small></div>`
+                + `<span>${relation.observation_count || 0} 次</span>`;
+            branches.appendChild(child);
+        }
+        card.append(header, branches);
+        list.appendChild(card);
+    }
+}
+
+function renderNetworkObservations(data) {
+    const list = $('networkList');
+    list.innerHTML = '';
+    if (data.view === 'pairs') renderNetworkPairList(list, data);
+    else renderNetworkGroups(list, data);
     if (!list.children.length) {
         list.innerHTML = '<div class="security-empty">没有符合条件的 WebRTC 关系记录</div>';
     }
     networkPage = data.pagination?.page || 1;
     networkPages = data.pagination?.pages || 1;
-    $('networkSummary').textContent = `聚合关系 ${data.pagination?.total || 0} 组；每个“公网 IP → WebRTC IP”只显示一行`;
+    const summaries = {
+        pairs: `聚合关系 ${data.pagination?.total || 0} 组；每个“公网 IP → WebRTC IP”只显示一行`,
+        public: `公网 IP ${data.pagination?.total || 0} 个；展开查看它对应的全部 WebRTC IP`,
+        webrtc: `WebRTC IP ${data.pagination?.total || 0} 个；展开查看它对应的全部公网 IP`,
+    };
+    $('networkSummary').textContent = summaries[data.view] || summaries.pairs;
     $('networkPageInfo').textContent = `第 ${networkPage} / ${networkPages} 页`;
     $('networkPrev').disabled = networkPage <= 1;
     $('networkNext').disabled = networkPage >= networkPages;
 }
 
 async function loadNetworkObservations() {
-    const params = new URLSearchParams({page: String(networkPage), page_size: '100'});
+    const params = new URLSearchParams({page: String(networkPage), page_size: '100', view: networkView});
     const publicIp = $('networkPublicIp').value.trim();
     const webrtcIp = $('networkWebrtcIp').value.trim();
     if (publicIp) params.set('public_ip', publicIp);
@@ -851,6 +896,17 @@ $('networkFilterForm').onsubmit = event => {
     networkPage = 1;
     loadNetworkObservations().catch(error => alert(error.message));
 };
+
+for (const button of document.querySelectorAll('[data-network-view]')) {
+    button.onclick = () => {
+        networkView = button.dataset.networkView;
+        networkPage = 1;
+        for (const candidate of document.querySelectorAll('[data-network-view]')) {
+            candidate.classList.toggle('selected', candidate === button);
+        }
+        loadNetworkObservations().catch(error => alert(error.message));
+    };
+}
 $('networkReset').onclick = () => {
     $('networkFilterForm').reset();
     networkPage = 1;
@@ -874,12 +930,29 @@ async function changeAdminKey(payload) {
         method: 'POST', headers: requestHeaders(), body: JSON.stringify(payload),
     });
     $('newKeyValue').textContent = data.admin_key;
+    $('newKeyTitle').textContent = '请立即保存新的长期 Admin Key';
+    $('newKeyDetail').textContent = '长期有效；本次轮换已使其他管理会话和未使用临时 Key 失效';
+    $('copyKey').textContent = '复制';
     $('newKeyResult').classList.remove('hidden');
 }
 
 $('randomKey').onclick = async () => {
     if (!confirm('确认生成随机强 Key？其他已登录会话将立即失效。')) return;
     try { await changeAdminKey({mode: 'random'}); } catch (error) { alert(error.message); }
+};
+$('temporaryKeyForm').onsubmit = async event => {
+    event.preventDefault();
+    const minutes = Number($('temporaryKeyMinutes').value);
+    try {
+        const data = await api('/api/v1/media/admin/key/temporary', {
+            method: 'POST', headers: requestHeaders(), body: JSON.stringify({minutes}),
+        });
+        $('newKeyValue').textContent = data.admin_key;
+        $('newKeyTitle').textContent = '一次性临时 Admin Key';
+        $('newKeyDetail').textContent = `未使用时 ${data.minutes} 分钟后失效；首次登录立即作废，并建立 ${data.minutes} 分钟滑动会话`;
+        $('copyKey').textContent = '复制';
+        $('newKeyResult').classList.remove('hidden');
+    } catch (error) { alert(error.message); }
 };
 $('customKeyForm').onsubmit = async event => {
     event.preventDefault();
@@ -973,6 +1046,12 @@ $('logout').onclick = async () => {
         const status = await api('/api/v1/media/admin/status');
         uploadLimits = {...uploadLimits, ...status.limits};
         csrfCookieName = status.csrf_cookie_name || csrfCookieName;
+        if (status.credential_kind !== 'persistent') {
+            for (const id of ['randomKey', 'customKey', 'customKeyConfirm', 'customKeySubmit', 'temporaryKeyMinutes', 'temporaryKey']) {
+                $(id).disabled = true;
+            }
+            $('temporaryKey').textContent = '临时会话不可签发';
+        }
         await renderTree();
         await loadSecurityStatus(true);
         securityTimer = setInterval(loadSecurityStatus, 15000);

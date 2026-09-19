@@ -132,32 +132,31 @@ for (const failure of ['network', 'status', 'truncated']) {
 
 {
     const p = playerContext(async () => new Response('unused'));
-    let localErrors = 0, reloads = 0, resumes = 0, restore;
-    p.context.Artplayer = class {
-        constructor(option) {
-            this.e = {};
-            this.url = option.url;
-            this.notice = {};
-            this.loading = {};
-            this.mask = {};
-            this.controls = {};
-            this.video = {
+    let reloads = 0, resumes = 0, restore;
+    p.context.reloadsRef = () => { reloads += 1; };
+    p.context.resumesRef = () => { resumes += 1; };
+    p.context.restoreRef = listener => { restore = listener; };
+    p.run(`
+        art = {
+            e: {}, notice: {}, loading: {}, mask: {}, controls: {}, url: '/b', playRequested: true,
+            video: {
                 currentTime: 1800, duration: 2400, paused: false,
-                load() { reloads += 1; },
-                async play() { resumes += 1; },
-                addEventListener(event, listener) { if (event === 'loadedmetadata') restore = listener; },
-            };
-            this.on('video:error', () => { localErrors += 1; });
-        }
-        on(name, fn) { (this.e[name] ||= []).push({fn}); }
-        off(name) { delete this.e[name]; }
-        emit(name) { for (const listener of [...(this.e[name] || [])]) listener.fn(); }
-        async play() {}
-    };
-    p.run('art=null; initPlayer(currentMediaList[0],0); art.emit("video:error")');
-    assert.equal(localErrors, 1);
-    p.run('currentMediaList[1].resource_id="owner-b-object"; initPlayer(currentMediaList[1],1); playbackState.lastTick=performance.now(); art.emit("video:error")');
-    assert.equal(localErrors, 1);
+                load() { reloadsRef(); },
+                async play() { resumesRef(); },
+                addEventListener(event, listener) { if (event === 'loadedmetadata') restoreRef(listener); },
+            },
+            on(name, fn) { (this.e[name] ||= []).push(fn); return this; },
+            emit(name) { for (const listener of [...(this.e[name] || [])]) listener(); },
+            async play() {},
+        };
+        currentIndex = 1;
+        playerSwitchSequence = 7;
+        currentMediaList[1].resource_id = 'owner-b-object';
+        resetPlaybackAccounting(currentMediaList[1]);
+        playbackState.lastTick = performance.now();
+        bindPlayerBusinessEvents();
+        art.emit('video:error');
+    `);
     assert.equal(reloads, 1);
     assert.equal(p.run('art.video.src'), '/b');
     restore();

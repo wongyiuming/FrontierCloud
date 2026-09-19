@@ -131,17 +131,18 @@ class RealIPLogMiddleware:
                     message["headers"].append((b"x-audit-trace-id", audit_trace.encode("ascii")))
                 if scope.get("admin_authenticated"):
                     # Cookie expiry must slide with the authenticated Redis idle TTL.
+                    session_ttl = int(scope.get("admin_session_ttl") or settings.ADMIN_SESSION_TTL)
                     cookie_response = Response()
                     cookie_response.set_cookie(
                         settings.ADMIN_COOKIE_NAME, scope["admin_session_cookie"],
-                        max_age=settings.ADMIN_SESSION_TTL, httponly=True,
+                        max_age=session_ttl, httponly=True,
                         secure=settings.ADMIN_COOKIE_SECURE, samesite=settings.ADMIN_COOKIE_SAMESITE, path="/",
                     )
                     cookies = Request(scope).cookies
                     csrf = cookies.get(settings.ADMIN_CSRF_COOKIE_NAME)
                     if csrf:
                         cookie_response.set_cookie(
-                            settings.ADMIN_CSRF_COOKIE_NAME, csrf, max_age=settings.ADMIN_SESSION_TTL,
+                            settings.ADMIN_CSRF_COOKIE_NAME, csrf, max_age=session_ttl,
                             secure=settings.ADMIN_COOKIE_SECURE, samesite=settings.ADMIN_COOKIE_SAMESITE, path="/",
                         )
                     message["headers"].extend((name, value) for name, value in cookie_response.raw_headers

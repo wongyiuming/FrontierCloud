@@ -185,6 +185,18 @@ class AdminKeyLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     await admin_service.rotate_admin_key("current", "custom-admin-key-1234", "different-key-123456")
 
 
+class AdminKeyRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_temporary_session_cannot_extend_itself_or_replace_the_persistent_key(self):
+        request = _request()
+        request.scope["admin_credential_kind"] = "temporary"
+        with self.assertRaises(HTTPException) as rotate_error:
+            await admin.admin_key_rotate(request, {"mode": "random"}, "temporary-session")
+        with self.assertRaises(HTTPException) as issue_error:
+            await admin.admin_temporary_key(request, {"minutes": 15}, "temporary-session")
+        self.assertEqual(rotate_error.exception.status_code, 403)
+        self.assertEqual(issue_error.exception.status_code, 403)
+
+
 class AdminUploadContractTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _wav_bytes(marker: bytes) -> bytes:

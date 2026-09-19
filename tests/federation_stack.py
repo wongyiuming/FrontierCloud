@@ -91,7 +91,7 @@ class Node:
             service.pop("env_file", None)
             service.pop("build", None)
             service.pop("ports", None)
-            if name in ("web", "secrets-init"):
+            if name in ("web", "secrets-init", "media-init"):
                 service["image"] = "frontiercloud-acceptance-web"
             elif name == "nginx":
                 service["image"] = "frontiercloud-acceptance-nginx"
@@ -516,6 +516,8 @@ def main():
                 wait_for(lambda: a.relationship()["cursor"] >= repaired_version, description="full catalog repair convergence")
                 assert len(a.resources()) == 107
             report["checks"].append("three delay/loss/restart/add/delete/full-repair recovery cycles")
+            wait_for(lambda: len(c.resources()) == 107,
+                     description="independent Master catalog convergence")
             a.compose("stop", "web")
             try:
                 assert c.range(c.resource["url"]).status_code == 206
@@ -572,7 +574,7 @@ def main():
             held_page.wait_for_function("typeof art !== 'undefined' && art && art.video", timeout=60000)
             held_page.evaluate("id => { selectMedia(currentMediaList.findIndex(item => item.resource_id === id)); art.video.preload='metadata'; }", large["resource_id"])
             held_page.wait_for_function("art.video.readyState >= 1 && art.video.duration >= 2399", timeout=60000)
-            held_page.evaluate("art.video.pause()")
+            held_page.evaluate("art.pause()")
             original_route_requests = len(held_routes)
             start = time.monotonic()
             a.mode("Relay")
@@ -593,7 +595,7 @@ def main():
             expired_pair = a.api("/api/v1/media/admin/nodes/pair", {"package": expiring_package}, expected=409)
             assert "过期" in expired_pair["detail"]
             a.mode("Direct")
-            held_page.evaluate("art.video.currentTime=1800; void art.video.play().catch(() => {})")
+            held_page.evaluate("art.currentTime=1800; void art.play().catch(() => {})")
             try:
                 held_page.wait_for_function("art.video.currentTime >= 1805 && !art.video.paused && art.video.readyState >= 2", timeout=60000)
             finally:

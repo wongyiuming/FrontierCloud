@@ -22,6 +22,372 @@ const MAX_PREFERENCE = 7;
 const PRELOAD_MAX_BYTES = 128 * 1024 * 1024;
 const PRELOAD_START_SECONDS = 5;
 
+
+const PLAYER_ICONS = {
+    play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>',
+    pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>',
+    volume: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 4V5L7 9H3zm12.5 3a3.5 3.5 0 0 0-1.5-2.87v5.74A3.5 3.5 0 0 0 15.5 12zm0-6.33v2.06a5.5 5.5 0 0 1 0 8.54v2.06a7.5 7.5 0 0 0 0-12.66z"/></svg>',
+    muted: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 4V5L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg>',
+    webFullscreen: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h7v2H6v5H4zm9 0h7v7h-2V7h-5zM4 14h2v3h5v2H4zm14 0h2v5h-7v-2h5z"/></svg>',
+    fullscreen: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h6v2H7v4H5zm8 0h6v6h-2V7h-4zM5 13h2v4h4v2H5zm12 0h2v6h-6v-2h4z"/></svg>',
+};
+
+function playerNoticeState(element) {
+    let value = '';
+    return Object.defineProperty({}, 'show', {
+        get: () => value,
+        set: next => {
+            value = next ? String(next) : '';
+            element.textContent = value;
+            element.hidden = !value;
+        },
+    });
+}
+
+function playerVisibilityState(element, display = '') {
+    let visible = !element.hidden;
+    return Object.defineProperty({}, 'show', {
+        get: () => visible,
+        set: value => {
+            visible = Boolean(value);
+            element.hidden = !visible;
+            if (visible && display) element.style.display = display;
+            else if (!visible && display) element.style.removeProperty('display');
+        },
+    });
+}
+
+class FrontierMediaPlayer {
+    constructor(options) {
+        this.container = typeof options.container === 'string'
+            ? document.querySelector(options.container) : options.container;
+        if (!this.container) throw new Error('Player container not found');
+        this._events = new Map();
+        this._url = '';
+        this._title = '';
+        this._hideTimer = null;
+        this._draggingProgress = false;
+        this._webFullscreen = false;
+        this._playRequested = false;
+        this.container.replaceChildren();
+        this.container.insertAdjacentHTML('beforeend', `
+            <div class="art-video-player">
+                <video class="art-video" playsinline webkit-playsinline preload="metadata"></video>
+                <div class="art-title" aria-live="polite"></div>
+                <button type="button" class="art-mask art-center-play" aria-label="播放">${PLAYER_ICONS.play}</button>
+                <div class="art-loading" hidden aria-label="加载中"><span></span></div>
+                <div class="art-notice" hidden role="status"></div>
+                <div class="art-bottom">
+                    <div class="art-progress">
+                        <div class="art-control-progress" role="slider" aria-label="播放进度" tabindex="0">
+                            <div class="art-control-progress-inner">
+                                <div class="art-progress-loaded"></div>
+                                <div class="art-progress-played"></div>
+                                <span class="art-progress-indicator"></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="art-controls">
+                        <div class="art-controls-left">
+                            <button type="button" class="art-control art-control-play" aria-label="播放">${PLAYER_ICONS.play}</button>
+                            <span class="art-time"><span class="art-current">0:00</span><span class="art-time-separator"> / </span><span class="art-duration">0:00</span></span>
+                            <div class="art-volume">
+                                <button type="button" class="art-control art-control-volume" aria-label="静音">${PLAYER_ICONS.volume}</button>
+                                <input class="art-volume-range" type="range" min="0" max="1" step="0.01" aria-label="音量">
+                            </div>
+                        </div>
+                        <div class="art-controls-right">
+                            <button type="button" class="art-control art-control-web-fullscreen" aria-label="网页全屏">${PLAYER_ICONS.webFullscreen}</button>
+                            <button type="button" class="art-control art-control-fullscreen" aria-label="全屏">${PLAYER_ICONS.fullscreen}</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `);
+        this.root = this.container.querySelector('.art-video-player');
+        this.video = this.container.querySelector('.art-video');
+        this.titleElement = this.container.querySelector('.art-title');
+        this.maskElement = this.container.querySelector('.art-mask');
+        this.loadingElement = this.container.querySelector('.art-loading');
+        this.noticeElement = this.container.querySelector('.art-notice');
+        this.bottomElement = this.container.querySelector('.art-bottom');
+        this.playButton = this.container.querySelector('.art-control-play');
+        this.currentElement = this.container.querySelector('.art-current');
+        this.durationElement = this.container.querySelector('.art-duration');
+        this.progressControl = this.container.querySelector('.art-control-progress');
+        this.progressLoaded = this.container.querySelector('.art-progress-loaded');
+        this.progressPlayed = this.container.querySelector('.art-progress-played');
+        this.progressIndicator = this.container.querySelector('.art-progress-indicator');
+        this.volumeButton = this.container.querySelector('.art-control-volume');
+        this.volumeRange = this.container.querySelector('.art-volume-range');
+        this.webFullscreenButton = this.container.querySelector('.art-control-web-fullscreen');
+        this.fullscreenButton = this.container.querySelector('.art-control-fullscreen');
+
+        this.notice = playerNoticeState(this.noticeElement);
+        this.loading = playerVisibilityState(this.loadingElement, 'grid');
+        this.mask = playerVisibilityState(this.maskElement, 'grid');
+        this.controls = playerVisibilityState(this.bottomElement);
+
+        this.video.volume = Number.isFinite(Number(options.volume)) ? Number(options.volume) : 0.7;
+        this.volumeRange.value = String(this.video.volume);
+        this._bindNativeEvents();
+        this._bindControls();
+        this.title = options.title || '';
+        this.url = options.url || '';
+        this._syncVolume();
+        this._syncPlaybackUi();
+    }
+
+    _bindNativeEvents() {
+        const forward = {
+            play: 'play', pause: 'pause', timeupdate: 'video:timeupdate',
+            error: 'video:error', ended: 'video:ended', waiting: 'video:waiting',
+            playing: 'video:playing', seeking: 'video:seeking', seeked: 'video:seeked',
+            loadedmetadata: 'video:loadedmetadata', canplay: 'video:canplay',
+            volumechange: 'video:volumechange', progress: 'video:progress',
+        };
+        for (const [nativeName, playerName] of Object.entries(forward)) {
+            this.video.addEventListener(nativeName, event => this._emit(playerName, event));
+        }
+        this.video.addEventListener('loadstart', () => { this.loading.show = true; this.controls.show = true; });
+        this.video.addEventListener('waiting', () => { this.loading.show = true; this.controls.show = true; });
+        this.video.addEventListener('seeking', () => { this.loading.show = true; this.controls.show = true; });
+        this.video.addEventListener('canplay', () => { this.loading.show = false; this._syncTime(); });
+        this.video.addEventListener('playing', () => { this.loading.show = false; this.notice.show = false; this._syncPlaybackUi(); this._scheduleControlsHide(); });
+        this.video.addEventListener('play', () => { this._syncPlaybackUi(); this.controls.show = true; });
+        this.video.addEventListener('pause', () => { this._syncPlaybackUi(); this._showControls(); });
+        this.video.addEventListener('ended', () => { this._playRequested = false; this._syncPlaybackUi(); this._showControls(); });
+        this.video.addEventListener('timeupdate', () => this._syncTime());
+        this.video.addEventListener('durationchange', () => this._syncTime());
+        this.video.addEventListener('progress', () => this._syncBuffered());
+        this.video.addEventListener('volumechange', () => this._syncVolume());
+        this.video.addEventListener('error', () => {
+            this.loading.show = false;
+            this.mask.show = true;
+            this.controls.show = true;
+            this.notice.show = '播放失败，请重试';
+        });
+        document.addEventListener('fullscreenchange', () => this._syncFullscreenState());
+    }
+
+    _bindControls() {
+        const togglePlayback = event => {
+            event?.stopPropagation();
+            if (this.video.paused || this.video.ended) this.play().catch(error => this._showPlayError(error));
+            else this.pause();
+        };
+        this.playButton.addEventListener('click', togglePlayback);
+        this.maskElement.addEventListener('click', togglePlayback);
+        this.video.addEventListener('click', togglePlayback);
+        this.video.addEventListener('dblclick', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.toggleFullscreen();
+        });
+        this.volumeButton.addEventListener('click', event => {
+            event.stopPropagation();
+            this.video.muted = !this.video.muted;
+        });
+        this.volumeRange.addEventListener('input', event => {
+            event.stopPropagation();
+            this.video.volume = Number(this.volumeRange.value);
+            if (this.video.volume > 0) this.video.muted = false;
+        });
+        this.webFullscreenButton.addEventListener('click', event => {
+            event.stopPropagation();
+            this.toggleWebFullscreen();
+        });
+        this.fullscreenButton.addEventListener('click', event => {
+            event.stopPropagation();
+            this.toggleFullscreen();
+        });
+        this.progressControl.addEventListener('pointerdown', event => {
+            if (event.button !== undefined && event.button !== 0) return;
+            this._draggingProgress = true;
+            this.progressControl.setPointerCapture?.(event.pointerId);
+            this._seekFromClientX(event.clientX);
+            event.preventDefault();
+        });
+        this.progressControl.addEventListener('pointermove', event => {
+            if (!this._draggingProgress) return;
+            this._seekFromClientX(event.clientX);
+            event.preventDefault();
+        });
+        const finishProgress = event => {
+            if (!this._draggingProgress) return;
+            this._draggingProgress = false;
+            this.progressControl.releasePointerCapture?.(event.pointerId);
+            event.preventDefault();
+        };
+        this.progressControl.addEventListener('pointerup', finishProgress);
+        this.progressControl.addEventListener('pointercancel', finishProgress);
+        this.progressControl.addEventListener('keydown', event => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+            if (event.key === 'Home') this.currentTime = 0;
+            else if (event.key === 'End') this.currentTime = this.duration;
+            else this.currentTime = Math.min(this.duration, Math.max(0, this.currentTime + (event.key === 'ArrowRight' ? 5 : -5)));
+        });
+        this.root.addEventListener('mousemove', () => this._showControls());
+        this.root.addEventListener('mouseleave', () => this._scheduleControlsHide(500));
+        this.root.addEventListener('touchstart', () => this._showControls(), {passive: true});
+    }
+
+    _emit(name, event) {
+        for (const handler of [...(this._events.get(name) || [])]) handler(event);
+    }
+
+    on(name, handler) {
+        if (!this._events.has(name)) this._events.set(name, new Set());
+        this._events.get(name).add(handler);
+        return this;
+    }
+
+    off(name, handler) {
+        if (!handler) this._events.delete(name);
+        else this._events.get(name)?.delete(handler);
+        return this;
+    }
+
+    _showPlayError(error) {
+        if (error?.name === 'AbortError') return;
+        this.notice.show = error?.name === 'NotAllowedError'
+            ? '浏览器暂停了自动播放，请点击播放继续' : '播放失败，请重试';
+        this.mask.show = true;
+        this.controls.show = true;
+    }
+
+    _syncPlaybackUi() {
+        const playing = !this.video.paused && !this.video.ended;
+        this.playButton.innerHTML = playing ? PLAYER_ICONS.pause : PLAYER_ICONS.play;
+        this.playButton.setAttribute('aria-label', playing ? '暂停' : '播放');
+        this.mask.show = !playing;
+    }
+
+    _syncTime() {
+        const duration = this.duration;
+        const current = Math.min(this.currentTime, duration || this.currentTime);
+        this.currentElement.textContent = formatTime(current);
+        this.durationElement.textContent = formatTime(duration);
+        const ratio = duration > 0 ? Math.min(1, Math.max(0, current / duration)) : 0;
+        const percent = `${ratio * 100}%`;
+        this.progressPlayed.style.width = percent;
+        this.progressIndicator.style.left = percent;
+        this.progressControl.setAttribute('aria-valuemin', '0');
+        this.progressControl.setAttribute('aria-valuemax', String(duration || 0));
+        this.progressControl.setAttribute('aria-valuenow', String(current || 0));
+    }
+
+    _syncBuffered() {
+        const duration = this.duration;
+        if (!duration || !this.video.buffered?.length) {
+            this.progressLoaded.style.width = '0%';
+            return;
+        }
+        const end = this.video.buffered.end(this.video.buffered.length - 1);
+        this.progressLoaded.style.width = `${Math.min(100, Math.max(0, end / duration * 100))}%`;
+    }
+
+    _syncVolume() {
+        this.volumeRange.value = String(this.video.muted ? 0 : this.video.volume);
+        this.volumeButton.innerHTML = this.video.muted || this.video.volume === 0 ? PLAYER_ICONS.muted : PLAYER_ICONS.volume;
+        this.volumeButton.setAttribute('aria-label', this.video.muted ? '取消静音' : '静音');
+    }
+
+    _seekFromClientX(clientX) {
+        const duration = this.duration;
+        if (!duration) return;
+        const rect = this.progressControl.getBoundingClientRect();
+        const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
+        this.currentTime = duration * ratio;
+    }
+
+    _showControls() {
+        clearTimeout(this._hideTimer);
+        this.controls.show = true;
+        this._scheduleControlsHide();
+    }
+
+    _scheduleControlsHide(delay = 2500) {
+        clearTimeout(this._hideTimer);
+        if (this.video.paused || this.video.ended || this.video.readyState < 2) return;
+        this._hideTimer = setTimeout(() => { this.controls.show = false; }, delay);
+    }
+
+    async toggleFullscreen() {
+        try {
+            if (document.fullscreenElement === this.container) await document.exitFullscreen();
+            else if (this.container.requestFullscreen) await this.container.requestFullscreen();
+            else if (this.video.webkitEnterFullscreen) this.video.webkitEnterFullscreen();
+        } catch (_error) {
+            this.notice.show = '当前浏览器无法进入全屏';
+        }
+    }
+
+    toggleWebFullscreen() {
+        this._webFullscreen = !this._webFullscreen;
+        this.container.classList.toggle('art-fullscreen-web', this._webFullscreen);
+        document.body.classList.toggle('player-web-fullscreen', this._webFullscreen);
+    }
+
+    _syncFullscreenState() {
+        this.container.classList.toggle('art-fullscreen', document.fullscreenElement === this.container);
+    }
+
+    play() {
+        this._playRequested = true;
+        const result = this.video.play();
+        return result.catch(error => {
+            if (error?.name === 'NotAllowedError') this._playRequested = false;
+            throw error;
+        });
+    }
+    pause() { this._playRequested = false; this.video.pause(); }
+
+    get url() { return this._url; }
+    set url(value) {
+        const url = String(value || '');
+        if (url === this._url && this.video.getAttribute('src') === url) return;
+        this._url = url;
+        this.video.src = url;
+        this.video.load();
+    }
+
+    get currentTime() { return Number(this.video.currentTime) || 0; }
+    set currentTime(value) {
+        const next = Number(value);
+        if (Number.isFinite(next)) this.video.currentTime = Math.max(0, next);
+    }
+    get duration() { return Number.isFinite(this.video.duration) ? this.video.duration : 0; }
+    get playing() { return !this.video.paused && !this.video.ended; }
+    get playRequested() { return this._playRequested; }
+    get title() { return this._title; }
+    set title(value) {
+        this._title = String(value || '');
+        if (this.titleElement) this.titleElement.textContent = this._title;
+    }
+}
+
+class FrontierAudioPlayer extends FrontierMediaPlayer {
+    constructor(options) {
+        super(options);
+        this.root.classList.add('frontier-audio-player');
+        this.controls.show = true;
+    }
+
+    _scheduleControlsHide() {
+        clearTimeout(this._hideTimer);
+        this.controls.show = true;
+    }
+}
+
+class FrontierVideoPlayer extends FrontierMediaPlayer {
+    constructor(options) {
+        super(options);
+        this.root.classList.add('frontier-video-player');
+    }
+}
+
 function nextMediaIndex() {
     return (currentIndex + 1) % currentMediaList.length;
 }
@@ -87,8 +453,8 @@ function updateMediaSession(media) {
     if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
             title: media.title || '未知曲目',
-            artist: media.artist || '前沿视界',
-            album: typeof PAGE_TITLE !== 'undefined' ? PAGE_TITLE : '前沿视界',
+            artist: media.artist || '前沿娱乐',
+            album: typeof PAGE_TITLE !== 'undefined' ? PAGE_TITLE : '前沿娱乐',
             artwork: [
                 { src: media.cover, sizes: '512x512', type: 'image/png' }
             ]
@@ -387,6 +753,61 @@ async function loadInlineLyrics(media) {
     }
 }
 
+function bindPlayerBusinessEvents() {
+    art.on('play', () => {
+        remoteRetrySequence = -1;
+        if (playbackState) playbackState.lastTick = performance.now();
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+        startLyricClock();
+    });
+
+    art.on('pause', () => {
+        accountPlaybackTime();
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+        stopLyricClock();
+    });
+
+    art.on('video:timeupdate', () => {
+        checkAndPreloadNext(art.currentTime);
+        if (typeof PLAYER_KIND !== 'undefined' && PLAYER_KIND === 'audio') {
+            updateSynchronizedLyrics(art.currentTime);
+            startLyricClock();
+        }
+        reportValidPlayback();
+    });
+
+    art.on('video:error', async () => {
+        const media = currentMediaList[currentIndex];
+        const sequence = playerSwitchSequence;
+        const video = art.video;
+        if (!media?.resource_id || activeObjectUrl || !video) return;
+        if (remoteRetrySequence === sequence) {
+            art.loading.show = false;
+            art.mask.show = true;
+            art.controls.show = true;
+            art.notice.show = '媒体暂不可用，请稍后重试';
+            return;
+        }
+        remoteRetrySequence = sequence;
+        const position = video.currentTime;
+        const resume = art.playRequested;
+        video.src = media.url;
+        video.load();
+        const restore = () => {
+            if (playerSwitchSequence !== sequence) return;
+            video.currentTime = Math.min(position, Math.max(0, video.duration - 0.1));
+            if (resume) video.play().catch(() => { art.notice.show = '请点击播放继续'; });
+        };
+        video.addEventListener('loadedmetadata', restore, {once: true});
+        art.notice.show = '正在重新连接媒体';
+    });
+
+    art.on('video:ended', () => {
+        stopLyricClock();
+        playNext();
+    });
+}
+
 function initPlayer(media, index) {
     accountPlaybackTime();
     currentIndex = index;
@@ -415,8 +836,6 @@ function initPlayer(media, index) {
     }
 
     if (art) {
-        // Assign directly: switchUrl waits for canplay before our play() call,
-        // and its same-URL path never settles in Artplayer 5.1.1.
         if (art.url !== playbackUrl) art.url = playbackUrl;
         else art.currentTime = 0;
         if (previousObjectUrl) URL.revokeObjectURL(previousObjectUrl);
@@ -433,83 +852,22 @@ function initPlayer(media, index) {
         return;
     }
 
-    art = new Artplayer({
+    const PlayerClass = typeof PLAYER_KIND !== 'undefined' && PLAYER_KIND === 'audio'
+        ? FrontierAudioPlayer
+        : FrontierVideoPlayer;
+    art = new PlayerClass({
         container: '#artplayer',
         url: playbackUrl,
         title: media.title,
         volume: 0.7,
-        autoplay: true,
-        autoSize: true,
-        fullscreen: true,
-        fullscreenWeb: true,
     });
-
-    // Artplayer 5.1.1 registers a delayed URL reset in its error listener.
-    // Keep that listener for local media; owner routes use one recovery path.
-    const localErrorListeners = art.e['video:error'].slice();
-    art.off('video:error');
-    art.on('video:error', error => {
-        if (currentMediaList[currentIndex]?.resource_id && !activeObjectUrl) return;
-        for (const listener of localErrorListeners) listener.fn.call(listener.ctx, error);
-    });
-
-    art.on('play', () => {
-        remoteRetrySequence = -1;
-        if (playbackState) playbackState.lastTick = performance.now();
-        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-        startLyricClock();
-    });
-
-    art.on('pause', () => {
-        accountPlaybackTime();
-        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-        stopLyricClock();
-    });
-
-    art.on('video:timeupdate', () => {
-        checkAndPreloadNext(art.currentTime);
-        if (typeof PLAYER_KIND !== 'undefined' && PLAYER_KIND === 'audio') {
-            updateSynchronizedLyrics(art.currentTime);
-            // Initial autoplay can begin before Artplayer delivers our play listener.
-            // The first native time update therefore also hands off to the frame clock.
-            startLyricClock();
-        }
-        reportValidPlayback();
-    });
-
-    art.on('video:error', async () => {
-        const media = currentMediaList[currentIndex];
-        const sequence = playerSwitchSequence;
-        const video = art.video;
-        if (!media?.resource_id || activeObjectUrl || !video) return;
-        if (remoteRetrySequence === sequence) {
-            art.loading.show = false;
-            art.mask.show = true;
-            art.controls.show = true;
-            art.notice.show = '媒体暂不可用，请稍后重试';
-            return;
-        }
-        remoteRetrySequence = sequence;
-        const position = video.currentTime;
-        const resume = playbackState?.lastTick != null && !video.paused;
-        // Re-enter the owner's business route once to obtain a fresh capability.
-        video.src = media.url;
-        video.load();
-        const restore = () => {
-            if (playerSwitchSequence !== sequence) return;
-            video.currentTime = Math.min(position, Math.max(0, video.duration - 0.1));
-            if (resume) video.play().catch(() => { art.notice.show = '请点击播放继续'; });
-        };
-        video.addEventListener('loadedmetadata', restore, {once: true});
-        art.notice.show = '正在重新连接媒体';
-    });
-
-    art.on('video:ended', () => {
-        stopLyricClock();
-        playNext();
-    });
-
+    bindPlayerBusinessEvents();
     updateMediaSession(media);
+    Promise.resolve(art.play()).catch(error => {
+        if (sequence !== playerSwitchSequence || error.name === 'AbortError') return;
+        art.notice.show = error.name === 'NotAllowedError'
+            ? '浏览器暂停了自动播放，请点击播放继续' : '播放失败，请重试';
+    });
 }
 
 function formatTime(seconds) {

@@ -11,6 +11,7 @@ docker compose up -d --build --wait
 ```
 
 Open `http://localhost`. Put audio in `data/media/music`, video in `data/media/vido`, and UTF-8 LRC lyrics in `data/media/lyrics`, or upload through Admin WebUI.
+The startup initializer creates these directories and gives the unprivileged Web process access to the mounted `data` tree.
 
 Initialization generates an Admin Key, two MySQL passwords, and a metrics Bearer token in the persistent `runtime_secrets` volume. Startup logs list newly created secret names without printing values. Read the current key or token with:
 
@@ -20,7 +21,7 @@ docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token'
 # Database credentials use mysql_password and mysql_root_password in the same directory.
 ```
 
-Keep secrets private. Restarts do not rotate them. Enter the Admin Key using the home page's privilege-elevation control; Admin WebUI can replace it with a random or confirmed custom key. Replacement invalidates other admin sessions. Sessions default to 180 minutes of inactivity; the key itself does not expire.
+Keep secrets private. Restarts do not rotate them. Enter the Admin Key using the home page's privilege-elevation control; Admin WebUI can replace it with a random or confirmed custom key, or issue a single-use temporary key with a 15, 30, 60, or 120 minute sliding session. Replacement invalidates other admin sessions and unused temporary keys. Persistent sessions default to 180 minutes of inactivity; the long-term key itself does not expire.
 
 ## HTTPS and configuration
 
@@ -32,6 +33,7 @@ SERVER_NAME=media.example.com
 ```
 
 Provide a matching certificate at `certs/fullchain.pem` and private key at `certs/privkey.pem`. HTTPS requires `SERVER_NAME`; HTTP does not. The project selects transport behavior from `TLS_ENABLED`, not deployment names.
+Public ports bind IPv4 by default. Set `PUBLIC_BIND_ADDRESS=::` in `.env` only when the host is ready to publish IPv6.
 
 [.env.example](.env.example) lists every supported setting and its purpose. Optional settings are commented and have technical defaults. Secrets are generated internally, not supplied through `.env`; remove unsupported legacy entries before upgrading. Alternative certificate paths and published ports are optional settings.
 
@@ -43,8 +45,8 @@ Provide a matching certificate at `certs/fullchain.pem` and private key at `cert
 - Playback scores and lyric links bind to stable media object IDs. Next-track preloading uses the player's queue; offline switching requires a completed preload. Speculative downloads are capped at 128 MiB per track.
 - Nodes default to Standalone. With working, certificate-verified HTTPS, Admin can fix a node's role as Master or Slave and import a Slave's five-minute, one-time pairing package. Each relationship is independent; Slave retains its own public pages and Admin. Master merges directories, preserves distinct objects at identical paths, and selects Relay (Nginx) or Direct (short resource token) per relationship. Public pages do not expose topology.
 - Remote media identity combines its owning node and original object ID. Media and existing lyrics/attachments resolve on the same owner; cross-node attachment links are not supported. Master playback records take precedence; absent Master records use the owner's catalog data. Master cannot mutate Slave files. Offline relationships retain catalogs and recover automatically; Admin can revoke one relationship or explicitly reinitialize a node without deleting media.
-- IP views aggregate each address once and sort numerically. The first automatic ban lasts 24 hours; the second is permanent. Admin can release, permanently ban, or allowlist an IP. Nginx applies known bans before proxying, with a short propagation delay.
-- WebRTC observation is mandatory. STUN uses `SERVER_NAME` and `WEBRTC_STUN_PORT`; probing starts on connection and repeats every 30 seconds. Admin displays aggregated IP relationships; MySQL retains event history.
+- IP views aggregate each address once and sort numerically or by its last attack. The summary separates observed, active, historical, permanent, and allowlisted addresses while MySQL retains the full event timeline. The first automatic ban lasts 24 hours; the second is permanent. Admin can release, permanently ban, or allowlist an IP. Nginx applies known bans before proxying, with a short propagation delay.
+- WebRTC observation is mandatory. STUN uses `SERVER_NAME` and `WEBRTC_STUN_PORT`; probing starts on connection and repeats every 30 seconds. Admin keeps the per-pair view and adds both public-IP-first and WebRTC-IP-first one-to-many views; MySQL retains event history.
 
 ## Data and operations
 

@@ -259,7 +259,7 @@ def _scan_media_files_by_category_sync(category_subpath, valid_exts, media_type,
         result.append({
             "media_path": rel,
             "title": file_path.stem,
-            "artist": "前沿视界",
+            "artist": "前沿娱乐",
             "type": media_type,
             "url": f"/api/v1/media/stream?file_path={urllib.parse.quote(rel)}",
             "cover": "/favicon.ico",

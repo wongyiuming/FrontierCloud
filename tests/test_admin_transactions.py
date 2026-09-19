@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
+from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -48,8 +49,11 @@ class _Redis:
         self.pipelines = []
         self.sessions = {}
 
-    async def eval(self, script, number_of_keys, key, window, increment):
-        self.eval_calls.append((script, number_of_keys, key, window, increment))
+    async def eval(self, script, number_of_keys, *arguments):
+        self.eval_calls.append((script, number_of_keys, *arguments))
+        if script == admin_service._REDEEM_TEMPORARY_KEY_SCRIPT:
+            return self.values.pop(arguments[0], None)
+        key, window, increment = arguments
         count = int(self.values.get(key, 0))
         if int(increment) == 1:
             count += 1
@@ -57,6 +61,14 @@ class _Redis:
         if count > 0 and self.ttls.get(key, -1) < 0:
             self.ttls[key] = int(window)
         return count
+
+    async def set(self, key, value, *, ex=None, nx=False):
+        if nx and key in self.values:
+            return False
+        self.values[key] = value
+        if ex is not None:
+            self.ttls[key] = int(ex)
+        return True
 
     async def delete(self, key):
         self.values.pop(key, None)
@@ -124,6 +136,77 @@ class AdminRedisTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(fake.pipelines[0].transaction)
         names = [name for name, _args, _kwargs in fake.pipelines[0].commands]
         self.assertEqual(names, ["hset", "expire"])
+
+    async def test_temporary_key_is_consumed_once_and_creates_its_own_sliding_window(self):
+        fake = _Redis()
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "admin_key"
+            key_file.write_text("stable-admin-key-123456789\n", encoding="utf-8")
+            with (
+                patch.object(admin_service, "ADMIN_KEY_FILE", key_file),
+                patch.object(admin_service, "redis_client", fake),
+                patch.object(admin_service.secrets, "token_urlsafe", return_value="one-time-key"),
+            ):
+                key = await admin_service.issue_temporary_admin_key("issuer", 15)
+                credential = await admin_service.redeem_admin_credential(key, _request())
+                response = Response()
+                with patch.object(
+                    admin_service.secrets,
+                    "token_urlsafe",
+                    side_effect=["temporary-session", "temporary-csrf"],
+                ):
+                    await admin_service.create_session(
+                        credential.key_hash,
+                        _request(),
+                        response,
+                        idle_ttl=credential.idle_ttl,
+                        credential_kind=credential.kind,
+                    )
+                with self.assertRaisesRegex(HTTPException, "Admin Key 无效"):
+                    await admin_service.redeem_admin_credential(key, _request())
+
+        self.assertEqual(credential.kind, "temporary")
+        self.assertEqual(credential.idle_ttl, 15 * 60)
+        session_pipeline = fake.pipelines[-1]
+        expire = next(command for command in session_pipeline.commands if command[0] == "expire")
+        self.assertEqual(expire[1][1], 15 * 60)
+        self.assertTrue(all("Max-Age=900" in value for value in response.headers.getlist("set-cookie")))
+
+    async def test_temporary_key_duration_is_limited_to_supported_choices(self):
+        with self.assertRaisesRegex(ValueError, "15、30、60 或 120"):
+            await admin_service.issue_temporary_admin_key("issuer", 20)
+
+    async def test_temporary_session_refreshes_the_selected_sliding_window(self):
+        session = "temporary-session"
+        key = "stable-admin-key-123456789"
+        redis = AsyncMock()
+        redis.hgetall.return_value = {
+            "key_hash": hashlib.sha256(key.encode()).hexdigest(),
+            "idle_ttl": "1800",
+            "credential_kind": "temporary",
+        }
+        redis.expire.return_value = True
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/media/admin/status",
+            "headers": [(b"cookie", f"{admin_service.settings.ADMIN_COOKIE_NAME}={session}".encode())],
+            "client": ("203.0.113.8", 12345),
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "admin_key"
+            key_file.write_text(key + "\n", encoding="utf-8")
+            with (
+                patch.object(admin_service, "ADMIN_KEY_FILE", key_file),
+                patch.object(admin_service, "redis_client", redis),
+            ):
+                returned_hash = await admin_service.require_admin(request)
+
+        expected_hash = hashlib.sha256(session.encode()).hexdigest()
+        self.assertEqual(returned_hash, expected_hash)
+        redis.expire.assert_awaited_once_with(admin_service.SESSION_PREFIX + expected_hash, 1800)
+        self.assertEqual(request.scope["admin_session_ttl"], 1800)
+        self.assertEqual(request.scope["admin_credential_kind"], "temporary")
 
     async def test_rotation_returns_published_key_when_redis_reconciliation_fails(self):
         fake = _Redis()

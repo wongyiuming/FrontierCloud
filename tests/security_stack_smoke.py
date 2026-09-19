@@ -52,7 +52,7 @@ def main():
         web(f"""
 for ip in {ip_values}:
     async with engine.connect() as conn:
-        for table in ['ip_auto_ban_events', 'ip_permanent_whitelist', 'ip_security_audit_log', 'ip_security_locks']:
+        for table in ['ip_auto_ban_events', 'ip_permanent_whitelist', 'ip_security_audit_log', 'ip_security_summary', 'ip_security_locks']:
             assert not await conn.scalar(text('SELECT COUNT(*) FROM ' + table + ' WHERE ip_address=:ip'), {{'ip':ip}}), 'Fixture collision; refusing changes'
 print('fixtures-unused')
 """)
@@ -148,7 +148,7 @@ await s._run_state_transaction(shorten)
                 web(f"""
 async def cleanup(conn):
     for ip in {ip_values}:
-        for table in ['ip_security_audit_log','ip_auto_ban_events','ip_permanent_whitelist','ip_security_locks']:
+        for table in ['ip_security_audit_log','ip_security_summary','ip_auto_ban_events','ip_permanent_whitelist','ip_security_locks']:
             await conn.execute(text('DELETE FROM '+table+' WHERE ip_address=:ip'), {{'ip':ip}})
 await s._run_state_transaction(cleanup)
 for ip in {ip_values}:

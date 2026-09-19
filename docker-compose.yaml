@@ -13,6 +13,19 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
 
+  media-init:
+    build: .
+    user: "0:0"
+    command: ["python", "-m", "app.services.media_storage_init"]
+    restart: "no"
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    volumes:
+      - ./data:/app/data:z
+    logging: *service_logging
+
   web:
     build: .
     container_name: office_automation_web
@@ -29,6 +42,7 @@ services:
     expose: ["8000"]
     depends_on:
       secrets-init: {condition: service_completed_successfully}
+      media-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
       mysql: {condition: service_healthy}
     volumes:
@@ -87,11 +101,18 @@ services:
       TLS_ENABLED: ${TLS_ENABLED:-false}
       SERVER_NAME: ${SERVER_NAME:-localhost}
       INSTANCE_NAME: ${INSTANCE_NAME:-frontiercloud}
+      PUBLIC_BIND_ADDRESS: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}
       UPLOAD_INACTIVITY_TIMEOUT: ${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}
       NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
     ports:
-      - "${HTTP_PORT:-80}:80"
-      - "${HTTPS_PORT:-443}:443"
+      - target: 80
+        published: "${HTTP_PORT:-80}"
+        protocol: tcp
+        host_ip: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}
+      - target: 443
+        published: "${HTTPS_PORT:-443}"
+        protocol: tcp
+        host_ip: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}
     volumes:
       - ./data:/app/data:ro,z
       - ${SSL_CERT_PATH:-./certs/fullchain.pem}:/etc/nginx/certs/fullchain.pem:ro
@@ -107,8 +128,14 @@ services:
     restart: always
     command: [-n, --stun-only, --no-auth, --no-cli, --no-tls, --no-dtls, --fingerprint, --no-multicast-peers, --log-file=stdout, --simple-log, --listening-port=3478]
     ports:
-      - "${WEBRTC_STUN_PORT:-3478}:3478/tcp"
-      - "${WEBRTC_STUN_PORT:-3478}:3478/udp"
+      - target: 3478
+        published: "${WEBRTC_STUN_PORT:-3478}"
+        protocol: tcp
+        host_ip: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}
+      - target: 3478
+        published: "${WEBRTC_STUN_PORT:-3478}"
+        protocol: udp
+        host_ip: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}
     read_only: true
     tmpfs:
       - /tmp:size=4m,mode=1777

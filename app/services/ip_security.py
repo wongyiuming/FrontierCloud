@@ -246,14 +246,23 @@ async def _lock_ip_state(conn: AsyncConnection, ip: str) -> None:
 async def _audit_ip(conn: AsyncConnection, ip: str, action: str,
                     detail: dict[str, Any], session: str | None = None) -> None:
     """Append investigation evidence in the same transaction as the transition."""
+    now = _utcnow()
     await conn.execute(text("""
         INSERT INTO ip_security_audit_log
         (ip_address, action, detail, session_id_hash, created_at, request_id, trace_id)
         VALUES (:ip, :action, :detail, :session, :now, :request_id, :trace_id)
     """), {"ip": ip, "action": action,
            "detail": json.dumps(detail, ensure_ascii=False),
-           "session": session, "now": _utcnow(),
+           "session": session, "now": now,
            "request_id": request_id_context.get() or None, "trace_id": trace_id_context.get() or None})
+    if action == "invalid_api":
+        await conn.execute(text("""
+            INSERT INTO ip_security_summary (ip_address, attack_count, last_attack_at)
+            VALUES (:ip, 1, :now)
+            ON DUPLICATE KEY UPDATE
+                attack_count=attack_count + 1,
+                last_attack_at=GREATEST(COALESCE(last_attack_at, VALUES(last_attack_at)), VALUES(last_attack_at))
+        """), {"ip": ip, "now": now})
 
 
 async def _project_ip(ip: str) -> None:
@@ -698,11 +707,15 @@ async def list_security_summary(
     page: int = 1,
     page_size: int = 100,
     ip_order: str = "asc",
+    sort_order: str | None = None,
 ) -> dict[str, Any]:
     """Return one current object per IP; never paginate or filter event history."""
     now = _utcnow()
     if ip_order not in {"asc", "desc"}:
         raise ValueError("Invalid IP order")
+    sort_order = sort_order or f"ip_{ip_order}"
+    if sort_order not in {"ip_asc", "ip_desc", "last_attack_desc", "last_attack_asc"}:
+        raise ValueError("Invalid security summary order")
     page = max(1, page)
     page_size = max(1, min(200, page_size))
     conditions: list[str] = []
@@ -710,20 +723,22 @@ async def list_security_summary(
         "now": now,
         "limit": page_size,
         "offset": (page - 1) * page_size,
+        "attack_cutoff": now - timedelta(seconds=settings.SECURITY_INVALID_API_WINDOW),
     }
     if ip_filter:
         conditions.append("ip_address = :ip")
         params["ip"] = normalize_ip(ip_filter)
     if status_filter:
-        allowed_statuses = {"active", "expired", "unbanned", "whitelisted", "observed"}
+        allowed_statuses = {"active", "observed", "history", "permanent", "whitelisted"}
         if status_filter not in allowed_statuses:
             raise ValueError("Invalid ban status")
         conditions.append("status = :status")
         params["status"] = status_filter
-    where_sql = " WHERE " + " AND ".join(conditions) if conditions else ""
+    conditions.insert(0, "status IS NOT NULL")
+    where_sql = " WHERE " + " AND ".join(conditions)
 
-    # The active record wins over history. Time is used only to derive current
-    # state, not as a web query dimension. Whitelist-only IPs also have an object.
+    # One object represents one IP. Current enforcement wins over recent
+    # observation, which wins over historical bans. MySQL keeps the full events.
     objects_sql = """
         WITH ranked_bans AS (
             SELECT b.*, COUNT(*) OVER (PARTITION BY ip_address) AS ban_count,
@@ -739,26 +754,38 @@ async def list_security_summary(
         ), known_ips AS (
             SELECT ip_address FROM ranked_bans
             UNION SELECT ip_address FROM current_whitelist
-            UNION SELECT ip_address FROM ip_security_audit_log
+            UNION SELECT ip_address FROM ip_security_summary
         ), objects AS (
             SELECT k.ip_address, COALESCE(b.ban_count, 0) AS ban_count,
-                   b.ban_kind, b.reason, w.note,
+                   COALESCE(a.attack_count, 0) AS attack_count,
+                   a.last_attack_at, b.ban_kind, b.reason, w.note,
                    CASE
                        WHEN w.ip_address IS NOT NULL THEN 'whitelisted'
+                       WHEN b.status='active' AND b.expires_at > :now
+                            AND b.ban_kind='permanent' THEN 'permanent'
                        WHEN b.status='active' AND b.expires_at > :now THEN 'active'
-                       WHEN b.status='active' THEN 'expired'
-                       WHEN b.status IN ('whitelisted', 'replaced') THEN 'unbanned'
-                       ELSE COALESCE(b.status, 'observed')
+                       WHEN a.last_attack_at > :attack_cutoff THEN 'observed'
+                       WHEN COALESCE(b.ban_count, 0) > 0 THEN 'history'
+                       ELSE NULL
                    END AS status
             FROM known_ips k
             LEFT JOIN ranked_bans b ON b.ip_address=k.ip_address AND b.position=1
             LEFT JOIN current_whitelist w ON w.ip_address=k.ip_address
+            LEFT JOIN ip_security_summary a ON a.ip_address=k.ip_address
         )
     """
     # INET6_ATON returns network-order bytes, not text: 13.11 > 10.199.
     # IPv4 sorts before IPv6 ascending, after IPv6 descending.
-    order_sql = (f" ORDER BY LENGTH(INET6_ATON(ip_address)) {ip_order},"
-                 f" INET6_ATON(ip_address) {ip_order}, ip_address {ip_order}")
+    if sort_order.startswith("ip_"):
+        direction = "asc" if sort_order == "ip_asc" else "desc"
+        order_sql = (f" ORDER BY LENGTH(INET6_ATON(ip_address)) {direction},"
+                     f" INET6_ATON(ip_address) {direction}, ip_address {direction}")
+    else:
+        direction = "DESC" if sort_order == "last_attack_desc" else "ASC"
+        order_sql = (
+            f" ORDER BY (last_attack_at IS NULL) ASC, last_attack_at {direction},"
+            " LENGTH(INET6_ATON(ip_address)) ASC, INET6_ATON(ip_address) ASC, ip_address ASC"
+        )
     async with engine.connect() as conn:
         count_result = await conn.execute(
             text(objects_sql + "SELECT COUNT(*) FROM objects" + where_sql),
@@ -766,7 +793,7 @@ async def list_security_summary(
         )
         total_ips = int(count_result.scalar_one())
         stats = (await conn.execute(text(objects_sql + """
-            SELECT COALESCE(SUM(status='active'), 0) AS active_count,
+            SELECT COALESCE(SUM(status IN ('active', 'permanent')), 0) AS active_count,
                    COALESCE(SUM(status='whitelisted'), 0) AS whitelist_count
             FROM objects
         """), params)).mappings().one()
@@ -779,14 +806,25 @@ async def list_security_summary(
     whitelist = []
     for row in rows:
         status = str(row["status"])
+        last_attack_at = row.get("last_attack_at")
+        if isinstance(last_attack_at, datetime):
+            last_attack_at = last_attack_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
         if status == "whitelisted":
-            whitelist.append({"ip": str(row["ip_address"]), "note": row["note"] or ""})
+            whitelist.append({
+                "ip": str(row["ip_address"]),
+                "note": row["note"] or "",
+                "attack_count": int(row.get("attack_count") or 0),
+                "last_attack_at": last_attack_at,
+            })
             continue
         events.append({
             "ip": str(row["ip_address"]),
             "ban_count": int(row["ban_count"]),
+            "attack_count": int(row.get("attack_count") or 0),
+            "last_attack_at": last_attack_at,
             "status": status,
-            "active": status == "active",
+            "active": status in {"active", "permanent"},
+            "permanent": status == "permanent",
             "whitelisted": False,
             "ban_kind": row["ban_kind"],
             "reason": row["reason"],
@@ -803,6 +841,7 @@ async def list_security_summary(
             "total": total_ips,
             "pages": max(1, (total_ips + page_size - 1) // page_size),
             "ip_order": ip_order,
+            "sort_order": sort_order,
         },
         "threshold": settings.SECURITY_INVALID_API_LIMIT,
         "window_seconds": settings.SECURITY_INVALID_API_WINDOW,

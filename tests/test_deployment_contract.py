@@ -71,6 +71,19 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("UPLOAD_INACTIVITY_TIMEOUT: ${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}", compose)
         self.assertIn("client_body_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
 
+    def test_public_bind_defaults_to_ipv4_and_requires_an_explicit_ipv6_address(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        selector = (ROOT / "nginx/15-select-tls.sh").read_text(encoding="utf-8")
+        self.assertGreaterEqual(compose.count("host_ip: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}"), 4)
+        self.assertIn("PUBLIC_BIND_ADDRESS: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}", compose)
+        self.assertIn('public_bind_address=${PUBLIC_BIND_ADDRESS:-0.0.0.0}', selector)
+        self.assertIn('::) ipv6_enabled=true', selector)
+        self.assertIn("# IPV6 /\\1/", selector)
+        for path in (ROOT / "nginx/transport").rglob("*.conf"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if "listen [::]" in line:
+                    self.assertTrue(line.lstrip().startswith("# IPV6 "), path)
+
     def test_nginx_selects_transport_without_deployment_tiers(self):
         selector = (ROOT / "nginx/15-select-tls.sh").read_text(encoding="utf-8")
         self.assertIn('${TLS_ENABLED:-false}', selector)
@@ -101,13 +114,37 @@ class DeploymentContractTests(unittest.TestCase):
         nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
         headers = (ROOT / "nginx/security-headers.conf").read_text(encoding="utf-8")
         dockerfile = (ROOT / "nginx/Dockerfile").read_text(encoding="utf-8")
-        self.assertEqual(nginx.count("client_max_body_size 820M"), 1)
+        self.assertEqual(nginx.count("client_max_body_size 8705M"), 1)
         self.assertIn("location /api/v1/media/admin/upload/", nginx)
         self.assertIn("client_max_body_size 64k", nginx)
         self.assertIn("X-Content-Type-Options", headers)
         self.assertIn("X-Frame-Options", headers)
         self.assertIn("Strict-Transport-Security", headers)
         self.assertIn("COPY nginx/security-headers.conf", dockerfile)
+
+    def test_media_storage_is_initialized_before_the_unprivileged_web_service(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        initializer = (ROOT / "app/services/media_storage_init.py").read_text(encoding="utf-8")
+        federation_harness = (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8")
+        self.assertIn("media-init:", compose)
+        self.assertIn('command: ["python", "-m", "app.services.media_storage_init"]', compose)
+        self.assertIn("media-init: {condition: service_completed_successfully}", compose)
+        for directory in ("media/music", "media/vido", "media/lyrics"):
+            self.assertIn(f'"{directory}"', initializer)
+        self.assertIn("APP_UID = 10001", initializer)
+        self.assertIn("followlinks=False", initializer)
+        self.assertIn('(\"web\", \"secrets-init\", \"media-init\")', federation_harness)
+
+    def test_chinese_product_name_is_consistent(self):
+        paths = [ROOT / "app", ROOT / "static"]
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for root in paths
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix in {".py", ".js", ".html", ".css"}
+        )
+        self.assertNotIn("前沿" + "视界", source)
+        self.assertIn("前沿娱乐", source)
 
     def test_nginx_emits_structured_logs_without_a_log_directory(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
@@ -138,14 +175,6 @@ class DeploymentContractTests(unittest.TestCase):
     def test_nginx_uses_a_current_patched_stable_image(self):
         dockerfile = (ROOT / "nginx/Dockerfile").read_text(encoding="utf-8")
         self.assertTrue(dockerfile.startswith("FROM nginx:1.30.4-alpine\n"))
-
-    def test_external_player_script_has_verified_integrity_and_cors(self):
-        expected = "sha384-u9JL6zwTLTwPvEjiiGwzo+cVKf/PW1DHkEFwhCt4RWdD2Pr0fFf2/jZTwLCSv/5K"
-        for filename in ("audio-player.html", "video-player.html"):
-            template = (ROOT / "static/media" / filename).read_text(encoding="utf-8")
-            script = next(tag for tag in re.findall(r"<script\b[^>]*>", template) if "cdnjs.cloudflare.com" in tag)
-            self.assertIn(f'integrity="{expected}"', script)
-            self.assertIn('crossorigin="anonymous"', script)
 
     def test_duplicate_uvicorn_access_log_is_disabled(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
@@ -235,6 +264,15 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("python3 scripts/validate_env_contract.py", workflow)
         self.assertIn("python3 scripts/validate_env_contract.py", deploy_script)
         self.assertIn("runs-on: [self-hosted, Linux, X64, rn]", deploy)
+        self.assertIn("mapfile -d '' tracked_paths", deploy)
+        self.assertIn('git diff --quiet "$GITHUB_SHA" -- "$path"', deploy)
+        self.assertIn('git restore --source=HEAD --staged --worktree -- "${tracked_paths[@]}"', deploy)
+        self.assertIn('[ "${#tracked_paths[@]}" -eq 1 ] && [ "${tracked_paths[0]}" = nginx/nginx.conf ]', deploy)
+        self.assertIn('git stash push -m "rn-preserved-nginx-before-$GITHUB_SHA" -- nginx/nginx.conf', deploy)
+        self.assertIn('test -z "$(git status --porcelain --untracked-files=no)"', deploy)
+        self.assertLess(deploy.index("git fetch --no-tags origin dev"), deploy.index("mapfile -d '' tracked_paths"))
+        self.assertIn("git switch dev", deploy)
+        self.assertLess(deploy.index("git switch dev"), deploy.index('git merge --ff-only "$GITHUB_SHA"'))
         self.assertIn("group: rn", deploy)
         self.assertIn("name: rn", deploy)
         self.assertNotRegex(deploy, r"(?i)\b(?:production|preproduction|staging|development)\b")

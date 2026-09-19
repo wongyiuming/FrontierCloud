@@ -22,6 +22,14 @@ class SecurityConfigurationTests(unittest.TestCase):
         self.assertFalse(settings.TLS_ENABLED)
         self.assertEqual(settings.SERVER_NAME, "localhost")
         self.assertEqual(settings.WEBRTC_REPORT_COOLDOWN, 30)
+        self.assertEqual(settings.PUBLIC_BIND_ADDRESS, "0.0.0.0")
+        self.assertEqual(settings.ADMIN_MAX_UPLOAD_FILE_SIZE, 9_126_805_504)
+
+    def test_public_bind_address_accepts_only_ipv4_or_explicit_ipv6_wildcards(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(Settings(_env_file=None, PUBLIC_BIND_ADDRESS="::").PUBLIC_BIND_ADDRESS, "::")
+            with self.assertRaises(ValidationError):
+                Settings(_env_file=None, PUBLIC_BIND_ADDRESS="localhost")
 
     def test_https_requires_public_server_name(self):
         with patch.dict(os.environ, {}, clear=True):
