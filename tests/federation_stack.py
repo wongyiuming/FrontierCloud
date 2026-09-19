@@ -91,7 +91,7 @@ class Node:
             service.pop("env_file", None)
             service.pop("build", None)
             service.pop("ports", None)
-            if name in ("web", "secrets-init"):
+            if name in ("web", "secrets-init", "media-init"):
                 service["image"] = "frontiercloud-acceptance-web"
             elif name == "nginx":
                 service["image"] = "frontiercloud-acceptance-nginx"

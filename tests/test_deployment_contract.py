@@ -125,6 +125,7 @@ class DeploymentContractTests(unittest.TestCase):
     def test_media_storage_is_initialized_before_the_unprivileged_web_service(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         initializer = (ROOT / "app/services/media_storage_init.py").read_text(encoding="utf-8")
+        federation_harness = (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8")
         self.assertIn("media-init:", compose)
         self.assertIn('command: ["python", "-m", "app.services.media_storage_init"]', compose)
         self.assertIn("media-init: {condition: service_completed_successfully}", compose)
@@ -132,6 +133,7 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertIn(f'"{directory}"', initializer)
         self.assertIn("APP_UID = 10001", initializer)
         self.assertIn("followlinks=False", initializer)
+        self.assertIn('(\"web\", \"secrets-init\", \"media-init\")', federation_harness)
 
     def test_chinese_product_name_is_consistent(self):
         paths = [ROOT / "app", ROOT / "static"]
