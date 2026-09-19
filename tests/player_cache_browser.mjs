@@ -34,7 +34,6 @@ try {
     const context = await browser.newContext();
     const page = await context.newPage();
     await page.goto(`http://127.0.0.1:${server.address().port}`);
-    await page.addScriptTag({url: 'https://cdnjs.cloudflare.com/ajax/libs/artplayer/5.1.1/artplayer.js'});
     await page.addScriptTag({url: '/player.js'});
     await page.evaluate(() => {
         window.currentMediaList = ['a', 'b'].map(id => ({media_id: id, title: id, type: 'audio', url: `/${id}.wav`, cover: '', media_path: id}));
