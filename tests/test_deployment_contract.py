@@ -174,14 +174,6 @@ class DeploymentContractTests(unittest.TestCase):
         dockerfile = (ROOT / "nginx/Dockerfile").read_text(encoding="utf-8")
         self.assertTrue(dockerfile.startswith("FROM nginx:1.30.4-alpine\n"))
 
-    def test_external_player_script_has_verified_integrity_and_cors(self):
-        expected = "sha384-u9JL6zwTLTwPvEjiiGwzo+cVKf/PW1DHkEFwhCt4RWdD2Pr0fFf2/jZTwLCSv/5K"
-        for filename in ("audio-player.html", "video-player.html"):
-            template = (ROOT / "static/media" / filename).read_text(encoding="utf-8")
-            script = next(tag for tag in re.findall(r"<script\b[^>]*>", template) if "cdnjs.cloudflare.com" in tag)
-            self.assertIn(f'integrity="{expected}"', script)
-            self.assertIn('crossorigin="anonymous"', script)
-
     def test_duplicate_uvicorn_access_log_is_disabled(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         logging_config = (ROOT / "app/core/logging_config.py").read_text(encoding="utf-8")

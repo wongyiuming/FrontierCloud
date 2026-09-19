@@ -118,13 +118,13 @@ jobs:
 
       - name: Test public and admin flows
         run: |
-          curl -fsSL https://ci.frontiercloud.local/ | grep "前沿视界"
+          curl -fsSL https://ci.frontiercloud.local/ | grep "前沿娱乐"
           curl -fsS https://ci.frontiercloud.local/health/live | grep '"status":"healthy"'
           curl -fsS https://ci.frontiercloud.local/health/ready | grep '"status":"ready"'
           generated_metrics_token=$(docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token')
           curl -fsS https://ci.frontiercloud.local/metrics \
             -H "Authorization: Bearer $generated_metrics_token" | grep 'frontiercloud_http_requests_total'
-          curl -fsS https://ci.frontiercloud.local/api/v1/media/ | grep "前沿视界"
+          curl -fsS https://ci.frontiercloud.local/api/v1/media/ | grep "前沿娱乐"
           test "$(curl -sS -o /dev/null -w '%{http_code}' https://ci.frontiercloud.local/api/v1/media/admin/)" = 401
 
           ADMIN_KEY=$(docker compose exec -T web python -c "from app.core.config import ADMIN_KEY_FILE; print(ADMIN_KEY_FILE.read_text().strip())")
