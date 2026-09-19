@@ -246,14 +246,20 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RN_DEPLOY_PATH"
-          tracked_changes="$(git status --porcelain --untracked-files=no)"
-          if [ -n "$tracked_changes" ]; then
-            echo "::error::RN checkout has tracked changes; deployment refused"
-            printf '%s\n' "$tracked_changes"
-            exit 1
-          fi
           git fetch --no-tags origin dev
           test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          mapfile -d '' tracked_paths < <(git diff --name-only -z HEAD)
+          if [ "${#tracked_paths[@]}" -gt 0 ]; then
+            for path in "${tracked_paths[@]}"; do
+              if ! git diff --quiet "$GITHUB_SHA" -- "$path"; then
+                echo "::error::RN checkout has tracked changes that differ from the tested commit; deployment refused"
+                git status --short --untracked-files=no
+                exit 1
+              fi
+            done
+            printf 'RN checkout already contains tested content; reconciling %s\n' "${tracked_paths[@]}"
+            git restore --source=HEAD --staged --worktree -- "${tracked_paths[@]}"
+          fi
           git switch dev
           git merge --ff-only "$GITHUB_SHA"
           sh scripts/deploy_rn.sh
