@@ -57,7 +57,7 @@ function playerVisibilityState(element, display = '') {
     });
 }
 
-class FrontierPlayer {
+class FrontierMediaPlayer {
     constructor(options) {
         this.container = typeof options.container === 'string'
             ? document.querySelector(options.container) : options.container;
@@ -148,12 +148,12 @@ class FrontierPlayer {
         for (const [nativeName, playerName] of Object.entries(forward)) {
             this.video.addEventListener(nativeName, event => this._emit(playerName, event));
         }
-        this.video.addEventListener('loadstart', () => { this.loading.show = true; });
-        this.video.addEventListener('waiting', () => { this.loading.show = true; });
-        this.video.addEventListener('seeking', () => { this.loading.show = true; });
+        this.video.addEventListener('loadstart', () => { this.loading.show = true; this.controls.show = true; });
+        this.video.addEventListener('waiting', () => { this.loading.show = true; this.controls.show = true; });
+        this.video.addEventListener('seeking', () => { this.loading.show = true; this.controls.show = true; });
         this.video.addEventListener('canplay', () => { this.loading.show = false; this._syncTime(); });
         this.video.addEventListener('playing', () => { this.loading.show = false; this.notice.show = false; this._syncPlaybackUi(); this._scheduleControlsHide(); });
-        this.video.addEventListener('play', () => { this._syncPlaybackUi(); this._scheduleControlsHide(); });
+        this.video.addEventListener('play', () => { this._syncPlaybackUi(); this.controls.show = true; });
         this.video.addEventListener('pause', () => { this._syncPlaybackUi(); this._showControls(); });
         this.video.addEventListener('ended', () => { this._syncPlaybackUi(); this._showControls(); });
         this.video.addEventListener('timeupdate', () => this._syncTime());
@@ -309,8 +309,7 @@ class FrontierPlayer {
 
     _scheduleControlsHide(delay = 2500) {
         clearTimeout(this._hideTimer);
-        if (typeof PLAYER_KIND !== 'undefined' && PLAYER_KIND === 'audio') return;
-        if (this.video.paused || this.video.ended) return;
+        if (this.video.paused || this.video.ended || this.video.readyState < 2) return;
         this._hideTimer = setTimeout(() => { this.controls.show = false; }, delay);
     }
 
@@ -357,6 +356,26 @@ class FrontierPlayer {
     set title(value) {
         this._title = String(value || '');
         if (this.titleElement) this.titleElement.textContent = this._title;
+    }
+}
+
+class FrontierAudioPlayer extends FrontierMediaPlayer {
+    constructor(options) {
+        super(options);
+        this.root.classList.add('frontier-audio-player');
+        this.controls.show = true;
+    }
+
+    _scheduleControlsHide() {
+        clearTimeout(this._hideTimer);
+        this.controls.show = true;
+    }
+}
+
+class FrontierVideoPlayer extends FrontierMediaPlayer {
+    constructor(options) {
+        super(options);
+        this.root.classList.add('frontier-video-player');
     }
 }
 
@@ -824,7 +843,10 @@ function initPlayer(media, index) {
         return;
     }
 
-    art = new FrontierPlayer({
+    const PlayerClass = typeof PLAYER_KIND !== 'undefined' && PLAYER_KIND === 'audio'
+        ? FrontierAudioPlayer
+        : FrontierVideoPlayer;
+    art = new PlayerClass({
         container: '#artplayer',
         url: playbackUrl,
         title: media.title,

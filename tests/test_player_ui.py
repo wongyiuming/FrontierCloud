@@ -44,8 +44,11 @@ class PlayerUIContractTests(unittest.TestCase):
             for name in ("audio-player.html", "video-player.html")
         )
 
-        self.assertIn("class FrontierPlayer", script)
-        self.assertIn("new FrontierPlayer({", script)
+        self.assertIn("class FrontierMediaPlayer", script)
+        self.assertIn("class FrontierAudioPlayer extends FrontierMediaPlayer", script)
+        self.assertIn("class FrontierVideoPlayer extends FrontierMediaPlayer", script)
+        self.assertIn("? FrontierAudioPlayer", script)
+        self.assertIn(": FrontierVideoPlayer", script)
         self.assertIn("<video class=\"art-video\"", script)
         self.assertNotIn("new Artplayer", script)
         self.assertNotIn("art.e['video:error']", script)

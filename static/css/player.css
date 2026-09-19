@@ -6,7 +6,7 @@ body { background-color: #0f0f0f; color: #fff; font-family: -apple-system, Blink
 .artplayer-app button, .artplayer-app input { font: inherit; }
 .artplayer-app svg { width: 22px; height: 22px; fill: currentColor; pointer-events: none; }
 .artplayer-app .art-video-player { --art-progress-height: 26px; --art-bottom-gap: 8px; width: 100%; height: 100%; position: relative; overflow: hidden; background: #000; color: #fff; user-select: none; }
-.artplayer-app .art-video { width: 100%; height: 100%; display: block; background: #000; object-fit: cover; }
+.artplayer-app .art-video { width: 100%; height: 100%; display: block; background: #000; object-fit: contain; }
 .audio-player-page .artplayer-app .art-video { opacity: 0; pointer-events: none; }
 .art-title { position: absolute; top: 16px; left: 18px; right: 18px; z-index: 4; overflow: hidden; color: rgba(255,255,255,.92); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 2px #000; pointer-events: none; }
 .audio-player-page .art-title { display: none; }
