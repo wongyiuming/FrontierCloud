@@ -87,8 +87,8 @@ function updateMediaSession(media) {
     if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
             title: media.title || '未知曲目',
-            artist: media.artist || '前沿视界',
-            album: typeof PAGE_TITLE !== 'undefined' ? PAGE_TITLE : '前沿视界',
+            artist: media.artist || '前沿娱乐',
+            album: typeof PAGE_TITLE !== 'undefined' ? PAGE_TITLE : '前沿娱乐',
             artwork: [
                 { src: media.cover, sizes: '512x512', type: 'image/png' }
             ]
