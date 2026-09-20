@@ -38,7 +38,7 @@ class SecurityUIContractTests(unittest.TestCase):
         style = (ROOT / "static" / "css" / "admin.css").read_text(encoding="utf-8")
 
         self.assertGreaterEqual(html.count('class="module-heading"'), 6)
-        self.assertEqual(html.count('class="admin-module'), 6)
+        self.assertEqual(html.count('class="admin-module'), 7)
         self.assertIn("function expandAdminModule(target)", script)
         self.assertIn("module === target && shouldExpand", script)
         self.assertIn('id="permanentBanForm"', html)

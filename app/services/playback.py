@@ -60,10 +60,11 @@ async def attach_stats_and_sort(items: Iterable[dict[str, Any]], session_id: str
     enriched = [dict(item) for item in items]
     media_ids = [str(item["media_id"]) for item in enriched]
     stats: dict[str, dict[str, int]] = {}
-    if media_ids:
-        placeholders = ", ".join(f":media_{index}" for index in range(len(media_ids)))
-        params = {f"media_{index}": media_id for index, media_id in enumerate(media_ids)}
-        async with engine.connect() as conn:
+    async with engine.connect() as conn:
+        for offset in range(0, len(media_ids), 500):
+            batch = media_ids[offset:offset + 500]
+            placeholders = ", ".join(f":media_{index}" for index in range(len(batch)))
+            params = {f"media_{index}": media_id for index, media_id in enumerate(batch)}
             result = await conn.execute(
                 text(
                     "SELECT media_id, play_score, preference FROM media_playback_stats "
@@ -71,13 +72,13 @@ async def attach_stats_and_sort(items: Iterable[dict[str, Any]], session_id: str
                 ),
                 params,
             )
-        stats = {
-            str(row["media_id"]): {
-                "play_score": int(row["play_score"]),
-                "preference": int(row["preference"]),
-            }
-            for row in result.mappings().all()
-        }
+            stats.update({
+                str(row["media_id"]): {
+                    "play_score": int(row["play_score"]),
+                    "preference": int(row["preference"]),
+                }
+                for row in result.mappings().all()
+            })
     for item in enriched:
         item.update(stats.get(str(item["media_id"]), {"play_score": 0, "preference": 0}))
     return sort_media(enriched, session_id)
@@ -193,7 +194,7 @@ async def record_playback(
     }
 
 
-async def change_preference(media_root: Path, relative_path: str, delta: int) -> dict[str, Any]:
+async def change_preference(media_root: Path, relative_path: str, delta: int, *, audit=None) -> dict[str, Any]:
     if delta not in {-1, 1}:
         raise ValueError("Preference delta must be -1 or 1")
     now = _utcnow()
@@ -227,6 +228,12 @@ async def change_preference(media_root: Path, relative_path: str, delta: int) ->
                 {"media_id": media_id},
             )
             row = result.mappings().first()
+            if audit is not None:
+                await audit(conn, "success", 1, {
+                    "media_id": media_id,
+                    "preference": int(row["preference"]),
+                    "play_score": int(row["play_score"]),
+                })
     return {
         "media_id": media_id,
         "play_score": int(row["play_score"]),

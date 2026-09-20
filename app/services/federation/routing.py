@@ -81,9 +81,13 @@ async def directory_items(path: str):
 async def attach_master_stats(items):
     if not items:
         return items
+    rows = {}
+    identifiers = [entry["resource_id"] for entry in items]
     async with state.database.connect() as conn:
-        rows = {row["resource_id"]: dict(row) for row in (await conn.execute(select(s.stats).where(
-            s.stats.c.resource_id.in_([entry["resource_id"] for entry in items])))).mappings()}
+        for offset in range(0, len(identifiers), 500):
+            result = await conn.execute(select(s.stats).where(
+                s.stats.c.resource_id.in_(identifiers[offset:offset + 500])))
+            rows.update({row["resource_id"]: dict(row) for row in result.mappings()})
     for entry in items:
         if entry["resource_id"] in rows:
             row = rows[entry["resource_id"]]
@@ -92,7 +96,7 @@ async def attach_master_stats(items):
     return items
 
 
-async def mutate_stats(identifier, path, *, delta=None, session=None, played=None, duration=None):
+async def mutate_stats(identifier, path, *, delta=None, session=None, played=None, duration=None, audit=None):
     row, _relation = await resolve(identifier, path)
     if delta is not None and delta not in (-1, 1):
         raise p.ProtocolError("Preference delta must be -1 or 1")
@@ -133,4 +137,10 @@ async def mutate_stats(identifier, path, *, delta=None, session=None, played=Non
                 counted = True
         values["updated_at"] = now
         await conn.execute(update(s.stats).where(s.stats.c.resource_id == identifier).values(**values))
+        if audit is not None:
+            await audit(conn, "success", 1, {
+                "resource_id": identifier,
+                "preference": values["preference"],
+                "play_score": values["play_score"],
+            })
     return {"media_id": identifier, "play_score": values["play_score"], "preference": values["preference"], "counted": counted}

@@ -17,8 +17,6 @@ let lyricAnimationFrame = null;
 const LYRIC_SLIDE_MS = 480;
 const LYRIC_WINDOW_OFFSETS = [-1, 0, 1, 2, 3];
 const DIRECT_SEEK_ZONE_START = 0.75;
-const MIN_PREFERENCE = -2;
-const MAX_PREFERENCE = 7;
 const PRELOAD_MAX_BYTES = 128 * 1024 * 1024;
 const PRELOAD_START_SECONDS = 5;
 
@@ -504,15 +502,8 @@ function playbackThreshold(duration) {
 function updateTrackStats(media) {
     const row = document.querySelector(`.media-item[data-media-id="${media.media_id}"]`);
     if (!row) return;
-    const preference = row.querySelector('.media-preference');
     const score = row.querySelector('.media-score');
-    if (preference) preference.textContent = `喜好 ${media.preference > 0 ? '+' : ''}${media.preference}`;
     if (score) score.textContent = `播放 ${media.play_score}`;
-    for (const button of row.querySelectorAll('.preference-btn')) {
-        const delta = Number(button.dataset.delta);
-        button.disabled = (delta > 0 && media.preference >= MAX_PREFERENCE)
-            || (delta < 0 && media.preference <= MIN_PREFERENCE);
-    }
 }
 
 function resetPlaybackAccounting(media) {
@@ -568,21 +559,6 @@ async function reportValidPlayback() {
     } finally {
         reportingState.reporting = false;
     }
-}
-
-async function changePreference(index, delta) {
-    const media = currentMediaList[index];
-    if (!media) return;
-    const response = await fetch('/api/v1/media/preference', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({media_path: media.media_path, resource_id: media.resource_id || null, delta}),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || '喜好调整失败');
-    media.preference = data.preference;
-    media.play_score = data.play_score;
-    updateTrackStats(media);
 }
 
 function lyricIndexAt(entries, currentTime) {
@@ -1108,28 +1084,10 @@ function renderPlaylist() {
             <div class="media-info">
                 <div class="media-title">${escapeHTML(item.title)}</div>
                 <div class="media-artist">${escapeHTML(item.artist)}</div>
-                <div class="media-stats"><span class="media-preference">喜好 ${item.preference > 0 ? '+' : ''}${item.preference}</span><span class="media-score">播放 ${item.play_score}</span></div>
-            </div>
-            <div class="preference-controls">
-                <button type="button" class="preference-btn preference-down" data-index="${index}" data-delta="-1" aria-label="降低喜好" ${item.preference <= MIN_PREFERENCE ? 'disabled' : ''}>💔</button>
-                <button type="button" class="preference-btn preference-up" data-index="${index}" data-delta="1" aria-label="提高喜好" ${item.preference >= MAX_PREFERENCE ? 'disabled' : ''}>❤️</button>
+                <div class="media-stats"><span class="media-score">播放 ${item.play_score}</span></div>
             </div>
         </li>
     `).join('');
-
-    for (const button of listContainer.querySelectorAll('.preference-btn')) {
-        button.addEventListener('click', async event => {
-            event.stopPropagation();
-            button.disabled = true;
-            try {
-                await changePreference(Number(button.dataset.index), Number(button.dataset.delta));
-            } catch (error) {
-                alert(error.message);
-            } finally {
-                updateTrackStats(currentMediaList[Number(button.dataset.index)]);
-            }
-        });
-    }
 }
 
 window.addEventListener('DOMContentLoaded', () => {

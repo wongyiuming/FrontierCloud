@@ -155,6 +155,28 @@ class PlaybackIdempotencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["counted"])
         self.assertEqual(connection.increment_count, 0)
 
+    async def test_admin_preference_change_and_audit_share_the_business_transaction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "music" / "artist" / "song.mp3"
+            track.parent.mkdir(parents=True)
+            track.write_bytes(b"ID3")
+            connection = _PlaybackConnection(insert_rowcount=0)
+            audit = AsyncMock()
+            with (
+                patch.object(playback, "engine", _Engine(connection)),
+                patch.object(playback.media_objects, "ensure_object",
+                             new=AsyncMock(return_value="stable-media-id")),
+            ):
+                result = await playback.change_preference(
+                    root, "music/artist/song.mp3", 1, audit=audit,
+                )
+
+        self.assertEqual(result["preference"], 1)
+        audit.assert_awaited_once()
+        self.assertIs(audit.await_args.args[0], connection)
+        self.assertEqual(audit.await_args.args[1:3], ("success", 1))
+
 
 if __name__ == "__main__":
     unittest.main()

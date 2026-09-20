@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PlayerUIContractTests(unittest.TestCase):
-    def test_player_reports_wall_clock_play_time_and_exposes_preference_controls(self):
+    def test_player_reports_wall_clock_play_time_without_public_preference_controls(self):
         script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
         audio_template = (ROOT / "static" / "media" / "audio-player.html").read_text(encoding="utf-8")
         video_template = (ROOT / "static" / "media" / "video-player.html").read_text(encoding="utf-8")
@@ -14,12 +14,11 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("performance.now()", script)
         self.assertIn("elapsed <= 2.5", script)
         self.assertIn("/api/v1/media/playback", script)
-        self.assertIn("/api/v1/media/preference", script)
-        self.assertIn("event.stopPropagation()", script)
-        self.assertIn("const MIN_PREFERENCE = -2", script)
-        self.assertIn("const MAX_PREFERENCE = 7", script)
-        self.assertIn(">💔</button>", script)
-        self.assertIn(">❤️</button>", script)
+        self.assertNotIn("/api/v1/media/preference", script)
+        self.assertNotIn("preference-btn", script)
+        self.assertNotIn("media-preference", script)
+        self.assertNotIn(">💔</button>", script)
+        self.assertNotIn(">❤️</button>", script)
         self.assertIn("const playbackSessionId = {{PLAYBACK_SESSION_ID}}", audio_template)
         self.assertIn("const PLAYER_KIND = 'audio'", audio_template)
         self.assertIn("const PLAYER_KIND = 'video'", video_template)
@@ -28,6 +27,8 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertNotIn("next_music", audio_template + video_template)
         self.assertIn("function playNext()", script)
         self.assertIn("function playPrev()", script)
+        media_api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")
+        self.assertNotIn('@router.post("/preference")', media_api)
 
     def test_audio_and_video_players_use_independent_templates(self):
         api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")

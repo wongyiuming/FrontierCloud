@@ -15,6 +15,7 @@ from fastapi import (
     Query,
 )
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.db import engine
@@ -22,11 +23,20 @@ from app.services import admin_service
 from app.services import ip_security
 from app.services import lyrics
 from app.services import network_observation
+from app.services import media_search, playback
+from app.services.federation import routing as node_routing
+from app.services.federation.catalog import catalog as node_catalog
 from app.services.media_catalog_cache import invalidate_media_catalog
-from app.services.media_manager import MediaManager
+from app.services.media_manager import MEDIA_ROOT, MediaManager
 
 
 router = APIRouter()
+
+
+class MediaPriorityChange(BaseModel):
+    media_path: str = Field(min_length=1, max_length=1024)
+    resource_id: str | None = Field(None, pattern=r"^[a-f0-9]{64}$")
+    delta: int
 
 
 async def require_session(request: Request) -> str:
@@ -172,6 +182,66 @@ async def admin_status(
             request.scope.get("admin_session_ttl", settings.ADMIN_SESSION_TTL)
         ) // 60,
     }
+
+
+@router.get("/media-priority")
+async def media_priority(
+    request: Request,
+    q: str = Query("", max_length=100),
+    media_type: str = Query("", pattern=r"^(|audio|video)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=100),
+    session_hash: str = Depends(require_session),
+):
+    local = await playback.attach_stats_and_sort(
+        await MediaManager.list_media_objects(), "admin-media-priority"
+    )
+    remote = [node_routing.item(row) for row in await node_catalog.resources()]
+    remote = await node_routing.attach_master_stats(remote)
+    items = local + remote
+    normalized_query = media_search.normalized_query(q) if q else ""
+    if normalized_query:
+        items = [item for item in items if media_search.matches_search(
+            media_search.build_search_text(item["title"], item["media_path"]),
+            normalized_query,
+        )]
+    if media_type:
+        items = [item for item in items if item["type"] == media_type]
+    items.sort(key=lambda item: (
+        -int(item.get("preference", 0)),
+        int(item.get("play_score", 0)),
+        str(item["media_path"]).casefold(),
+        str(item["media_id"]),
+    ))
+    total = len(items)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = min(page, pages)
+    start = (page - 1) * page_size
+    return {
+        "items": items[start:start + page_size],
+        "minimum": playback.MIN_PREFERENCE,
+        "maximum": playback.MAX_PREFERENCE,
+        "pagination": {"page": page, "pages": pages, "total": total, "page_size": page_size},
+    }
+
+
+@router.post("/media-priority")
+async def update_media_priority(
+    payload: MediaPriorityChange,
+    request: Request,
+    session_hash: str = Depends(require_session),
+):
+    audit = _mutation_audit(session_hash, "media_priority", [payload.media_path], request)
+    try:
+        if payload.resource_id:
+            return await node_routing.mutate_stats(
+                payload.resource_id, payload.media_path, delta=payload.delta, audit=audit,
+            )
+        return await playback.change_preference(
+            MEDIA_ROOT, payload.media_path, payload.delta, audit=audit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ============================================================

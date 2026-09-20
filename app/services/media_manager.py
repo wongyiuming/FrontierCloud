@@ -18,7 +18,7 @@ from app.core.async_lock import LoopLocalAsyncRWLock
 from app.core.config import settings
 from app.core.db import engine
 from app.core.admin_log import append_admin_log
-from app.services import media_search
+from app.services import media_objects, media_search
 from app.services.media_catalog_cache import (
     invalidate_media_catalog,
     load_media_catalog,
@@ -61,6 +61,18 @@ def _layout_conflict(category: Path, flat: bool, extensions: set[str]) -> bool:
     if cached and cached[0] == stamp:
         try:
             unchanged = all(_directory_stamp(path) == previous for path, previous in cached[1])
+            # Some filesystems do not advance a directory timestamp when a
+            # child file is created. Flat categories have no dependencies;
+            # nested candidates are therefore the only paths rechecked here.
+            if unchanged and flat and not cached[2]:
+                for path, _previous in cached[1]:
+                    with os.scandir(path) as entries:
+                        if any(entry.is_file(follow_symlinks=False)
+                               and Path(entry.name).suffix.lower() in extensions
+                               for entry in entries):
+                            _LAYOUT_CACHE[key] = stamp, cached[1], True
+                            _LAYOUT_CACHE.move_to_end(key)
+                            return True
         except FileNotFoundError:
             unchanged = False
         if unchanged:
@@ -515,6 +527,42 @@ class MediaManager:
             "items": matches[:media_search.MAX_SEARCH_RESULTS],
             "truncated": truncated,
         }
+
+    @staticmethod
+    async def list_media_objects() -> list[dict]:
+        """Return every managed local object for the Admin priority view."""
+        async with media_mutation_lock.shared():
+            ensure_media_mutations_ready()
+            return await MediaManager._list_media_objects_unlocked()
+
+    @staticmethod
+    async def _list_media_objects_unlocked() -> list[dict]:
+        hidden = await MediaManager.hidden_paths()
+        result: list[dict] = []
+        for root_name, object_kind in (("music", "audio"), ("vido", "video")):
+            cache_identity = f"admin:{root_name}"
+            generation, catalog = await load_media_catalog("search", cache_identity)
+            if catalog is None:
+                scope, current, extensions = MediaManager._search_scope(root_name)
+                catalog = await asyncio.to_thread(
+                    MediaManager._search_catalog_sync,
+                    scope,
+                    current,
+                    extensions,
+                    hidden,
+                )
+                await store_media_catalog(generation, "search", cache_identity, catalog)
+            items = [
+                {
+                    "media_path": item["path"],
+                    "title": Path(item["path"]).stem,
+                    "type": object_kind,
+                    "hidden": bool(item.get("hidden")),
+                }
+                for item in catalog
+            ]
+            result.extend(await media_objects.bind_items(items, object_kind))
+        return result
 
     @staticmethod
     async def hidden_paths() -> set[str]:

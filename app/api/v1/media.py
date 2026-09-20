@@ -55,12 +55,6 @@ class PlaybackReport(BaseModel):
     duration: float = Field(gt=0, le=86400)
 
 
-class PreferenceChange(BaseModel):
-    media_path: str = Field(min_length=1, max_length=1024)
-    resource_id: str | None = Field(None, pattern=r"^[a-f0-9]{64}$")
-    delta: int
-
-
 class NetworkObservation(BaseModel):
     addresses: list[str] = Field(default_factory=list, max_length=8)
     failure: str | None = Field(None, max_length=32)
@@ -573,16 +567,6 @@ async def report_playback(payload: PlaybackReport):
             payload.played_seconds,
             payload.duration,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/preference")
-async def update_preference(payload: PreferenceChange):
-    try:
-        if payload.resource_id:
-            return await node_routing.mutate_stats(payload.resource_id, payload.media_path, delta=payload.delta)
-        return await playback.change_preference(MEDIA_ROOT, payload.media_path, payload.delta)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -11,6 +11,9 @@ let securityPages = 1;
 let networkPage = 1;
 let networkPages = 1;
 let networkView = 'public';
+let priorityPage = 1;
+let priorityPages = 1;
+let priorityLoading = false;
 let lyricCatalog = null;
 let lyricOrigin = null;
 let lyricLinking = false;
@@ -51,6 +54,11 @@ for (const module of document.querySelectorAll('.admin-module')) {
         if (module.dataset.adminModule === 'network') {
             loadNetworkObservations().catch(error => {
                 $('networkSummary').textContent = `加载失败：${error.message}`;
+            });
+        }
+        if (module.dataset.adminModule === 'priority') {
+            loadMediaPriority().catch(error => {
+                $('prioritySummary').textContent = `加载失败：${error.message}`;
             });
         }
     };
@@ -801,6 +809,95 @@ $('permanentBanForm').onsubmit = async event => {
 function networkTimeLine(item) {
     return `首次 ${escapeHtml(item.first_seen || '-')} · 最近 ${escapeHtml(item.last_seen || '-')}`;
 }
+
+function renderMediaPriority(data) {
+    const list = $('priorityList');
+    list.innerHTML = '';
+    for (const item of data.items || []) {
+        const row = document.createElement('div');
+        row.className = 'priority-row';
+        const resourceId = item.resource_id || null;
+        row.innerHTML = `
+            <div class="priority-main">
+                <strong>${escapeHtml(item.title)}</strong>
+                <small>${escapeHtml(item.media_path)}${item.hidden ? ' · 已隐藏' : ''}</small>
+            </div>
+            <div class="priority-values">
+                <span>${item.type === 'audio' ? '音乐' : '视频'}</span>
+                <span>播放 ${Number(item.play_score || 0)}</span>
+                <b>${Number(item.preference) > 0 ? '+' : ''}${Number(item.preference || 0)}</b>
+            </div>
+            <div class="priority-actions"></div>`;
+        const actions = row.querySelector('.priority-actions');
+        for (const [label, delta] of [['降低', -1], ['提高', 1]]) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = delta < 0 ? '−' : '＋';
+            button.title = `${label}展示优先级`;
+            button.setAttribute('aria-label', `${label}${item.title}的展示优先级`);
+            button.disabled = delta < 0
+                ? Number(item.preference) <= Number(data.minimum)
+                : Number(item.preference) >= Number(data.maximum);
+            button.onclick = async () => {
+                button.disabled = true;
+                try {
+                    await api('/api/v1/media/admin/media-priority', {
+                        method: 'POST',
+                        headers: requestHeaders(),
+                        body: JSON.stringify({media_path: item.media_path, resource_id: resourceId, delta}),
+                    });
+                    await loadMediaPriority(true);
+                } catch (error) {
+                    alert(error.message);
+                    button.disabled = false;
+                }
+            };
+            actions.appendChild(button);
+        }
+        list.appendChild(row);
+    }
+    if (!list.children.length) list.innerHTML = '<div class="priority-empty">没有符合条件的媒体</div>';
+    priorityPage = data.pagination?.page || 1;
+    priorityPages = data.pagination?.pages || 1;
+    $('prioritySummary').textContent = `共 ${data.pagination?.total || 0} 个媒体；高优先级优先，相同优先级下播放次数较少的优先`;
+    $('priorityPageInfo').textContent = `第 ${priorityPage} / ${priorityPages} 页`;
+    $('priorityPrev').disabled = priorityPage <= 1;
+    $('priorityNext').disabled = priorityPage >= priorityPages;
+}
+
+async function loadMediaPriority(force = false) {
+    if (priorityLoading && !force) return;
+    priorityLoading = true;
+    try {
+        const params = new URLSearchParams({page: String(priorityPage), page_size: '100'});
+        const query = $('prioritySearch').value.trim();
+        const mediaType = $('priorityType').value;
+        if (query) params.set('q', query);
+        if (mediaType) params.set('media_type', mediaType);
+        renderMediaPriority(await api(`/api/v1/media/admin/media-priority?${params}`));
+    } finally {
+        priorityLoading = false;
+    }
+}
+
+$('priorityFilterForm').onsubmit = event => {
+    event.preventDefault();
+    priorityPage = 1;
+    loadMediaPriority(true).catch(error => alert(error.message));
+};
+$('priorityRefresh').onclick = () => loadMediaPriority(true).catch(error => alert(error.message));
+$('priorityPrev').onclick = () => {
+    if (priorityPage > 1) {
+        priorityPage -= 1;
+        loadMediaPriority(true).catch(error => alert(error.message));
+    }
+};
+$('priorityNext').onclick = () => {
+    if (priorityPage < priorityPages) {
+        priorityPage += 1;
+        loadMediaPriority(true).catch(error => alert(error.message));
+    }
+};
 
 function renderNetworkGroups(list, data) {
     const reverse = data.view === 'webrtc';
