@@ -335,6 +335,9 @@ def browser_promote(browser, node, role):
     page.select_option('#nodeRole', role)
     page.fill('#nodeEndpoint', node.endpoint)
     page.locator('#nodePromotion button[type="submit"]').click()
+    page.wait_for_function("document.querySelector('#nodeOperationStatus').textContent && document.querySelector('#nodeOperationStatus').textContent !== '处理中'")
+    operation = page.locator('#nodeOperationStatus').text_content()
+    assert operation == '已完成', f"{node.name} promotion failed: {operation}"
     page.wait_for_function("role => document.querySelector('#nodeIdentity').textContent.startsWith(role)", arg=role)
     assert not page.locator('#nodePromotion').is_visible()
     context.close()
