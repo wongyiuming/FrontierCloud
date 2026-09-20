@@ -185,9 +185,13 @@ async def read():
             "SELECT resource_id, path, payload FROM node_media_catalog "
             "WHERE relationship_id=:relationship_id AND deleted=0 ORDER BY path, resource_id"
         ), {{"relationship_id": {self.relation!r}}})).mappings().all()
-    return [{{"resource_id": row["resource_id"], "path": row["path"],
-             "size": int(row["payload"]["size"]),
-             "url": "/api/v1/media/stream?resource_id=" + row["resource_id"]}} for row in rows]
+    items = []
+    for row in rows:
+        payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+        items.append({{"resource_id": row["resource_id"], "path": row["path"],
+                      "size": int(payload["size"]),
+                      "url": "/api/v1/media/stream?resource_id=" + row["resource_id"]}})
+    return items
 print(json.dumps(asyncio.run(read())))
 """
         return json.loads(self.web(program))
