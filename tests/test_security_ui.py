@@ -55,10 +55,11 @@ class SecurityUIContractTests(unittest.TestCase):
         self.assertIn('value="15" selected', html)
         self.assertIn('value="120"', html)
         self.assertIn("/api/v1/media/admin/key/temporary", script)
-        self.assertIn('data-network-view="pairs"', html)
+        self.assertNotIn('data-network-view="pairs"', html)
         self.assertIn('data-network-view="public"', html)
         self.assertIn('data-network-view="webrtc"', html)
         self.assertIn("function renderNetworkGroups", script)
+        self.assertNotIn("function renderNetworkPairList", script)
         self.assertIn(".network-branch::before", style)
 
 

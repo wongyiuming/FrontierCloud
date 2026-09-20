@@ -4,14 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿娱乐 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260916-1">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260920-1">
 </head>
 <body>
     <main class="admin-console">
-        <div id="globalAdminActions" class="global-admin-actions">
-            <button id="backPublic" type="button">公共视图</button>
-            <button id="logout" type="button">退出特权</button>
-        </div>
         <section class="admin-module key-panel" data-admin-module="key">
             <button class="module-heading" type="button" aria-expanded="false"><span><strong>Admin Key</strong><small>长期 Key 可轮换；临时 Key 单次使用并建立所选时长的滑动会话。</small></span><b>＋</b></button>
             <div class="module-content">
@@ -133,8 +129,7 @@
                 </form>
                 <div id="networkSummary" class="network-summary">尚未加载</div>
                 <div id="networkViewSwitch" class="network-view-switch" role="group" aria-label="WebRTC 关系展示方式">
-                    <button type="button" class="selected" data-network-view="pairs">逐条关系</button>
-                    <button type="button" data-network-view="public">公网 IP → WebRTC IP</button>
+                    <button type="button" class="selected" data-network-view="public">公网 IP → WebRTC IP</button>
                     <button type="button" data-network-view="webrtc">WebRTC IP → 公网 IP</button>
                 </div>
                 <div id="networkList" class="network-list"></div>
@@ -146,13 +141,12 @@
             </div>
         </section>
         <section id="nodesPanel" class="admin-module nodes-panel" data-admin-module="nodes">
-            <button class="module-heading" type="button" aria-expanded="false"><span><strong>节点管理</strong><small>角色、配对关系及媒体链路测试</small></span><b>＋</b></button>
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>节点管理</strong><small>角色、配对关系及联合状态</small></span><b>＋</b></button>
             <div class="module-content nodes-content">
                 <div class="nodes-toolbar"><strong id="nodeIdentity">尚未加载</strong><button id="nodesRefresh" type="button">刷新</button></div>
                 <form id="nodePromotion" class="nodes-toolbar hidden"><select id="nodeRole" aria-label="节点角色"><option>Master</option><option>Slave</option></select><input id="nodeEndpoint" type="url" required placeholder="当前节点 HTTPS 根地址"><button type="submit">固定角色</button></form>
                 <div id="nodePairing" class="hidden"><div class="nodes-toolbar"><button id="nodeIssuePair" type="button">生成一次性配对包</button><button id="nodeImportPair" type="button">导入 Slave 配对包</button></div><textarea id="nodePairPackage" rows="4" aria-label="一次性配对包" placeholder="配对包只用于建立当前关系，五分钟后过期"></textarea></div>
                 <div class="nodes-table-scroll"><table class="nodes-table"><thead><tr><th>节点 / HTTPS 地址</th><th>状态 / RTT / 心跳</th><th>版本 / 同步 / 存储</th><th>当前关系操作</th></tr></thead><tbody id="nodeRelationships"></tbody></table></div>
-                <section id="nodeBusinessTest" class="hidden"><div class="nodes-toolbar"><select id="nodeTestRelationship" aria-label="测试关系"></select><select id="nodeTestResource" aria-label="测试媒体"></select><button id="nodeRunTest" type="button">HEAD / Range 测试</button><button id="nodeSeekTest" type="button">暂停 / Seek / 恢复</button><button id="nodeRestartTest" type="button">重新播放</button></div><video id="nodeTestPlayer" controls preload="metadata" crossorigin="anonymous"></video><pre id="nodeTestResult" aria-live="polite"></pre></section>
                 <form id="nodeReinitialize" class="nodes-toolbar hidden"><input id="nodeResetConfirmation" autocomplete="off" placeholder="输入当前节点 ID 确认重置"><button type="submit">重新初始化节点</button><span>撤销旧关系，保留媒体文件</span></form>
                 <div id="nodeOperationStatus" role="status"></div>
             </div>
@@ -161,7 +155,10 @@
     <section class="admin-module admin-side" data-admin-module="media">
         <header class="admin-header">
             <button class="module-heading" type="button" aria-expanded="false"><span><strong>媒体管理</strong><small>上传、下载、隐藏及删除媒体</small></span><b>＋</b></button>
-            <div class="admin-header-actions module-action-host"></div>
+            <div id="globalAdminActions" class="admin-header-actions global-admin-actions">
+                <button id="backPublic" type="button">公共视图</button>
+                <button id="logout" type="button">退出特权</button>
+            </div>
         </header>
         <div class="module-content media-content">
         <div class="toolbar">
@@ -213,7 +210,7 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260916-1"></script>
-    <script src="/static/js/nodes.js?v=20260913-3"></script>
+    <script src="/static/js/admin.js?v=20260920-1"></script>
+    <script src="/static/js/nodes.js?v=20260920-1"></script>
 </body>
 </html>
