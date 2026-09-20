@@ -1,4 +1,5 @@
 """Deployment boundaries for the optional V1 control plane."""
+import re
 import unittest
 from pathlib import Path
 
@@ -15,11 +16,21 @@ class FederationContractTests(unittest.TestCase):
     def test_cluster_acceptance_gates_existing_dev_only_cd(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         self.assertIn("  test-cluster:", workflow)
-        self.assertIn("    needs: test-cluster", workflow)
-        self.assertIn("    needs: test-compose", workflow.split("  deploy-rn:")[1])
-        self.assertIn("--origin-ca-pool", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
+        compose = workflow.split("  test-compose:", 1)[1].split("  prepare-rn:", 1)[0]
+        self.assertNotIn("needs:", compose)
+        deploy = workflow.split("  deploy-rn:", 1)[1]
+        self.assertIn("needs: [test-cluster, test-compose, prepare-rn]", deploy)
+        self.assertIn("--no-build", (ROOT / "scripts/deploy_rn.sh").read_text(encoding="utf-8"))
+        self.assertNotIn("cloudflared", workflow)
+        self.assertIn("ACCEPTANCE_GATEWAY", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
         self.assertNotIn("curl -k", workflow)
         self.assertNotIn("ignore_https_errors", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
+
+    def test_every_ci_or_deployment_job_has_a_three_minute_hard_limit(self):
+        workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
+        limits = [int(value) for value in re.findall(r"^    timeout-minutes: (\d+)$", workflow, re.MULTILINE)]
+        self.assertEqual(len(limits), 4)
+        self.assertTrue(all(value <= 3 for value in limits), limits)
 
     def test_relay_has_verified_tls_and_no_disk_buffering(self):
         nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")

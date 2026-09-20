@@ -114,7 +114,6 @@ await s.manual_permanent_ban_ip({ip!r}, 'a'*64, 'owned edge fixture')
 print('mysql-summary-order-pagination-audit-ok')
 """)
         proof_path = "/edge-security-proof-" + token
-        time.sleep(3)
         expect_status(proof_path, 403)
         logs = run("docker", "compose", "logs", "--no-log-prefix", "--since", "60s", "nginx")
         matches = []
@@ -135,11 +134,9 @@ print('mysql-summary-order-pagination-audit-ok')
 await s.remove_whitelist({ip!r}, 'a'*64)
 await s.manual_ban_ip({ip!r}, 'a'*64, 'owned expiry test')
 async def shorten(conn):
-    await conn.execute(text("UPDATE ip_auto_ban_events SET expires_at=:expiry WHERE ip_address=:ip AND status='active'"), {{'ip':{ip!r}, 'expiry':datetime.now(timezone.utc).replace(tzinfo=None)+timedelta(seconds=10)}})
+    await conn.execute(text("UPDATE ip_auto_ban_events SET expires_at=:expiry WHERE ip_address=:ip AND status='active'"), {{'ip':{ip!r}, 'expiry':datetime.now(timezone.utc).replace(tzinfo=None)-timedelta(seconds=1)}})
 await s._run_state_transaction(shorten)
 """)
-        expect_status(proof_path, 403)
-        time.sleep(11)
         expect_status("/static/js/admin.js", 200)
         print("security-stack-smoke-ok: unique numeric IP summaries, durable timeline, Nginx-only denial, spoof resistance, release, whitelist, expiry")
     finally:

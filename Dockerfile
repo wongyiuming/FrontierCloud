@@ -4,22 +4,20 @@ FROM python:3.14-slim
 # Set the application working directory.
 WORKDIR /app
 
-# Copy dependency metadata before application sources for better layer reuse.
+# Install locked dependencies before copying application sources. Code and test
+# changes must not invalidate the dependency layer on every deployment.
 COPY --chmod=0644 pyproject.toml .
-# Git worktree permissions can be restrictive on the host. The unprivileged
-# runtime user must always be able to import the application entry point.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -c "import pathlib,tomllib; data=tomllib.loads(pathlib.Path('pyproject.toml').read_text()); pathlib.Path('/tmp/requirements.txt').write_text('\\n'.join(data['project']['dependencies'])+'\\n')" && \
+    python -m pip install -r /tmp/requirements.txt
+
+# Git worktree permissions can be restrictive on the host. Copy mutable sources
+# after dependencies, then normalize them for the fixed unprivileged UID.
 COPY --chmod=0644 main.py .
 COPY app ./app
 COPY static ./static
 COPY tests ./tests
-
-# Runtime code is immutable inside the image. Normalize permissions after COPY
-# so a restrictive host umask cannot make source files unreadable by UID 10001.
 RUN chmod -R a+rX /app/app /app/static /app/tests
-
-# Install Python dependencies with a current pip release.
-RUN python -m pip install --no-cache-dir --upgrade "pip>=26.1.2" && \
-    python -m pip install --no-cache-dir .
 
 # The public service does not require root. A fixed UID simplifies host
 # permissions for the data directory.
