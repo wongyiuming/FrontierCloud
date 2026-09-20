@@ -10,7 +10,7 @@ let securityPage = 1;
 let securityPages = 1;
 let networkPage = 1;
 let networkPages = 1;
-let networkView = 'pairs';
+let networkView = 'public';
 let lyricCatalog = null;
 let lyricOrigin = null;
 let lyricLinking = false;
@@ -25,16 +25,6 @@ let uploadLimits = {
 
 const $ = id => document.getElementById(id);
 
-function attachGlobalActions(target) {
-    const actions = $('globalAdminActions');
-    if (!actions || !target) return;
-    for (const module of document.querySelectorAll('.admin-module')) {
-        module.classList.toggle('has-global-actions', module === target);
-    }
-    const host = target.querySelector?.('.module-action-host') || target;
-    host.appendChild(actions);
-}
-
 function expandAdminModule(target) {
     const shouldExpand = !target.classList.contains('expanded');
     for (const module of document.querySelectorAll('.admin-module')) {
@@ -47,7 +37,6 @@ function expandAdminModule(target) {
             if (indicator) indicator.textContent = expanded ? '−' : '＋';
         }
     }
-    attachGlobalActions(target);
 }
 
 for (const module of document.querySelectorAll('.admin-module')) {
@@ -65,13 +54,6 @@ for (const module of document.querySelectorAll('.admin-module')) {
             });
         }
     };
-}
-
-for (const module of document.querySelectorAll('.admin-module')) {
-    if (module.classList.contains('expanded')) {
-        attachGlobalActions(module);
-        break;
-    }
 }
 
 function getCookie(name) {
@@ -820,23 +802,6 @@ function networkTimeLine(item) {
     return `首次 ${escapeHtml(item.first_seen || '-')} · 最近 ${escapeHtml(item.last_seen || '-')}`;
 }
 
-function renderNetworkPairList(list, data) {
-    for (const item of data.items || []) {
-        const row = document.createElement('div');
-        row.className = 'network-row';
-        const pair = document.createElement('div');
-        pair.className = 'network-pair';
-        const observed = item.webrtc_ip || '未获取';
-        pair.innerHTML = `<strong>${escapeHtml(item.client_ip)}</strong> → ${escapeHtml(observed)}`
-            + `<div class="network-meta">${networkTimeLine(item)} · 结果 ${escapeHtml(item.outcomes || '-')}</div>`;
-        const count = document.createElement('div');
-        count.className = 'network-count';
-        count.textContent = `${item.observation_count || 0} 次`;
-        row.append(pair, count);
-        list.appendChild(row);
-    }
-}
-
 function renderNetworkGroups(list, data) {
     const reverse = data.view === 'webrtc';
     for (const group of data.groups || []) {
@@ -864,19 +829,17 @@ function renderNetworkGroups(list, data) {
 function renderNetworkObservations(data) {
     const list = $('networkList');
     list.innerHTML = '';
-    if (data.view === 'pairs') renderNetworkPairList(list, data);
-    else renderNetworkGroups(list, data);
+    renderNetworkGroups(list, data);
     if (!list.children.length) {
         list.innerHTML = '<div class="security-empty">没有符合条件的 WebRTC 关系记录</div>';
     }
     networkPage = data.pagination?.page || 1;
     networkPages = data.pagination?.pages || 1;
     const summaries = {
-        pairs: `聚合关系 ${data.pagination?.total || 0} 组；每个“公网 IP → WebRTC IP”只显示一行`,
         public: `公网 IP ${data.pagination?.total || 0} 个；展开查看它对应的全部 WebRTC IP`,
         webrtc: `WebRTC IP ${data.pagination?.total || 0} 个；展开查看它对应的全部公网 IP`,
     };
-    $('networkSummary').textContent = summaries[data.view] || summaries.pairs;
+    $('networkSummary').textContent = summaries[data.view] || summaries.public;
     $('networkPageInfo').textContent = `第 ${networkPage} / ${networkPages} 页`;
     $('networkPrev').disabled = networkPage <= 1;
     $('networkNext').disabled = networkPage >= networkPages;

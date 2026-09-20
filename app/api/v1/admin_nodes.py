@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 from app.api.internal_nodes import require_https
 from app.api.v1.admin import require_session
 from app.services.federation import protocol as p
-from app.services.federation.catalog import catalog
 from app.services.federation.runtime import runtime
 from app.services.federation.state import state
 from app.services.federation.transport import transport
@@ -139,13 +138,3 @@ async def repair(request: Request, identifier: str, actor: str = Depends(require
         return {"state": "repair-scheduled"}
     except Exception as exc:
         raise checked(exc) from exc
-
-
-@router.get("/{identifier}/resources")
-async def test_resources(identifier: str, actor: str = Depends(require_session)):
-    relation = await state.relationship(identifier)
-    if state.node["role"] != "Master" or relation["direction"] != "downstream":
-        raise HTTPException(409, "Only Master tests downstream resources")
-    rows = [row for row in await catalog.resources() if row["relationship_id"] == identifier]
-    return {"mode": relation["mode"], "items": [{"resource_id": row["resource_id"], "path": row["path"],
-        "size": row["payload"]["size"], "url": "/api/v1/media/stream?resource_id=" + row["resource_id"]} for row in rows]}
