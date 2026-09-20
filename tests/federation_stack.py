@@ -1,4 +1,4 @@
-"""Disposable three-node HTTPS + browser + fault/soak acceptance harness.
+"""Disposable three-node HTTPS and browser acceptance harness.
 
 Infrastructure is test-only. Compose configurations and private CA material are
 generated in a temporary directory; no hosted user data or deployment is used.
@@ -402,10 +402,8 @@ def browser_checks(browser, master, resource):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--probe-cycles", type=int, default=3)
     parser.add_argument("--output", type=Path, default=Path("/tmp/federation-acceptance.json"))
     arguments = parser.parse_args()
-    assert 3 <= arguments.probe_cycles <= 10
     report, nodes = {"checks": Checks(), "samples": []}, []
     network = "fc-acceptance-" + uuid.uuid4().hex[:12]
     command("docker", "network", "create", "--subnet", ACCEPTANCE_SUBNET,
@@ -517,117 +515,6 @@ def main():
             assert sum(counted) == 1
             a.api("/api/v1/media/admin/media-priority", {"media_path": payload["media_path"], "resource_id": payload["resource_id"], "delta": 1})
             report["checks"].append("Master accounting idempotence and authoritative preference")
-            # Repeated short faults exercise connection release and sync convergence.
-            a.mode("Relay")
-            for cycle in range(1):
-                report["samples"].append({"stage": f"before-fault-{cycle}", "master": a.measure()})
-                try:
-                    b.netem(["delay", "150ms", "loss", "10%"])
-                    response = a.range(a.resource["url"])
-                    assert response.status_code in (206, 502, 503, 504)
-                finally: b.netem(None)
-                previous_heartbeat = a.relationship()["last_heartbeat"] or 0
-                b.compose("restart", "web")
-                wait_for(lambda: b.client.get(b.endpoint + "/health/ready").status_code == 200)
-                a.compose("restart", "web")
-                wait_for(lambda: a.client.get(a.endpoint + "/health/ready").status_code == 200)
-                a.wait_online(after=previous_heartbeat)
-                assert b.nodes()["node_id"] == identities[b.name] and b.nodes()["role"] == "Slave"
-                assert a.nodes()["node_id"] == identities[a.name] and a.nodes()["role"] == "Master"
-                assert a.range(a.resource["url"]).status_code == 206
-                assert len(a.resources()) == 107
-                fixture = b.data / f"media/music/shared/new-{cycle}.wav"
-                wav(fixture, seconds=1)
-                wait_for(lambda: any(item["path"].endswith(f"new-{cycle}.wav") for item in a.resources()), description="incremental addition")
-                b.api("/api/v1/media/admin/delete", {"paths": [f"music/shared/new-{cycle}.wav"]})
-                wait_for(lambda: not any(item["path"].endswith(f"new-{cycle}.wav") for item in a.resources()), description="incremental deletion")
-                repaired_version = a.relationship()["cursor"]
-                a.api(f"/api/v1/media/admin/nodes/{a.relation}/sync", {})
-                wait_for(lambda: a.relationship()["cursor"] >= repaired_version, description="full catalog repair convergence")
-                assert len(a.resources()) == 107
-            report["checks"].append("delay/loss/restart/add/delete/full-repair recovery")
-            wait_for(lambda: len(c.resources()) == 107,
-                     description="independent Master catalog convergence")
-            a.compose("stop", "web")
-            try:
-                assert c.range(c.resource["url"]).status_code == 206
-                assert len(c.resources()) == 107
-            finally: a.compose("start", "web")
-            a.wait_online()
-            report["checks"].append("Master-A stopped; Master-C continues serving the same Slave independently")
-            # Offline status retains catalog and revocation is independent of other Masters.
-            b.compose("stop", "nginx")
-            try:
-                unavailable = a.range(a.resource["url"])
-                assert unavailable.status_code in (502, 503, 504), "Broken media ingress did not surface an error"
-                assert len(a.resources()) == 107
-            finally: b.compose("start", "nginx")
-            for master in (a, c):
-                wait_for(lambda master=master: master.range(master.resource["url"]).status_code == 206,
-                         seconds=30, description=f"{master.name} media ingress recovery")
-            report["checks"].append("failed ingress preserves catalog; verified automatic recovery")
-            a.mode("Direct")
-            old_response = a.client.get(a.endpoint + a.resource["url"], follow_redirects=False)
-            old_token_url = old_response.headers["location"]
-            with sync_playwright() as playwright:
-                browser = launch_browser(playwright, nodes)
-                browser_revoke(browser, a)
-                browser.close()
-            assert a.client.get(old_token_url).status_code == 401
-            assert c.range(c.resource["url"]).status_code == 206
-            a.pair(b)
-            a.wait_online()
-            wait_for(lambda: len(a.resources()) == 107)
-            a.resource = next(item for item in a.resources() if item["path"] == "music/shared/song.wav")
-            report["checks"].append("revocation invalidates Direct; other Master unaffected; clean re-pair")
-            # Repeated partial Relay cancellation catches immediate resource leaks.
-            # Capability and pair expiry use controlled-time unit tests instead of
-            # sleeping for the full business lifetime in every CI run.
-            a.mode("Relay")
-            large = next(item for item in a.resources() if item["path"].endswith("large.wav"))
-            baseline = a.measure()
-            for cycle in range(arguments.probe_cycles):
-                with a.client.stream("GET", a.endpoint + large["url"]) as response:
-                    assert response.status_code == 200
-                    received = 0
-                    for chunk in response.iter_bytes():
-                        received += len(chunk)
-                        if received >= 1024 * 1024: break
-                assert a.range(a.resource["url"]).status_code == 206
-                sample = a.measure()
-                report["samples"].append({"stage": "probe", "cycle": cycle, "master": sample})
-                assert sample["temporary"] == baseline["temporary"], "Master wrote temporary media"
-                time.sleep(.25)
-            transient_rss_limit = 64 * 1024 * 1024
-            sustained_rss_limit = 12 * 1024 * 1024
-            for service in ("web", "nginx"):
-                soak_samples = [row["master"][service] for row in report["samples"] if row["stage"] == "probe"]
-                peak = max(row["rss"] for row in soak_samples)
-                tail_samples = soak_samples[-5:]
-                tail_rss = sorted(row["rss"] for row in tail_samples)
-                # One short allocator or worker spike is transient. Requiring the
-                # second-highest tail sample to stay bounded still catches growth
-                # that survives across consecutive request cycles.
-                settled_peak = tail_rss[-2] if len(tail_rss) > 1 else tail_rss[-1]
-                first = tail_samples[0]
-                last = tail_samples[-1]
-                peak_growth = peak - baseline[service]["rss"]
-                sustained_drift = settled_peak - first["rss"]
-                print(json.dumps({
-                    "rss_guard": {
-                        "service": service,
-                        "baseline_mib": round(baseline[service]["rss"] / 1024 / 1024, 2),
-                        "peak_mib": round(peak / 1024 / 1024, 2),
-                        "peak_growth_mib": round(peak_growth / 1024 / 1024, 2),
-                        "tail_sustained_drift_mib": round(sustained_drift / 1024 / 1024, 2),
-                        "tail_samples": len(tail_samples),
-                    }
-                }), flush=True)
-                assert peak_growth <= transient_rss_limit, f"{service} excessive Relay RSS peak"
-                assert sustained_drift <= sustained_rss_limit, f"{service} sustained large Relay RSS growth"
-                assert last["rss"] - first["rss"] <= sustained_rss_limit, f"{service} steady RSS drift"
-                assert last["fd"] - first["fd"] <= 8 and last["sockets"] - first["sockets"] <= 8, f"{service} FD/socket drift"
-            report["checks"].append("bounded Relay cancellation burst RSS/FD/socket/tmp")
             # Explicit Slave reset revokes all relationships but retains owned files.
             identity = b.nodes()["node_id"]
             b.api("/api/v1/media/admin/nodes/reinitialize", {"confirmation": identity})

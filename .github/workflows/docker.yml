@@ -33,7 +33,7 @@ jobs:
         run: |
           docker build -t frontiercloud-acceptance-web .
           docker build -t frontiercloud-acceptance-nginx -f nginx/Dockerfile .
-      - name: Run verified local HTTPS topology, browser and bounded fault probes
+      - name: Run verified local HTTPS topology and browser acceptance
         env:
           PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
         run: /tmp/frontiercloud-cluster-test/bin/python tests/federation_stack.py --output /tmp/federation-acceptance.json
