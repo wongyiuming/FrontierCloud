@@ -138,7 +138,8 @@ class Node:
         with socket.create_connection((self.host, self.port), timeout=10) as connection:
             with trusted.wrap_socket(connection, server_hostname=self.host):
                 pass
-        for context, hostname in ((ssl.create_default_context(), self.host), (trusted, "wrong.frontiercloud.local")):
+        unknown_ca = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        for context, hostname in ((unknown_ca, self.host), (trusted, "wrong.frontiercloud.local")):
             try:
                 with socket.create_connection((self.host, self.port), timeout=10) as connection:
                     with context.wrap_socket(connection, server_hostname=hostname):

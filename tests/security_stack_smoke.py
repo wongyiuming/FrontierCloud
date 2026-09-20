@@ -114,18 +114,24 @@ await s.manual_permanent_ban_ip({ip!r}, 'a'*64, 'owned edge fixture')
 print('mysql-summary-order-pagination-audit-ok')
 """)
         proof_path = "/edge-security-proof-" + token
-        expect_status(proof_path, 403)
-        logs = run("docker", "compose", "logs", "--no-log-prefix", "--since", "60s", "nginx")
-        matches = []
-        for line in logs.splitlines():
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            if record.get("path") == proof_path:
-                matches.append(record)
-        assert any(r.get("security_blocked") == 1 and r.get("upstream_addr") == "-"
-                   and r.get("client_ip") == ip for r in matches), "No edge-only denial evidence"
+        deadline = time.monotonic() + 15
+        while True:
+            assert request(proof_path) == 403
+            logs = run("docker", "compose", "logs", "--no-log-prefix", "--since", "60s", "nginx")
+            matches = []
+            for line in logs.splitlines():
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if record.get("path") == proof_path:
+                    matches.append(record)
+            if any(r.get("security_blocked") == 1 and r.get("upstream_addr") == "-"
+                   and r.get("client_ip") == ip for r in matches):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError("No edge-only denial evidence")
+            time.sleep(.25)
         web(f"await s.unban_ip({ip!r}, 'a'*64)")
         expect_status("/static/js/admin.js", 200)
         web(f"await s.manual_permanent_ban_ip({ip!r}, 'a'*64, 'owned allowlist test')\nawait s.add_whitelist({ip!r}, 'a'*64)")
