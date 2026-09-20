@@ -25,6 +25,7 @@ class FederationContractTests(unittest.TestCase):
         self.assertIn("ACCEPTANCE_GATEWAY", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
         self.assertNotIn("curl -k", workflow)
         self.assertNotIn("ignore_https_errors", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
+        self.assertIn("ignore-certificate-errors-spki-list", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
 
     def test_every_ci_or_deployment_job_has_a_three_minute_hard_limit(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")

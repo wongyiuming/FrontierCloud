@@ -6,7 +6,9 @@ generated in a temporary directory; no hosted user data or deployment is used.
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
+import hashlib
 import json
 import os
 import socket
@@ -82,6 +84,12 @@ class Node:
         extensions.write_text(f"subjectAltName=IP:{self.host}\nextendedKeyUsage=serverAuth\n")
         command("openssl", "x509", "-req", "-in", str(request), "-CA", str(ca), "-CAkey", str(ca.with_suffix(".key")),
                 "-CAcreateserial", "-out", str(cert), "-days", "1", "-extfile", str(extensions))
+        public_key = command("openssl", "x509", "-in", str(cert), "-pubkey", "-noout")
+        public_key_der = subprocess.check_output(
+            ["openssl", "pkey", "-pubin", "-outform", "DER"],
+            input=public_key.encode(),
+        )
+        self.spki = base64.b64encode(hashlib.sha256(public_key_der).digest()).decode()
         configuration = copy.deepcopy(base)
         configuration.pop("name", None)
         for volume in configuration.get("volumes", {}).values():
@@ -281,6 +289,7 @@ def wav(path, seconds=12, tone=500):
 
 def browser_args(nodes):
     return ["--autoplay-policy=no-user-gesture-required",
+            "--ignore-certificate-errors-spki-list=" + ",".join(node.spki for node in nodes),
             "--log-net-log=" + str(nodes[0].directory.parent / "browser-network.json")]
 
 
@@ -388,9 +397,6 @@ def main():
         ca = directory / "ca.pem"
         command("openssl", "req", "-x509", "-nodes", "-days", "1", "-newkey", "rsa:2048", "-keyout", str(ca.with_suffix(".key")),
                 "-out", str(ca), "-subj", "/CN=FrontierCloud disposable test CA", "-addext", "basicConstraints=critical,CA:TRUE")
-        host_ca = Path(f"/usr/local/share/ca-certificates/frontiercloud-acceptance-{uuid.uuid4().hex}.crt")
-        command("sudo", "cp", str(ca), str(host_ca))
-        command("sudo", "update-ca-certificates")
         bundle = directory / "ca-certificates.crt"
         bundle.write_bytes(Path("/etc/ssl/certs/ca-certificates.crt").read_bytes() + b"\n" + ca.read_bytes())
         base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.yaml"), "config", "--format", "json"))
@@ -622,8 +628,6 @@ def main():
             with ThreadPoolExecutor(max_workers=3) as executor:
                 list(executor.map(lambda node: node.stop(), reversed(nodes)))
             command("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(directory))
-            subprocess.run(["sudo", "rm", "-f", str(host_ca)], capture_output=True)
-            subprocess.run(["sudo", "update-ca-certificates"], capture_output=True)
             subprocess.run(["docker", "network", "rm", network], capture_output=True)
     print(json.dumps({"result": report.get("result", "failed"), "checks": report["checks"], "samples": len(report["samples"])}))
 
