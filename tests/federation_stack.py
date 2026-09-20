@@ -81,7 +81,14 @@ class Node:
         command("openssl", "req", "-new", "-nodes", "-newkey", "rsa:2048", "-keyout", str(key),
                 "-out", str(request), "-subj", f"/CN={self.host}")
         extensions = certs / "extensions.conf"
-        extensions.write_text(f"subjectAltName=IP:{self.host}\nextendedKeyUsage=serverAuth\n")
+        extensions.write_text(
+            f"subjectAltName=IP:{self.host}\n"
+            "basicConstraints=critical,CA:FALSE\n"
+            "keyUsage=critical,digitalSignature,keyEncipherment\n"
+            "extendedKeyUsage=serverAuth\n"
+            "subjectKeyIdentifier=hash\n"
+            "authorityKeyIdentifier=keyid,issuer\n"
+        )
         command("openssl", "x509", "-req", "-in", str(request), "-CA", str(ca), "-CAkey", str(ca.with_suffix(".key")),
                 "-CAcreateserial", "-out", str(cert), "-days", "1", "-extfile", str(extensions))
         public_key = command("openssl", "x509", "-in", str(cert), "-pubkey", "-noout")
@@ -407,7 +414,10 @@ def main():
         directory = Path(temporary)
         ca = directory / "ca.pem"
         command("openssl", "req", "-x509", "-nodes", "-days", "1", "-newkey", "rsa:2048", "-keyout", str(ca.with_suffix(".key")),
-                "-out", str(ca), "-subj", "/CN=FrontierCloud disposable test CA", "-addext", "basicConstraints=critical,CA:TRUE")
+                "-out", str(ca), "-subj", "/CN=FrontierCloud disposable test CA",
+                "-addext", "basicConstraints=critical,CA:TRUE",
+                "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+                "-addext", "subjectKeyIdentifier=hash")
         bundle = directory / "ca-certificates.crt"
         bundle.write_bytes(Path("/etc/ssl/certs/ca-certificates.crt").read_bytes() + b"\n" + ca.read_bytes())
         base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.yaml"), "config", "--format", "json"))
