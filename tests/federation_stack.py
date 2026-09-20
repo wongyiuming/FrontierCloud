@@ -111,6 +111,8 @@ class Node:
                     "type": "bind", "source": str(bundle),
                     "target": "/etc/ssl/certs/ca-certificates.crt", "read_only": True,
                 })
+            if name == "web":
+                service["environment"]["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt"
             for volume in service.get("volumes", []):
                 if volume.get("target") == "/app/data":
                     volume["source"] = str(self.data)
@@ -160,6 +162,12 @@ class Node:
         assert response.status_code == 200, f"{self.name} admin login failed: {response.text[:300]}"
         self.csrf = self.client.cookies.get("__Host-admin-csrf")
         assert self.csrf
+        identity = self.nodes()
+        verified_id = self.web(
+            "import asyncio; from app.services.federation.transport import transport; "
+            f"print(asyncio.run(transport.identity({self.endpoint!r}, expected_id={identity['node_id']!r}, role='Standalone'))['node_id'])"
+        )
+        assert verified_id == identity["node_id"]
 
     def api(self, path, value=None, *, expected=200):
         response = (self.client.get(self.endpoint + path) if value is None else
