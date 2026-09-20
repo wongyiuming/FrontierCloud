@@ -56,7 +56,7 @@ def wait_for(work, seconds=150, description="condition"):
 
 
 class Node:
-    def __init__(self, name, directory, base, ca, bundle, network, index):
+    def __init__(self, name, directory, base, ca, bundle, index):
         self.name, self.directory = name, directory / name
         self.directory.mkdir()
         self.host = ACCEPTANCE_GATEWAY
@@ -86,10 +86,7 @@ class Node:
         configuration.pop("name", None)
         for volume in configuration.get("volumes", {}).values():
             volume.pop("name", None)
-        configuration["networks"] = {
-            "default": {"name": self.project},
-            "acceptance": {"name": network, "external": True},
-        }
+        configuration["networks"] = {"default": {"name": self.project}}
         for name, service in configuration["services"].items():
             service.pop("container_name", None)
             service.pop("env_file", None)
@@ -102,7 +99,6 @@ class Node:
                 service["ports"] = [{"target": 443, "published": str(self.port), "host_ip": ACCEPTANCE_GATEWAY, "protocol": "tcp"}]
             if name in ("web", "nginx"):
                 service.setdefault("environment", {}).update(TLS_ENABLED="true", SERVER_NAME=self.host, INSTANCE_NAME="acceptance")
-                service["networks"] = {"default": None, "acceptance": None}
                 service.setdefault("volumes", []).append({
                     "type": "bind", "source": str(bundle),
                     "target": "/etc/ssl/certs/ca-certificates.crt", "read_only": True,
@@ -153,7 +149,7 @@ class Node:
                  description=f"{self.name} verified HTTPS readiness")
         key = self.web("from app.core.config import ADMIN_KEY_FILE; print(ADMIN_KEY_FILE.read_text().strip())")
         response = self.client.post(self.endpoint + "/api/v1/media/admin/elevate", data={"token": key})
-        assert response.status_code == 200, f"{self.name} admin login failed"
+        assert response.status_code == 200, f"{self.name} admin login failed: {response.text[:300]}"
         self.csrf = self.client.cookies.get("__Host-admin-csrf")
         assert self.csrf
 
@@ -400,7 +396,7 @@ def main():
         base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.yaml"), "config", "--format", "json"))
         try:
             for index, name in enumerate(("master-a", "slave-b", "master-c")):
-                node = Node(name, directory, base, ca, bundle, network, index)
+                node = Node(name, directory, base, ca, bundle, index)
                 nodes.append(node)
                 # Same paths deliberately carry different content and different lyrics.
                 wav(node.data / "media/music/shared/song.wav", seconds=20, tone=500 + index * 100)
