@@ -608,32 +608,34 @@ def main():
             held_browser.close()
             held_playwright.stop()
             held_browser, held_playwright = None, None
-            rss_limit = 12 * 1024 * 1024
+            transient_rss_limit = 64 * 1024 * 1024
+            sustained_rss_limit = 12 * 1024 * 1024
             for service in ("web", "nginx"):
                 soak_samples = [row["master"][service] for row in report["samples"] if row["stage"] == "soak"]
                 peak = max(row["rss"] for row in soak_samples)
                 tail_samples = soak_samples[-5:]
-                tail_peak = max(row["rss"] for row in tail_samples)
+                tail_rss = sorted(row["rss"] for row in tail_samples)
+                # One short allocator or worker spike is transient. Requiring the
+                # second-highest tail sample to stay bounded still catches growth
+                # that survives across consecutive 15-second sampling intervals.
+                settled_peak = tail_rss[-2] if len(tail_rss) > 1 else tail_rss[-1]
                 first = tail_samples[0]
                 last = tail_samples[-1]
                 peak_growth = peak - baseline[service]["rss"]
-                tail_drift = tail_peak - first["rss"]
+                sustained_drift = settled_peak - first["rss"]
                 print(json.dumps({
                     "rss_guard": {
                         "service": service,
                         "baseline_mib": round(baseline[service]["rss"] / 1024 / 1024, 2),
                         "peak_mib": round(peak / 1024 / 1024, 2),
                         "peak_growth_mib": round(peak_growth / 1024 / 1024, 2),
-                        "tail_peak_drift_mib": round(tail_drift / 1024 / 1024, 2),
+                        "tail_sustained_drift_mib": round(sustained_drift / 1024 / 1024, 2),
                         "tail_samples": len(tail_samples),
                     }
                 }), flush=True)
-                # RSS is sampled process-wide and can show short-lived allocator/I/O buffers.
-                # Gate on movement within the settled tail. Comparing every
-                # tail sample to the pre-soak baseline mislabels one-time pool
-                # or allocator growth as a leak even when it remains flat.
-                assert tail_drift <= rss_limit, f"{service} sustained large Relay RSS growth"
-                assert last["rss"] - first["rss"] <= rss_limit, f"{service} steady RSS drift"
+                assert peak_growth <= transient_rss_limit, f"{service} excessive Relay RSS peak"
+                assert sustained_drift <= sustained_rss_limit, f"{service} sustained large Relay RSS growth"
+                assert last["rss"] - first["rss"] <= sustained_rss_limit, f"{service} steady RSS drift"
                 assert last["fd"] - first["fd"] <= 8 and last["sockets"] - first["sockets"] <= 8, f"{service} FD/socket drift"
             a.mode("Direct")
             with sync_playwright() as playwright:
