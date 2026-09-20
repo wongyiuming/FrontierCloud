@@ -163,6 +163,7 @@ assert(adminHtml.includes('id="securityPanel"'));
 assert(adminHtml.includes('id="banList"'));
 assert(adminHtml.includes('/static/css/admin.css?v=20260921-1'));
 assert(adminHtml.includes('/static/js/admin.js?v=20260921-1'));
+assert(adminHtml.includes('/static/js/nodes.js?v=20260921-1'));
 assert(adminHtml.includes('id="randomKey"'));
 assert(adminHtml.includes('id="temporaryKeyForm"'));
 assert(adminHtml.includes('id="permanentBanForm"'));

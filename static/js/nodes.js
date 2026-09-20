@@ -3,7 +3,7 @@
     const element = id => document.getElementById(id);
     const panel = element('nodesPanel');
     if (!panel) return;
-    let loading = false;
+    let refreshQueue = Promise.resolve();
     const status = text => { element('nodeOperationStatus').textContent = text; };
     const visible = (id, show) => element(id).classList.toggle('hidden', !show);
     const post = (path, value = {}) => api(`/api/v1/media/admin/nodes${path}`, {
@@ -22,10 +22,8 @@
         result.type = 'button'; result.textContent = label;
         result.onclick = () => action(work); return result;
     }
-    async function refresh() {
-        if (loading) return;
-        loading = true;
-        try {
+    function refresh() {
+        const current = refreshQueue.then(async () => {
             const node = await api('/api/v1/media/admin/nodes');
             element('nodeIdentity').textContent = `${node.role} · ${node.node_id} · ${node.app_version} / v${node.protocol}${node.endpoint ? ' · ' + node.endpoint : ''}`;
             visible('nodePromotion', node.role === 'Standalone');
@@ -61,7 +59,9 @@
                 operations.appendChild(button('撤销关系', () => post(`/${relation.relationship_id}/revoke`)));
                 row.appendChild(operations); body.appendChild(row);
             }
-        } finally { loading = false; }
+        });
+        refreshQueue = current.catch(() => {});
+        return current;
     }
     element('nodesRefresh').onclick = () => action(async () => {});
     panel.querySelector('.module-heading').addEventListener('click', () => {
