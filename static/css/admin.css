@@ -142,7 +142,12 @@ select { color-scheme: dark; }
 .priority-panel { order: -1; }
 .module-content { display: none; min-height: 0; }
 .admin-module.expanded > .module-content,
-.admin-module.expanded > header + .module-content { display: block; }
+.admin-module.expanded > header + .module-content {
+    display: block;
+    flex: 1 1 0;
+}
+
+.admin-module > .module-heading { flex: 0 0 56px; }
 
 .module-heading {
     display: flex;
