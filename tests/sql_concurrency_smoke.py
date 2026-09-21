@@ -84,8 +84,8 @@ async def main():
                 for number, identifier in enumerate(identifiers)])
         remote_catalog = Catalog(store)
 
-        async def remote(identifier, session=None, delta=None):
-            return await routing.mutate_stats(identifier, delta=delta, session=session,
+        async def remote(identifier, session=None, preference=None):
+            return await routing.mutate_stats(identifier, preference=preference, session=session,
                                               played=30, duration=60, path=None)
 
         with patch.object(routing, "state", store), patch.object(routing, "catalog", remote_catalog):
@@ -114,8 +114,8 @@ async def main():
                     pending.cancel()
                     await asyncio.gather(pending, return_exceptions=True)
 
-            await asyncio.gather(*(remote(identifiers[0], delta=1) for _ in range(12)))
-            assert (await remote(identifiers[0], delta=1))["preference"] == 7
+            await asyncio.gather(*(remote(identifiers[0], preference=500) for _ in range(12)))
+            assert (await remote(identifiers[0], preference=500))["preference"] == 500
             async with database.begin() as conn:
                 await conn.execute(update(s.events).where(s.events.c.session_id == session).values(expires_at=int(time.time()) - 1))
             results = await asyncio.gather(*(remote(identifier, session) for identifier in identifiers))

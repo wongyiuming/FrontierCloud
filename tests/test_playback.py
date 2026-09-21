@@ -22,16 +22,20 @@ class _PlaybackConnection:
     def __init__(self, insert_rowcount):
         self.insert_rowcount = insert_rowcount
         self.increment_count = 0
+        self.preference = 1
 
     async def execute(self, statement, _params=None):
         sql = str(statement)
+        params = _params or {}
+        if "INSERT INTO media_playback_stats" in sql and "value" in params:
+            self.preference = params["value"]
         if "INSERT IGNORE INTO media_playback_events" in sql:
             return _Result(rowcount=self.insert_rowcount)
         if "SET play_score=play_score + 1" in sql:
             self.increment_count += 1
             return _Result()
         if "SELECT play_score" in sql:
-            return _Result(row={"play_score": 8, "preference": 1})
+            return _Result(row={"play_score": 8, "preference": self.preference})
         return _Result()
 
 
@@ -55,16 +59,16 @@ class _Engine:
 
 
 class PlaybackPolicyTests(unittest.TestCase):
-    def test_preference_range_extends_from_negative_two_through_seven(self):
-        self.assertEqual(playback.MIN_PREFERENCE, -2)
-        self.assertEqual(playback.MAX_PREFERENCE, 7)
+    def test_preference_range_extends_from_negative_seven_through_five_hundred(self):
+        self.assertEqual(playback.MIN_PREFERENCE, -7)
+        self.assertEqual(playback.MAX_PREFERENCE, 500)
 
     def test_threshold_uses_half_duration_with_five_and_thirty_second_bounds(self):
         self.assertEqual(playback.valid_playback_threshold(6), 5)
         self.assertEqual(playback.valid_playback_threshold(40), 20)
         self.assertEqual(playback.valid_playback_threshold(600), 30)
 
-    def test_sort_prefers_preference_then_lower_score_with_stable_tie_order(self):
+    def test_sort_uses_manual_preference_and_stable_tie_order_without_play_count(self):
         session_id = "d8088f10-4238-4a62-96f8-f5dd9c981fc1"
         items = [
             {"media_id": "a", "preference": 0, "play_score": 1},
@@ -76,8 +80,9 @@ class PlaybackPolicyTests(unittest.TestCase):
         second = playback.sort_media(list(reversed(items)), session_id)
 
         self.assertEqual(first[0]["media_id"], "b")
-        self.assertEqual(first[-1]["media_id"], "a")
         self.assertEqual([item["media_id"] for item in first], [item["media_id"] for item in second])
+        tied = [item["media_id"] for item in first if item["preference"] == 0]
+        self.assertEqual(set(tied), {"a", "c", "d"})
 
     def test_media_path_validation_rejects_escape_and_accepts_real_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -115,7 +120,8 @@ class PlaybackPolicyTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("CHECK (preference BETWEEN -2 AND 7)", source)
+        self.assertIn("CHECK (preference BETWEEN -7 AND 500)", source)
+        self.assertIn("preference SMALLINT", source)
         self.assertIn("DROP CHECK chk_media_preference", source)
         self.assertNotIn("UPDATE media_playback_stats", source)
 
@@ -168,11 +174,11 @@ class PlaybackIdempotencyTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(playback.media_objects, "ensure_object",
                              new=AsyncMock(return_value="stable-media-id")),
             ):
-                result = await playback.change_preference(
-                    root, "music/artist/song.mp3", 1, audit=audit,
+                result = await playback.set_preference(
+                    root, "music/artist/song.mp3", 300, audit=audit,
                 )
 
-        self.assertEqual(result["preference"], 1)
+        self.assertEqual(result["preference"], 300)
         audit.assert_awaited_once()
         self.assertIs(audit.await_args.args[0], connection)
         self.assertEqual(audit.await_args.args[1:3], ("success", 1))

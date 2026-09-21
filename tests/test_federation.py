@@ -305,10 +305,10 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             results = await asyncio.gather(*(routing.mutate_stats(resource["resource_id"], resource["path"], session=session, played=30, duration=60) for _ in range(12)))
             self.assertEqual(sum(result["counted"] for result in results), 1)
             self.assertEqual(results[-1]["play_score"], 8)
-            await asyncio.gather(*(routing.mutate_stats(resource["resource_id"], resource["path"], delta=1) for _ in range(12)))
-            item = {"resource_id": resource["resource_id"], "play_score": 999, "preference": -2}
+            await routing.mutate_stats(resource["resource_id"], resource["path"], preference=500)
+            item = {"resource_id": resource["resource_id"], "play_score": 999, "preference": -7}
             result = (await routing.attach_master_stats([item]))[0]
-            self.assertEqual((result["play_score"], result["preference"]), (8, 7))
+            self.assertEqual((result["play_score"], result["preference"]), (8, 500))
 
     async def test_lyrics_lookup_stays_on_the_resolved_owner(self):
         row = dict(object_id="a" * 64, path="music/same/song.wav", owner_id="b" * 32)

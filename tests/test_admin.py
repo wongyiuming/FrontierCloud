@@ -260,15 +260,15 @@ class AdminMediaPriorityTests(unittest.IsolatedAsyncioTestCase):
         changed = {"media_id": "local", "preference": 3, "play_score": 9}
         mutation = AsyncMock(return_value=changed)
         payload = admin.MediaPriorityChange(
-            media_path="music/artist/local.mp3", resource_id=None, delta=1,
+            media_path="music/artist/local.mp3", resource_id=None, value=300,
         )
-        with patch.object(admin.playback, "change_preference", new=mutation):
+        with patch.object(admin.playback, "set_preference", new=mutation):
             result = await admin.update_media_priority(payload, _request(), "session")
 
         self.assertEqual(result, changed)
         args, kwargs = mutation.await_args
         self.assertEqual(args[:2], (admin.MEDIA_ROOT, "music/artist/local.mp3"))
-        self.assertEqual(args[2], 1)
+        self.assertEqual(args[2], 300)
         self.assertTrue(callable(kwargs["audit"]))
 
 
