@@ -393,6 +393,16 @@ def browser_checks(browser, master, resource):
     assert page.locator(f'[data-media-id="{resource["resource_id"]}"]').count() == 1
     page.evaluate("selectMedia(currentMediaList.findIndex(item => !item.resource_id))")
     page.wait_for_function("art.video.currentTime > 0.1 && !art.video.paused", timeout=30000)
+    page.wait_for_function("activeLyricEntries.length > 0", timeout=10000)
+    player_url = page.url
+    playback_position = page.evaluate("art.video.currentTime")
+    page.locator('#lyricsLink').click()
+    page.wait_for_function("!document.querySelector('#fullscreenLyrics').classList.contains('hidden')")
+    assert page.url == player_url and page.locator('.fullscreen-lyrics-column').count() == 3
+    page.locator('#fullscreenLyrics').click(position={"x": 12, "y": 12})
+    page.wait_for_function("document.querySelector('#fullscreenLyrics').classList.contains('hidden')")
+    page.wait_for_function("position => art.video.currentTime >= position && !art.video.paused", arg=playback_position)
+    assert page.url == player_url
     page.evaluate("id => selectMedia(currentMediaList.findIndex(item => item.resource_id === id))", resource["resource_id"])
     page.wait_for_function("art.video.readyState >= 1", timeout=60000)
     page.evaluate("async () => { await art.video.play(); art.video.pause(); art.video.currentTime=1; await art.video.play(); }")

@@ -36,10 +36,18 @@
             <span class="header-actions"><a href="{{CATEGORY_LIST_URL}}" class="back-btn">← 返回分类</a></span>
         </div>
         <div class="player-controls">
-            <a id="lyricsLink" class="control-btn lyrics-link unavailable" target="_blank" rel="noopener">全屏歌词</a>
+            <button id="lyricsLink" class="control-btn lyrics-link unavailable" type="button" disabled>全屏歌词</button>
         </div>
         <ul id="mediaList" class="media-list"></ul>
     </div>
+    <section id="fullscreenLyrics" class="fullscreen-lyrics hidden" aria-hidden="true" aria-label="全屏歌词，轻按任意位置返回播放器">
+        <div class="fullscreen-lyrics-columns" aria-live="off">
+            <div id="fullscreenLyricsColumn0" class="fullscreen-lyrics-column"></div>
+            <div id="fullscreenLyricsColumn1" class="fullscreen-lyrics-column"></div>
+            <div id="fullscreenLyricsColumn2" class="fullscreen-lyrics-column"></div>
+        </div>
+        <span class="fullscreen-lyrics-hint">轻按任意位置返回播放器</span>
+    </section>
 
     <script>
         const currentMediaList = {{MEDIA_JSON}};
