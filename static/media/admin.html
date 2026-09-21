@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿娱乐 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260921-4">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260921-5">
 </head>
 <body>
     <main class="admin-console">
@@ -33,7 +33,7 @@
         </section>
 
         <section id="priorityPanel" class="admin-module priority-panel" data-admin-module="priority">
-            <button class="module-heading" type="button" aria-expanded="false"><span><strong>媒体展示优先级</strong><small>按媒体目录分类；沿用现有积分与优先级数据</small></span><b>＋</b></button>
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>媒体展示优先级</strong><small>按媒体目录分类；滑块松手后保存确定值</small></span><b>＋</b></button>
             <div class="module-content priority-content">
                 <form id="priorityFilterForm" class="priority-toolbar">
                     <input id="prioritySearch" type="search" maxlength="100" autocomplete="off" placeholder="搜索媒体名称或路径">
@@ -120,7 +120,7 @@
         </section>
 
         <section id="lyricsPanel" class="admin-module lyrics-panel" data-admin-module="lyrics">
-            <button class="module-heading" type="button" aria-expanded="false"><span><strong>歌词关联</strong><small>先选择一首曲目或一份歌词，再进入连线编辑</small></span><b>＋</b></button>
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>歌词关联</strong><small>选择歌词后关联曲目；Shift/Ctrl 支持批量选择</small></span><b>＋</b></button>
             <div class="module-content lyrics-content">
                 <div class="lyrics-stats">
                     <span>曲目<strong id="lyricsTrackCount">-</strong></span>
@@ -128,25 +128,23 @@
                     <span>关联<strong id="lyricsRelationCount">-</strong></span>
                 </div>
                 <div class="lyrics-toolbar">
-                    <span id="lyricsModeStatus">请选择一个起点</span>
+                    <span id="lyricsModeStatus">请选择一份歌词</span>
                     <button id="lyricsRefresh" type="button">刷新</button>
-                    <button id="lyricsEnterLink" type="button" disabled>进入连线</button>
-                    <button id="lyricsCancelLink" class="hidden" type="button">取消</button>
                     <button id="lyricsSaveLink" class="hidden" type="button">保存关联</button>
                 </div>
                 <div class="lyrics-browser">
                     <section>
-                        <label>曲目<input id="lyricsTrackFilter" type="search" maxlength="100" placeholder="搜索当前目录及其子目录"></label>
-                        <div id="lyricsTrackPath" class="lyrics-pathbar">/data/media/music</div>
-                        <div id="lyricsTrackList" class="lyrics-object-list"></div>
-                    </section>
-                    <section>
-                        <label>歌词<input id="lyricsFileFilter" type="search" maxlength="100" placeholder="搜索当前目录及其子目录"></label>
+                        <label><span>歌词</span><select id="lyricsFileUsage" aria-label="歌词使用状态"><option value="all">全部</option><option value="unused">未使用</option><option value="used">已使用</option></select><input id="lyricsFileFilter" type="search" maxlength="100" placeholder="搜索当前目录及其子目录"></label>
                         <div id="lyricsFilePath" class="lyrics-pathbar">/data/media/lyrics</div>
                         <div id="lyricsFileList" class="lyrics-object-list"></div>
                     </section>
+                    <section>
+                        <label><span>曲目</span><select id="lyricsTrackUsage" aria-label="曲目关联状态"><option value="all">全部</option><option value="unused">未使用</option><option value="used">已使用</option></select><input id="lyricsTrackFilter" type="search" maxlength="100" placeholder="搜索当前目录及其子目录"></label>
+                        <div id="lyricsTrackPath" class="lyrics-pathbar">/data/media/music</div>
+                        <div id="lyricsTrackList" class="lyrics-object-list"></div>
+                    </section>
                 </div>
-                <div class="lyrics-graph-wrap"><svg id="lyricsGraph" class="lyrics-graph" role="img" aria-label="当前选中对象的歌词关联图"></svg></div>
+                <pre id="lyricsRelationJson" class="lyrics-relation-json" aria-label="当前待保存的歌词关联 JSON">{"歌词": null, "曲目": []}</pre>
             </div>
         </section>
         <section id="networkPanel" class="admin-module network-panel" data-admin-module="network">
@@ -248,7 +246,7 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260921-3"></script>
+    <script src="/static/js/admin.js?v=20260921-4"></script>
     <script src="/static/js/nodes.js?v=20260921-1"></script>
 </body>
 </html>

@@ -36,7 +36,7 @@ router = APIRouter()
 class MediaPriorityChange(BaseModel):
     media_path: str = Field(min_length=1, max_length=1024)
     resource_id: str | None = Field(None, pattern=r"^[a-f0-9]{64}$")
-    delta: int
+    value: int = Field(ge=-7, le=500)
 
 
 def _media_priority_scope(value: str) -> str:
@@ -258,7 +258,6 @@ async def media_priority(
     )
     items.sort(key=lambda item: (
         -int(item.get("preference", 0)),
-        int(item.get("play_score", 0)),
         str(item["media_path"]).casefold(),
         str(item["media_id"]),
     ))
@@ -289,10 +288,10 @@ async def update_media_priority(
     try:
         if payload.resource_id:
             return await node_routing.mutate_stats(
-                payload.resource_id, payload.media_path, delta=payload.delta, audit=audit,
+                payload.resource_id, payload.media_path, preference=payload.value, audit=audit,
             )
-        return await playback.change_preference(
-            MEDIA_ROOT, payload.media_path, payload.delta, audit=audit,
+        return await playback.set_preference(
+            MEDIA_ROOT, payload.media_path, payload.value, audit=audit,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -398,7 +397,6 @@ async def lyric_catalog(
     try:
         result = await lyrics.catalog(track_path, lyric_path, track_q, lyric_q)
     except ValueError as exc:
-        await admin_service.audit(session_hash, "lyric_relations", len(linked_paths), str(payload.get("origin_path", "")), "failed", str(exc), request)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 

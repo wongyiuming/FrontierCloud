@@ -523,7 +523,7 @@ def main():
             with ThreadPoolExecutor(max_workers=8) as executor:
                 counted = list(executor.map(lambda _: a.api("/api/v1/media/playback", payload)["counted"], range(12)))
             assert sum(counted) == 1
-            a.api("/api/v1/media/admin/media-priority", {"media_path": payload["media_path"], "resource_id": payload["resource_id"], "delta": 1})
+            a.api("/api/v1/media/admin/media-priority", {"media_path": payload["media_path"], "resource_id": payload["resource_id"], "value": 123})
             report["checks"].append("Master accounting idempotence and authoritative preference")
             # Explicit Slave reset revokes all relationships but retains owned files.
             identity = b.nodes()["node_id"]

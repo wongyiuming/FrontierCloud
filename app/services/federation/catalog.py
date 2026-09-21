@@ -29,7 +29,7 @@ def valid_payload(payload: dict) -> dict:
         if PurePosixPath(path).suffix.lower() not in extensions[parts[0]]:
             raise ValueError()
         score, preference, size = int(payload["play_score"]), int(payload["preference"]), int(payload["size"])
-        if score < 0 or score > 2**63 - 1 or not -2 <= preference <= 7 or not 0 <= size <= 2**63 - 1:
+        if score < 0 or score > 2**63 - 1 or not -7 <= preference <= 500 or not 0 <= size <= 2**63 - 1:
             raise ValueError()
         return dict(path=path, size=size, etag=str(payload["etag"])[:128], updated_at=int(payload["updated_at"]),
                     play_score=score, preference=preference, has_lyrics=bool(payload.get("has_lyrics")),

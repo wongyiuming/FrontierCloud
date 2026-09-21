@@ -17,6 +17,8 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertNotIn("/api/v1/media/preference", script)
         self.assertNotIn("preference-btn", script)
         self.assertNotIn("media-preference", script)
+        self.assertNotIn("media-score", script)
+        self.assertIn("function middleEllipsis", script)
         self.assertNotIn(">💔</button>", script)
         self.assertNotIn(">❤️</button>", script)
         self.assertIn("const playbackSessionId = {{PLAYBACK_SESSION_ID}}", audio_template)

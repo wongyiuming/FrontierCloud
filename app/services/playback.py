@@ -17,8 +17,8 @@ from app.services.media_manager import ensure_media_mutations_ready, media_mutat
 
 
 PLAYBACK_EVENT_TTL_DAYS = 7
-MIN_PREFERENCE = -2
-MAX_PREFERENCE = 7
+MIN_PREFERENCE = -7
+MAX_PREFERENCE = 500
 _next_cleanup_at = 0.0
 
 
@@ -50,7 +50,6 @@ def sort_media(items: list[dict[str, Any]], session_id: str) -> list[dict[str, A
         items,
         key=lambda item: (
             -int(item.get("preference", 0)),
-            int(item.get("play_score", 0)),
             stable_random_key(session_id, str(item["media_id"])),
         ),
     )
@@ -194,9 +193,9 @@ async def record_playback(
     }
 
 
-async def change_preference(media_root: Path, relative_path: str, delta: int, *, audit=None) -> dict[str, Any]:
-    if delta not in {-1, 1}:
-        raise ValueError("Preference delta must be -1 or 1")
+async def set_preference(media_root: Path, relative_path: str, value: int, *, audit=None) -> dict[str, Any]:
+    if isinstance(value, bool) or not isinstance(value, int) or not MIN_PREFERENCE <= value <= MAX_PREFERENCE:
+        raise ValueError(f"Preference must be between {MIN_PREFERENCE} and {MAX_PREFERENCE}")
     now = _utcnow()
     async with media_mutation_lock.shared():
         ensure_media_mutations_ready()
@@ -208,18 +207,16 @@ async def change_preference(media_root: Path, relative_path: str, delta: int, *,
                 text("""
                     INSERT INTO media_playback_stats
                     (media_id, media_path, play_score, preference, created_at, updated_at)
-                    VALUES (:media_id, :media_path, 0, :delta, :now, :now)
+                    VALUES (:media_id, :media_path, 0, :value, :now, :now)
                     ON DUPLICATE KEY UPDATE
                         media_path=VALUES(media_path),
-                        preference=LEAST(:maximum, GREATEST(:minimum, preference + :delta)),
+                        preference=VALUES(preference),
                         updated_at=VALUES(updated_at)
                 """),
                 {
                     "media_id": media_id,
                     "media_path": normalized_path,
-                    "delta": delta,
-                    "minimum": MIN_PREFERENCE,
-                    "maximum": MAX_PREFERENCE,
+                    "value": value,
                     "now": now,
                 },
             )

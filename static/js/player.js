@@ -448,6 +448,14 @@ function escapeHTML(str) {
     }[tag] || tag));
 }
 
+function middleEllipsis(value, maximum = 40) {
+    const characters = Array.from(String(value || ''));
+    if (characters.length <= maximum) return characters.join('');
+    const head = Math.ceil((maximum - 3) / 2);
+    const tail = Math.floor((maximum - 3) / 2);
+    return `${characters.slice(0, head).join('')}...${characters.slice(-tail).join('')}`;
+}
+
 function updateMediaSession(media) {
     if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
@@ -500,13 +508,6 @@ function playbackThreshold(duration) {
     return Math.max(5, Math.min(30, duration * 0.5));
 }
 
-function updateTrackStats(media) {
-    const row = document.querySelector(`.media-item[data-media-id="${media.media_id}"]`);
-    if (!row) return;
-    const score = row.querySelector('.media-score');
-    if (score) score.textContent = `播放 ${media.play_score}`;
-}
-
 function resetPlaybackAccounting(media) {
     playbackState = {
         mediaId: media.media_id,
@@ -554,7 +555,6 @@ async function reportValidPlayback() {
         const data = await response.json();
         reportingState.reported = true;
         media.play_score = data.play_score;
-        updateTrackStats(media);
     } catch (_error) {
         // Playback remains available while transient accounting failures retry.
     } finally {
@@ -867,7 +867,7 @@ function initPlayer(media, index) {
         if (art.url !== playbackUrl) art.url = playbackUrl;
         else art.currentTime = 0;
         if (previousObjectUrl) URL.revokeObjectURL(previousObjectUrl);
-        art.title = media.title;
+        art.title = middleEllipsis(media.title, 54);
         Promise.resolve(art.play()).then(() => {
             if (sequence !== playerSwitchSequence) return;
             updateMediaSession(media);
@@ -886,7 +886,7 @@ function initPlayer(media, index) {
     art = new PlayerClass({
         container: '#artplayer',
         url: playbackUrl,
-        title: media.title,
+        title: middleEllipsis(media.title, 54),
         volume: 0.7,
     });
     bindPlayerBusinessEvents();
@@ -1134,9 +1134,8 @@ function renderPlaylist() {
         <li class="media-item ${index === currentIndex ? 'active' : ''}" data-index="${index}" data-media-id="${escapeHTML(item.media_id)}" onclick="selectMedia(${index})">
             <img src="${escapeHTML(item.cover)}" alt="cover">
             <div class="media-info">
-                <div class="media-title">${escapeHTML(item.title)}</div>
+                <div class="media-title" title="${escapeHTML(item.title)}">${escapeHTML(middleEllipsis(item.title, 40))}</div>
                 <div class="media-artist">${escapeHTML(item.artist)}</div>
-                <div class="media-stats"><span class="media-score">播放 ${item.play_score}</span></div>
             </div>
         </li>
     `).join('');

@@ -8,7 +8,7 @@ from app.core import db
 class _MigrationConnection:
     def __init__(
         self,
-        preference_check="(`preference` between -(2) and 7)",
+        preference_check="(`preference` between -(7) and 500)",
         *,
         get_lock_error=None,
         release_result=1,
@@ -35,6 +35,8 @@ class _MigrationConnection:
             return self.release_result
         if "COLLATION_NAME" in sql:
             return "utf8mb4_bin"
+        if "DATA_TYPE" in sql:
+            return "smallint"
         if "information_schema.columns" in sql:
             return 1
         if "information_schema.statistics" in sql:

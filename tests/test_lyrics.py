@@ -121,7 +121,7 @@ class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual([item["path"] for item in items], ["music/黃耀明/人山人海/暗湧.mp3"])
-        self.assertEqual([item["path"] for item in directories], ["music/黃耀明/人山人海"])
+        self.assertEqual(directories, [])
         self.assertEqual(total, 2)
         self.assertFalse(truncated)
 

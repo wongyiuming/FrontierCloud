@@ -382,11 +382,11 @@ async def init_db() -> None:
                     media_id CHAR(64) NOT NULL PRIMARY KEY,
                     media_path VARCHAR(1024) NOT NULL,
                     play_score BIGINT UNSIGNED NOT NULL DEFAULT 0,
-                    preference TINYINT NOT NULL DEFAULT 0,
+                    preference SMALLINT NOT NULL DEFAULT 0,
                     created_at DATETIME(6) NOT NULL,
                     updated_at DATETIME(6) NOT NULL,
                     INDEX idx_playback_sort (preference, play_score),
-                    CONSTRAINT chk_media_preference CHECK (preference BETWEEN -2 AND 7)
+                    CONSTRAINT chk_media_preference CHECK (preference BETWEEN -7 AND 500)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
             preference_check = await conn.scalar(text("""
@@ -395,24 +395,31 @@ async def init_db() -> None:
                 WHERE CONSTRAINT_SCHEMA=DATABASE()
                   AND CONSTRAINT_NAME='chk_media_preference'
             """))
+            preference_type = await conn.scalar(text("""
+                SELECT DATA_TYPE
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA=DATABASE()
+                  AND TABLE_NAME='media_playback_stats'
+                  AND COLUMN_NAME='preference'
+            """))
             await conn.commit()
             normalized_check = re.sub(r"[`\s()]", "", str(preference_check or "")).lower()
             normalized_check = normalized_check.replace("media_playback_stats.", "")
-            expected_check = "preferencebetween-2and7"
+            expected_check = "preferencebetween-7and500"
+            clauses = []
+            if normalized_check != expected_check and preference_check:
+                clauses.append("DROP CHECK chk_media_preference")
+            if str(preference_type or "").lower() != "smallint":
+                clauses.append("MODIFY COLUMN preference SMALLINT NOT NULL DEFAULT 0")
             if normalized_check != expected_check:
-                if preference_check:
-                    await _commit_ddl(conn, """
-                        ALTER TABLE media_playback_stats
-                        DROP CHECK chk_media_preference,
-                        ADD CONSTRAINT chk_media_preference
-                        CHECK (preference BETWEEN -2 AND 7)
-                    """)
-                else:
-                    await _commit_ddl(conn, """
-                        ALTER TABLE media_playback_stats
-                        ADD CONSTRAINT chk_media_preference
-                        CHECK (preference BETWEEN -2 AND 7)
-                    """)
+                clauses.append(
+                    "ADD CONSTRAINT chk_media_preference CHECK (preference BETWEEN -7 AND 500)"
+                )
+            if clauses:
+                await _commit_ddl(
+                    conn,
+                    "ALTER TABLE media_playback_stats " + ", ".join(clauses),
+                )
             await _commit_ddl(conn, """
                 CREATE TABLE IF NOT EXISTS media_playback_events (
                     playback_session_id CHAR(36) NOT NULL,
