@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿娱乐 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260921-2">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260921-3">
 </head>
 <body>
     <main class="admin-console">
@@ -83,6 +83,10 @@
                 </form>
                 <form id="securityFilterForm" class="security-filter-form">
                     <input id="securityIpFilter" type="text" maxlength="45" autocomplete="off" placeholder="精确 IP（可选）">
+                    <select id="securityMatchMode" aria-label="IP 查询方式">
+                        <option value="exact">精确查</option>
+                        <option value="fuzzy">模糊查</option>
+                    </select>
                     <select id="securityStatusFilter">
                         <option value="">全部状态</option>
                         <option value="active">当前封禁</option>
@@ -147,6 +151,10 @@
                 <form id="networkFilterForm" class="network-filter-form">
                     <input id="networkPublicIp" type="text" maxlength="45" autocomplete="off" placeholder="公网 IP（精确查询）">
                     <input id="networkWebrtcIp" type="text" maxlength="45" autocomplete="off" placeholder="WebRTC IP（精确查询）">
+                    <select id="networkMatchMode" aria-label="IP 查询方式">
+                        <option value="exact">精确查</option>
+                        <option value="fuzzy">模糊查</option>
+                    </select>
                     <button type="submit">查询</button>
                     <button id="networkReset" type="button">最近访问</button>
                 </form>
@@ -154,6 +162,9 @@
                 <div id="networkViewSwitch" class="network-view-switch" role="group" aria-label="WebRTC 关系展示方式">
                     <button type="button" class="selected" data-network-view="public">公网 IP → WebRTC IP</button>
                     <button type="button" data-network-view="webrtc">WebRTC IP → 公网 IP</button>
+                    <span></span>
+                    <button id="networkExpandAll" type="button">全部展开</button>
+                    <button id="networkCollapseAll" type="button">全部收起</button>
                 </div>
                 <div id="networkList" class="network-list"></div>
                 <div class="network-pagination">
@@ -233,7 +244,7 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260921-1"></script>
+    <script src="/static/js/admin.js?v=20260921-2"></script>
     <script src="/static/js/nodes.js?v=20260921-1"></script>
 </body>
 </html>

@@ -11,6 +11,7 @@ let securityPages = 1;
 let networkPage = 1;
 let networkPages = 1;
 let networkView = 'public';
+const networkExpandedGroups = new Set();
 let priorityPage = 1;
 let priorityPages = 1;
 let priorityLoading = false;
@@ -744,6 +745,7 @@ async function loadSecurityStatus(force = false) {
         });
         const ip = $('securityIpFilter').value.trim();
         const status = $('securityStatusFilter').value;
+        params.set('match_mode', $('securityMatchMode').value);
         if (ip) params.set('ip', ip);
         if (status) params.set('status', status);
         renderSecurityList(await api(`/api/v1/media/admin/security/blocks?${params}`));
@@ -760,6 +762,18 @@ $('securityFilterForm').onsubmit = event => {
     securityPage = 1;
     loadSecurityStatus(true);
 };
+
+function updateIpSearchPlaceholders() {
+    const securityFuzzy = $('securityMatchMode').value === 'fuzzy';
+    $('securityIpFilter').placeholder = securityFuzzy ? 'IP 片段（至少 3 个字符）' : '精确 IP（可选）';
+    const networkFuzzy = $('networkMatchMode').value === 'fuzzy';
+    $('networkPublicIp').placeholder = networkFuzzy ? '公网 IP 片段（至少 3 字符）' : '公网 IP（精确查询）';
+    $('networkWebrtcIp').placeholder = networkFuzzy ? 'WebRTC IP 片段（至少 3 字符）' : 'WebRTC IP（精确查询）';
+}
+
+$('securityMatchMode').onchange = updateIpSearchPlaceholders;
+$('networkMatchMode').onchange = updateIpSearchPlaceholders;
+updateIpSearchPlaceholders();
 $('securityPrev').onclick = () => {
     if (securityPage > 1) {
         securityPage -= 1;
@@ -820,7 +834,7 @@ function renderMediaPriority(data) {
         row.innerHTML = `
             <div class="priority-main">
                 <strong>${escapeHtml(item.title)}</strong>
-                <small>${escapeHtml(item.media_path)}${item.hidden ? ' · 已隐藏' : ''}</small>
+                <small><span>路径</span><code>/data/media/${escapeHtml(item.media_path)}${item.hidden ? ' · 已隐藏' : ''}</code></small>
             </div>
             <div class="priority-values">
                 <span>${item.type === 'audio' ? '音乐' : '视频'}</span>
@@ -859,7 +873,7 @@ function renderMediaPriority(data) {
     if (!list.children.length) list.innerHTML = '<div class="priority-empty">没有符合条件的媒体</div>';
     priorityPage = data.pagination?.page || 1;
     priorityPages = data.pagination?.pages || 1;
-    $('prioritySummary').textContent = `共 ${data.pagination?.total || 0} 个媒体；高优先级优先，相同优先级下播放次数较少的优先`;
+    $('prioritySummary').textContent = `共 ${data.pagination?.total || 0} 个本机与跨节点媒体；高优先级优先，相同优先级下播放次数较少的优先`;
     $('priorityPageInfo').textContent = `第 ${priorityPage} / ${priorityPages} 页`;
     $('priorityPrev').disabled = priorityPage <= 1;
     $('priorityNext').disabled = priorityPage >= priorityPages;
@@ -902,12 +916,16 @@ $('priorityNext').onclick = () => {
 function renderNetworkGroups(list, data) {
     const reverse = data.view === 'webrtc';
     for (const group of data.groups || []) {
+        const stateKey = `${data.view}:${group.key}`;
         const card = document.createElement('section');
         card.className = 'network-group';
-        const header = document.createElement('div');
+        card.dataset.networkGroup = stateKey;
+        const header = document.createElement('button');
+        header.type = 'button';
         header.className = 'network-group-header';
+        const relationCount = Number(group.relation_count ?? group.relations?.length ?? 0);
         header.innerHTML = `<div><strong>${escapeHtml(group.key)}</strong><small>${networkTimeLine(group)}</small></div>`
-            + `<span>${group.observation_count || 0} 次 · ${group.relations?.length || 0} 个关联</span>`;
+            + `<span>${group.observation_count || 0} 次 · N=${relationCount}</span>`;
         const branches = document.createElement('div');
         branches.className = 'network-branches';
         for (const relation of group.relations || []) {
@@ -918,7 +936,15 @@ function renderNetworkGroups(list, data) {
                 + `<span>${relation.observation_count || 0} 次</span>`;
             branches.appendChild(child);
         }
+        const setExpanded = expanded => {
+            header.setAttribute('aria-expanded', String(expanded));
+            branches.hidden = !expanded;
+            if (expanded) networkExpandedGroups.add(stateKey);
+            else networkExpandedGroups.delete(stateKey);
+        };
+        header.onclick = () => setExpanded(header.getAttribute('aria-expanded') !== 'true');
         card.append(header, branches);
+        setExpanded(networkExpandedGroups.has(stateKey));
         list.appendChild(card);
     }
 }
@@ -946,6 +972,7 @@ async function loadNetworkObservations() {
     const params = new URLSearchParams({page: String(networkPage), page_size: '100', view: networkView});
     const publicIp = $('networkPublicIp').value.trim();
     const webrtcIp = $('networkWebrtcIp').value.trim();
+    params.set('match_mode', $('networkMatchMode').value);
     if (publicIp) params.set('public_ip', publicIp);
     if (webrtcIp) params.set('webrtc_ip', webrtcIp);
     renderNetworkObservations(await api(`/api/v1/media/admin/network/observations?${params}`));
@@ -960,6 +987,7 @@ $('networkFilterForm').onsubmit = event => {
 for (const button of document.querySelectorAll('[data-network-view]')) {
     button.onclick = () => {
         networkView = button.dataset.networkView;
+        networkExpandedGroups.clear();
         networkPage = 1;
         for (const candidate of document.querySelectorAll('[data-network-view]')) {
             candidate.classList.toggle('selected', candidate === button);
@@ -967,8 +995,22 @@ for (const button of document.querySelectorAll('[data-network-view]')) {
         loadNetworkObservations().catch(error => alert(error.message));
     };
 }
+$('networkExpandAll').onclick = () => {
+    for (const card of document.querySelectorAll('[data-network-group]')) {
+        const header = card.querySelector('.network-group-header');
+        if (header?.getAttribute('aria-expanded') !== 'true') header?.click();
+    }
+};
+$('networkCollapseAll').onclick = () => {
+    for (const card of document.querySelectorAll('[data-network-group]')) {
+        const header = card.querySelector('.network-group-header');
+        if (header?.getAttribute('aria-expanded') === 'true') header?.click();
+    }
+};
 $('networkReset').onclick = () => {
     $('networkFilterForm').reset();
+    updateIpSearchPlaceholders();
+    networkExpandedGroups.clear();
     networkPage = 1;
     loadNetworkObservations().catch(error => alert(error.message));
 };

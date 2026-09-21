@@ -90,6 +90,33 @@ class SummaryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await ip_security.list_security_summary(ip_order="desc; DROP TABLE x")
 
+    async def test_fuzzy_ip_search_has_hard_query_bounds(self):
+        count, stats, rows = MagicMock(), MagicMock(), MagicMock()
+        count.scalar_one.return_value = 0
+        stats.mappings.return_value.one.return_value = {"active_count": 0, "whitelist_count": 0}
+        rows.mappings.return_value.all.return_value = []
+        conn = AsyncMock()
+        conn.execute.side_effect = [count, stats, rows]
+
+        @asynccontextmanager
+        async def connect():
+            yield conn
+
+        with patch.object(ip_security, "engine") as engine:
+            engine.connect = connect
+            result = await ip_security.list_security_summary(
+                ip_filter="0.113", match_mode="fuzzy", page_size=200,
+            )
+        statements = "\n".join(str(call.args[0]) for call in conn.execute.call_args_list)
+        self.assertIn("ip_address LIKE :ip", statements)
+        self.assertIn("MAX_EXECUTION_TIME(250)", statements)
+        self.assertEqual(conn.execute.call_args_list[0].args[1]["ip"], "%0.113%")
+        self.assertEqual(result["pagination"]["page_size"], 50)
+        with self.assertRaisesRegex(ValueError, "至少需要 3"):
+            await ip_security.list_security_summary(ip_filter="1.", match_mode="fuzzy")
+        with self.assertRaisesRegex(ValueError, "前 20 页"):
+            await ip_security.list_security_summary(ip_filter="203", match_mode="fuzzy", page=21)
+
     async def test_whitelist_removal_evidence_is_written_inside_state_transaction(self):
         conn = AsyncMock()
 

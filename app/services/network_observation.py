@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Iterable
@@ -8,6 +9,7 @@ from typing import Iterable
 from fastapi import HTTPException, Request
 from redis.exceptions import RedisError
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from app.core.client_ip import resolve_client_identity
 from app.core.config import settings
@@ -17,6 +19,11 @@ from app.core.redis import redis_client
 
 REPORT_PREFIX = "webrtc:observation:"
 ALLOWED_FAILURES = {"unsupported", "disabled", "timeout", "no_srflx", "ice_error"}
+IP_SEARCH_MODES = {"exact", "fuzzy"}
+FUZZY_MIN_CHARACTERS = 3
+FUZZY_MAX_PAGE = 20
+FUZZY_MAX_PAGE_SIZE = 50
+FUZZY_QUERY_TIMEOUT_MS = 250
 RELEASE_RESERVATION = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
     return redis.call('DEL', KEYS[1])
@@ -150,6 +157,35 @@ def _optional_ip(value: str | None) -> str | None:
         raise ValueError("IP 地址无效") from exc
 
 
+def _ip_search_value(value: str | None, mode: str) -> str | None:
+    if mode not in IP_SEARCH_MODES:
+        raise ValueError("IP 查询方式无效")
+    if value is None or not str(value).strip():
+        return None
+    if mode == "exact":
+        return _optional_ip(value)
+    fragment = str(value).strip().lower()
+    if len(fragment) < FUZZY_MIN_CHARACTERS:
+        raise ValueError(f"模糊 IP 查询至少需要 {FUZZY_MIN_CHARACTERS} 个字符")
+    if len(fragment) > 45 or not re.fullmatch(r"[0-9a-f:.]+", fragment):
+        raise ValueError("模糊 IP 查询只允许十六进制数字、冒号和点")
+    return fragment
+
+
+def _append_ip_clause(
+    clauses: list[str], parameters: dict[str, object], column: str,
+    name: str, value: str | None, mode: str,
+) -> None:
+    if not value:
+        return
+    if mode == "exact":
+        clauses.append(f"{column}=:{name}")
+        parameters[name] = value
+    else:
+        clauses.append(f"{column} LIKE :{name}")
+        parameters[name] = f"%{value}%"
+
+
 def _serialize_summary_row(row) -> dict[str, object]:
     item = dict(row)
     for field in ("first_seen", "last_seen"):
@@ -165,49 +201,58 @@ async def list_observation_summary(
     webrtc_ip: str | None = None,
     page: int = 1,
     page_size: int = 100,
+    match_mode: str = "exact",
 ) -> dict[str, object]:
-    public_ip = _optional_ip(public_ip)
-    webrtc_ip = _optional_ip(webrtc_ip)
+    public_ip = _ip_search_value(public_ip, match_mode)
+    webrtc_ip = _ip_search_value(webrtc_ip, match_mode)
+    page = max(1, page)
+    page_size = max(1, min(200, page_size))
+    if match_mode == "fuzzy":
+        if page > FUZZY_MAX_PAGE:
+            raise ValueError(f"模糊查询最多查看前 {FUZZY_MAX_PAGE} 页")
+        page_size = min(page_size, FUZZY_MAX_PAGE_SIZE)
     clauses: list[str] = []
     parameters: dict[str, object] = {
         "limit": page_size,
         "offset": (page - 1) * page_size,
     }
-    if public_ip:
-        clauses.append("client_ip=:public_ip")
-        parameters["public_ip"] = public_ip
-    if webrtc_ip:
-        clauses.append("webrtc_ip=:webrtc_ip")
-        parameters["webrtc_ip"] = webrtc_ip
+    _append_ip_clause(clauses, parameters, "client_ip", "public_ip", public_ip, match_mode)
+    _append_ip_clause(clauses, parameters, "webrtc_ip", "webrtc_ip", webrtc_ip, match_mode)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    async with engine.connect() as conn:
-        total = await conn.scalar(text(f"""
-            SELECT COUNT(*)
-            FROM webrtc_observation_summary
-            {where}
-        """), parameters)
-        result = await conn.execute(text(f"""
-            SELECT
-                client_ip,
-                webrtc_ip,
-                observation_count,
-                first_seen,
-                last_seen,
-                matching_count,
-                last_outcome AS outcomes
-            FROM webrtc_observation_summary
-            {where}
-            ORDER BY last_seen DESC, client_ip ASC, webrtc_ip ASC
-            LIMIT :limit OFFSET :offset
-        """), parameters)
-        rows = result.mappings().all()
+    hint = f"/*+ MAX_EXECUTION_TIME({FUZZY_QUERY_TIMEOUT_MS}) */ " if match_mode == "fuzzy" else ""
+    try:
+        async with engine.connect() as conn:
+            total = await conn.scalar(text(f"""
+                SELECT {hint}COUNT(*)
+                FROM webrtc_observation_summary
+                {where}
+            """), parameters)
+            result = await conn.execute(text(f"""
+                SELECT {hint}
+                    client_ip,
+                    webrtc_ip,
+                    observation_count,
+                    first_seen,
+                    last_seen,
+                    matching_count,
+                    last_outcome AS outcomes
+                FROM webrtc_observation_summary
+                {where}
+                ORDER BY last_seen DESC, client_ip ASC, webrtc_ip ASC
+                LIMIT :limit OFFSET :offset
+            """), parameters)
+            rows = result.mappings().all()
+    except DBAPIError as exc:
+        if match_mode == "fuzzy":
+            raise ValueError("模糊查询计算超过 250ms，请增加 IP 片段长度") from exc
+        raise
     total = int(total or 0)
     pages = max(1, (total + page_size - 1) // page_size)
     items = [_serialize_summary_row(row) for row in rows]
     return {
         "items": items,
         "pagination": {"page": page, "page_size": page_size, "pages": pages, "total": total},
-        "filters": {"public_ip": public_ip, "webrtc_ip": webrtc_ip},
+        "filters": {"public_ip": public_ip, "webrtc_ip": webrtc_ip, "match_mode": match_mode},
         "view": "pairs",
     }
 
@@ -218,64 +263,73 @@ async def list_grouped_observation_summary(
     webrtc_ip: str | None = None,
     page: int = 1,
     page_size: int = 100,
+    match_mode: str = "exact",
 ) -> dict[str, object]:
     if direction not in {"public", "webrtc"}:
         raise ValueError("WebRTC 聚合方向无效")
-    public_ip = _optional_ip(public_ip)
-    webrtc_ip = _optional_ip(webrtc_ip)
+    public_ip = _ip_search_value(public_ip, match_mode)
+    webrtc_ip = _ip_search_value(webrtc_ip, match_mode)
     page = max(1, page)
     page_size = max(1, min(200, page_size))
+    if match_mode == "fuzzy":
+        if page > FUZZY_MAX_PAGE:
+            raise ValueError(f"模糊查询最多查看前 {FUZZY_MAX_PAGE} 页")
+        page_size = min(page_size, FUZZY_MAX_PAGE_SIZE)
     group_column = "client_ip" if direction == "public" else "webrtc_ip"
     clauses: list[str] = []
     parameters: dict[str, object] = {
         "limit": page_size,
         "offset": (page - 1) * page_size,
     }
-    if public_ip:
-        clauses.append("client_ip=:public_ip")
-        parameters["public_ip"] = public_ip
-    if webrtc_ip:
-        clauses.append("webrtc_ip=:webrtc_ip")
-        parameters["webrtc_ip"] = webrtc_ip
+    _append_ip_clause(clauses, parameters, "client_ip", "public_ip", public_ip, match_mode)
+    _append_ip_clause(clauses, parameters, "webrtc_ip", "webrtc_ip", webrtc_ip, match_mode)
     if direction == "webrtc":
         clauses.append("webrtc_ip IS NOT NULL")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    async with engine.connect() as conn:
-        total = await conn.scalar(text(f"""
-            SELECT COUNT(DISTINCT {group_column})
-            FROM webrtc_observation_summary
-            {where}
-        """), parameters)
-        grouped_rows = (await conn.execute(text(f"""
-            SELECT {group_column} AS group_key,
-                   SUM(observation_count) AS observation_count,
-                   MIN(first_seen) AS first_seen,
-                   MAX(last_seen) AS last_seen
-            FROM webrtc_observation_summary
-            {where}
-            GROUP BY {group_column}
-            ORDER BY MAX(last_seen) DESC, {group_column} ASC
-            LIMIT :limit OFFSET :offset
-        """), parameters)).mappings().all()
-        group_keys = [str(row["group_key"]) for row in grouped_rows]
-        relationship_rows = []
-        if group_keys:
-            key_parameters = {f"group_{index}": key for index, key in enumerate(group_keys)}
-            placeholders = ",".join(f":group_{index}" for index in range(len(group_keys)))
-            detail_clauses = list(clauses)
-            detail_clauses.append(f"{group_column} IN ({placeholders})")
-            detail_where = "WHERE " + " AND ".join(detail_clauses)
-            relationship_rows = (await conn.execute(text(f"""
-                SELECT client_ip, webrtc_ip, observation_count, first_seen,
-                       last_seen, matching_count, last_outcome AS outcomes
+    hint = f"/*+ MAX_EXECUTION_TIME({FUZZY_QUERY_TIMEOUT_MS}) */ " if match_mode == "fuzzy" else ""
+    try:
+        async with engine.connect() as conn:
+            total = await conn.scalar(text(f"""
+                SELECT {hint}COUNT(DISTINCT {group_column})
                 FROM webrtc_observation_summary
-                {detail_where}
-                ORDER BY {group_column} ASC, last_seen DESC, client_ip ASC, webrtc_ip ASC
-            """), {**parameters, **key_parameters})).mappings().all()
+                {where}
+            """), parameters)
+            grouped_rows = (await conn.execute(text(f"""
+                SELECT {hint}{group_column} AS group_key,
+                       COUNT(*) AS relation_count,
+                       SUM(observation_count) AS observation_count,
+                       MIN(first_seen) AS first_seen,
+                       MAX(last_seen) AS last_seen
+                FROM webrtc_observation_summary
+                {where}
+                GROUP BY {group_column}
+                ORDER BY MAX(last_seen) DESC, {group_column} ASC
+                LIMIT :limit OFFSET :offset
+            """), parameters)).mappings().all()
+            group_keys = [str(row["group_key"]) for row in grouped_rows]
+            relationship_rows = []
+            if group_keys:
+                key_parameters = {f"group_{index}": key for index, key in enumerate(group_keys)}
+                placeholders = ",".join(f":group_{index}" for index in range(len(group_keys)))
+                detail_clauses = list(clauses)
+                detail_clauses.append(f"{group_column} IN ({placeholders})")
+                detail_where = "WHERE " + " AND ".join(detail_clauses)
+                relationship_rows = (await conn.execute(text(f"""
+                    SELECT {hint}client_ip, webrtc_ip, observation_count, first_seen,
+                           last_seen, matching_count, last_outcome AS outcomes
+                    FROM webrtc_observation_summary
+                    {detail_where}
+                    ORDER BY {group_column} ASC, last_seen DESC, client_ip ASC, webrtc_ip ASC
+                """), {**parameters, **key_parameters})).mappings().all()
+    except DBAPIError as exc:
+        if match_mode == "fuzzy":
+            raise ValueError("模糊查询计算超过 250ms，请增加 IP 片段长度") from exc
+        raise
 
     groups_by_key = {
         str(row["group_key"]): {
             "key": str(row["group_key"]),
+            "relation_count": int(row.get("relation_count") or 0),
             "observation_count": int(row["observation_count"] or 0),
             "first_seen": _serialize_summary_row(row)["first_seen"],
             "last_seen": _serialize_summary_row(row)["last_seen"],
@@ -293,6 +347,6 @@ async def list_grouped_observation_summary(
     return {
         "groups": [groups_by_key[key] for key in group_keys],
         "pagination": {"page": page, "page_size": page_size, "pages": pages, "total": total},
-        "filters": {"public_ip": public_ip, "webrtc_ip": webrtc_ip},
+        "filters": {"public_ip": public_ip, "webrtc_ip": webrtc_ip, "match_mode": match_mode},
         "view": direction,
     }

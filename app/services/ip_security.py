@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager, suppress, nullcontext
 from contextvars import ContextVar
@@ -30,6 +31,11 @@ CACHE_READY_KEY = "security:cache-ready"
 DIRTY_IP_PREFIX = "security:dirty-ip:"
 CACHE_LOCK_KEY = "security:cache-lock"
 FIRST_BAN_SECONDS = 24 * 60 * 60
+IP_SEARCH_MODES = {"exact", "fuzzy"}
+FUZZY_MIN_CHARACTERS = 3
+FUZZY_MAX_PAGE = 20
+FUZZY_MAX_PAGE_SIZE = 50
+FUZZY_QUERY_TIMEOUT_MS = 250
 PERMANENT_EXPIRES_AT = datetime(9999, 12, 31, 23, 59, 59)
 CACHE_LOCK_TIMEOUT_SECONDS = 120
 CACHE_LOCK_WAIT_SECONDS = 30
@@ -708,6 +714,7 @@ async def list_security_summary(
     page_size: int = 100,
     ip_order: str = "asc",
     sort_order: str | None = None,
+    match_mode: str = "exact",
 ) -> dict[str, Any]:
     """Return one current object per IP; never paginate or filter event history."""
     now = _utcnow()
@@ -716,8 +723,14 @@ async def list_security_summary(
     sort_order = sort_order or f"ip_{ip_order}"
     if sort_order not in {"ip_asc", "ip_desc", "last_attack_desc", "last_attack_asc"}:
         raise ValueError("Invalid security summary order")
+    if match_mode not in IP_SEARCH_MODES:
+        raise ValueError("IP 查询方式无效")
     page = max(1, page)
     page_size = max(1, min(200, page_size))
+    if match_mode == "fuzzy":
+        if page > FUZZY_MAX_PAGE:
+            raise ValueError(f"模糊查询最多查看前 {FUZZY_MAX_PAGE} 页")
+        page_size = min(page_size, FUZZY_MAX_PAGE_SIZE)
     conditions: list[str] = []
     params: dict[str, Any] = {
         "now": now,
@@ -726,8 +739,17 @@ async def list_security_summary(
         "attack_cutoff": now - timedelta(seconds=settings.SECURITY_INVALID_API_WINDOW),
     }
     if ip_filter:
-        conditions.append("ip_address = :ip")
-        params["ip"] = normalize_ip(ip_filter)
+        if match_mode == "exact":
+            conditions.append("ip_address = :ip")
+            params["ip"] = normalize_ip(ip_filter)
+        else:
+            fragment = str(ip_filter).strip().lower()
+            if len(fragment) < FUZZY_MIN_CHARACTERS:
+                raise ValueError(f"模糊 IP 查询至少需要 {FUZZY_MIN_CHARACTERS} 个字符")
+            if len(fragment) > 45 or not re.fullmatch(r"[0-9a-f:.]+", fragment):
+                raise ValueError("模糊 IP 查询只允许十六进制数字、冒号和点")
+            conditions.append("ip_address LIKE :ip")
+            params["ip"] = f"%{fragment}%"
     if status_filter:
         allowed_statuses = {"active", "observed", "history", "permanent", "whitelisted"}
         if status_filter not in allowed_statuses:
@@ -786,21 +808,27 @@ async def list_security_summary(
             f" ORDER BY (last_attack_at IS NULL) ASC, last_attack_at {direction},"
             " LENGTH(INET6_ATON(ip_address)) ASC, INET6_ATON(ip_address) ASC, ip_address ASC"
         )
-    async with engine.connect() as conn:
-        count_result = await conn.execute(
-            text(objects_sql + "SELECT COUNT(*) FROM objects" + where_sql),
-            params,
-        )
-        total_ips = int(count_result.scalar_one())
-        stats = (await conn.execute(text(objects_sql + """
-            SELECT COALESCE(SUM(status IN ('active', 'permanent')), 0) AS active_count,
-                   COALESCE(SUM(status='whitelisted'), 0) AS whitelist_count
-            FROM objects
-        """), params)).mappings().one()
-        rows = (await conn.execute(text(
-            objects_sql + "SELECT * FROM objects" + where_sql + order_sql
-            + " LIMIT :limit OFFSET :offset"
-        ), params)).mappings().all()
+    hint = f"/*+ MAX_EXECUTION_TIME({FUZZY_QUERY_TIMEOUT_MS}) */ " if match_mode == "fuzzy" else ""
+    try:
+        async with engine.connect() as conn:
+            count_result = await conn.execute(
+                text(objects_sql + f"SELECT {hint}COUNT(*) FROM objects" + where_sql),
+                params,
+            )
+            total_ips = int(count_result.scalar_one())
+            stats = (await conn.execute(text(objects_sql + f"""
+                SELECT {hint}COALESCE(SUM(status IN ('active', 'permanent')), 0) AS active_count,
+                       COALESCE(SUM(status='whitelisted'), 0) AS whitelist_count
+                FROM objects
+            """), params)).mappings().one()
+            rows = (await conn.execute(text(
+                objects_sql + f"SELECT {hint}* FROM objects" + where_sql + order_sql
+                + " LIMIT :limit OFFSET :offset"
+            ), params)).mappings().all()
+    except SQLAlchemyError as exc:
+        if match_mode == "fuzzy":
+            raise ValueError("模糊查询计算超过 250ms，请增加 IP 片段长度") from exc
+        raise
 
     events = []
     whitelist = []
@@ -842,6 +870,7 @@ async def list_security_summary(
             "pages": max(1, (total_ips + page_size - 1) // page_size),
             "ip_order": ip_order,
             "sort_order": sort_order,
+            "match_mode": match_mode,
         },
         "threshold": settings.SECURITY_INVALID_API_LIMIT,
         "window_seconds": settings.SECURITY_INVALID_API_WINDOW,
