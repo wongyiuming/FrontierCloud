@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿娱乐 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260920-1">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260921-1">
 </head>
 <body>
     <main class="admin-console">
@@ -29,6 +29,29 @@
                 </form>
               </div>
               <div id="newKeyResult" class="new-key-result hidden" aria-live="polite"><strong id="newKeyTitle">请立即保存新 Admin Key</strong><code id="newKeyValue"></code><small id="newKeyDetail"></small><button id="copyKey" type="button">复制</button><button id="dismissKey" type="button">关闭</button></div>
+            </div>
+        </section>
+
+        <section id="priorityPanel" class="admin-module priority-panel" data-admin-module="priority">
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>媒体展示优先级</strong><small>沿用现有积分与优先级数据；数值越高越先展示</small></span><b>＋</b></button>
+            <div class="module-content priority-content">
+                <form id="priorityFilterForm" class="priority-toolbar">
+                    <input id="prioritySearch" type="search" maxlength="100" autocomplete="off" placeholder="搜索媒体名称或路径">
+                    <select id="priorityType" aria-label="媒体类型">
+                        <option value="">全部媒体</option>
+                        <option value="audio">音乐</option>
+                        <option value="video">视频</option>
+                    </select>
+                    <button type="submit">查询</button>
+                    <button id="priorityRefresh" type="button">刷新</button>
+                </form>
+                <div id="prioritySummary" class="priority-summary">尚未加载</div>
+                <div id="priorityList" class="priority-list"></div>
+                <div class="priority-pagination">
+                    <button id="priorityPrev" type="button">上一页</button>
+                    <span id="priorityPageInfo">第 1 / 1 页</span>
+                    <button id="priorityNext" type="button">下一页</button>
+                </div>
             </div>
         </section>
 
@@ -210,7 +233,7 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260920-1"></script>
-    <script src="/static/js/nodes.js?v=20260920-1"></script>
+    <script src="/static/js/admin.js?v=20260921-1"></script>
+    <script src="/static/js/nodes.js?v=20260921-1"></script>
 </body>
 </html>

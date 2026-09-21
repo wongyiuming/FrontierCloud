@@ -1,6 +1,10 @@
+x-app-image: &app-image
+  image: frontiercloud-web
+  build: .
+
 services:
   secrets-init:
-    build: .
+    <<: *app-image
     user: "0:0"
     command: ["python", "-m", "app.services.runtime_secrets"]
     restart: "no"
@@ -14,7 +18,7 @@ services:
       options: {max-size: "10m", max-file: "3"}
 
   media-init:
-    build: .
+    <<: *app-image
     user: "0:0"
     command: ["python", "-m", "app.services.media_storage_init"]
     restart: "no"
@@ -27,7 +31,7 @@ services:
     logging: *service_logging
 
   web:
-    build: .
+    <<: *app-image
     container_name: office_automation_web
     restart: always
     env_file:
@@ -52,9 +56,11 @@ services:
     healthcheck:
       test: ["CMD", "python", "-m", "app.services.health_probe"]
       interval: 30s
+      start_interval: 2s
       timeout: 5s
       retries: 4
       start_period: 15s
+    stop_grace_period: 3s
     logging: *service_logging
 
   redis:
@@ -95,6 +101,7 @@ services:
 
   nginx:
     build: {context: ., dockerfile: nginx/Dockerfile}
+    image: frontiercloud-nginx
     container_name: office_automation_nginx
     restart: always
     environment:
@@ -120,6 +127,7 @@ services:
       - ${ACME_WEBROOT:-./certs/acme}:/var/www/certbot:ro
     depends_on:
       web: {condition: service_healthy}
+    stop_grace_period: 3s
     logging: *service_logging
 
   stun:

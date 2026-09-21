@@ -255,7 +255,7 @@ class DeploymentContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         deploy_script = (ROOT / "scripts/deploy_rn.sh").read_text(encoding="utf-8")
         deploy = workflow.split("  deploy-rn:", 1)[1]
-        self.assertIn("needs: test-compose", deploy)
+        self.assertIn("needs: [test-cluster, test-compose, prepare-rn]", deploy)
         self.assertIn("github.event_name == 'push'", deploy)
         self.assertIn("github.ref == 'refs/heads/dev'", deploy)
         self.assertNotIn("refs/heads/main", deploy)
@@ -275,6 +275,8 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertLess(deploy.index("git switch dev"), deploy.index('git merge --ff-only "$GITHUB_SHA"'))
         self.assertIn("group: rn", deploy)
         self.assertIn("name: rn", deploy)
+        self.assertIn('sh scripts/deploy_rn.sh "$override"', deploy)
+        self.assertIn("timeout-minutes: 1", deploy)
         self.assertNotRegex(deploy, r"(?i)\b(?:production|preproduction|staging|development)\b")
 
 

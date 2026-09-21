@@ -16,9 +16,9 @@ jobs:
   test-cluster:
     if: github.event_name != 'pull_request' || github.head_ref != 'dev'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 3
     concurrency:
-      group: ${{ github.workflow }}-ci-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+      group: ${{ github.workflow }}-cluster-${{ github.event_name }}-${{ github.head_ref || github.ref }}
       cancel-in-progress: true
     steps:
       - name: Checkout code
@@ -27,17 +27,15 @@ jobs:
         run: |
           python3 -m venv /tmp/frontiercloud-cluster-test
           /tmp/frontiercloud-cluster-test/bin/pip install httpx==0.28.1 playwright==1.62.0
-          /tmp/frontiercloud-cluster-test/bin/playwright install --with-deps chromium
-          curl -fsSL https://github.com/cloudflare/cloudflared/releases/download/2026.9.1/cloudflared-linux-amd64 -o /tmp/cloudflared
-          chmod 755 /tmp/cloudflared
-          sudo install /tmp/cloudflared /usr/local/bin/cloudflared
-          sudo apt-get update
-          sudo apt-get install -y iproute2
+          test -x /usr/bin/google-chrome
+          command -v tc
       - name: Build the same application for every node
         run: |
           docker build -t frontiercloud-acceptance-web .
           docker build -t frontiercloud-acceptance-nginx -f nginx/Dockerfile .
-      - name: Run verified HTTPS topology, browser, fault and expiration soak
+      - name: Run verified local HTTPS topology and browser acceptance
+        env:
+          PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
         run: /tmp/frontiercloud-cluster-test/bin/python tests/federation_stack.py --output /tmp/federation-acceptance.json
       - name: Keep acceptance evidence
         if: always()
@@ -47,12 +45,11 @@ jobs:
           path: /tmp/federation-acceptance.json
 
   test-compose:
-    needs: test-cluster
     if: github.event_name != 'pull_request' || github.head_ref != 'dev'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 3
     concurrency:
-      group: ${{ github.workflow }}-ci-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+      group: ${{ github.workflow }}-compose-${{ github.event_name }}-${{ github.head_ref || github.ref }}
       cancel-in-progress: true
 
     steps:
@@ -149,6 +146,14 @@ jobs:
           cmp /tmp/ci-one.wav /tmp/ci-downloaded.wav
           test "$(docker compose exec -T redis redis-cli GET media:catalog:v2:generation)" -ge 3
           curl -fsS 'https://ci.frontiercloud.local/api/v1/media/music/category?path=music%2Fci-folder' | grep 'one'
+          test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            https://ci.frontiercloud.local/api/v1/media/preference)" = 404
+          curl -fsS -b /tmp/admin-cookies.txt \
+            'https://ci.frontiercloud.local/api/v1/media/admin/media-priority?media_type=audio' | grep 'music/ci-folder/one.wav'
+          curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d '{"media_path":"music/ci-folder/one.wav","delta":1}' \
+            https://ci.frontiercloud.local/api/v1/media/admin/media-priority | grep '"preference":1'
           curl -fsS -D /tmp/media-headers.txt \
             'https://ci.frontiercloud.local/api/v1/media/stream?file_path=music%2Fci-folder%2Fone.wav' \
             -o /tmp/ci-streamed.wav
@@ -211,9 +216,40 @@ jobs:
         if: always()
         run: docker compose down --volumes --remove-orphans
 
+  prepare-rn:
+    name: prepare-rn
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/dev' &&
+      github.repository == 'wongyiuming/FrontierCloud'
+    runs-on: [self-hosted, Linux, X64, rn]
+    timeout-minutes: 3
+    concurrency:
+      group: rn-build
+      cancel-in-progress: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build commit-addressed RN images without changing the active deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          override="/tmp/frontiercloud-rn-$GITHUB_SHA.yaml"
+          cat > "$override" <<EOF
+          services:
+            web: &web-image
+              image: frontiercloud-web:$GITHUB_SHA
+            secrets-init: *web-image
+            media-init: *web-image
+            nginx:
+              image: frontiercloud-nginx:$GITHUB_SHA
+          EOF
+          docker compose -f docker-compose.yaml -f "$override" build web nginx
+          docker image inspect "frontiercloud-web:$GITHUB_SHA" "frontiercloud-nginx:$GITHUB_SHA" >/dev/null
+
   deploy-rn:
     name: deploy-rn
-    needs: test-compose
+    needs: [test-cluster, test-compose, prepare-rn]
     if: >-
       github.event_name == 'push' &&
       github.ref == 'refs/heads/dev' &&
@@ -222,7 +258,7 @@ jobs:
       contents: read
       deployments: write
     runs-on: [self-hosted, Linux, X64, rn]
-    timeout-minutes: 20
+    timeout-minutes: 1
     concurrency:
       group: rn
       cancel-in-progress: false
@@ -272,5 +308,8 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=no)"
           git switch dev
           git merge --ff-only "$GITHUB_SHA"
-          sh scripts/deploy_rn.sh
+          override="/tmp/frontiercloud-rn-$GITHUB_SHA.yaml"
+          test -f "$override"
+          sh scripts/deploy_rn.sh "$override"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          rm -f "$override"
