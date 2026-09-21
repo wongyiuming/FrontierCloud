@@ -161,7 +161,7 @@ assert(!adminHtml.includes('id="move"'));
 assert(adminHtml.includes('id="mediaSearch"'));
 assert(adminHtml.includes('id="securityPanel"'));
 assert(adminHtml.includes('id="banList"'));
-assert(adminHtml.includes('/static/css/admin.css?v=20260921-1'));
+assert(adminHtml.includes('/static/css/admin.css?v=20260921-2'));
 assert(adminHtml.includes('/static/js/admin.js?v=20260921-1'));
 assert(adminHtml.includes('/static/js/nodes.js?v=20260921-1'));
 assert(adminHtml.includes('id="randomKey"'));
@@ -205,6 +205,8 @@ assert(adminCss.includes('.admin-side[data-admin-module="media"] { order: -2; }'
 assert(adminCss.includes('.priority-panel { order: -1;'));
 assert(!adminCss.includes('#nodeTestPlayer'));
 assert.match(adminCss, /\.admin-module\.expanded\s*\{[^}]*flex:\s*1 1 0;/s);
+assert.match(adminCss, /\.admin-module > \.module-heading\s*\{[^}]*flex:\s*0 0 56px;/s);
+assert.match(adminCss, /\.admin-module\.expanded > \.module-content,[\s\S]*?flex:\s*1 1 0;/s);
 assert.match(adminCss, /\.media-content\s*\{[^}]*flex:\s*1 1 0;/s);
 assert.match(adminCss, /\.admin-side\.expanded > header \+ \.media-content\s*\{[^}]*display:\s*flex;/s);
 assert(!adminCss.includes('.media-content { height: 0;'));
