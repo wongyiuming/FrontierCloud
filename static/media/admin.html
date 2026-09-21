@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿娱乐 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260921-3">
+    <link rel="stylesheet" href="/static/css/admin.css?v=20260921-4">
 </head>
 <body>
     <main class="admin-console">
@@ -33,7 +33,7 @@
         </section>
 
         <section id="priorityPanel" class="admin-module priority-panel" data-admin-module="priority">
-            <button class="module-heading" type="button" aria-expanded="false"><span><strong>媒体展示优先级</strong><small>沿用现有积分与优先级数据；数值越高越先展示</small></span><b>＋</b></button>
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>媒体展示优先级</strong><small>按媒体目录分类；沿用现有积分与优先级数据</small></span><b>＋</b></button>
             <div class="module-content priority-content">
                 <form id="priorityFilterForm" class="priority-toolbar">
                     <input id="prioritySearch" type="search" maxlength="100" autocomplete="off" placeholder="搜索媒体名称或路径">
@@ -45,6 +45,10 @@
                     <button type="submit">查询</button>
                     <button id="priorityRefresh" type="button">刷新</button>
                 </form>
+                <div class="priority-pathbar">
+                    <button id="priorityUp" type="button">↩ 返回上级</button>
+                    <code id="priorityPath">/data/media</code>
+                </div>
                 <div id="prioritySummary" class="priority-summary">尚未加载</div>
                 <div id="priorityList" class="priority-list"></div>
                 <div class="priority-pagination">
@@ -244,7 +248,7 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260921-2"></script>
+    <script src="/static/js/admin.js?v=20260921-3"></script>
     <script src="/static/js/nodes.js?v=20260921-1"></script>
 </body>
 </html>

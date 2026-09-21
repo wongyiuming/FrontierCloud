@@ -15,6 +15,7 @@ const networkExpandedGroups = new Set();
 let priorityPage = 1;
 let priorityPages = 1;
 let priorityLoading = false;
+let priorityScope = '';
 let lyricCatalog = null;
 let lyricOrigin = null;
 let lyricLinking = false;
@@ -824,56 +825,110 @@ function networkTimeLine(item) {
     return `首次 ${escapeHtml(item.first_seen || '-')} · 最近 ${escapeHtml(item.last_seen || '-')}`;
 }
 
+function prioritySectionLabel(text, count) {
+    const label = document.createElement('div');
+    label.className = 'priority-section-label';
+    label.innerHTML = `<strong>${escapeHtml(text)}</strong><span>${Number(count || 0)}</span>`;
+    return label;
+}
+
+function priorityDirectoryButton(directory) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'priority-directory';
+    button.innerHTML = `<span class="priority-directory-label"><strong>📁 ${escapeHtml(directory.name)}</strong>`
+        + `<small>/data/media/${escapeHtml(directory.path)}</small></span>`
+        + `<span>${Number(directory.count || 0)} 个媒体&nbsp;&nbsp;进入</span>`;
+    button.onclick = () => {
+        priorityScope = directory.path;
+        priorityPage = 1;
+        $('prioritySearch').value = '';
+        loadMediaPriority(true).catch(error => alert(error.message));
+    };
+    return button;
+}
+
+function priorityMediaRow(item, data) {
+    const row = document.createElement('div');
+    row.className = 'priority-row';
+    const resourceId = item.resource_id || null;
+    const fileName = item.media_path.split('/').pop() || item.title;
+    row.innerHTML = `
+        <div class="priority-main">
+            <strong>${escapeHtml(item.title)}</strong>
+            <small><span>文件</span><code>${escapeHtml(fileName)}${item.hidden ? ' · 已隐藏' : ''}</code></small>
+        </div>
+        <div class="priority-values">
+            <span>${item.type === 'audio' ? '音乐' : '视频'}</span>
+            <span>播放 ${Number(item.play_score || 0)}</span>
+            <b>${Number(item.preference) > 0 ? '+' : ''}${Number(item.preference || 0)}</b>
+        </div>
+        <div class="priority-actions"></div>`;
+    const actions = row.querySelector('.priority-actions');
+    for (const [label, delta] of [['降低', -1], ['提高', 1]]) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = delta < 0 ? '−' : '＋';
+        button.title = `${label}展示优先级`;
+        button.setAttribute('aria-label', `${label}${item.title}的展示优先级`);
+        button.disabled = delta < 0
+            ? Number(item.preference) <= Number(data.minimum)
+            : Number(item.preference) >= Number(data.maximum);
+        button.onclick = async () => {
+            button.disabled = true;
+            try {
+                await api('/api/v1/media/admin/media-priority', {
+                    method: 'POST',
+                    headers: requestHeaders(),
+                    body: JSON.stringify({media_path: item.media_path, resource_id: resourceId, delta}),
+                });
+                await loadMediaPriority(true);
+            } catch (error) {
+                alert(error.message);
+                button.disabled = false;
+            }
+        };
+        actions.appendChild(button);
+    }
+    return row;
+}
+
 function renderMediaPriority(data) {
     const list = $('priorityList');
     list.innerHTML = '';
-    for (const item of data.items || []) {
-        const row = document.createElement('div');
-        row.className = 'priority-row';
-        const resourceId = item.resource_id || null;
-        row.innerHTML = `
-            <div class="priority-main">
-                <strong>${escapeHtml(item.title)}</strong>
-                <small><span>路径</span><code>/data/media/${escapeHtml(item.media_path)}${item.hidden ? ' · 已隐藏' : ''}</code></small>
-            </div>
-            <div class="priority-values">
-                <span>${item.type === 'audio' ? '音乐' : '视频'}</span>
-                <span>播放 ${Number(item.play_score || 0)}</span>
-                <b>${Number(item.preference) > 0 ? '+' : ''}${Number(item.preference || 0)}</b>
-            </div>
-            <div class="priority-actions"></div>`;
-        const actions = row.querySelector('.priority-actions');
-        for (const [label, delta] of [['降低', -1], ['提高', 1]]) {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = delta < 0 ? '−' : '＋';
-            button.title = `${label}展示优先级`;
-            button.setAttribute('aria-label', `${label}${item.title}的展示优先级`);
-            button.disabled = delta < 0
-                ? Number(item.preference) <= Number(data.minimum)
-                : Number(item.preference) >= Number(data.maximum);
-            button.onclick = async () => {
-                button.disabled = true;
-                try {
-                    await api('/api/v1/media/admin/media-priority', {
-                        method: 'POST',
-                        headers: requestHeaders(),
-                        body: JSON.stringify({media_path: item.media_path, resource_id: resourceId, delta}),
-                    });
-                    await loadMediaPriority(true);
-                } catch (error) {
-                    alert(error.message);
-                    button.disabled = false;
-                }
-            };
-            actions.appendChild(button);
+    priorityScope = data.scope || '';
+    const currentPath = `/data/media${priorityScope ? `/${priorityScope}` : ''}`;
+    $('priorityPath').textContent = currentPath;
+    $('priorityPath').title = currentPath;
+    $('priorityUp').disabled = !priorityScope;
+    if (data.searching) {
+        const groups = new Map();
+        for (const item of data.items || []) {
+            const directory = item.media_path.split('/').slice(0, -1).join('/');
+            if (!groups.has(directory)) groups.set(directory, []);
+            groups.get(directory).push(item);
         }
-        list.appendChild(row);
+        for (const directory of [...groups.keys()].sort((left, right) => left.localeCompare(right, 'zh-Hans-CN'))) {
+            const items = groups.get(directory);
+            list.appendChild(prioritySectionLabel(`📁 /data/media/${directory}`, items.length));
+            for (const item of items) list.appendChild(priorityMediaRow(item, data));
+        }
+    } else {
+        if (data.directories?.length) {
+            list.appendChild(prioritySectionLabel('目录', data.directories.length));
+            for (const directory of data.directories) list.appendChild(priorityDirectoryButton(directory));
+        }
+        if (data.items?.length) {
+            list.appendChild(prioritySectionLabel('当前目录媒体', data.pagination?.total));
+            for (const item of data.items) list.appendChild(priorityMediaRow(item, data));
+        }
     }
-    if (!list.children.length) list.innerHTML = '<div class="priority-empty">没有符合条件的媒体</div>';
+    if (!list.children.length) list.innerHTML = '<div class="priority-empty">当前目录没有符合条件的媒体或子目录</div>';
     priorityPage = data.pagination?.page || 1;
     priorityPages = data.pagination?.pages || 1;
-    $('prioritySummary').textContent = `共 ${data.pagination?.total || 0} 个本机与跨节点媒体；高优先级优先，相同优先级下播放次数较少的优先`;
+    $('prioritySummary').textContent = data.searching
+        ? `在 ${currentPath} 中找到 ${data.pagination?.total || 0} 个本机与跨节点媒体，结果按所在目录分类`
+        : `${currentPath} 及其子目录共 ${data.catalog_total || 0} 个本机与跨节点媒体；进入目录后调整优先级`;
     $('priorityPageInfo').textContent = `第 ${priorityPage} / ${priorityPages} 页`;
     $('priorityPrev').disabled = priorityPage <= 1;
     $('priorityNext').disabled = priorityPage >= priorityPages;
@@ -888,6 +943,7 @@ async function loadMediaPriority(force = false) {
         const mediaType = $('priorityType').value;
         if (query) params.set('q', query);
         if (mediaType) params.set('media_type', mediaType);
+        if (priorityScope) params.set('path', priorityScope);
         renderMediaPriority(await api(`/api/v1/media/admin/media-priority?${params}`));
     } finally {
         priorityLoading = false;
@@ -900,6 +956,20 @@ $('priorityFilterForm').onsubmit = event => {
     loadMediaPriority(true).catch(error => alert(error.message));
 };
 $('priorityRefresh').onclick = () => loadMediaPriority(true).catch(error => alert(error.message));
+$('priorityUp').onclick = () => {
+    if (!priorityScope) return;
+    priorityScope = priorityScope.includes('/') ? priorityScope.split('/').slice(0, -1).join('/') : '';
+    priorityPage = 1;
+    $('prioritySearch').value = '';
+    loadMediaPriority(true).catch(error => alert(error.message));
+};
+$('priorityType').onchange = () => {
+    priorityScope = $('priorityType').value === 'audio' ? 'music'
+        : ($('priorityType').value === 'video' ? 'vido' : '');
+    priorityPage = 1;
+    $('prioritySearch').value = '';
+    loadMediaPriority(true).catch(error => alert(error.message));
+};
 $('priorityPrev').onclick = () => {
     if (priorityPage > 1) {
         priorityPage -= 1;
