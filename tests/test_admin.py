@@ -214,14 +214,47 @@ class AdminMediaPriorityTests(unittest.IsolatedAsyncioTestCase):
             )),
         ):
             result = await admin.media_priority(
-                _request(method="GET"), q="", media_type="", page=1, page_size=100,
+                _request(method="GET"), q="", media_type="", path="music/artist",
+                page=1, page_size=100,
                 session_hash="session",
             )
 
         self.assertEqual([item["title"] for item in result["items"]], ["remote", "local"])
         self.assertEqual(result["items"][0]["preference"], 5)
+        self.assertEqual(result["scope"], "music/artist")
+        self.assertEqual(result["directories"], [])
         self.assertNotIn("owner_id", result["items"][0])
         self.assertNotIn("relationship_id", result["items"][0])
+
+    def test_listing_classifies_local_and_remote_media_by_path(self):
+        items = [
+            {"media_id": "local", "media_path": "music/artist/direct.mp3",
+             "title": "direct", "type": "audio"},
+            {"media_id": "remote", "resource_id": "a" * 64,
+             "media_path": "music/artist/direct.mp3", "title": "direct remote",
+             "type": "audio"},
+            {"media_id": "album", "media_path": "music/artist/album/song.mp3",
+             "title": "song", "type": "audio"},
+            {"media_id": "video", "media_path": "vido/show/clip.mp4",
+             "title": "clip", "type": "video"},
+        ]
+
+        root_directories, root_items, root_total = admin._classify_media_priority(items, "", "")
+        self.assertEqual(root_items, [])
+        self.assertEqual(root_total, 4)
+        self.assertEqual(
+            [(item["path"], item["count"]) for item in root_directories],
+            [("music", 3), ("vido", 1)],
+        )
+
+        directories, direct_items, total = admin._classify_media_priority(
+            items, "music/artist", "",
+        )
+        self.assertEqual([(item["path"], item["count"]) for item in directories], [
+            ("music/artist/album", 1),
+        ])
+        self.assertEqual([item["media_id"] for item in direct_items], ["local", "remote"])
+        self.assertEqual(total, 3)
 
     async def test_update_dispatches_through_admin_route_with_transactional_audit(self):
         changed = {"media_id": "local", "preference": 3, "play_score": 9}

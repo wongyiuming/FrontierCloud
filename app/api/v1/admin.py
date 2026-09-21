@@ -39,6 +39,52 @@ class MediaPriorityChange(BaseModel):
     delta: int
 
 
+def _media_priority_scope(value: str) -> str:
+    scope = str(value or "").strip().replace("\\", "/").strip("/")
+    if not scope:
+        return ""
+    parts = scope.split("/")
+    if parts[0] not in {"music", "vido"} or any(
+        not part or part in {".", ".."} for part in parts
+    ):
+        raise ValueError("媒体优先级目录无效")
+    return "/".join(parts)
+
+
+def _classify_media_priority(
+    items: list[dict], scope: str, normalized_query: str,
+) -> tuple[list[dict], list[dict], int]:
+    prefix = f"{scope}/" if scope else ""
+    scoped = [
+        item for item in items
+        if not scope or str(item["media_path"]).startswith(prefix)
+    ]
+    directory_counts: dict[str, int] = {}
+    direct_items: list[dict] = []
+    for item in scoped:
+        media_path = str(item["media_path"])
+        remainder = media_path[len(prefix):]
+        if "/" in remainder:
+            child = remainder.split("/", 1)[0]
+            child_path = f"{scope}/{child}" if scope else child
+            directory_counts[child_path] = directory_counts.get(child_path, 0) + 1
+        else:
+            direct_items.append(item)
+    directories = [
+        {"name": path.rsplit("/", 1)[-1], "path": path, "count": count}
+        for path, count in directory_counts.items()
+    ]
+    directories.sort(key=lambda item: (item["name"].casefold(), item["path"].casefold()))
+    if normalized_query:
+        visible_items = [item for item in scoped if media_search.matches_search(
+            media_search.build_search_text(item["title"], item["media_path"]),
+            normalized_query,
+        )]
+    else:
+        visible_items = direct_items
+    return directories, visible_items, len(scoped)
+
+
 async def require_session(request: Request) -> str:
     return await admin_service.require_admin(request)
 
@@ -189,6 +235,7 @@ async def media_priority(
     request: Request,
     q: str = Query("", max_length=100),
     media_type: str = Query("", pattern=r"^(|audio|video)$"),
+    path: str = Query("", max_length=1024),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=100),
     session_hash: str = Depends(require_session),
@@ -199,14 +246,16 @@ async def media_priority(
     remote = [node_routing.item(row) for row in await node_catalog.resources()]
     remote = await node_routing.attach_master_stats(remote)
     items = local + remote
-    normalized_query = media_search.normalized_query(q) if q else ""
-    if normalized_query:
-        items = [item for item in items if media_search.matches_search(
-            media_search.build_search_text(item["title"], item["media_path"]),
-            normalized_query,
-        )]
     if media_type:
         items = [item for item in items if item["type"] == media_type]
+    try:
+        scope = _media_priority_scope(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    normalized_query = media_search.normalized_query(q) if q else ""
+    directories, items, catalog_total = _classify_media_priority(
+        items, scope, normalized_query,
+    )
     items.sort(key=lambda item: (
         -int(item.get("preference", 0)),
         int(item.get("play_score", 0)),
@@ -219,6 +268,11 @@ async def media_priority(
     start = (page - 1) * page_size
     return {
         "items": items[start:start + page_size],
+        "directories": directories,
+        "scope": scope,
+        "parent": scope.rsplit("/", 1)[0] if "/" in scope else "",
+        "catalog_total": catalog_total,
+        "searching": bool(normalized_query),
         "minimum": playback.MIN_PREFERENCE,
         "maximum": playback.MAX_PREFERENCE,
         "pagination": {"page": page, "pages": pages, "total": total, "page_size": page_size},
