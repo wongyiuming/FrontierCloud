@@ -18,8 +18,8 @@ let priorityLoading = false;
 let priorityScope = '';
 let lyricCatalog = null;
 let lyricOrigin = null;
-let lyricLinking = false;
 let lyricTargets = new Set();
+let lyricTrackAnchor = null;
 let lyricScopes = {track: 'music', lyric: 'lyrics'};
 let lyricSearchTimer = null;
 let uploadLimits = {
@@ -222,11 +222,12 @@ async function renderTree() {
         row.dataset.hidden = String(item.hidden);
         row.dataset.hideable = String(item.hideable === true);
         const pathDetail = scopedSearch
-            ? `<small class="tree-path">媒体路径 /${escapeHtml(item.path.split('/').slice(1).join('/'))}</small>`
+            ? `<small class="tree-path">媒体路径 ${expandableFilename(`/${item.path.split('/').slice(1).join('/')}`, 72)}</small>`
             : '';
         row.innerHTML = `<span class="kind">${item.kind === 'directory' ? '📁' : '📄'}</span>`
-            + `<span class="tree-label"><span class="name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>${pathDetail}</span>`
+            + `<span class="tree-label"><span class="name" title="${escapeHtml(item.name)}">${expandableFilename(item.name, 52)}</span>${pathDetail}</span>`
             + `<small>${item.kind === 'file' ? formatSize(item.size) : ''}</small>`;
+        bindExpandableFilenames(row);
         row.onclick = event => {
             event.stopPropagation();
             toggleSelection(item);
@@ -392,22 +393,73 @@ function lyricRelationSet(kind, path) {
         .map(relation => kind === 'track' ? relation.lyric : relation.track));
 }
 
-function selectLyricObject(kind, path) {
-    if (!lyricLinking) {
-        lyricOrigin = {kind, path};
-        $('lyricsEnterLink').disabled = false;
-        $('lyricsModeStatus').textContent = `已选择${kind === 'track' ? '曲目' : '歌词'}：${path}`;
-    } else if (lyricOrigin && lyricOrigin.kind !== kind) {
-        if (lyricOrigin.kind === 'track') {
-            lyricTargets = lyricTargets.has(path) ? new Set() : new Set([path]);
-        } else if (lyricTargets.has(path)) {
-            lyricTargets.delete(path);
-        } else {
-            lyricTargets.add(path);
-        }
-    }
+function lyricUsageMatches(item, kind) {
+    const filter = $(kind === 'track' ? 'lyricsTrackUsage' : 'lyricsFileUsage').value;
+    const used = kind === 'track' ? Boolean(item.lyric_path) : Number(item.linked_count || 0) > 0;
+    return filter === 'all' || (filter === 'used' && used) || (filter === 'unused' && !used);
+}
+
+function visibleLyricItems(kind) {
+    const source = kind === 'track' ? lyricCatalog?.tracks : lyricCatalog?.lyrics;
+    return (source || []).filter(item => lyricUsageMatches(item, kind));
+}
+
+function renderLyricRelationJson() {
+    $('lyricsRelationJson').textContent = JSON.stringify({
+        '歌词': lyricOrigin?.path || null,
+        '曲目': lyricOrigin ? [...lyricTargets].sort((left, right) => left.localeCompare(right, 'zh-Hans-CN')) : [],
+    }, null, 2);
+}
+
+function exitLyricSelection(message = '请选择一份歌词') {
+    lyricOrigin = null;
+    lyricTargets.clear();
+    lyricTrackAnchor = null;
+    $('lyricsSaveLink').classList.add('hidden');
+    $('lyricsModeStatus').textContent = message;
     renderLyricObjects();
-    renderLyricGraph();
+    renderLyricRelationJson();
+}
+
+function activateLyric(path) {
+    lyricOrigin = {kind: 'lyric', path};
+    lyricTargets = lyricRelationSet('lyric', path);
+    lyricTrackAnchor = null;
+    $('lyricsSaveLink').classList.remove('hidden');
+    $('lyricsModeStatus').textContent = `正在编辑：${path}；点击曲目添加或取消，Esc 退出`;
+    renderLyricObjects();
+    renderLyricRelationJson();
+}
+
+function toggleLyricTrack(path, event) {
+    if (!lyricOrigin) return;
+    const items = visibleLyricItems('track');
+    const index = items.findIndex(item => item.path === path);
+    if (event.shiftKey && lyricTrackAnchor !== null && index >= 0) {
+        const start = Math.min(lyricTrackAnchor, index);
+        const end = Math.max(lyricTrackAnchor, index);
+        const shouldAdd = !lyricTargets.has(path);
+        for (const item of items.slice(start, end + 1)) {
+            if (shouldAdd) lyricTargets.add(item.path);
+            else lyricTargets.delete(item.path);
+        }
+    } else if (lyricTargets.has(path)) {
+        lyricTargets.delete(path);
+    } else {
+        lyricTargets.add(path);
+    }
+    if (index >= 0) lyricTrackAnchor = index;
+    renderLyricObjects();
+    renderLyricRelationJson();
+}
+
+function selectLyricObject(kind, path, event) {
+    if (kind === 'lyric') {
+        if (lyricOrigin?.path === path) exitLyricSelection();
+        else activateLyric(path);
+        return;
+    }
+    toggleLyricTrack(path, event);
 }
 
 function lyricObjectButton(item, kind) {
@@ -415,15 +467,39 @@ function lyricObjectButton(item, kind) {
     button.type = 'button';
     button.className = 'lyrics-object';
     const path = item.path;
-    const isOrigin = lyricOrigin?.kind === kind && lyricOrigin.path === path;
-    const isTarget = lyricLinking && lyricOrigin?.kind !== kind && lyricTargets.has(path);
+    const isOrigin = lyricOrigin?.path === path;
+    const isTarget = kind === 'track' && Boolean(lyricOrigin) && lyricTargets.has(path);
+    const used = kind === 'track' ? Boolean(item.lyric_path) : Number(item.linked_count || 0) > 0;
     button.classList.toggle('selected', isOrigin);
-    button.classList.toggle('linked', isTarget || (!lyricLinking && (kind === 'track' ? item.lyric_path : item.linked_count)));
-    button.disabled = lyricLinking && lyricOrigin?.kind === kind && !isOrigin;
+    button.classList.toggle('linked', isTarget || (!lyricOrigin && used));
+    button.disabled = kind === 'track' && !lyricOrigin;
     const count = kind === 'track' ? (item.lyric_path ? '已关联' : '未关联') : `${item.linked_count || 0} 首`;
     const displayPath = `/${path.split('/').slice(1).join('/')}`;
-    button.innerHTML = `<span class="lyrics-object-label" title="${escapeHtml(path)}"><strong>${escapeHtml(item.name)}</strong><small>媒体路径 ${escapeHtml(displayPath)}</small></span><small>${count}</small>`;
-    button.onclick = () => selectLyricObject(kind, path);
+    button.innerHTML = `<span class="lyrics-object-label" title="${escapeHtml(path)}"><strong>${expandableFilename(item.name, 34)}</strong><small>媒体路径 ${expandableFilename(displayPath, 52)}</small></span><small>${count}</small>`;
+    bindExpandableFilenames(button);
+    button.onclick = event => {
+        if (event.detail > 1) return;
+        selectLyricObject(kind, path, event);
+    };
+    if (kind === 'lyric') {
+        button.ondblclick = async event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (lyricOrigin?.path !== path) activateLyric(path);
+            const filename = path.split('/').pop() || item.name;
+            $('lyricsTrackFilter').value = filename.replace(/\.lrc$/i, '');
+            try {
+                await loadLyricCatalog();
+                lyricTargets = new Set((lyricCatalog.tracks || []).map(track => track.path));
+                lyricTrackAnchor = lyricCatalog.tracks?.length ? lyricCatalog.tracks.length - 1 : null;
+                $('lyricsModeStatus').textContent = `已选择歌词并全选 ${lyricTargets.size} 条搜索结果；请确认后保存`;
+                renderLyricObjects();
+                renderLyricRelationJson();
+            } catch (error) {
+                alert(error.message);
+            }
+        };
+    }
     return button;
 }
 
@@ -431,14 +507,13 @@ function lyricDirectoryButton(item, kind) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'lyrics-object lyrics-directory';
-    button.innerHTML = `<span class="lyrics-object-label" title="${escapeHtml(item.path)}"><strong>📁 ${escapeHtml(item.name)}</strong><small>/data/media/${escapeHtml(item.path)}</small></span><small>进入</small>`;
+    button.innerHTML = `<span class="lyrics-object-label" title="${escapeHtml(item.path)}"><strong>📁 ${expandableFilename(item.name, 34)}</strong><small>/data/media/${expandableFilename(item.path, 52)}</small></span><small>进入</small>`;
+    bindExpandableFilenames(button);
     button.onclick = () => {
         lyricScopes[kind] = item.path;
         const filter = kind === 'track' ? $('lyricsTrackFilter') : $('lyricsFileFilter');
         filter.value = '';
-        lyricOrigin = null;
-        lyricLinking = false;
-        lyricTargets.clear();
+        lyricTrackAnchor = null;
         loadLyricCatalog().catch(error => alert(error.message));
     };
     return button;
@@ -455,9 +530,7 @@ function lyricUpButton(kind) {
         lyricScopes[kind] = lyricScopes[kind].split('/').slice(0, -1).join('/');
         const filter = kind === 'track' ? $('lyricsTrackFilter') : $('lyricsFileFilter');
         filter.value = '';
-        lyricOrigin = null;
-        lyricLinking = false;
-        lyricTargets.clear();
+        lyricTrackAnchor = null;
         loadLyricCatalog().catch(error => alert(error.message));
     };
     return button;
@@ -469,56 +542,22 @@ function renderLyricObjects() {
     const files = $('lyricsFileList');
     tracks.innerHTML = '';
     files.innerHTML = '';
-    const trackUp = lyricUpButton('track');
-    const lyricUp = lyricUpButton('lyric');
-    if (trackUp) tracks.appendChild(trackUp);
+    const trackSearching = Boolean($('lyricsTrackFilter').value.trim());
+    const lyricSearching = Boolean($('lyricsFileFilter').value.trim());
+    const trackUp = !trackSearching ? lyricUpButton('track') : null;
+    const lyricUp = !lyricSearching ? lyricUpButton('lyric') : null;
     if (lyricUp) files.appendChild(lyricUp);
-    for (const item of lyricCatalog.track_directories || []) {
-        tracks.appendChild(lyricDirectoryButton(item, 'track'));
+    if (trackUp) tracks.appendChild(trackUp);
+    if (!lyricSearching) {
+        for (const item of lyricCatalog.lyric_directories || []) files.appendChild(lyricDirectoryButton(item, 'lyric'));
     }
-    for (const item of lyricCatalog.lyric_directories || []) {
-        files.appendChild(lyricDirectoryButton(item, 'lyric'));
+    if (!trackSearching) {
+        for (const item of lyricCatalog.track_directories || []) tracks.appendChild(lyricDirectoryButton(item, 'track'));
     }
-    for (const item of lyricCatalog.tracks) {
-        tracks.appendChild(lyricObjectButton(item, 'track'));
-    }
-    for (const item of lyricCatalog.lyrics) {
-        files.appendChild(lyricObjectButton(item, 'lyric'));
-    }
-    if (!tracks.children.length) tracks.innerHTML = '<div class="lyrics-empty">当前目录没有曲目或子目录</div>';
-    if (!files.children.length) files.innerHTML = '<div class="lyrics-empty">当前目录没有歌词或子目录</div>';
-}
-
-function svgLabel(path) {
-    const name = path.split('/').pop() || path;
-    return name.length > 28 ? `${name.slice(0, 27)}…` : name;
-}
-
-function renderLyricGraph() {
-    const graph = $('lyricsGraph');
-    if (!lyricOrigin) {
-        graph.setAttribute('viewBox', '0 0 900 180');
-        graph.innerHTML = '<text x="450" y="94" text-anchor="middle">选择一个对象后，仅展示与它相关的连线</text>';
-        return;
-    }
-    const targets = lyricLinking ? [...lyricTargets] : [...lyricRelationSet(lyricOrigin.kind, lyricOrigin.path)];
-    const height = Math.max(180, targets.length * 58 + 36);
-    const originX = lyricOrigin.kind === 'track' ? 70 : 610;
-    const targetX = lyricOrigin.kind === 'track' ? 610 : 70;
-    const originY = height / 2 - 20;
-    let markup = `<rect class="node" x="${originX}" y="${originY}" width="220" height="40" rx="8"/>`
-        + `<text x="${originX + 110}" y="${originY + 25}" text-anchor="middle">${escapeHtml(svgLabel(lyricOrigin.path))}</text>`;
-    targets.forEach((path, index) => {
-        const y = 18 + index * 58;
-        const x1 = lyricOrigin.kind === 'track' ? originX + 220 : originX;
-        const x2 = lyricOrigin.kind === 'track' ? targetX : targetX + 220;
-        markup += `<line class="edge" x1="${x1}" y1="${originY + 20}" x2="${x2}" y2="${y + 20}"/>`
-            + `<rect class="node target" x="${targetX}" y="${y}" width="220" height="40" rx="8"/>`
-            + `<text x="${targetX + 110}" y="${y + 25}" text-anchor="middle">${escapeHtml(svgLabel(path))}</text>`;
-    });
-    if (!targets.length) markup += '<text x="450" y="145" text-anchor="middle">当前没有关联；进入连线后从另一列选择对象</text>';
-    graph.setAttribute('viewBox', `0 0 900 ${height}`);
-    graph.innerHTML = markup;
+    for (const item of visibleLyricItems('lyric')) files.appendChild(lyricObjectButton(item, 'lyric'));
+    for (const item of visibleLyricItems('track')) tracks.appendChild(lyricObjectButton(item, 'track'));
+    if (!files.children.length) files.innerHTML = '<div class="lyrics-empty">没有符合条件的歌词</div>';
+    if (!tracks.children.length) tracks.innerHTML = '<div class="lyrics-empty">没有符合条件的曲目</div>';
 }
 
 async function loadLyricCatalog() {
@@ -532,24 +571,35 @@ async function loadLyricCatalog() {
     if (lyricQuery) params.set('lyric_q', lyricQuery);
     lyricCatalog = await api(`/api/v1/media/admin/lyrics/catalog?${params}`);
     lyricScopes = {...lyricScopes, ...lyricCatalog.scopes};
-    $('lyricsTrackPath').textContent = `/data/media/${lyricScopes.track}${trackQuery ? ` 内搜索：${trackQuery}${lyricCatalog.truncated.track ? '（仅显示前 200 项）' : ''}` : ''}`;
-    $('lyricsFilePath').textContent = `/data/media/${lyricScopes.lyric}${lyricQuery ? ` 内搜索：${lyricQuery}${lyricCatalog.truncated.lyric ? '（仅显示前 200 项）' : ''}` : ''}`;
+    const trackPathLabel = `/data/media/${lyricScopes.track}${trackQuery ? ` 内搜索：${trackQuery}${lyricCatalog.truncated.track ? '（仅显示前 200 项）' : ''}` : ''}`;
+    const lyricPathLabel = `/data/media/${lyricScopes.lyric}${lyricQuery ? ` 内搜索：${lyricQuery}${lyricCatalog.truncated.lyric ? '（仅显示前 200 项）' : ''}` : ''}`;
+    $('lyricsTrackPath').innerHTML = expandableFilename(trackPathLabel, 88);
+    $('lyricsFilePath').innerHTML = expandableFilename(lyricPathLabel, 88);
+    bindExpandableFilenames($('lyricsTrackPath'));
+    bindExpandableFilenames($('lyricsFilePath'));
     $('lyricsTrackCount').textContent = String(lyricCatalog.counts.tracks);
     $('lyricsFileCount').textContent = String(lyricCatalog.counts.lyrics);
     $('lyricsRelationCount').textContent = String(lyricCatalog.counts.relations);
-    if (lyricOrigin) {
-        const source = lyricOrigin.kind === 'track' ? lyricCatalog.tracks : lyricCatalog.lyrics;
-        if (!source.some(item => item.path === lyricOrigin.path)) lyricOrigin = null;
+    if (lyricOrigin && !lyricCatalog.lyrics.some(item => item.path === lyricOrigin.path)) {
+        exitLyricSelection('当前筛选中看不到原歌词，已退出选择状态');
+        return;
     }
     renderLyricObjects();
-    renderLyricGraph();
+    renderLyricRelationJson();
 }
 
 $('lyricsRefresh').onclick = () => loadLyricCatalog().catch(error => alert(error.message));
 for (const id of ['lyricsTrackFilter', 'lyricsFileFilter']) {
     $(id).oninput = () => {
         clearTimeout(lyricSearchTimer);
+        lyricTrackAnchor = null;
         lyricSearchTimer = setTimeout(() => loadLyricCatalog().catch(error => alert(error.message)), 220);
+    };
+}
+for (const id of ['lyricsTrackUsage', 'lyricsFileUsage']) {
+    $(id).onchange = () => {
+        lyricTrackAnchor = null;
+        renderLyricObjects();
     };
 }
 $('mediaSearch').oninput = () => {
@@ -558,45 +608,28 @@ $('mediaSearch').oninput = () => {
     selectionKind = null;
     mediaSearchTimer = setTimeout(() => renderTree().catch(error => alert(error.message)), 220);
 };
-$('lyricsEnterLink').onclick = () => {
-    if (!lyricOrigin) return;
-    lyricLinking = true;
-    lyricTargets = lyricRelationSet(lyricOrigin.kind, lyricOrigin.path);
-    $('lyricsEnterLink').classList.add('hidden');
-    $('lyricsCancelLink').classList.remove('hidden');
-    $('lyricsSaveLink').classList.remove('hidden');
-    $('lyricsModeStatus').textContent = '连线编辑中：点击另一列对象添加或移除连线';
-    renderLyricObjects();
-    renderLyricGraph();
-};
-$('lyricsCancelLink').onclick = () => {
-    lyricLinking = false;
-    lyricTargets.clear();
-    $('lyricsEnterLink').classList.remove('hidden');
-    $('lyricsCancelLink').classList.add('hidden');
-    $('lyricsSaveLink').classList.add('hidden');
-    $('lyricsModeStatus').textContent = `已选择：${lyricOrigin?.path || ''}`;
-    renderLyricObjects();
-    renderLyricGraph();
-};
+
+globalThis.addEventListener?.('keydown', event => {
+    if (event.key === 'Escape' && lyricOrigin) exitLyricSelection();
+});
+
 $('lyricsSaveLink').onclick = async () => {
     if (!lyricOrigin) return;
     $('lyricsSaveLink').disabled = true;
     try {
         await api('/api/v1/media/admin/lyrics/relations', {
             method: 'POST', headers: requestHeaders(), body: JSON.stringify({
-                origin_kind: lyricOrigin.kind,
+                origin_kind: 'lyric',
                 origin_path: lyricOrigin.path,
                 linked_paths: [...lyricTargets],
             }),
         });
-        lyricLinking = false;
-        lyricTargets.clear();
-        $('lyricsEnterLink').classList.remove('hidden');
-        $('lyricsCancelLink').classList.add('hidden');
-        $('lyricsSaveLink').classList.add('hidden');
-        $('lyricsModeStatus').textContent = `已保存：${lyricOrigin.path}`;
+        const savedPath = lyricOrigin.path;
         await loadLyricCatalog();
+        if (lyricOrigin?.path === savedPath) lyricTargets = lyricRelationSet('lyric', savedPath);
+        $('lyricsModeStatus').textContent = `已保存：${savedPath}；再次点击歌词或按 Esc 退出`;
+        renderLyricObjects();
+        renderLyricRelationJson();
     } catch (error) {
         alert(error.message);
     } finally {
@@ -772,6 +805,40 @@ function updateIpSearchPlaceholders() {
     $('networkWebrtcIp').placeholder = networkFuzzy ? 'WebRTC IP 片段（至少 3 字符）' : 'WebRTC IP（精确查询）';
 }
 
+function middleEllipsis(value, maximum = 42) {
+    const characters = Array.from(String(value));
+    if (characters.length <= maximum) return {text: characters.join(''), truncated: false};
+    const head = Math.ceil((maximum - 3) / 2);
+    const tail = Math.floor((maximum - 3) / 2);
+    return {text: `${characters.slice(0, head).join('')}...${characters.slice(-tail).join('')}`, truncated: true};
+}
+
+function expandableFilename(value, maximum = 42) {
+    const full = String(value);
+    const display = middleEllipsis(full, maximum);
+    if (!display.truncated) return `<span class="filename-full">${escapeHtml(full)}</span>`;
+    return `<span class="filename-toggle" role="button" tabindex="0" aria-expanded="false" data-full="${escapeHtml(full)}" data-short="${escapeHtml(display.text)}" title="点击展开完整名称">${escapeHtml(display.text)}</span>`;
+}
+
+function bindExpandableFilenames(root) {
+    for (const element of root.querySelectorAll('.filename-toggle')) {
+        const toggle = event => {
+            event.stopPropagation();
+            const expanded = element.getAttribute('aria-expanded') === 'true';
+            element.setAttribute('aria-expanded', String(!expanded));
+            element.textContent = expanded ? element.dataset.short : element.dataset.full;
+            element.title = expanded ? '点击展开完整名称' : '点击收起名称';
+        };
+        element.onclick = toggle;
+        element.onkeydown = event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                toggle(event);
+            }
+        };
+    }
+}
+
 $('securityMatchMode').onchange = updateIpSearchPlaceholders;
 $('networkMatchMode').onchange = updateIpSearchPlaceholders;
 updateIpSearchPlaceholders();
@@ -828,7 +895,8 @@ function networkTimeLine(item) {
 function prioritySectionLabel(text, count) {
     const label = document.createElement('div');
     label.className = 'priority-section-label';
-    label.innerHTML = `<strong>${escapeHtml(text)}</strong><span>${Number(count || 0)}</span>`;
+    label.innerHTML = `<strong>${expandableFilename(text, 68)}</strong><span>${Number(count || 0)}</span>`;
+    bindExpandableFilenames(label);
     return label;
 }
 
@@ -836,9 +904,10 @@ function priorityDirectoryButton(directory) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'priority-directory';
-    button.innerHTML = `<span class="priority-directory-label"><strong>📁 ${escapeHtml(directory.name)}</strong>`
-        + `<small>/data/media/${escapeHtml(directory.path)}</small></span>`
+    button.innerHTML = `<span class="priority-directory-label"><strong>📁 ${expandableFilename(directory.name, 48)}</strong>`
+        + `<small>/data/media/${expandableFilename(directory.path, 68)}</small></span>`
         + `<span>${Number(directory.count || 0)} 个媒体&nbsp;&nbsp;进入</span>`;
+    bindExpandableFilenames(button);
     button.onclick = () => {
         priorityScope = directory.path;
         priorityPage = 1;
@@ -853,43 +922,43 @@ function priorityMediaRow(item, data) {
     row.className = 'priority-row';
     const resourceId = item.resource_id || null;
     const fileName = item.media_path.split('/').pop() || item.title;
+    const preference = Number(item.preference || 0);
     row.innerHTML = `
         <div class="priority-main">
-            <strong>${escapeHtml(item.title)}</strong>
-            <small><span>文件</span><code>${escapeHtml(fileName)}${item.hidden ? ' · 已隐藏' : ''}</code></small>
+            <strong>${expandableFilename(item.title, 48)}</strong>
+            <small><span>${item.type === 'audio' ? '音乐' : '视频'}</span><code>${expandableFilename(fileName, 58)}${item.hidden ? ' · 已隐藏' : ''}</code></small>
         </div>
-        <div class="priority-values">
-            <span>${item.type === 'audio' ? '音乐' : '视频'}</span>
-            <span>播放 ${Number(item.play_score || 0)}</span>
-            <b>${Number(item.preference) > 0 ? '+' : ''}${Number(item.preference || 0)}</b>
-        </div>
-        <div class="priority-actions"></div>`;
-    const actions = row.querySelector('.priority-actions');
-    for (const [label, delta] of [['降低', -1], ['提高', 1]]) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = delta < 0 ? '−' : '＋';
-        button.title = `${label}展示优先级`;
-        button.setAttribute('aria-label', `${label}${item.title}的展示优先级`);
-        button.disabled = delta < 0
-            ? Number(item.preference) <= Number(data.minimum)
-            : Number(item.preference) >= Number(data.maximum);
-        button.onclick = async () => {
-            button.disabled = true;
-            try {
-                await api('/api/v1/media/admin/media-priority', {
-                    method: 'POST',
-                    headers: requestHeaders(),
-                    body: JSON.stringify({media_path: item.media_path, resource_id: resourceId, delta}),
-                });
-                await loadMediaPriority(true);
-            } catch (error) {
-                alert(error.message);
-                button.disabled = false;
-            }
-        };
-        actions.appendChild(button);
-    }
+        <label class="priority-control">
+            <span>展示优先级 <output>${preference}</output></span>
+            <input type="range" min="${Number(data.minimum)}" max="${Number(data.maximum)}" value="${preference}" step="1" aria-label="${escapeHtml(item.title)}的展示优先级">
+        </label>`;
+    bindExpandableFilenames(row);
+    const slider = row.querySelector('input[type="range"]');
+    const output = row.querySelector('output');
+    let committed = preference;
+    slider.oninput = () => { output.textContent = slider.value; };
+    slider.onchange = async () => {
+        const value = Number(slider.value);
+        if (value === committed) return;
+        slider.disabled = true;
+        try {
+            const result = await api('/api/v1/media/admin/media-priority', {
+                method: 'POST',
+                headers: requestHeaders(),
+                body: JSON.stringify({media_path: item.media_path, resource_id: resourceId, value}),
+            });
+            committed = Number(result.preference);
+            item.preference = committed;
+            slider.value = String(committed);
+            output.textContent = String(committed);
+        } catch (error) {
+            slider.value = String(committed);
+            output.textContent = String(committed);
+            alert(error.message);
+        } finally {
+            slider.disabled = false;
+        }
+    };
     return row;
 }
 
@@ -898,7 +967,8 @@ function renderMediaPriority(data) {
     list.innerHTML = '';
     priorityScope = data.scope || '';
     const currentPath = `/data/media${priorityScope ? `/${priorityScope}` : ''}`;
-    $('priorityPath').textContent = currentPath;
+    $('priorityPath').innerHTML = expandableFilename(currentPath, 88);
+    bindExpandableFilenames($('priorityPath'));
     $('priorityPath').title = currentPath;
     $('priorityUp').disabled = !priorityScope;
     if (data.searching) {

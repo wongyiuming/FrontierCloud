@@ -145,6 +145,10 @@ def _scan_catalog_scope_sync(
         )
     ]
     directories.sort(key=lambda item: item["name"].casefold())
+    if query:
+        # A search result is a flat, scoped result set. Directory navigation in
+        # that state pushes matches below unrelated folders and is misleading.
+        directories = []
     matches: list[dict[str, Any]] = []
     total = 0
     for path in current.rglob("*"):

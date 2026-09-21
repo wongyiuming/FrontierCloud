@@ -96,10 +96,15 @@ async def attach_master_stats(items):
     return items
 
 
-async def mutate_stats(identifier, path, *, delta=None, session=None, played=None, duration=None, audit=None):
+async def mutate_stats(identifier, path, *, preference=None, session=None, played=None, duration=None, audit=None):
     row, _relation = await resolve(identifier, path)
-    if delta is not None and delta not in (-1, 1):
-        raise p.ProtocolError("Preference delta must be -1 or 1")
+    if preference is not None and (
+        isinstance(preference, bool) or not isinstance(preference, int)
+        or not playback.MIN_PREFERENCE <= preference <= playback.MAX_PREFERENCE
+    ):
+        raise p.ProtocolError(
+            f"Preference must be between {playback.MIN_PREFERENCE} and {playback.MAX_PREFERENCE}"
+        )
     if session is not None:
         session = playback.normalize_session_id(session)
         if played + .05 < playback.valid_playback_threshold(duration):
@@ -121,8 +126,8 @@ async def mutate_stats(identifier, path, *, delta=None, session=None, played=Non
             .on_duplicate_key_update(resource_id=identifier))
         values = dict((await conn.execute(select(s.stats).where(
             s.stats.c.resource_id == identifier).with_for_update())).mappings().one())
-        if delta is not None:
-            values["preference"] = max(-2, min(7, values["preference"] + delta))
+        if preference is not None:
+            values["preference"] = preference
         if session is not None:
             event = mysql_insert(s.events).values(session_id=session, resource_id=identifier,
                 expires_at=now + 604800).prefix_with("IGNORE")
