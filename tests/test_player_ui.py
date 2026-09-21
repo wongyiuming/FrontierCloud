@@ -94,6 +94,9 @@ class PlayerUIContractTests(unittest.TestCase):
         lyric_template = (ROOT / "static" / "media" / "lyrics.html").read_text(encoding="utf-8")
 
         self.assertIn('id="lyricsLink"', audio_template)
+        self.assertIn('id="fullscreenLyrics"', audio_template)
+        self.assertEqual(audio_template.count('class="fullscreen-lyrics-column"'), 3)
+        self.assertNotIn('target="_blank"', audio_template)
         self.assertIn('id="inlineLyrics"', audio_template)
         self.assertIn('id="inlineLyricsLines"', audio_template)
         self.assertIn('id="inlineLyricsTrack"', audio_template)
@@ -112,6 +115,10 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("function lyricIndexAt(entries, currentTime)", player_script)
         self.assertIn("updateSynchronizedLyrics(art.currentTime)", player_script)
         self.assertIn("function startLyricClock()", player_script)
+        self.assertIn("function openFullscreenLyrics()", player_script)
+        self.assertIn("function closeFullscreenLyrics()", player_script)
+        self.assertNotIn("lyricsLink.href", player_script)
+        self.assertIn("position: fixed; inset: 0", player_style)
         self.assertIn("requestAnimationFrame(tick)", player_script)
         timeupdate_handler = player_script.split("art.on('video:timeupdate'", 1)[1].split("art.on('video:ended'", 1)[0]
         self.assertIn("startLyricClock()", timeupdate_handler)

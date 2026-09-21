@@ -13,7 +13,7 @@ function playerContext(fetchImpl) {
             id,
             textContent: '',
             style: {setProperty(name, value) { this[name] = value; }},
-            classList: {add() {}, remove() {}, toggle() {}},
+            classList: {add() {}, remove() {}, toggle() {}, contains(value) { return value === 'hidden'; }},
             clientHeight: 400,
             clientWidth: 500,
             children: [],

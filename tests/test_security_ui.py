@@ -12,6 +12,7 @@ class SecurityUIContractTests(unittest.TestCase):
 
         for element_id in (
             "securityIpFilter",
+            "securityMatchMode",
             "securityStatusFilter",
             "securityIpOrder",
             "securityPrev",
@@ -58,7 +59,13 @@ class SecurityUIContractTests(unittest.TestCase):
         self.assertNotIn('data-network-view="pairs"', html)
         self.assertIn('data-network-view="public"', html)
         self.assertIn('data-network-view="webrtc"', html)
+        self.assertIn('id="networkMatchMode"', html)
+        self.assertIn('id="networkExpandAll"', html)
+        self.assertIn('id="networkCollapseAll"', html)
         self.assertIn("function renderNetworkGroups", script)
+        self.assertIn("networkExpandedGroups", script)
+        self.assertIn("N=${relationCount}", script)
+        self.assertIn('aria-expanded', script)
         self.assertNotIn("function renderNetworkPairList", script)
         self.assertIn(".network-branch::before", style)
 

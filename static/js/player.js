@@ -14,6 +14,7 @@ let activeLyricEntries = [];
 let activeLyricIndex = null;
 let lyricSlideTimer = null;
 let lyricAnimationFrame = null;
+let fullscreenLyricIndex = null;
 const LYRIC_SLIDE_MS = 480;
 const LYRIC_WINDOW_OFFSETS = [-1, 0, 1, 2, 3];
 const DIRECT_SEEK_ZONE_START = 0.75;
@@ -608,6 +609,59 @@ function setActiveLyricTime(panel, index) {
     else panel.removeAttribute('data-active-time');
 }
 
+function sizeFullscreenLyrics() {
+    const overlay = document.getElementById('fullscreenLyrics');
+    if (!overlay || overlay.classList.contains('hidden') || activeLyricEntries.length === 0) return;
+    const rowsPerColumn = Math.max(1, Math.ceil(activeLyricEntries.length / 3));
+    const longest = Math.max(1, ...activeLyricEntries.map(entry => Array.from(entry.text || '').length));
+    const heightSize = Math.max(10, (overlay.clientHeight - 80) / (rowsPerColumn * 1.22));
+    const widthSize = Math.max(10, (overlay.clientWidth / 3 - 56) / Math.max(4, longest * 1.02));
+    overlay.style.setProperty('--fullscreen-lyric-font-size', `${Math.max(10, Math.min(48, heightSize, widthSize))}px`);
+}
+
+function syncFullscreenLyrics(index) {
+    const overlay = document.getElementById('fullscreenLyrics');
+    if (!overlay || overlay.classList.contains('hidden') || index === fullscreenLyricIndex) return;
+    overlay.querySelector('.fullscreen-lyric-line.current')?.classList.remove('current');
+    if (index >= 0) overlay.querySelector(`[data-lyric-index="${index}"]`)?.classList.add('current');
+    fullscreenLyricIndex = index;
+}
+
+function renderFullscreenLyrics() {
+    const columns = [0, 1, 2].map(index => document.getElementById(`fullscreenLyricsColumn${index}`));
+    if (columns.some(column => !column)) return;
+    columns.forEach(column => column.replaceChildren());
+    const rowsPerColumn = Math.max(1, Math.ceil(activeLyricEntries.length / columns.length));
+    activeLyricEntries.forEach((entry, index) => {
+        const row = document.createElement('p');
+        row.className = 'fullscreen-lyric-line';
+        row.dataset.lyricIndex = String(index);
+        row.textContent = entry.text || '\u00a0';
+        columns[Math.min(columns.length - 1, Math.floor(index / rowsPerColumn))].appendChild(row);
+    });
+    fullscreenLyricIndex = null;
+    syncFullscreenLyrics(activeLyricIndex ?? -1);
+    sizeFullscreenLyrics();
+}
+
+function closeFullscreenLyrics() {
+    const overlay = document.getElementById('fullscreenLyrics');
+    if (!overlay) return;
+    overlay.classList.add('hidden');
+    overlay.setAttribute('aria-hidden', 'true');
+    fullscreenLyricIndex = null;
+}
+
+function openFullscreenLyrics() {
+    const overlay = document.getElementById('fullscreenLyrics');
+    if (!overlay || activeLyricEntries.length === 0) return;
+    renderFullscreenLyrics();
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden', 'false');
+    syncFullscreenLyrics(activeLyricIndex ?? -1);
+    sizeFullscreenLyrics();
+}
+
 function renderLyricWindow(index) {
     const panel = document.getElementById('inlineLyrics');
     const track = document.getElementById('inlineLyricsTrack');
@@ -662,6 +716,7 @@ function updateSynchronizedLyrics(currentTime, force = false) {
         return;
     }
     const nextIndex = lyricIndexAt(activeLyricEntries, Number(currentTime) || 0);
+    syncFullscreenLyrics(nextIndex);
     if (!force && nextIndex === activeLyricIndex) return;
     if (lyricSlideTimer !== null) renderLyricWindow(activeLyricIndex);
     if (!force && nextIndex === activeLyricIndex + 1) animateLyricForward(nextIndex);
@@ -671,6 +726,8 @@ function updateSynchronizedLyrics(currentTime, force = false) {
 function showSynchronizedLyrics(entries, currentTime = 0) {
     activeLyricEntries = entries;
     activeLyricIndex = null;
+    if (entries.length === 0) closeFullscreenLyrics();
+    else if (!document.getElementById('fullscreenLyrics')?.classList.contains('hidden')) renderFullscreenLyrics();
     updateSynchronizedLyrics(currentTime, true);
 }
 
@@ -802,13 +859,8 @@ function initPlayer(media, index) {
 
     if (lyricsLink) {
         lyricsLink.classList.toggle('unavailable', !media.has_lyrics);
-        if (media.has_lyrics) {
-            lyricsLink.href = `/api/v1/media/lyrics?track=${encodeURIComponent(media.media_path)}${media.resource_id ? `&resource_id=${encodeURIComponent(media.resource_id)}` : ''}`;
-            lyricsLink.setAttribute('aria-label', `打开 ${media.title} 的歌词`);
-        } else {
-            lyricsLink.removeAttribute('href');
-            lyricsLink.setAttribute('aria-label', `${media.title} 暂无歌词`);
-        }
+        lyricsLink.disabled = !media.has_lyrics;
+        lyricsLink.setAttribute('aria-label', media.has_lyrics ? `全屏显示 ${media.title} 的歌词` : `${media.title} 暂无歌词`);
     }
 
     if (art) {
@@ -1101,6 +1153,8 @@ window.addEventListener('DOMContentLoaded', () => {
     const initialIndex = 0;
     currentIndex = initialIndex;
     renderPlaylist();
+    document.getElementById('lyricsLink')?.addEventListener('click', openFullscreenLyrics);
+    document.getElementById('fullscreenLyrics')?.addEventListener('click', closeFullscreenLyrics);
     initPlayer(currentMediaList[initialIndex], initialIndex);
     initGestureControl();
     playbackReporter = setInterval(reportValidPlayback, 1000);
@@ -1126,6 +1180,7 @@ window.addEventListener('pageshow', event => {
 
 window.addEventListener('resize', () => {
     sizeSynchronizedLyrics();
+    sizeFullscreenLyrics();
 });
 
 function selectMedia(index) {
@@ -1141,7 +1196,10 @@ function selectMedia(index) {
 }
 
 window.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowRight' || e.key === 'MediaTrackNext' || e.code === 'MediaTrackNext') {
+    if (e.key === 'Escape' && !document.getElementById('fullscreenLyrics')?.classList.contains('hidden')) {
+        e.preventDefault();
+        closeFullscreenLyrics();
+    } else if (e.key === 'ArrowRight' || e.key === 'MediaTrackNext' || e.code === 'MediaTrackNext') {
         e.preventDefault();
         playNext();
     } else if (e.key === 'ArrowLeft' || e.key === 'MediaTrackPrevious' || e.code === 'MediaTrackPrevious') {

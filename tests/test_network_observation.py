@@ -158,6 +158,26 @@ class NetworkObservationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "IP 地址无效"):
             asyncio.run(network_observation.list_observation_summary(public_ip="invalid"))
 
+    def test_fuzzy_summary_is_strictly_bounded(self):
+        connection = _Connection(rows=[], total=0)
+        with patch.object(network_observation, "engine", _Engine(connection)):
+            result = asyncio.run(network_observation.list_observation_summary(
+                public_ip="0.113", match_mode="fuzzy", page_size=200,
+            ))
+        sql = "\n".join(statement for statement, _params in connection.executed)
+        self.assertIn("client_ip LIKE :public_ip", sql)
+        self.assertIn("MAX_EXECUTION_TIME(250)", sql)
+        self.assertEqual(connection.executed[0][1]["public_ip"], "%0.113%")
+        self.assertEqual(result["pagination"]["page_size"], 50)
+        with self.assertRaisesRegex(ValueError, "至少需要 3"):
+            asyncio.run(network_observation.list_observation_summary(
+                public_ip="1.", match_mode="fuzzy",
+            ))
+        with self.assertRaisesRegex(ValueError, "前 20 页"):
+            asyncio.run(network_observation.list_observation_summary(
+                public_ip="203", match_mode="fuzzy", page=21,
+            ))
+
     def test_grouped_view_returns_complete_one_to_many_relationships(self):
         class SequencedConnection(_Connection):
             def __init__(self):
@@ -165,6 +185,7 @@ class NetworkObservationTests(unittest.TestCase):
                 self.results = [
                     [{
                         "group_key": "203.0.113.5",
+                        "relation_count": 2,
                         "observation_count": 12,
                         "first_seen": "2026-09-01",
                         "last_seen": "2026-09-16",
@@ -192,6 +213,7 @@ class NetworkObservationTests(unittest.TestCase):
         self.assertEqual(result["view"], "public")
         self.assertEqual(result["pagination"]["total"], 1)
         self.assertEqual(result["groups"][0]["observation_count"], 12)
+        self.assertEqual(result["groups"][0]["relation_count"], 2)
         self.assertEqual(
             [item["webrtc_ip"] for item in result["groups"][0]["relations"]],
             ["198.51.100.7", "198.51.100.8"],

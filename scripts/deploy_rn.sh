@@ -14,14 +14,14 @@ compose() {
 }
 
 if [ "$(git branch --show-current)" != "dev" ]; then
-    echo "RN deployment refused: checkout must be dev" >&2
+    echo "FrontierCloud deployment refused: checkout must be dev" >&2
     exit 1
 fi
 
 # Remove the retired public setting without printing its secret value.
 if [ -f .env ] && grep -q '^[[:space:]]*METRICS_TOKEN[[:space:]]*=' .env; then
     sed -i '/^[[:space:]]*METRICS_TOKEN[[:space:]]*=/d' .env
-    echo "Removed obsolete METRICS_TOKEN from RN .env"
+    echo "Removed obsolete METRICS_TOKEN from deployment .env"
 fi
 
 python3 scripts/validate_env_contract.py
@@ -35,7 +35,7 @@ fi
 compose exec -T nginx nginx -t
 tls_enabled="$(compose exec -T nginx printenv TLS_ENABLED)"
 if [ "$tls_enabled" != "true" ]; then
-    echo "RN deployment failed: TLS_ENABLED must be true" >&2
+    echo "FrontierCloud deployment failed: TLS_ENABLED must be true" >&2
     exit 1
 fi
 server_name="$(compose exec -T nginx printenv SERVER_NAME)"
@@ -44,7 +44,7 @@ until curl -fsS --resolve "$server_name:443:127.0.0.1" \
     "https://$server_name/health/ready" | grep '"status":"ready"'; do
     health_attempt=$((health_attempt + 1))
     if [ "$health_attempt" -ge 30 ]; then
-        echo "RN deployment failed: HTTPS health check did not stabilize" >&2
+        echo "FrontierCloud deployment failed: HTTPS health check did not stabilize" >&2
         exit 1
     fi
     sleep 2

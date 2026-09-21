@@ -26,11 +26,16 @@ class FederationContractTests(unittest.TestCase):
         self.assertNotIn("curl -k", workflow)
         self.assertNotIn("ignore_https_errors", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
         self.assertIn("ignore-certificate-errors-spki-list", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
+        self.assertIn("  prepare-evoxt:", workflow)
+        self.assertIn("  deploy-evoxt:", workflow)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, evoxt]", workflow)
+        self.assertIn("vars.EVOXT_DEPLOY_PATH != ''", workflow)
+        self.assertIn("needs: [test-cluster, test-compose, prepare-evoxt]", workflow)
 
     def test_every_ci_or_deployment_job_has_a_three_minute_hard_limit(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         limits = [int(value) for value in re.findall(r"^    timeout-minutes: (\d+)$", workflow, re.MULTILINE)]
-        self.assertEqual(len(limits), 4)
+        self.assertEqual(len(limits), 6)
         self.assertTrue(all(value <= 3 for value in limits), limits)
 
     def test_relay_has_verified_tls_and_no_disk_buffering(self):

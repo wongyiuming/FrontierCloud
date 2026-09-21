@@ -441,6 +441,7 @@ async def admin_temporary_key(
 async def security_blocks(
     request: Request,
     ip: str | None = Query(None, max_length=45),
+    match_mode: str = Query("exact", pattern="^(exact|fuzzy)$"),
     status: str | None = Query(None, max_length=32),
     ip_order: str = Query("asc", pattern="^(asc|desc)$"),
     sort_order: str | None = Query(
@@ -461,6 +462,7 @@ async def security_blocks(
             page_size=page_size,
             ip_order=ip_order,
             sort_order=sort_order,
+            match_mode=match_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -574,6 +576,7 @@ async def network_observations(
     request: Request,
     public_ip: str | None = Query(None, max_length=45),
     webrtc_ip: str | None = Query(None, max_length=45),
+    match_mode: str = Query("exact", pattern="^(exact|fuzzy)$"),
     view: str = Query("pairs", pattern="^(pairs|public|webrtc)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=200),
@@ -588,6 +591,7 @@ async def network_observations(
                 webrtc_ip=webrtc_ip,
                 page=page,
                 page_size=page_size,
+                match_mode=match_mode,
             )
         else:
             result = await network_observation.list_grouped_observation_summary(
@@ -596,6 +600,7 @@ async def network_observations(
                 webrtc_ip=webrtc_ip,
                 page=page,
                 page_size=page_size,
+                match_mode=match_mode,
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
