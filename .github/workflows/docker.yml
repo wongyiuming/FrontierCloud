@@ -149,7 +149,7 @@ jobs:
           test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
             https://ci.frontiercloud.local/api/v1/media/preference)" = 404
           curl -fsS -b /tmp/admin-cookies.txt \
-            'https://ci.frontiercloud.local/api/v1/media/admin/media-priority?media_type=audio' | grep 'music/ci-folder/one.wav'
+            'https://ci.frontiercloud.local/api/v1/media/admin/media-priority?media_type=audio&path=music%2Fci-folder' | grep 'music/ci-folder/one.wav'
           curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
             -H 'Content-Type: application/json' \
             -d '{"media_path":"music/ci-folder/one.wav","delta":1}' \
