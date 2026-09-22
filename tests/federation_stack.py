@@ -112,6 +112,8 @@ class Node:
             elif name == "nginx":
                 service["image"] = "frontiercloud-acceptance-nginx"
                 service["ports"] = [{"target": 443, "published": str(self.port), "host_ip": ACCEPTANCE_GATEWAY, "protocol": "tcp"}]
+            elif name == "karaoke":
+                service["image"] = "frontiercloud-acceptance-karaoke"
             if name in ("web", "nginx"):
                 service.setdefault("environment", {}).update(TLS_ENABLED="true", SERVER_NAME=self.host, INSTANCE_NAME="acceptance")
                 service.setdefault("volumes", []).append({

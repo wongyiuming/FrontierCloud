@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>前沿娱乐 · K歌</title>
+  <link rel="stylesheet" href="/karaoke/style.css">
+</head>
+<body>
+<main class="shell">
+  <header><button id="back" class="quiet">← 返回播放器</button><div><p class="eyebrow">前沿娱乐</p><h1>K歌</h1></div><span class="stateless">本页关闭即清除录音</span></header>
+  <section class="song card">
+    <div><span id="kind" class="badge">媒体</span><h2 id="title">正在载入当前媒体…</h2><p id="path"></p></div>
+    <div class="mode"><button id="original" class="selected">原唱</button><button id="accompaniment">伴奏（中置消除）</button></div>
+  </section>
+  <section class="workspace">
+    <div class="stage card">
+      <video id="media" playsinline crossorigin="anonymous"></video>
+      <div id="lyrics" class="lyrics" aria-live="polite"><p>当前媒体没有歌词时，这里保持简洁。</p></div>
+      <div class="transport"><button id="play">只播放歌曲</button><button id="record" class="primary">开始 K 歌</button><button id="stop" disabled>停止录音</button><button id="fullLyrics">歌词全屏</button></div>
+      <p id="status" class="status">播放器声音不会接入录音总线。</p>
+    </div>
+    <aside class="mixer card">
+      <h3>麦克风与返听</h3>
+      <label>麦克风<select id="microphone"><option value="">系统默认麦克风</option></select></label>
+      <button id="refreshMic" class="quiet">刷新麦克风</button>
+      <label>媒体播放音量 <output id="songValue">100%</output><input id="songGain" type="range" min="0" max="100" value="100"></label>
+      <label class="switch"><input id="songMute" type="checkbox"> 静音媒体</label>
+      <label>录音人声增益 <output id="voiceValue">100%</output><input id="voiceGain" type="range" min="0" max="200" value="100"></label>
+      <label>返听增益 <output id="monitorValue">20%</output><input id="monitorGain" type="range" min="0" max="100" value="20"></label>
+      <label class="switch"><input id="monitor" type="checkbox"> 开启实时返听</label>
+      <label class="switch"><input id="aec" type="checkbox" checked> 回声消除与噪声抑制</label>
+      <p class="route">麦克风 → 滤波 → 人声增益 → 限幅器 → 录音<br>媒体 → 扬声器（不进入录音）</p>
+      <p class="warning">返听默认关闭。使用扬声器时，声音可能经空气再次进入麦克风；耳机能获得最可靠的纯人声录音。</p>
+    </aside>
+  </section>
+  <section id="previewCard" class="preview card" hidden><div><h3>本次录音</h3><p>仅存在于当前标签页，刷新或关闭后清除。</p></div><audio id="preview" controls></audio></section>
+</main>
+<div id="lyricsOverlay" class="overlay" hidden><div id="overlayLines"></div><span>轻按任意位置返回 K 歌</span></div>
+<script src="/karaoke/app.js"></script>
+</body>
+</html>

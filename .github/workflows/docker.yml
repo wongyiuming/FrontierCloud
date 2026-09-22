@@ -33,6 +33,7 @@ jobs:
         run: |
           docker build -t frontiercloud-acceptance-web .
           docker build -t frontiercloud-acceptance-nginx -f nginx/Dockerfile .
+          docker build -t frontiercloud-acceptance-karaoke -f karaoke/Dockerfile .
       - name: Run verified local HTTPS topology and browser acceptance
         env:
           PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
@@ -84,6 +85,7 @@ jobs:
           node --check static/js/player.js
           node --check static/js/nodes.js
           node --check static/js/lyrics.js
+          node --check karaoke/static/app.js
           node tests/admin_ui_smoke.mjs
           node tests/player_cache_smoke.mjs
 
@@ -116,6 +118,8 @@ jobs:
       - name: Test public and admin flows
         run: |
           curl -fsSL https://ci.frontiercloud.local/ | grep "前沿娱乐"
+          curl -fsSL https://ci.frontiercloud.local/karaoke/ | grep "K歌"
+          curl -fsSI https://ci.frontiercloud.local/karaoke/ | grep -qi 'permissions-policy: camera=(), microphone=(self), geolocation=()'
           curl -fsS https://ci.frontiercloud.local/health/live | grep '"status":"healthy"'
           curl -fsS https://ci.frontiercloud.local/health/ready | grep '"status":"ready"'
           generated_metrics_token=$(docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token')
@@ -243,9 +247,11 @@ jobs:
             media-init: *web-image
             nginx:
               image: frontiercloud-nginx:$GITHUB_SHA
+            karaoke:
+              image: frontiercloud-karaoke:$GITHUB_SHA
           EOF
-          docker compose -f docker-compose.yaml -f "$override" build web nginx
-          docker image inspect "frontiercloud-web:$GITHUB_SHA" "frontiercloud-nginx:$GITHUB_SHA" >/dev/null
+          docker compose -f docker-compose.yaml -f "$override" build web nginx karaoke
+          docker image inspect "frontiercloud-web:$GITHUB_SHA" "frontiercloud-nginx:$GITHUB_SHA" "frontiercloud-karaoke:$GITHUB_SHA" >/dev/null
 
   prepare-evoxt:
     name: prepare-evoxt
@@ -275,9 +281,11 @@ jobs:
             media-init: *web-image
             nginx:
               image: frontiercloud-nginx:$GITHUB_SHA
+            karaoke:
+              image: frontiercloud-karaoke:$GITHUB_SHA
           EOF
-          docker compose -f docker-compose.yaml -f "$override" build web nginx
-          docker image inspect "frontiercloud-web:$GITHUB_SHA" "frontiercloud-nginx:$GITHUB_SHA" >/dev/null
+          docker compose -f docker-compose.yaml -f "$override" build web nginx karaoke
+          docker image inspect "frontiercloud-web:$GITHUB_SHA" "frontiercloud-nginx:$GITHUB_SHA" "frontiercloud-karaoke:$GITHUB_SHA" >/dev/null
 
   deploy-rn:
     name: deploy-rn
