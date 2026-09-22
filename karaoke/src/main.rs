@@ -53,7 +53,7 @@ fn serve(mut stream: TcpStream) -> std::io::Result<()> {
     let target = parts.next().unwrap_or_default();
     let path = target.split('?').next().unwrap_or_default();
     let head = method == "HEAD";
-    let (status, content_type, body) = match (method, path) {
+    let (status, content_type, body): (u16, &str, &[u8]) = match (method, path) {
         ("GET" | "HEAD", "/karaoke/") => (200, "text/html; charset=utf-8", INDEX.as_bytes()),
         ("GET" | "HEAD", "/karaoke/app.js") => (200, "text/javascript; charset=utf-8", SCRIPT.as_bytes()),
         ("GET" | "HEAD", "/karaoke/style.css") => (200, "text/css; charset=utf-8", STYLE.as_bytes()),
