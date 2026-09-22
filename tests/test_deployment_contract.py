@@ -11,6 +11,30 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentContractTests(unittest.TestCase):
+    def test_rust_karaoke_is_stateless_and_excludes_media_from_recording(self):
+        script = (ROOT / "karaoke/static/app.js").read_text(encoding="utf-8")
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        service = compose.split("  karaoke:", 1)[1].split("  redis:", 1)[0]
+        self.assertNotIn("volumes:", service)
+        for storage in ("localStorage", "sessionStorage", "indexedDB", "upload"):
+            self.assertNotIn(storage, script)
+        self.assertIn("createMediaStreamDestination", script)
+        self.assertNotRegex(script, r"mediaSource\.connect\([^)]*record")
+        self.assertIn("echoCancellation", script)
+        self.assertIn("noiseSuppression", script)
+
+    def test_karaoke_and_hidden_home_gestures_match_the_product_contract(self):
+        player = (ROOT / "static/js/player.js").read_text(encoding="utf-8")
+        home = (ROOT / "static/media/index.html").read_text(encoding="utf-8")
+        self.assertIn("event.touches.length !== 3", player)
+        self.assertIn("}, 1500)", player)
+        self.assertIn("media_path: media.media_path", player)
+        self.assertIn("count===5", home)
+        self.assertIn('id="refreshHotspot"', home)
+        self.assertIn('id="elevateHotspot"', home)
+        self.assertNotIn(">提权</button>", home)
+        self.assertNotIn("↻ 刷新界面", home)
+
     def test_runtime_dependencies_are_reproducibly_pinned(self):
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
         unpinned = [dependency for dependency in project["dependencies"] if "==" not in dependency]
@@ -249,7 +273,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertNotIn('"admin_key": secrets.admin_key', runtime)
         self.assertNotIn('"metrics_token": secrets.metrics_token', runtime)
         self.assertIn("persistent `runtime_secrets` volume", readme)
-        self.assertIn("privilege-elevation control", readme)
+        self.assertIn("Rapidly click the second half of the home logo five times", readme)
 
     def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")

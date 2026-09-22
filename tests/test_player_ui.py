@@ -169,13 +169,16 @@ class PlayerUIContractTests(unittest.TestCase):
             self.assertIn("{{PLAYER_CSS_URL}}", template)
             self.assertIn("{{PLAYER_JS_URL}}", template)
 
-    def test_public_home_keeps_elevation_and_the_only_refresh_action(self):
+    def test_public_home_hides_elevation_and_refresh_behind_logo_hotspots(self):
         template = (ROOT / "static" / "media" / "index.html").read_text(encoding="utf-8")
 
         self.assertEqual(template.count('/api/v1/media/refresh'), 1)
-        self.assertIn('id="elevate"', template)
+        self.assertIn('id="elevateHotspot"', template)
+        self.assertIn('id="refreshHotspot"', template)
+        self.assertIn("count===5", template)
         self.assertIn("/api/v1/media/admin/elevate", template)
-        self.assertIn("提权", template)
+        self.assertNotIn(">提权</button>", template)
+        self.assertNotIn("↻ 刷新界面", template)
         self.assertIn("前沿娱乐", template)
         self.assertIn("前沿音乐", template)
         self.assertIn("前沿媒体", template)

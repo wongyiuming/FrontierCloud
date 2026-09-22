@@ -1,6 +1,6 @@
 # FrontierCloud
 
-Self-hosted media browsing, playback, and administration. Docker Compose bundles Web/API, Nginx, MySQL, Redis, and the required WebRTC STUN service.
+Self-hosted media browsing, playback, stateless karaoke, and administration. Docker Compose bundles Web/API, a small Rust karaoke service, Nginx, MySQL, Redis, and the required WebRTC STUN service.
 
 ## Start
 
@@ -21,7 +21,7 @@ docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token'
 # Database credentials use mysql_password and mysql_root_password in the same directory.
 ```
 
-Keep secrets private. Restarts do not rotate them. Enter the Admin Key using the home page's privilege-elevation control; Admin WebUI can replace it with a random or confirmed custom key, or issue a single-use temporary key with a 15, 30, 60, or 120 minute sliding session. Replacement invalidates other admin sessions and unused temporary keys. Persistent sessions default to 180 minutes of inactivity; the long-term key itself does not expire.
+Keep secrets private. Restarts do not rotate them. Rapidly click the second half of the home logo five times to enter the Admin Key; rapidly click the first half five times to force a UI cache refresh. Admin WebUI can replace the key with a random or confirmed custom key, or issue a single-use temporary key with a 15, 30, 60, or 120 minute sliding session. Replacement invalidates other admin sessions and unused temporary keys. Persistent sessions default to 180 minutes of inactivity; the long-term key itself does not expire.
 
 ## HTTPS and configuration
 
@@ -41,6 +41,7 @@ Public ports bind IPv4 by default. Set `PUBLIC_BIND_ADDRESS=::` in `.env` only w
 
 - Admin manages uploads, downloads, visibility, deletion, and track-to-lyric links. One lyric can serve multiple tracks; each track has at most one lyric.
 - LRC uploads support timestamps and offsets, with a 2 MiB limit. Audio playback shows four synchronized, smoothly scrolling lyric lines above the heartbeat; fullscreen lyrics remain available.
+- The current audio or video can enter karaoke from its player button or a three-finger 1.5-second press. The Rust page reuses the selected media and owner-bound lyrics, records only the browser microphone bus, and keeps the recording only in the current tab. Upload and account storage are not part of this version.
 - Search is Admin-only, supports Simplified/Traditional Chinese and pinyin, and includes file paths. It searches the selected directory and descendants, up to one media-type root; global `data/media` queries are rejected. Results are capped at 200.
 - Playback scores and lyric links bind to stable media object IDs. Next-track preloading uses the player's queue; offline switching requires a completed preload. Speculative downloads are capped at 128 MiB per track.
 - Nodes default to Standalone. With working, certificate-verified HTTPS, Admin can fix a node's role as Master or Slave and import a Slave's five-minute, one-time pairing package. Each relationship is independent; Slave retains its own public pages and Admin. Master merges directories, preserves distinct objects at identical paths, and selects Relay (Nginx) or Direct (short resource token) per relationship. Public pages do not expose topology.

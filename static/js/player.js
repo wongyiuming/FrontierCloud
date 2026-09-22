@@ -1125,6 +1125,59 @@ function initGestureControl() {
     }
 }
 
+function karaokeUrl(media) {
+    const query = new URLSearchParams({media_path: media.media_path});
+    if (media.resource_id) query.set('resource_id', media.resource_id);
+    return `/karaoke/?${query}`;
+}
+
+function openKaraoke() {
+    const media = currentMediaList?.[currentIndex];
+    if (!media) return;
+    accountPlaybackTime();
+    void reportValidPlayback();
+    window.location.assign(karaokeUrl(media));
+}
+
+function initKaraokeGesture() {
+    const surface = document.getElementById('playerSection');
+    if (!surface) return;
+    let timer = null;
+    let starts = [];
+    let recognized = false;
+    const cancel = () => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        starts = [];
+    };
+    surface.addEventListener('touchstart', event => {
+        if (event.touches.length !== 3) { cancel(); return; }
+        starts = Array.from(event.touches, touch => ({id: touch.identifier, x: touch.clientX, y: touch.clientY}));
+        recognized = false;
+        timer = setTimeout(() => {
+            timer = null;
+            recognized = true;
+            showGestureHud('进入 K歌', 650);
+            openKaraoke();
+        }, 1500);
+    }, {passive: true});
+    surface.addEventListener('touchmove', event => {
+        if (!timer || event.touches.length !== 3) { cancel(); return; }
+        const moved = starts.some(start => {
+            const touch = Array.from(event.touches).find(item => item.identifier === start.id);
+            return !touch || Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > 18;
+        });
+        if (moved) cancel();
+    }, {passive: true});
+    const finish = event => {
+        if (!recognized) cancel();
+        if (recognized && event.cancelable) event.preventDefault();
+        recognized = false;
+    };
+    surface.addEventListener('touchend', finish, {passive: false});
+    surface.addEventListener('touchcancel', finish, {passive: false});
+}
+
 function renderPlaylist() {
     const listContainer = document.getElementById('mediaList');
     if (!listContainer) return;
@@ -1153,9 +1206,11 @@ window.addEventListener('DOMContentLoaded', () => {
     currentIndex = initialIndex;
     renderPlaylist();
     document.getElementById('lyricsLink')?.addEventListener('click', openFullscreenLyrics);
+    document.getElementById('karaokeLink')?.addEventListener('click', openKaraoke);
     document.getElementById('fullscreenLyrics')?.addEventListener('click', closeFullscreenLyrics);
     initPlayer(currentMediaList[initialIndex], initialIndex);
     initGestureControl();
+    initKaraokeGesture();
     playbackReporter = setInterval(reportValidPlayback, 1000);
 });
 
