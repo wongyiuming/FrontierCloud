@@ -134,8 +134,11 @@ impl App {
             audio.set_accompaniment(self.accompaniment.get())?;
         }
         self.apply_output().await?;
+        // Resume is initiated inside the user gesture, but its promise is not a
+        // recording prerequisite. Some browsers keep it pending while output
+        // policy settles even though the vocal recorder can already start.
         if let Some(audio) = self.audio.borrow().as_ref() {
-            JsFuture::from(audio.context.resume()?).await?;
+            let _ = audio.context.resume()?;
         }
         Ok(())
     }
@@ -224,7 +227,9 @@ impl App {
         self.stop_microphone();
         let stream = self.microphone_stream().await?;
         *self.microphone.borrow_mut() = Some(stream.clone());
+        self.status("麦克风已连接，正在初始化 Rust DSP 音频图…", false);
         self.ensure_audio(&stream).await?;
+        self.status("实时音频已就绪，正在启动纯人声录音…", false);
         let record_stream = self.audio.borrow().as_ref().unwrap().record_stream.clone();
         let recorder = MediaRecorder::new_with_media_stream(&record_stream)?;
         self.chunks.borrow_mut().clear();
