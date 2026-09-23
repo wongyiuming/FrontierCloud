@@ -1,6 +1,6 @@
 # FrontierCloud
 
-Self-hosted media browsing, playback, stateless karaoke, and administration. FastAPI is the business control plane; Rust/WASM provides the browser-side karaoke media plane. Docker Compose bundles Web/API, Nginx, MySQL, Redis, and the required WebRTC STUN service.
+Self-hosted media browsing, playback, stateless karaoke, and administration. FastAPI provides the business API and native browser JavaScript provides the media UI and real-time karaoke session. Docker Compose bundles Web/API, Nginx, MySQL, Redis, and the required WebRTC STUN service.
 
 ## Start
 
@@ -41,7 +41,7 @@ Public ports bind IPv4 by default. Set `PUBLIC_BIND_ADDRESS=::` in `.env` only w
 
 - Admin manages uploads, downloads, visibility, deletion, and track-to-lyric links. One lyric can serve multiple tracks; each track has at most one lyric.
 - LRC uploads support timestamps and offsets, with a 2 MiB limit. Audio playback shows four synchronized, smoothly scrolling lyric lines above the heartbeat; fullscreen lyrics remain available.
-- The current audio or video can enter karaoke from its player button or a three-finger 1.5-second press. The Rust/WASM page reuses the selected media and owner-bound lyrics, supports separate input and output device selection where the browser allows it, records only the microphone voice bus, and keeps the recording only in the current tab. Upload and account storage are not part of this version.
+- The current audio or video can enter karaoke from its player button or a three-finger 1.5-second press. The karaoke page reuses the selected media and owner-bound lyrics, supports separate input and output device selection where the browser allows it, records only the microphone voice bus, and keeps the recording only in the current tab. Upload and account storage are not part of this version.
 - Search is Admin-only, supports Simplified/Traditional Chinese and pinyin, and includes file paths. It searches the selected directory and descendants, up to one media-type root; global `data/media` queries are rejected. Results are capped at 200.
 - Playback scores and lyric links bind to stable media object IDs. Next-track preloading uses the player's queue; offline switching requires a completed preload. Speculative downloads are capped at 128 MiB per track.
 - Nodes default to Standalone. With working, certificate-verified HTTPS, Admin can fix a node's role as Master or Slave and import a Slave's five-minute, one-time pairing package. Each relationship is independent; Slave retains its own public pages and Admin. Master merges directories, preserves distinct objects at identical paths, and selects Relay (Nginx) or Direct (short resource token) per relationship. Public pages do not expose topology.
@@ -63,7 +63,6 @@ Do not rename or move managed files directly: paths locate objects, but cannot d
 python -m unittest discover -s tests -p 'test_*.py' -v
 node tests/admin_ui_smoke.mjs
 node tests/player_cache_smoke.mjs
-cd karaoke && cargo fmt --all -- --check && cargo test --workspace
 docker compose config --quiet
 ```
 

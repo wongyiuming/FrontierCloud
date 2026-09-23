@@ -71,14 +71,5 @@ class KaraokeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(token, "opaque-token")
             self.assertEqual(karaoke_identity.resolve(token), ("local", "a" * 64))
             self.assertNotIn("media_path", payload)
-
-
-class KaraokeContractTests(unittest.TestCase):
-    def test_openapi_snapshot_is_current(self):
-        from tests import karaoke_contract
-        self.assertTrue(karaoke_contract.CONTRACT.exists())
-        self.assertEqual(karaoke_contract.CONTRACT.read_text(encoding="utf-8"), karaoke_contract.rendered())
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -85,8 +85,7 @@ jobs:
           node --check static/js/media-browser.js
           node --check static/js/nodes.js
           node --check static/js/lyrics.js
-          node --check karaoke/web/bootstrap.js
-          node --check karaoke/web/audio-worklet.js
+          node --check static/js/karaoke.js
           node tests/admin_ui_smoke.mjs
           node tests/player_cache_smoke.mjs
 
@@ -105,7 +104,6 @@ jobs:
               ! -name 'test_federation_contract.py' \
               -printf '/app/%p\n' | sort
           )
-          docker compose exec -T web python -m tests.karaoke_contract
           docker compose exec -T web python -m unittest -v "${runtime_tests[@]}"
           docker compose exec -T nginx nginx -t
           docker compose exec -T redis redis-cli ping | grep PONG
@@ -121,8 +119,9 @@ jobs:
         run: |
           curl -fsSL https://ci.frontiercloud.local/ | grep "前沿娱乐"
           curl -fsSL https://ci.frontiercloud.local/karaoke/ | grep "K歌"
-          curl -fsSL https://ci.frontiercloud.local/karaoke/manifest.json | grep 'frontier_karaoke_web_bg.wasm'
+          curl -fsSL https://ci.frontiercloud.local/karaoke/ | grep '/static/js/karaoke.js?v='
           curl -fsSI https://ci.frontiercloud.local/karaoke/ | grep -qi 'permissions-policy: camera=(), microphone=(self), geolocation=()'
+          curl -fsSI 'https://ci.frontiercloud.local/static/js/karaoke.js?v=0000000000000000' | tr -d '\r' | grep -qi '^cache-control: public, max-age=31536000, immutable$'
           curl -fsSI 'https://ci.frontiercloud.local/static/js/player.js?v=0000000000000000' | tr -d '\r' | grep -qi '^cache-control: public, max-age=31536000, immutable$'
           curl -fsSI 'https://ci.frontiercloud.local/static/js/player.js' | tr -d '\r' | grep -qi '^cache-control: no-cache$'
           curl -fsS https://ci.frontiercloud.local/health/live | grep '"status":"healthy"'

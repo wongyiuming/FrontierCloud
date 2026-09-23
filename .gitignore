@@ -50,7 +50,6 @@ coverage.xml
 .hypothesistest/
 .pytest_cache/
 cover/
-/karaoke/target/
 
 # Environments
 .env

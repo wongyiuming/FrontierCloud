@@ -11,50 +11,39 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentContractTests(unittest.TestCase):
-    def test_rust_karaoke_is_wasm_stateless_and_excludes_media_from_recording(self):
-        web = (ROOT / "karaoke/crates/frontier-karaoke-web/src/lib.rs").read_text(encoding="utf-8")
-        audio = (ROOT / "karaoke/crates/frontier-karaoke-audio/src/lib.rs").read_text(encoding="utf-8")
+    def test_native_karaoke_is_stateless_and_excludes_media_from_recording(self):
+        web = (ROOT / "static/js/karaoke.js").read_text(encoding="utf-8")
+        page = (ROOT / "static/media/karaoke.html").read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         self.assertNotIn("  karaoke:", compose)
         for storage in ("localStorage", "sessionStorage", "indexedDB", "upload"):
             self.assertNotIn(storage, web)
-        self.assertIn("create_media_stream_destination", audio)
-        self.assertIn("recorder_inputs: vec![Bus::VocalRecord]", audio)
-        self.assertNotIn("Bus::Media, Bus::VocalRecord", audio)
-        self.assertIn('"echoCancellation"', web)
-        self.assertIn('"noiseSuppression".into(), &false.into()', web)
-        self.assertIn('"autoGainControl".into(), &false.into()', web)
-        self.assertIn('"inputDevice"', web)
-        self.assertIn('"outputDevice"', web)
-        self.assertIn('max="600" value="300"', web)
-        self.assertIn('value.clamp(0.0, 6.0)', audio)
-        self.assertLess(audio.index('AudioWorkletNode::new'), audio.index('create_media_element_source'))
-        worklet = Path("karaoke/web/audio-worklet.js").read_text(encoding="utf-8")
-        self.assertIn("registerProcessor('frontier-vocal-dsp'", worklet)
-        self.assertNotIn("fetch(", worklet)
-        self.assertIn("new WebAssembly.Instance(options.processorOptions.wasmModule)", worklet)
-        self.assertIn("WebAssembly::Module::new(&bytes)", audio)
-        self.assertNotIn("WebAssembly::compile(&bytes)", audio)
-        self.assertIn("pub fn prepare_context()", audio)
-        self.assertLess(audio.index("context.resume()?"), audio.index("pub async fn build("))
-        self.assertIn("AudioSession::prepare_context()", web)
-        ensure_audio = web[web.index("async fn ensure_audio"):web.index("async fn apply_output")]
-        graph_storage = ensure_audio[:ensure_audio.index("self.apply_levels()")]
-        self.assertIn("if self.audio.borrow().is_some()", ensure_audio)
-        self.assertIn("self.audio.replace(Some(session))", ensure_audio)
-        self.assertNotIn("if let Some(audio) = self.audio.borrow().as_ref()", graph_storage)
-        self.assertIn("set_processor_options(Some(&processor_options))", audio)
-        self.assertNotIn("JsFuture::from(self.media.play()?).await", web)
-        self.assertNotIn("JsFuture::from(audio.context.resume()?).await", web)
+        self.assertIn("createMediaStreamDestination", web)
+        self.assertIn("lowPass.connect(recordGain)", web)
+        self.assertIn("limiter.connect(recordDestination)", web)
+        self.assertIn("lowPass.connect(monitorGain)", web)
+        self.assertNotIn("mediaSource.connect(recordGain)", web)
+        self.assertNotIn("mediaSource.connect(recordDestination)", web)
+        self.assertIn("echoCancellation: elements.aec.checked", web)
+        self.assertIn("noiseSuppression: false", web)
+        self.assertIn("autoGainControl: false", web)
+        self.assertIn('id="inputDevice"', page)
+        self.assertIn('id="outputDevice"', page)
+        self.assertIn('max="600" value="300"', page)
+        self.assertIn("Math.min(6", web)
+        self.assertIn("if (state.graph)", web)
+        self.assertIn("context.createMediaElementSource(elements.media)", web)
+        self.assertIn("state.graph = graph", web)
         self.assertIn("录音继续，但媒体播放失败", web)
-        self.assertIn('Reflect::get(&audio_context_prototype, &"setSinkId".into())', web)
-        self.assertNotIn('targets.push(JsValue::from(self.media.clone()))', web)
+        self.assertIn("state.audioContext.setSinkId", web)
+        self.assertFalse((ROOT / "karaoke").exists())
+        self.assertFalse((ROOT / "contracts/karaoke-openapi.json").exists())
 
     def test_hashed_static_assets_are_immutable(self):
         nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
         admin = (ROOT / "static/media/admin.html").read_text(encoding="utf-8")
         self.assertIn('"~^[0-9a-f]{16}$" "public, max-age=31536000, immutable"', nginx)
-        for asset in ("admin.js", "admin.css", "player.js", "player.css", "network-observation.js"):
+        for asset in ("admin.js", "admin.css", "player.js", "player.css", "network-observation.js", "karaoke.js", "karaoke.css"):
             line = next(value for value in nginx.splitlines() if f"/{asset}" in value)
             self.assertIn("$versioned_static_cache_control", line)
             self.assertNotIn("no-store", line)
@@ -239,7 +228,7 @@ class DeploymentContractTests(unittest.TestCase):
 
     def test_nginx_uses_a_current_patched_stable_image(self):
         dockerfile = (ROOT / "nginx/Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("\nFROM nginx:1.30.4-alpine\n", dockerfile)
+        self.assertTrue(dockerfile.startswith("FROM nginx:1.30.4-alpine\n"))
 
     def test_duplicate_uvicorn_access_log_is_disabled(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
