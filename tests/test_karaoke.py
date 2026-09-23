@@ -7,6 +7,22 @@ from app.services import karaoke_identity
 
 
 class KaraokeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_remote_context_uses_live_owner_lyrics_instead_of_stale_catalog_flag(self):
+        resource_id = "a" * 64
+        row = {
+            "path": "music/shared/song.mp3",
+            "payload": {"type": "audio", "has_lyrics": False},
+        }
+        with (
+            patch.object(karaoke.karaoke_identity, "resolve", return_value=("remote", resource_id)),
+            patch.object(karaoke.media_api, "require_https"),
+            patch.object(karaoke.node_routing, "resolve", AsyncMock(return_value=(row, {}))),
+            patch.object(karaoke.node_routing, "lyric_entries", AsyncMock(return_value=[{"time": 1, "text": "owner"}])) as owner,
+        ):
+            resolved = await karaoke._resolve("opaque", request=object())
+        self.assertTrue(resolved["has_lyrics"])
+        owner.assert_awaited_once_with(resource_id)
+
     async def test_context_exposes_only_opaque_identity_and_api_urls(self):
         opaque = "A" * 100
         with patch.object(karaoke, "_resolve", AsyncMock(return_value={

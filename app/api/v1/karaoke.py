@@ -29,12 +29,17 @@ async def _resolve(token: str, request: Request | None) -> dict:
         media_type = payload.get("type")
         if media_type not in {"audio", "video"}:
             raise HTTPException(404, "Karaoke media not found")
+        has_lyrics = False
+        if media_type == "audio":
+            # The owner's live attachment state is authoritative; a cached
+            # Catalog flag can lag behind a newly saved lyric relationship.
+            has_lyrics = bool(await node_routing.lyric_entries(identifier))
         return {
             "kind": kind,
             "identifier": identifier,
             "path": row["path"],
             "type": media_type,
-            "has_lyrics": media_type == "audio" and bool(payload.get("has_lyrics")),
+            "has_lyrics": has_lyrics,
         }
 
     row = await media_objects.object_by_id(identifier)
