@@ -631,8 +631,18 @@ def main():
                 assert downloaded.headers["content-type"].startswith("audio/webm")
             # Admin ban invalidates user sessions; unban allows a later login.
             a.api(f"/api/v1/media/admin/users/{user['user_id']}", {"action": "ban", "quota_mib": None})
-            assert a.client.get(a.endpoint + "/api/v1/karaoke/account/recordings").status_code == 403
+            assert a.client.get(a.endpoint + "/api/v1/karaoke/account/recordings").status_code == 401
+            blocked_login = a.client.post(a.endpoint + "/api/v1/karaoke/account/login", json={
+                "username": user["username"], "password": "Huawei@123", "webrtc_addresses": [],
+            })
+            assert blocked_login.status_code == 403
             a.api(f"/api/v1/media/admin/users/{user['user_id']}", {"action": "unban", "quota_mib": None})
+            login = a.client.post(a.endpoint + "/api/v1/karaoke/account/login", json={
+                "username": user["username"], "password": "Huawei@123", "webrtc_addresses": [],
+            })
+            assert login.status_code == 200
+            a.kcsrf = a.client.cookies.get("__Host-karaoke_csrf")
+            a.karaoke_api("/logout", {})
             # Use Admin deletion while logged out to verify remote files and rows are removed together.
             a.api(f"/api/v1/media/admin/users/{user['user_id']}", {"action": "delete", "quota_mib": None})
             assert not any((b.data / "recordings").rglob("*.bin"))
