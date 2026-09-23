@@ -70,14 +70,19 @@ pub mod browser {
     }
 
     impl AudioSession {
+        pub fn prepare_context() -> Result<AudioContext, JsValue> {
+            let context = AudioContext::new()?;
+            // This method is called synchronously by the recording click. The
+            // browser's transient user activation must still be available.
+            let _ = context.resume()?;
+            Ok(context)
+        }
+
         pub async fn build(
+            context: AudioContext,
             media: HtmlMediaElement,
             microphone: &MediaStream,
         ) -> Result<Self, JsValue> {
-            let context = AudioContext::new()?;
-            // AudioWorklet initialization depends on a running render thread.
-            // The call is still inside the user's recording action.
-            JsFuture::from(context.resume()?).await?;
             JsFuture::from(
                 context
                     .audio_worklet()?

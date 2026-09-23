@@ -11,7 +11,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{
-    Blob, BlobEvent, Document, Element, Event, HtmlAudioElement, HtmlButtonElement,
+    AudioContext, Blob, BlobEvent, Document, Element, Event, HtmlAudioElement, HtmlButtonElement,
     HtmlInputElement, HtmlMediaElement, HtmlOptionElement, HtmlSelectElement, MediaDeviceInfo,
     MediaDeviceKind, MediaRecorder, MediaStream, MediaStreamConstraints, Url, UrlSearchParams,
 };
@@ -122,11 +122,17 @@ impl App {
             .dyn_into()
     }
 
-    async fn ensure_audio(&self, stream: &MediaStream) -> Result<(), JsValue> {
+    async fn ensure_audio(
+        &self,
+        stream: &MediaStream,
+        prepared_context: Option<AudioContext>,
+    ) -> Result<(), JsValue> {
         if let Some(audio) = self.audio.borrow().as_ref() {
             audio.replace_microphone(stream)?;
         } else {
-            let session = AudioSession::build(self.media.clone(), stream).await?;
+            let context = prepared_context
+                .ok_or_else(|| JsValue::from_str("audio context was not prepared"))?;
+            let session = AudioSession::build(context, self.media.clone(), stream).await?;
             *self.audio.borrow_mut() = Some(session);
         }
         self.apply_levels();
@@ -197,32 +203,53 @@ impl App {
         Ok(())
     }
 
-    async fn start_recording(self: &Rc<Self>) -> Result<(), JsValue> {
+    fn reset_failed_recording_start(&self) {
+        self.recording_state.set(RecordingState::Idle);
+        self.by_id::<HtmlButtonElement>("record")
+            .set_disabled(false);
+        self.by_id::<HtmlButtonElement>("stop").set_disabled(true);
+        self.by_id::<HtmlInputElement>("aec").set_disabled(false);
+        self.stop_microphone();
+    }
+
+    fn start_recording(self: &Rc<Self>) {
         let Ok(initializing) = self.recording_state.get().begin() else {
-            return Ok(());
+            return;
         };
         self.recording_state.set(initializing);
         self.by_id::<HtmlButtonElement>("record").set_disabled(true);
         self.status("正在初始化麦克风和纯人声录音支路…", false);
-        let result = self.initialize_recording().await;
-        if result.is_err() {
-            self.recording_state.set(RecordingState::Idle);
-            self.by_id::<HtmlButtonElement>("record")
-                .set_disabled(false);
-            self.by_id::<HtmlButtonElement>("stop").set_disabled(true);
-            self.by_id::<HtmlInputElement>("aec").set_disabled(false);
-            self.stop_microphone();
-        }
-        result
+        let prepared_context = if self.audio.borrow().is_none() {
+            match AudioSession::prepare_context() {
+                Ok(context) => Some(context),
+                Err(error) => {
+                    self.reset_failed_recording_start();
+                    self.status(&format!("无法开始录音：{}", js_error(error)), true);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let app = self.clone();
+        spawn_local(async move {
+            if let Err(error) = app.initialize_recording(prepared_context).await {
+                app.reset_failed_recording_start();
+                app.status(&format!("无法开始录音：{}", js_error(error)), true);
+            }
+        });
     }
 
-    async fn initialize_recording(self: &Rc<Self>) -> Result<(), JsValue> {
+    async fn initialize_recording(
+        self: &Rc<Self>,
+        prepared_context: Option<AudioContext>,
+    ) -> Result<(), JsValue> {
         self.clear_preview();
         self.stop_microphone();
         let stream = self.microphone_stream().await?;
         *self.microphone.borrow_mut() = Some(stream.clone());
         self.status("麦克风已连接，正在初始化 Rust DSP 音频图…", false);
-        self.ensure_audio(&stream).await?;
+        self.ensure_audio(&stream, prepared_context).await?;
         self.status("实时音频已就绪，正在启动纯人声录音…", false);
         let record_stream = self.audio.borrow().as_ref().unwrap().record_stream.clone();
         let recorder = MediaRecorder::new_with_media_stream(&record_stream)?;
@@ -422,14 +449,7 @@ fn bind(app: &Rc<App>) -> Result<(), JsValue> {
     event(
         &app.by_id::<HtmlButtonElement>("record"),
         "click",
-        move |_| {
-            let record_app = record_app.clone();
-            spawn_local(async move {
-                if let Err(error) = record_app.start_recording().await {
-                    record_app.status(&format!("无法开始录音：{}", js_error(error)), true);
-                }
-            });
-        },
+        move |_| record_app.start_recording(),
     )?;
     let stop_app = app.clone();
     event(
