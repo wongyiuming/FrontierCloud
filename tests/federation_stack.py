@@ -387,6 +387,7 @@ def browser_revoke(browser, master):
 
 def browser_checks(browser, master, resource):
     context = browser.new_context()  # TLS errors are never ignored.
+    context.grant_permissions(["microphone"], origin=master.endpoint)
     page = context.new_page()
     # Joining is accepted only with working media routes; exercise the actual public player.
     page.goto(master.endpoint + "/api/v1/media/music/category?path=music/shared", wait_until="domcontentloaded")
