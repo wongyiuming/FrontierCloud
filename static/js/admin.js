@@ -1340,7 +1340,8 @@ $('logout').onclick = async () => {
             row.append(operations); body.append(row);
         }
     }
-    panel.querySelector('.module-heading').addEventListener('click', () => { if (panel.classList.contains('expanded')) load().catch(error => alert(error.message)); });
+    const heading = panel.querySelector?.('.module-heading');
+    if (heading) heading.addEventListener('click', () => { if (panel.classList.contains('expanded')) load().catch(error => alert(error.message)); });
     $u('usersFilterForm').onsubmit = event => { event.preventDefault(); page = 1; load().catch(error => alert(error.message)); };
     $u('usersRefresh').onclick = () => load().catch(error => alert(error.message));
     $u('usersPrev').onclick = () => { if (page > 1) { page -= 1; load().catch(error => alert(error.message)); } };

@@ -167,7 +167,7 @@ assert(adminHtml.includes('{{NODES_JS_URL}}'));
 assert(adminHtml.includes('id="randomKey"'));
 assert(adminHtml.includes('id="temporaryKeyForm"'));
 assert(adminHtml.includes('id="permanentBanForm"'));
-assert(adminHtml.match(/class="module-heading"/g).length === 7);
+assert(adminHtml.match(/class="module-heading"/g).length === 8);
 assert(adminHtml.includes('data-admin-module="priority"'));
 assert(adminHtml.includes('媒体展示优先级'));
 assert(adminHtml.includes('id="priorityList"'));
