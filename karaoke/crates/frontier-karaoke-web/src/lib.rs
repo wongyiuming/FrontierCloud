@@ -206,6 +206,7 @@ impl App {
         };
         self.recording_state.set(initializing);
         self.by_id::<HtmlButtonElement>("record").set_disabled(true);
+        self.status("正在初始化麦克风和纯人声录音支路…", false);
         let result = self.initialize_recording().await;
         if result.is_err() {
             self.recording_state.set(RecordingState::Idle);

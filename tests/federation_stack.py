@@ -391,6 +391,7 @@ def browser_checks(browser, master, resource):
     # Joining is accepted only with working media routes; exercise the actual public player.
     page.goto(master.endpoint + "/api/v1/media/music/category?path=music/shared", wait_until="domcontentloaded")
     page.wait_for_function("typeof art !== 'undefined' && art && art.video", timeout=60000)
+    page.wait_for_function("currentMediaList.length > 0", timeout=30000)
     assert page.locator('.media-search-input, input[type="search"]').count() == 0
     assert page.locator(f'[data-media-id="{resource["resource_id"]}"]').count() == 1
     page.evaluate("selectMedia(currentMediaList.findIndex(item => !item.resource_id))")
@@ -425,7 +426,10 @@ def browser_checks(browser, master, resource):
     expect(page.locator('#lyricsOverlay')).to_be_visible()
     page.locator('#lyricsOverlay').click(position={"x": 12, "y": 12})
     expect(page.locator('#lyricsOverlay')).to_be_hidden()
-    page.locator('#record').dispatch_event('click')
+    # The first click must be a trusted browser gesture so microphone permission
+    # follows the same path as production. The synthetic second click verifies
+    # that the initialization guard rejects a concurrent start.
+    page.locator('#record').click()
     page.locator('#record').dispatch_event('click')
     expect(page.locator('#status')).to_contain_text('正在录制纯人声支路', timeout=30000)
     expect(page.locator('#stop')).to_be_enabled()
