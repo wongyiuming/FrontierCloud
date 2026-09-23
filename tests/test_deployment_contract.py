@@ -26,6 +26,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('"autoGainControl".into(), &false.into()', web)
         self.assertIn('"inputDevice"', web)
         self.assertIn('"outputDevice"', web)
+        self.assertIn('max="600" value="300"', web)
+        self.assertIn('value.clamp(0.0, 6.0)', audio)
+        self.assertLess(audio.index('AudioWorkletNode::new'), audio.index('create_media_element_source'))
         self.assertIn('Reflect::get(&audio_context_prototype, &"setSinkId".into())', web)
         self.assertNotIn('targets.push(JsValue::from(self.media.clone()))', web)
 

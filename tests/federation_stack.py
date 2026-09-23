@@ -304,6 +304,8 @@ def wav(path, seconds=12, tone=500):
 
 def browser_args(nodes):
     return ["--autoplay-policy=no-user-gesture-required",
+            "--use-fake-device-for-media-stream",
+            "--use-fake-ui-for-media-stream",
             "--ignore-certificate-errors-spki-list=" + ",".join(node.spki for node in nodes),
             "--log-net-log=" + str(nodes[0].directory.parent / "browser-network.json")]
 
@@ -423,6 +425,14 @@ def browser_checks(browser, master, resource):
     expect(page.locator('#lyricsOverlay')).to_be_visible()
     page.locator('#lyricsOverlay').click(position={"x": 12, "y": 12})
     expect(page.locator('#lyricsOverlay')).to_be_hidden()
+    page.locator('#record').dispatch_event('click')
+    page.locator('#record').dispatch_event('click')
+    expect(page.locator('#status')).to_contain_text('正在录制纯人声支路', timeout=30000)
+    expect(page.locator('#stop')).to_be_enabled()
+    page.wait_for_timeout(1100)
+    page.locator('#stop').click()
+    expect(page.locator('#previewCard')).to_be_visible(timeout=10000)
+    expect(page.locator('#status')).to_contain_text('录音已停止')
     context.close()
 
 

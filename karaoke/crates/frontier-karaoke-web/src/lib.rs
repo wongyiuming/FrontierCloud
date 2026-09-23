@@ -201,18 +201,29 @@ impl App {
     }
 
     async fn start_recording(self: &Rc<Self>) -> Result<(), JsValue> {
-        if self.recording_state.get() == RecordingState::Recording {
+        let Ok(initializing) = self.recording_state.get().begin() else {
             return Ok(());
+        };
+        self.recording_state.set(initializing);
+        self.by_id::<HtmlButtonElement>("record").set_disabled(true);
+        let result = self.initialize_recording().await;
+        if result.is_err() {
+            self.recording_state.set(RecordingState::Idle);
+            self.by_id::<HtmlButtonElement>("record")
+                .set_disabled(false);
+            self.by_id::<HtmlButtonElement>("stop").set_disabled(true);
+            self.by_id::<HtmlInputElement>("aec").set_disabled(false);
+            self.stop_microphone();
         }
+        result
+    }
+
+    async fn initialize_recording(self: &Rc<Self>) -> Result<(), JsValue> {
         self.clear_preview();
-        if let Some(stream) = self.microphone.borrow_mut().take() {
-            for track in stream.get_tracks().iter() {
-                track.dyn_into::<web_sys::MediaStreamTrack>()?.stop();
-            }
-        }
+        self.stop_microphone();
         let stream = self.microphone_stream().await?;
+        *self.microphone.borrow_mut() = Some(stream.clone());
         self.ensure_audio(&stream).await?;
-        *self.microphone.borrow_mut() = Some(stream);
         let record_stream = self.audio.borrow().as_ref().unwrap().record_stream.clone();
         let recorder = MediaRecorder::new_with_media_stream(&record_stream)?;
         self.chunks.borrow_mut().clear();
@@ -249,10 +260,9 @@ impl App {
         self.recording_state.set(
             self.recording_state
                 .get()
-                .start()
+                .activate()
                 .map_err(JsValue::from_str)?,
         );
-        self.by_id::<HtmlButtonElement>("record").set_disabled(true);
         self.by_id::<HtmlButtonElement>("stop").set_disabled(false);
         self.by_id::<HtmlInputElement>("aec").set_disabled(true);
         let _ = JsFuture::from(self.media.play()?).await;
@@ -263,11 +273,7 @@ impl App {
         Ok(())
     }
 
-    fn stop_recording(&self) {
-        if let Some(recorder) = self.recorder.borrow().as_ref() {
-            let _ = recorder.stop();
-        }
-        self.media.pause().ok();
+    fn stop_microphone(&self) {
         if let Some(stream) = self.microphone.borrow_mut().take() {
             for track in stream
                 .get_tracks()
@@ -277,6 +283,14 @@ impl App {
                 track.stop();
             }
         }
+    }
+
+    fn stop_recording(&self) {
+        if let Some(recorder) = self.recorder.borrow().as_ref() {
+            let _ = recorder.stop();
+        }
+        self.media.pause().ok();
+        self.stop_microphone();
     }
 
     fn finish_recording(&self) {
@@ -341,7 +355,7 @@ fn install_view(document: &Document) -> Result<(), JsValue> {
       <button id="refreshDevices" class="quiet">授权并刷新设备</button>
       <label>媒体播放音量 <output id="songValue">100%</output><input id="songGain" type="range" min="0" max="100" value="100"></label>
       <label class="switch"><input id="songMute" type="checkbox"> 静音媒体</label>
-      <label>录音人声增益 <output id="voiceValue">100%</output><input id="voiceGain" type="range" min="0" max="200" value="100"></label>
+      <label>录音人声增益 <output id="voiceValue">300%</output><input id="voiceGain" type="range" min="0" max="600" value="300"></label>
       <label>返听增益 <output id="monitorValue">20%</output><input id="monitorGain" type="range" min="0" max="200" value="20"></label>
       <label class="switch"><input id="monitor" type="checkbox"> 开启实时返听</label>
       <label class="switch"><input id="aec" type="checkbox" checked> 回声消除</label>

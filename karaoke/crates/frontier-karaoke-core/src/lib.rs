@@ -4,15 +4,23 @@ use serde::{Deserialize, Serialize};
 pub enum RecordingState {
     #[default]
     Idle,
+    Initializing,
     Recording,
     PreviewReady,
 }
 
 impl RecordingState {
-    pub fn start(self) -> Result<Self, &'static str> {
+    pub fn begin(self) -> Result<Self, &'static str> {
         match self {
-            Self::Idle | Self::PreviewReady => Ok(Self::Recording),
-            Self::Recording => Err("recording is already active"),
+            Self::Idle | Self::PreviewReady => Ok(Self::Initializing),
+            Self::Initializing | Self::Recording => Err("recording is already active"),
+        }
+    }
+
+    pub fn activate(self) -> Result<Self, &'static str> {
+        match self {
+            Self::Initializing => Ok(Self::Recording),
+            _ => Err("recording is not initializing"),
         }
     }
 
@@ -78,10 +86,15 @@ mod tests {
     #[test]
     fn recording_requires_valid_transitions() {
         assert_eq!(
-            RecordingState::Idle.start().unwrap(),
+            RecordingState::Idle.begin().unwrap(),
+            RecordingState::Initializing
+        );
+        assert!(RecordingState::Initializing.begin().is_err());
+        assert_eq!(
+            RecordingState::Initializing.activate().unwrap(),
             RecordingState::Recording
         );
-        assert!(RecordingState::Recording.start().is_err());
+        assert!(RecordingState::Idle.activate().is_err());
         assert_eq!(
             RecordingState::Recording.stop().unwrap(),
             RecordingState::PreviewReady

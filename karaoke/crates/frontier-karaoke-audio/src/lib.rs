@@ -64,9 +64,7 @@ pub mod browser {
             )
             .await?;
             let destination = context.destination();
-            let media_source = context.create_media_element_source(&media)?;
             let song_gain = context.create_gain()?;
-            media_source.connect_with_audio_node(&song_gain)?;
             song_gain.connect_with_audio_node(&destination)?;
             let microphone_source = context.create_media_stream_source(microphone)?;
             let high_pass = context.create_biquad_filter()?;
@@ -94,6 +92,10 @@ pub mod browser {
             monitor_gain.gain().set_value(0.0);
             vocal_worklet.connect_with_audio_node(&monitor_gain)?;
             monitor_gain.connect_with_audio_node(&destination)?;
+            // Bind the media element only after every fallible graph component
+            // is ready. Browsers never allow this association to be repeated.
+            let media_source = context.create_media_element_source(&media)?;
+            media_source.connect_with_audio_node(&song_gain)?;
             let record_stream = record_destination.stream();
             Ok(Self {
                 context,
@@ -146,7 +148,7 @@ pub mod browser {
             self.song_gain.gain().set_value(value.clamp(0.0, 1.0));
         }
         pub fn set_record_gain(&self, value: f32) {
-            self.record_gain.gain().set_value(value.clamp(0.0, 2.0));
+            self.record_gain.gain().set_value(value.clamp(0.0, 6.0));
         }
         pub fn set_monitor_gain(&self, value: f32) {
             self.monitor_gain.gain().set_value(value.clamp(0.0, 2.0));
