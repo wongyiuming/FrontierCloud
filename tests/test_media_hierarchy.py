@@ -120,12 +120,17 @@ class PublicMediaHierarchyTests(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             response = await media.get_music_player_page(album_path)
+            catalog = await media.get_media_catalog_data("music", album_path, "catalog-session")
 
         body = response.body.decode("utf-8")
-        self.assertIn("边走边唱", body)
+        catalog_body = catalog.body.decode("utf-8")
+        self.assertNotIn("边走边唱", body)
+        self.assertIn("/api/v1/media/catalog/media?", body)
+        self.assertIn("边走边唱", catalog_body)
         self.assertNotIn("另一首歌", body)
         self.assertNotIn("不应展示", body)
         self.assertIn("path=music%2F%E9%BB%84%E8%80%80%E6%98%8E", body)
+        self.assertIn("stale-while-revalidate", catalog.headers["cache-control"])
 
     async def test_public_stream_is_delegated_to_nginx_sendfile(self):
         artist = self.music_root / "artist"

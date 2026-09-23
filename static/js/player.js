@@ -1193,24 +1193,56 @@ function renderPlaylist() {
     `).join('');
 }
 
-window.addEventListener('DOMContentLoaded', () => {
-    const listContainer = document.getElementById('mediaList');
+function mediaIdentity(item) {
+    return item?.resource_id || item?.media_id || item?.media_path || '';
+}
 
-    if (typeof currentMediaList === 'undefined' || currentMediaList.length === 0) {
-        listContainer.innerHTML = '<li style="padding:20px;color:#666;text-align:center;">该分类下暂无媒体数据</li>';
+function applyMediaCatalog(entries) {
+    if (!Array.isArray(entries)) return;
+    const selectedIdentity = mediaIdentity(currentMediaList?.[currentIndex]);
+    currentMediaList = entries;
+    if (!entries.length) {
+        document.getElementById('mediaList').innerHTML = '<li style="padding:20px;color:#666;text-align:center;">该分类下暂无媒体数据</li>';
         return;
     }
-
-    const initialIndex = 0;
-    currentIndex = initialIndex;
+    const matched = selectedIdentity
+        ? entries.findIndex(item => mediaIdentity(item) === selectedIdentity)
+        : -1;
+    currentIndex = matched >= 0 ? matched : 0;
     renderPlaylist();
+    if (!art || (selectedIdentity && matched < 0)) {
+        initPlayer(currentMediaList[currentIndex], currentIndex);
+    }
+}
+
+async function loadPlayerCatalog() {
+    const config = window.frontierCloudPlayerCatalogConfig;
+    if (!config?.url || !window.FrontierCatalogCache) return;
+    const cached = window.FrontierCatalogCache.read(config.cacheKey);
+    if (cached) applyMediaCatalog(cached.entries);
+    try {
+        const fresh = await window.FrontierCatalogCache.fetch(config.url, config.cacheKey);
+        applyMediaCatalog(fresh.entries);
+    } catch (error) {
+        if (!currentMediaList.length) {
+            document.getElementById('mediaList').innerHTML = `<li style="padding:20px;color:#ff9f9f;text-align:center;">${escapeHTML(error.message)}</li>`;
+        }
+    }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+    const listContainer = document.getElementById('mediaList');
+    listContainer.innerHTML = '<li style="padding:20px;color:#888;text-align:center;">正在加载媒体目录…</li>';
     document.getElementById('lyricsLink')?.addEventListener('click', openFullscreenLyrics);
     document.getElementById('karaokeLink')?.addEventListener('click', openKaraoke);
     document.getElementById('fullscreenLyrics')?.addEventListener('click', closeFullscreenLyrics);
-    initPlayer(currentMediaList[initialIndex], initialIndex);
     initGestureControl();
     initKaraokeGesture();
     playbackReporter = setInterval(reportValidPlayback, 1000);
+    if (typeof currentMediaList !== 'undefined' && currentMediaList.length) {
+        applyMediaCatalog(currentMediaList);
+    }
+    void loadPlayerCatalog();
 });
 
 window.addEventListener('pagehide', event => {

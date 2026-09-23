@@ -40,6 +40,18 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('Reflect::get(&audio_context_prototype, &"setSinkId".into())', web)
         self.assertNotIn('targets.push(JsValue::from(self.media.clone()))', web)
 
+    def test_hashed_static_assets_are_immutable(self):
+        nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+        admin = (ROOT / "static/media/admin.html").read_text(encoding="utf-8")
+        self.assertIn('"~^[0-9a-f]{16}$" "public, max-age=31536000, immutable"', nginx)
+        for asset in ("admin.js", "admin.css", "player.js", "player.css", "network-observation.js"):
+            line = next(value for value in nginx.splitlines() if f"/{asset}" in value)
+            self.assertIn("$versioned_static_cache_control", line)
+            self.assertNotIn("no-store", line)
+        self.assertIn("{{ADMIN_CSS_URL}}", admin)
+        self.assertIn("{{ADMIN_JS_URL}}", admin)
+        self.assertIn("{{NODES_JS_URL}}", admin)
+
     def test_karaoke_and_hidden_home_gestures_match_the_product_contract(self):
         player = (ROOT / "static/js/player.js").read_text(encoding="utf-8")
         home = (ROOT / "static/media/index.html").read_text(encoding="utf-8")

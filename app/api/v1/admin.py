@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.db import engine
+from app.core.static_assets import static_asset_url
 from app.services import admin_service
 from app.services import ip_security
 from app.services import lyrics
@@ -194,10 +195,15 @@ async def admin_page(
             detail="Admin 页面文件不存在",
         )
 
+    content = path.read_text(encoding="utf-8")
+    for marker, asset in {
+        "{{ADMIN_CSS_URL}}": "css/admin.css",
+        "{{ADMIN_JS_URL}}": "js/admin.js",
+        "{{NODES_JS_URL}}": "js/nodes.js",
+    }.items():
+        content = content.replace(marker, static_asset_url(asset))
     return HTMLResponse(
-        content=path.read_text(
-            encoding="utf-8",
-        ),
+        content=content,
         headers={
             "Cache-Control": "no-store",
         },

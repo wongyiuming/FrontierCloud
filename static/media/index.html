@@ -24,15 +24,16 @@ h1{justify-self:center;font-size:clamp(2rem,4vw,4rem);line-height:1.1}
 <main class="container">
     <h1 class="brand" aria-label="前沿娱乐"><span id="refreshHotspot" class="brand-hotspot">前沿</span><span id="elevateHotspot" class="brand-hotspot">娱乐</span></h1>
     <nav class="card-grid" aria-label="媒体类型">
-        <a href="/api/v1/media/music" class="card"><div class="card-icon" aria-hidden="true">🎵</div><div class="card-title brand">前沿音乐</div></a>
-        <a href="/api/v1/media/video" class="card"><div class="card-icon" aria-hidden="true">🎬</div><div class="card-title brand">前沿媒体</div></a>
+        <a href="/api/v1/media/music" class="card" data-catalog-prefetch="/api/v1/media/catalog/categories?media_type=music" data-catalog-cache-key="categories:music"><div class="card-icon" aria-hidden="true">🎵</div><div class="card-title brand">前沿音乐</div></a>
+        <a href="/api/v1/media/video" class="card" data-catalog-prefetch="/api/v1/media/catalog/categories?media_type=video" data-catalog-cache-key="categories:video"><div class="card-icon" aria-hidden="true">🎬</div><div class="card-title brand">前沿媒体</div></a>
     </nav>
 </main>
 <script>
 window.frontierCloudStunUrls={{STUN_URLS_JSON}};window.frontierCloudWebrtcIntervalMs={{WEBRTC_INTERVAL_MS}};
+window.frontierCloudPrefetchAssets={{MEDIA_PREFETCH_ASSETS_JSON}};
 function fiveRapidClicks(element,action){let count=0,started=0;element.addEventListener('click',event=>{event.preventDefault();const now=Date.now();if(!started||now-started>1800){count=1;started=now}else count+=1;if(count===5){count=0;started=0;action()}})}
 fiveRapidClicks(document.getElementById('refreshHotspot'),()=>location.assign('/api/v1/media/refresh'));
 fiveRapidClicks(document.getElementById('elevateHotspot'),async()=>{const token=prompt('请输入 Admin Key:');if(!token)return;const body=new URLSearchParams({token});try{const r=await fetch('/api/v1/media/admin/elevate',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const d=await r.json();if(!r.ok){const detail=d.detail;throw new Error(detail&&typeof detail==='object'?(detail.message||'登录失败'):(detail||'登录失败'))}location.href=d.redirect}catch(e){alert(e.message)}});
-</script><script src="{{NETWORK_OBSERVATION_JS_URL}}"></script>
+</script><script src="{{MEDIA_BROWSER_JS_URL}}"></script><script src="{{NETWORK_OBSERVATION_JS_URL}}"></script>
 </body>
 </html>
