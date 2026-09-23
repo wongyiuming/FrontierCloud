@@ -389,6 +389,8 @@ def browser_checks(browser, master, resource):
     context = browser.new_context()  # TLS errors are never ignored.
     context.grant_permissions(["microphone"], origin=master.endpoint)
     page = context.new_page()
+    page.on("console", lambda message: print(f"browser-console: {message.type}: {message.text}", flush=True))
+    page.on("pageerror", lambda error: print(f"browser-pageerror: {error}", flush=True))
     # Joining is accepted only with working media routes; exercise the actual public player.
     page.goto(master.endpoint + "/api/v1/media/music/category?path=music/shared", wait_until="domcontentloaded")
     page.wait_for_function("typeof art !== 'undefined' && art && art.video", timeout=60000)
@@ -432,7 +434,7 @@ def browser_checks(browser, master, resource):
     # that the initialization guard rejects a concurrent start.
     page.locator('#record').click()
     page.locator('#record').dispatch_event('click')
-    expect(page.locator('#status')).to_contain_text('正在录制纯人声支路', timeout=30000)
+    expect(page.locator('#status')).to_contain_text('正在录制纯人声支路', timeout=15000)
     expect(page.locator('#stop')).to_be_enabled()
     page.wait_for_timeout(1100)
     page.locator('#stop').click()

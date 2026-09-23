@@ -40,6 +40,10 @@ pub mod browser {
         MediaStreamAudioDestinationNode, Response,
     };
 
+    fn stage(name: &str) {
+        web_sys::console::debug_1(&format!("frontier-karaoke-audio:{name}").into());
+    }
+
     async fn load_worklet_module() -> Result<JsValue, JsValue> {
         let window = web_sys::window().ok_or_else(|| JsValue::from_str("window unavailable"))?;
         let response: Response =
@@ -71,10 +75,12 @@ pub mod browser {
 
     impl AudioSession {
         pub fn prepare_context() -> Result<AudioContext, JsValue> {
+            stage("prepare-context");
             let context = AudioContext::new()?;
             // This method is called synchronously by the recording click. The
             // browser's transient user activation must still be available.
             let _ = context.resume()?;
+            stage("resume-requested");
             Ok(context)
         }
 
@@ -83,13 +89,16 @@ pub mod browser {
             media: HtmlMediaElement,
             microphone: &MediaStream,
         ) -> Result<Self, JsValue> {
+            stage("load-worklet-script");
             JsFuture::from(
                 context
                     .audio_worklet()?
                     .add_module("/karaoke/audio-worklet.js")?,
             )
             .await?;
+            stage("worklet-script-ready");
             let worklet_module = load_worklet_module().await?;
+            stage("worklet-wasm-ready");
             let destination = context.destination();
             let song_gain = context.create_gain()?;
             song_gain.connect_with_audio_node(&destination)?;
@@ -106,6 +115,7 @@ pub mod browser {
             node_options.set_processor_options(Some(&processor_options));
             let vocal_worklet =
                 AudioWorkletNode::new_with_options(&context, "frontier-vocal-dsp", &node_options)?;
+            stage("worklet-node-ready");
             microphone_source.connect_with_audio_node(&high_pass)?;
             high_pass.connect_with_audio_node(&low_pass)?;
             low_pass.connect_with_audio_node(&vocal_worklet)?;
@@ -127,6 +137,7 @@ pub mod browser {
             // Bind the media element only after every fallible graph component
             // is ready. Browsers never allow this association to be repeated.
             let media_source = context.create_media_element_source(&media)?;
+            stage("media-source-ready");
             media_source.connect_with_audio_node(&song_gain)?;
             let record_stream = record_destination.stream();
             Ok(Self {
