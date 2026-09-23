@@ -1,52 +1,67 @@
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from app.api.v1 import media
+from app.api.v1 import karaoke
+from app.services import karaoke_identity
 
 
-class KaraokeContextTests(unittest.IsolatedAsyncioTestCase):
-    async def test_local_context_reuses_selected_media_and_linked_lyrics(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            track = root / "music" / "album" / "song.mp3"
-            track.parent.mkdir(parents=True)
-            track.write_bytes(b"ID3")
-            with (
-                patch.object(media, "MEDIA_ROOT", root),
-                patch.object(media, "ensure_media_mutations_ready"),
-                patch.object(media, "_local_stream_metadata", new=AsyncMock(return_value={
-                    "resource_id": "a" * 64, "owner_id": "b" * 32, "media_id": "c" * 64,
-                })),
-                patch.object(media.lyrics, "attach_links", new=AsyncMock(return_value=[{
-                    "media_id": "c" * 64, "has_lyrics": True,
-                }])),
-            ):
-                response = await media.get_karaoke_context("music/album/song.mp3", None)
-        payload = json.loads(response.body)
-        self.assertEqual(payload["stream_url"], "/api/v1/media/stream?file_path=music%2Falbum%2Fsong.mp3")
-        self.assertEqual(payload["lyrics_url"], "/api/v1/media/lyrics/content?track=music%2Falbum%2Fsong.mp3")
-        self.assertEqual(payload["type"], "audio")
-        self.assertIn("no-store", response.headers["cache-control"])
+class KaraokeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_context_exposes_only_opaque_identity_and_api_urls(self):
+        opaque = "A" * 100
+        with patch.object(karaoke, "_resolve", AsyncMock(return_value={
+            "kind": "local", "identifier": "b" * 64, "path": "music/shared/song.mp3",
+            "type": "audio", "has_lyrics": True,
+        })):
+            payload = await karaoke.context(opaque, request=object())
+        data = payload.model_dump()
+        self.assertEqual(data["id"], opaque)
+        self.assertEqual(data["title"], "song")
+        self.assertEqual(data["stream_url"], f"/api/v1/karaoke/stream?media={opaque}")
+        self.assertEqual(data["lyrics_url"], f"/api/v1/karaoke/lyrics?media={opaque}")
+        serialized = json.dumps(data)
+        self.assertNotIn("music/shared", serialized)
+        self.assertNotIn("resource_id", serialized)
 
-    async def test_remote_context_keeps_media_and_lyrics_on_same_resource(self):
-        resource_id = "d" * 64
-        row = {"payload": {"type": "audio", "has_lyrics": True}}
-        with (
-            patch.object(media, "require_https"),
-            patch.object(media.node_routing, "resolve", new=AsyncMock(return_value=(row, {}))) as resolve,
-            patch.object(media.lyrics, "attach_links", new=AsyncMock()) as local_links,
-        ):
-            response = await media.get_karaoke_context(
-                "music/shared/song.mp3", resource_id, request=object()
-            )
-        payload = json.loads(response.body)
-        resolve.assert_awaited_once_with(resource_id, "music/shared/song.mp3")
-        local_links.assert_not_awaited()
-        self.assertIn("resource_id=" + resource_id, payload["stream_url"])
-        self.assertIn("resource_id=" + resource_id, payload["lyrics_url"])
+    async def test_video_without_lyrics_is_valid(self):
+        with patch.object(karaoke, "_resolve", AsyncMock(return_value={
+            "kind": "remote", "identifier": "c" * 64, "path": "vido/live/video.mp4",
+            "type": "video", "has_lyrics": False,
+        })):
+            payload = await karaoke.context("D" * 100, request=object())
+        self.assertFalse(payload.has_lyrics)
+        self.assertIsNone(payload.lyrics_url)
+
+    async def test_remote_lyrics_use_resolved_owner_only(self):
+        opaque = "E" * 100
+        entries = [{"time": 1.25, "text": "line"}]
+        with patch.object(karaoke, "_resolve", AsyncMock(return_value={
+            "kind": "remote", "identifier": "f" * 64, "path": "music/shared/song.mp3",
+            "type": "audio", "has_lyrics": True,
+        })), patch.object(karaoke.node_routing, "lyric_entries", AsyncMock(return_value=entries)) as owner:
+            response = await karaoke.lyric_entries(opaque, request=object())
+        self.assertEqual(json.loads(response.body), {"entries": entries})
+        owner.assert_awaited_once_with("f" * 64)
+
+    def test_identity_is_encrypted_and_round_trips_without_path(self):
+        payload = None
+        def seal(value):
+            nonlocal payload
+            payload = value
+            return "opaque-token"
+        with patch.object(karaoke_identity.state, "seal_client_identity", side_effect=seal), \
+             patch.object(karaoke_identity.state, "unseal_client_identity", side_effect=lambda _token: payload):
+            token = karaoke_identity.issue(media_id="a" * 64)
+            self.assertEqual(token, "opaque-token")
+            self.assertEqual(karaoke_identity.resolve(token), ("local", "a" * 64))
+            self.assertNotIn("media_path", payload)
+
+
+class KaraokeContractTests(unittest.TestCase):
+    def test_openapi_snapshot_is_current(self):
+        from tests import karaoke_contract
+        self.assertTrue(karaoke_contract.CONTRACT.exists())
+        self.assertEqual(karaoke_contract.CONTRACT.read_text(encoding="utf-8"), karaoke_contract.rendered())
 
 
 if __name__ == "__main__":

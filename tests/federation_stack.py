@@ -112,8 +112,6 @@ class Node:
             elif name == "nginx":
                 service["image"] = "frontiercloud-acceptance-nginx"
                 service["ports"] = [{"target": 443, "published": str(self.port), "host_ip": ACCEPTANCE_GATEWAY, "protocol": "tcp"}]
-            elif name == "karaoke":
-                service["image"] = "frontiercloud-acceptance-karaoke"
             if name in ("web", "nginx"):
                 service.setdefault("environment", {}).update(TLS_ENABLED="true", SERVER_NAME=self.host, INSTANCE_NAME="acceptance")
                 service.setdefault("volumes", []).append({
@@ -409,6 +407,22 @@ def browser_checks(browser, master, resource):
     page.wait_for_function("art.video.readyState >= 1", timeout=60000)
     page.evaluate("async () => { await art.video.play(); art.video.pause(); art.video.currentTime=1; await art.video.play(); }")
     page.wait_for_function("art.video.currentTime > 1", timeout=10000)
+    karaoke_id = page.evaluate(
+        "id => currentMediaList.find(item => item.resource_id === id).karaoke_id",
+        resource["resource_id"],
+    )
+    assert karaoke_id and resource["resource_id"] not in karaoke_id
+    page.goto(master.endpoint + "/karaoke/?media=" + karaoke_id, wait_until="domcontentloaded")
+    page.wait_for_function("document.querySelector('#title')?.textContent !== '正在载入当前媒体…'", timeout=30000)
+    page.wait_for_function("document.querySelector('#capabilities')?.textContent.includes('输出设备选择')", timeout=30000)
+    assert page.locator('#inputDevice').count() == 1
+    assert page.locator('#outputDevice').count() == 1
+    assert not page.locator('#previewCard').is_visible()
+    assert "Rust DSP" in page.locator('.route').text_content()
+    page.locator('#fullLyrics').click()
+    page.wait_for_function("document.querySelector('#lyricsOverlay').classList.contains('open')")
+    page.locator('#lyricsOverlay').click(position={"x": 12, "y": 12})
+    page.wait_for_function("!document.querySelector('#lyricsOverlay').classList.contains('open')")
     context.close()
 
 

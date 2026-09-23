@@ -11,25 +11,33 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentContractTests(unittest.TestCase):
-    def test_rust_karaoke_is_stateless_and_excludes_media_from_recording(self):
-        script = (ROOT / "karaoke/static/app.js").read_text(encoding="utf-8")
+    def test_rust_karaoke_is_wasm_stateless_and_excludes_media_from_recording(self):
+        web = (ROOT / "karaoke/crates/frontier-karaoke-web/src/lib.rs").read_text(encoding="utf-8")
+        audio = (ROOT / "karaoke/crates/frontier-karaoke-audio/src/lib.rs").read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
-        service = compose.split("  karaoke:", 1)[1].split("  redis:", 1)[0]
-        self.assertNotIn("volumes:", service)
+        self.assertNotIn("  karaoke:", compose)
         for storage in ("localStorage", "sessionStorage", "indexedDB", "upload"):
-            self.assertNotIn(storage, script)
-        self.assertIn("createMediaStreamDestination", script)
-        self.assertNotRegex(script, r"mediaSource\.connect\([^)]*record")
-        self.assertIn("echoCancellation", script)
-        self.assertIn("noiseSuppression", script)
+            self.assertNotIn(storage, web)
+        self.assertIn("create_media_stream_destination", audio)
+        self.assertIn("recorder_inputs: vec![Bus::VocalRecord]", audio)
+        self.assertNotIn("Bus::Media, Bus::VocalRecord", audio)
+        self.assertIn('"echoCancellation"', web)
+        self.assertIn('"noiseSuppression".into(), &false.into()', web)
+        self.assertIn('"autoGainControl".into(), &false.into()', web)
+        self.assertIn('"inputDevice"', web)
+        self.assertIn('"outputDevice"', web)
+        self.assertIn('Reflect::get(&audio_context_prototype, &"setSinkId".into())', web)
+        self.assertNotIn('targets.push(JsValue::from(self.media.clone()))', web)
 
     def test_karaoke_and_hidden_home_gestures_match_the_product_contract(self):
         player = (ROOT / "static/js/player.js").read_text(encoding="utf-8")
         home = (ROOT / "static/media/index.html").read_text(encoding="utf-8")
         self.assertIn("event.touches.length !== 3", player)
         self.assertIn("}, 1500)", player)
-        self.assertIn("media_path: media.media_path", player)
+        self.assertIn("media: media.karaoke_id", player)
+        self.assertNotIn("media_path: media.media_path", player[player.index("function karaokeUrl"):player.index("function openKaraoke")])
         self.assertIn("count===5", home)
+        self.assertIn("now-started>1800", home)
         self.assertIn('id="refreshHotspot"', home)
         self.assertIn('id="elevateHotspot"', home)
         self.assertNotIn(">提权</button>", home)
@@ -198,7 +206,7 @@ class DeploymentContractTests(unittest.TestCase):
 
     def test_nginx_uses_a_current_patched_stable_image(self):
         dockerfile = (ROOT / "nginx/Dockerfile").read_text(encoding="utf-8")
-        self.assertTrue(dockerfile.startswith("FROM nginx:1.30.4-alpine\n"))
+        self.assertIn("\nFROM nginx:1.30.4-alpine\n", dockerfile)
 
     def test_duplicate_uvicorn_access_log_is_disabled(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
