@@ -9,10 +9,11 @@ import uuid
 from pathlib import Path
 
 from cryptography.fernet import Fernet
-from sqlalchemy import delete, insert, select, update, tuple_
+from sqlalchemy import delete, func, insert, select, update, tuple_
 
 from app.core.config import SECRET_DIR
 from app.core.db import engine
+from app.services import karaoke_schema as karaoke
 from . import protocol as p
 from . import schema as s
 from app.core.logging_config import request_id_context, trace_id_context
@@ -162,7 +163,9 @@ class State:
         return dict(relationship_id=identifier, peer_id=peer["node_id"], peer_endpoint=p.endpoint(peer["endpoint"]),
             peer_key=peer["public_key"], credential=self.seal(credential), direction=direction, mode="Relay",
             state="pending", status="offline", last_heartbeat=0, rtt_ms=0, failures=0, recoveries=0,
-            cursor=0, peer_version=peer["app_version"], protocol=p.PROTOCOL_VERSION, summary={}, created_at=int(time.time()))
+            cursor=0, peer_version=peer["app_version"], protocol=p.PROTOCOL_VERSION, summary={},
+            recording_storage_enabled=0, recording_capacity_bytes=0, recording_used_bytes=0,
+            created_at=int(time.time()))
 
     async def prepare(self, identifier: str, peer: dict, credential: str, actor: str):
         async with self.database.begin() as conn:
@@ -235,6 +238,46 @@ class State:
                 raise p.ProtocolError("No active relationship")
             await self.log(conn, "mode-changed", actor, identifier, mode=mode)
 
+    async def set_recording_storage(self, identifier: str, enabled: bool, capacity_bytes: int, actor: str):
+        if capacity_bytes < 0 or capacity_bytes > 10 * 1024 ** 4:
+            raise p.ProtocolError("Storage allocation is outside the supported range")
+        if enabled and capacity_bytes < 1024 ** 3:
+            raise p.ProtocolError("Storage allocation must be at least 1 GiB")
+        async with self.database.begin() as conn:
+            node = await self.lock(conn)
+            if node["role"] != "Master":
+                raise p.ProtocolError("Only Master configures recording storage")
+            current = (await conn.execute(select(s.relationships).where(
+                s.relationships.c.relationship_id == identifier).with_for_update())).mappings().first()
+            if not current or current["direction"] != "downstream" or current["state"] != "active":
+                raise p.ProtocolError("No active downstream relationship")
+            if not enabled and int(current["recording_used_bytes"] or 0) > 0:
+                raise p.ProtocolError("Storage contains user recordings and cannot be disabled")
+            if enabled and capacity_bytes < int(current["recording_used_bytes"] or 0):
+                raise p.ProtocolError("Storage allocation cannot be lower than current usage")
+            result = await conn.execute(update(s.relationships).where(
+                s.relationships.c.relationship_id == identifier,
+                s.relationships.c.direction == "downstream", s.relationships.c.state == "active",
+            ).values(recording_storage_enabled=int(enabled),
+                     recording_capacity_bytes=capacity_bytes if enabled else 0))
+            if not result.rowcount:
+                raise p.ProtocolError("No active downstream relationship")
+            await self.log(conn, "recording-storage-changed", actor, identifier,
+                           enabled=enabled, capacity_bytes=capacity_bytes if enabled else 0)
+
+    async def accept_recording_storage(self, identifier: str, enabled: bool, capacity_bytes: int):
+        async with self.database.begin() as conn:
+            node = await self.lock(conn)
+            if node["role"] != "Slave":
+                raise p.ProtocolError("Only Slave accepts recording storage configuration")
+            result = await conn.execute(update(s.relationships).where(
+                s.relationships.c.relationship_id == identifier,
+                s.relationships.c.direction == "upstream", s.relationships.c.state == "active",
+            ).values(recording_storage_enabled=int(enabled),
+                     recording_capacity_bytes=capacity_bytes if enabled else 0))
+            if not result.rowcount:
+                raise p.ProtocolError("No active upstream relationship")
+
     async def accept_mode(self, identifier: str, mode: str, actor: str):
         if mode not in ("Relay", "Direct"):
             raise p.ProtocolError("Invalid relationship mode")
@@ -284,6 +327,14 @@ class State:
                 peer_summary["recovered_at"] = now if recovered else row["summary"].get("recovered_at", 0)
                 values = dict(status="online", failures=0, last_heartbeat=now, rtt_ms=max(0, rtt),
                     recoveries=row["recoveries"] + int(recovered), summary=peer_summary)
+                if row["direction"] == "downstream":
+                    reserved = int(await conn.scalar(select(func.coalesce(func.sum(
+                        karaoke.recordings.c.size_bytes), 0)).where(
+                        karaoke.recordings.c.storage_relationship_id == identifier,
+                        karaoke.recordings.c.state.in_(("pending", "ready")),
+                    )) or 0)
+                    reported = max(0, int(peer_summary.get("recording_used_bytes") or 0))
+                    values["recording_used_bytes"] = max(reserved, reported)
             else:
                 values = dict(failures=row["failures"] + 1,
                     status="offline" if now - row["last_heartbeat"] >= p.OFFLINE_SECONDS else "degraded")
