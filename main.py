@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import re
@@ -271,6 +272,9 @@ async def karaoke_page():
     content = karaoke_template()
     content = content.replace("{{KARAOKE_CSS_URL}}", static_asset_url("css/karaoke.css"))
     content = content.replace("{{KARAOKE_JS_URL}}", static_asset_url("js/karaoke.js"))
+    content = content.replace("{{NETWORK_OBSERVATION_JS_URL}}", static_asset_url("js/network-observation.js"))
+    content = content.replace("{{STUN_URLS}}", json.dumps(settings.webrtc_stun_urls()))
+    content = content.replace("{{WEBRTC_INTERVAL_MS}}", str(settings.WEBRTC_REPORT_COOLDOWN * 1000))
     return HTMLResponse(content, headers={"Cache-Control": "no-cache"})
 
 

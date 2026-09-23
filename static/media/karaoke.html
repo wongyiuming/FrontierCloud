@@ -11,7 +11,7 @@
   <header>
     <button id="back" class="quiet" type="button">← 返回播放器</button>
     <div><p class="eyebrow">前沿娱乐</p><h1>K歌</h1></div>
-    <span class="stateless">本页关闭即清除录音</span>
+    <div class="account-actions"><span id="accountName" class="stateless">游客</span><button id="account" type="button">登录 / 注册</button></div>
   </header>
   <section class="song card">
     <div><span id="kind" class="badge">媒体</span><h2 id="title">正在载入当前媒体…</h2></div>
@@ -22,9 +22,10 @@
       <video id="media" playsinline crossorigin="anonymous"></video>
       <div id="lyrics" class="lyrics" aria-live="polite"><p>正在载入歌词…</p></div>
       <div class="transport">
-        <button id="play" type="button">只播放歌曲</button>
         <button id="record" class="primary" type="button">开始 K 歌</button>
+        <button id="pauseResume" type="button" disabled>暂停</button>
         <button id="stop" type="button" disabled>停止录音</button>
+        <button id="upload" type="button" disabled>上传</button>
         <button id="fullLyrics" type="button">歌词全屏</button>
       </div>
       <p id="status" class="status">正在检查浏览器实时音频能力…</p>
@@ -46,12 +47,37 @@
     </aside>
   </section>
   <section id="previewCard" class="preview card" hidden>
-    <div><h3>本次录音</h3><p>仅存在于当前页面，刷新或关闭后清除。</p></div>
+    <div><h3>本次录音</h3><p id="previewHint">尚未上传，刷新或关闭后清除。</p></div>
     <audio id="preview" controls></audio>
   </section>
 </main>
 <div id="lyricsOverlay" class="overlay" aria-hidden="true"><div id="overlayLines"></div><span>轻按任意位置返回 K 歌</span></div>
+<div id="accountModal" class="dialog-backdrop" hidden>
+  <section class="dialog card" role="dialog" aria-modal="true" aria-labelledby="accountTitle">
+    <header><h2 id="accountTitle">K歌账号</h2><button id="accountClose" type="button">关闭</button></header>
+    <div id="guestAccount">
+      <div class="account-tabs"><button id="showLogin" class="selected" type="button">登录</button><button id="showRegister" type="button">注册</button></div>
+      <form id="authForm">
+        <label>用户名<input id="authUsername" minlength="3" maxlength="32" autocomplete="username" required></label>
+        <label>密码<input id="authPassword" type="password" minlength="10" maxlength="128" autocomplete="current-password" required></label>
+        <div id="captchaRow" class="captcha-row" hidden><img id="captchaImage" alt="验证码"><input id="captchaValue" maxlength="12" autocomplete="off" placeholder="输入验证码"><button id="captchaRefresh" type="button">换一张</button></div>
+        <button id="authSubmit" class="primary" type="submit">登录</button><p id="authMessage" class="status"></p>
+      </form>
+    </div>
+    <div id="profile" hidden>
+      <div id="profileSummary"></div>
+      <label>录音存储节点<select id="storageNode"></select></label><button id="bindStorage" type="button">保存绑定</button>
+      <div class="profile-actions"><button id="uploadFile" type="button">上传已有录音</button><input id="uploadFileInput" type="file" accept="audio/*,.webm,.ogg,.m4a,.mp3,.wav" hidden><button id="logoutAccount" type="button">退出登录</button></div>
+      <form id="passwordForm"><input id="currentPassword" type="password" placeholder="当前密码" required><input id="newPassword" type="password" placeholder="新密码，例如 Huawei@123" required><button type="submit">修改密码</button></form>
+      <div id="recordingList" class="recording-list"></div>
+      <button id="deleteAccount" class="danger" type="button">注销账号并删除全部录音</button>
+    </div>
+  </section>
+</div>
+<div id="storageModal" class="dialog-backdrop" hidden><section class="dialog card" role="dialog" aria-modal="true"><h2>选择录音存储节点</h2><p>选择后会继续上传，本次录音不会丢失。</p><select id="uploadStorageNode"></select><div class="dialog-actions"><button id="storageCancel" type="button">取消</button><button id="storageConfirm" class="primary" type="button">绑定并上传</button></div></section></div>
 <noscript>当前浏览器必须启用脚本才能使用 K歌。</noscript>
+<script>window.frontierCloudStunUrls={{STUN_URLS}};window.frontierCloudWebrtcIntervalMs={{WEBRTC_INTERVAL_MS}};</script>
+<script src="{{NETWORK_OBSERVATION_JS_URL}}" defer></script>
 <script src="{{KARAOKE_JS_URL}}" defer></script>
 </body>
 </html>

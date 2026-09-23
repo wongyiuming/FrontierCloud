@@ -11,13 +11,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentContractTests(unittest.TestCase):
-    def test_native_karaoke_is_stateless_and_excludes_media_from_recording(self):
+    def test_native_karaoke_keeps_recording_local_until_authenticated_upload(self):
         web = (ROOT / "static/js/karaoke.js").read_text(encoding="utf-8")
         page = (ROOT / "static/media/karaoke.html").read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         self.assertNotIn("  karaoke:", compose)
-        for storage in ("localStorage", "sessionStorage", "indexedDB", "upload"):
+        for storage in ("localStorage", "sessionStorage", "indexedDB"):
             self.assertNotIn(storage, web)
+        self.assertIn("recordedBlob", web)
+        self.assertIn("/recordings/ticket", web)
+        self.assertIn("elements.upload.disabled = !authenticated", web)
+        self.assertNotIn("重录", web)
+        self.assertNotIn("只播放歌曲", page)
+        self.assertIn('id="pauseResume"', page)
+        self.assertIn('id="upload"', page)
         self.assertIn("createMediaStreamDestination", web)
         self.assertIn("lowPass.connect(recordGain)", web)
         self.assertIn("limiter.connect(recordDestination)", web)

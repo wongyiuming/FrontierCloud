@@ -2,11 +2,11 @@
 
 const MAX_RECORDING_BYTES = 256 * 1024 * 1024;
 const elements = Object.fromEntries([
-  'back', 'kind', 'title', 'original', 'accompaniment', 'media', 'lyrics', 'play',
-  'record', 'stop', 'fullLyrics', 'status', 'inputDevice', 'outputDevice',
+  'back', 'kind', 'title', 'original', 'accompaniment', 'media', 'lyrics',
+  'record', 'pauseResume', 'stop', 'upload', 'fullLyrics', 'status', 'inputDevice', 'outputDevice',
   'refreshDevices', 'songGain', 'songValue', 'songMute', 'voiceGain', 'voiceValue',
   'monitorGain', 'monitorValue', 'monitor', 'aec', 'capabilities', 'previewCard',
-  'preview', 'lyricsOverlay', 'overlayLines',
+  'preview', 'previewHint', 'lyricsOverlay', 'overlayLines', 'account', 'accountName',
 ].map(id => [id, document.getElementById(id)]));
 
 const state = {
@@ -22,6 +22,10 @@ const state = {
   recordedBytes: 0,
   previewUrl: null,
   accompaniment: false,
+  recordedBlob: null,
+  account: null,
+  accountStatus: null,
+  authMode: 'login',
 };
 
 function errorText(error) {
@@ -155,6 +159,7 @@ function clearPreview() {
   elements.preview.removeAttribute('src');
   if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
   state.previewUrl = null;
+  state.recordedBlob = null;
   elements.previewCard.hidden = true;
 }
 
@@ -174,22 +179,34 @@ function resetFailedStart(message) {
   setStatus(`无法开始录音：${message}`, true);
 }
 
-function finishRecording() {
+async function addRecordingMetadata(blob) {
+  const encoded = new TextEncoder().encode(JSON.stringify({
+    version: 1, title: state.context?.title || 'K歌录音', lyrics: state.lyrics,
+  }));
+  const length = new Uint8Array(8);
+  new DataView(length.buffer).setBigUint64(0, BigInt(encoded.byteLength));
+  return new Blob([blob, encoded, length, new TextEncoder().encode('FRONTIERCLOUD-KARAOKE-V1')], {type: blob.type});
+}
+
+async function finishRecording() {
   const mimeType = state.recorder?.mimeType || state.chunks[0]?.type || 'audio/webm';
-  const blob = new Blob(state.chunks, {type: mimeType});
+  const blob = await addRecordingMetadata(new Blob(state.chunks, {type: mimeType}));
   state.chunks = [];
   state.recordedBytes = 0;
   state.previewUrl = URL.createObjectURL(blob);
+  state.recordedBlob = blob;
   elements.preview.src = state.previewUrl;
   elements.previewCard.hidden = false;
   state.phase = 'preview';
-  elements.record.disabled = false;
-  elements.record.textContent = '重录';
+  elements.record.disabled = true;
+  elements.pauseResume.disabled = false;
+  elements.pauseResume.textContent = '暂停';
   elements.stop.disabled = true;
   elements.aec.disabled = false;
   state.recorder = null;
   stopMicrophone();
-  setStatus('录音已停止，仅在当前页面提供试听。');
+  elements.upload.disabled = !state.account;
+  setStatus(state.account ? '录音已停止，可试听或上传到个人空间。' : '录音已停止；登录后可上传，当前可试听。');
   void applyOutputDevice();
 }
 
@@ -233,6 +250,7 @@ async function startRecording() {
     recorder.start(1000);
     state.phase = 'recording';
     elements.stop.disabled = false;
+    elements.pauseResume.disabled = false;
     setStatus('正在录制纯人声支路；媒体和返听数字信号不会进入录音。');
     elements.media.play().catch(error => {
       setStatus(`录音继续，但媒体播放失败：${errorText(error)}`, true);
@@ -245,6 +263,27 @@ async function startRecording() {
 function stopRecording() {
   if (state.recorder?.state !== 'inactive') state.recorder.stop();
   elements.media.pause();
+}
+
+function pauseResume() {
+  if (state.phase === 'recording' && state.recorder) {
+    if (state.recorder.state === 'recording') {
+      state.recorder.pause(); elements.media.pause(); elements.pauseResume.textContent = '恢复';
+      setStatus('录音与媒体已暂停。');
+    } else if (state.recorder.state === 'paused') {
+      state.recorder.resume(); elements.media.play().catch(() => {}); elements.pauseResume.textContent = '暂停';
+      setStatus('录音与媒体已恢复。');
+    }
+    return;
+  }
+  if (state.phase === 'preview') {
+    if (elements.preview.paused) {
+      elements.preview.play().then(() => { elements.pauseResume.textContent = '暂停'; })
+        .catch(error => setStatus(errorText(error), true));
+    } else {
+      elements.preview.pause(); elements.pauseResume.textContent = '恢复';
+    }
+  }
 }
 
 async function applyOutputDevice() {
@@ -307,7 +346,8 @@ function renderLyricContainer(container, active) {
 }
 
 function lyricClock() {
-  const active = activeLyricIndex(elements.media.currentTime);
+  const clock = (!elements.preview.paused && elements.preview.currentSrc) ? elements.preview : elements.media;
+  const active = activeLyricIndex(clock.currentTime);
   if (active !== state.activeLyric) {
     state.activeLyric = active;
     renderLyricContainer(elements.lyrics, active);
@@ -360,22 +400,15 @@ elements.back.addEventListener('click', () => {
   if (history.length > 1) history.back();
   else location.assign('/api/v1/media');
 });
-elements.play.addEventListener('click', () => {
-  if (elements.media.paused) {
-    elements.media.play().then(() => setStatus('仅播放媒体，没有录音。')).catch(error => setStatus(errorText(error), true));
-  } else {
-    elements.media.pause();
-    setStatus('媒体已暂停。');
-  }
-});
 elements.record.addEventListener('click', startRecording);
+elements.pauseResume.addEventListener('click', pauseResume);
 elements.stop.addEventListener('click', stopRecording);
 elements.refreshDevices.addEventListener('click', () => refreshDevices().catch(error => setStatus(`无法读取设备：${errorText(error)}`, true)));
 elements.outputDevice.addEventListener('change', () => applyOutputDevice().catch(error => setStatus(`无法切换输出设备：${errorText(error)}`, true)));
 elements.inputDevice.addEventListener('change', () => {
   if (state.phase === 'recording') {
     stopRecording();
-    setStatus('输入设备已变化，本次录音已停止；请重录。', true);
+    setStatus('输入设备已变化，本次录音已安全停止。', true);
   }
 });
 elements.original.addEventListener('click', () => {
@@ -406,15 +439,239 @@ navigator.mediaDevices?.addEventListener?.('devicechange', () => {
   if (state.phase === 'recording') stopRecording();
   setStatus('音频设备已变化，录音已安全停止；请刷新设备后继续。', true);
 });
+
+const accountElements = Object.fromEntries([
+  'accountModal', 'accountClose', 'guestAccount', 'profile', 'showLogin', 'showRegister',
+  'authForm', 'authUsername', 'authPassword', 'authSubmit', 'authMessage', 'captchaRow',
+  'captchaImage', 'captchaValue', 'captchaRefresh', 'profileSummary', 'storageNode',
+  'bindStorage', 'uploadFile', 'uploadFileInput', 'logoutAccount', 'passwordForm',
+  'currentPassword', 'newPassword', 'recordingList', 'deleteAccount', 'storageModal',
+  'uploadStorageNode', 'storageCancel', 'storageConfirm',
+].map(id => [id, document.getElementById(id)]));
+
+function cookie(name) {
+  return document.cookie.split(';').map(item => item.trim()).find(item => item.startsWith(`${name}=`))?.split('=').slice(1).join('=') || '';
+}
+
+function karaokeHeaders(json = true) {
+  const headers = {};
+  if (json) headers['Content-Type'] = 'application/json';
+  const name = location.protocol === 'https:' ? '__Host-karaoke_csrf' : 'karaoke_csrf';
+  const token = decodeURIComponent(cookie(name));
+  if (token) headers['X-Karaoke-CSRF'] = token;
+  return headers;
+}
+
+async function accountApi(path, options = {}) {
+  const response = await fetch(`/api/v1/karaoke/account${path}`, {cache: 'no-store', ...options});
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.detail || `请求失败（HTTP ${response.status}）`);
+    error.captchaRequired = response.headers.get('X-Captcha-Required') === '1';
+    error.storageRequired = response.headers.get('X-Storage-Binding-Required') === '1';
+    throw error;
+  }
+  return payload;
+}
+
+async function loadCaptcha() {
+  const data = await accountApi('/captcha');
+  accountElements.captchaImage.dataset.challenge = data.challenge;
+  accountElements.captchaImage.src = `${data.image_url}?v=${Date.now()}`;
+  accountElements.captchaValue.value = '';
+}
+
+function showCaptcha(show) {
+  accountElements.captchaRow.hidden = !show;
+  accountElements.captchaValue.required = show;
+  if (show) loadCaptcha().catch(error => { accountElements.authMessage.textContent = errorText(error); });
+}
+
+function setAuthMode(mode) {
+  state.authMode = mode;
+  accountElements.showLogin.classList.toggle('selected', mode === 'login');
+  accountElements.showRegister.classList.toggle('selected', mode === 'register');
+  accountElements.authSubmit.textContent = mode === 'login' ? '登录' : '注册';
+  accountElements.authPassword.autocomplete = mode === 'login' ? 'current-password' : 'new-password';
+  accountElements.authMessage.textContent = mode === 'register' ? '密码需包含大小写字母、数字和特殊字符，至少 10 位。' : '';
+  showCaptcha(mode === 'register');
+}
+
+function fillStorageSelect(select) {
+  select.replaceChildren();
+  const nodes = state.accountStatus?.storage_nodes || [];
+  for (const node of nodes) {
+    const free = (node.available_bytes / 1073741824).toFixed(2);
+    select.add(new Option(`${node.name} · ${node.mode} · 可用 ${free} GiB`, node.relationship_id));
+  }
+  if (state.account?.storage_relationship_id) select.value = state.account.storage_relationship_id;
+  select.disabled = !nodes.length;
+}
+
+function renderAccount() {
+  const authenticated = Boolean(state.account);
+  elements.accountName.textContent = authenticated ? state.account.username : '游客';
+  elements.account.textContent = authenticated ? '个人主页' : '登录 / 注册';
+  elements.upload.disabled = !authenticated || !state.recordedBlob;
+  accountElements.guestAccount.hidden = authenticated;
+  accountElements.profile.hidden = !authenticated;
+  if (authenticated) {
+    accountElements.profileSummary.textContent = `${state.account.username} · 已用 ${(state.account.used_bytes / 1048576).toFixed(1)} / ${(state.account.quota_bytes / 1048576).toFixed(1)} MiB`;
+    fillStorageSelect(accountElements.storageNode);
+  }
+}
+
+async function refreshAccount() {
+  state.accountStatus = await accountApi('/status');
+  state.account = state.accountStatus.user || null;
+  renderAccount();
+  if (state.account) await loadRecordings();
+}
+
+function recordingButton(label, handler) {
+  const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
+  button.onclick = () => handler().catch(error => setStatus(errorText(error), true)); return button;
+}
+
+async function loadRecordings() {
+  const data = await accountApi('/recordings');
+  accountElements.recordingList.replaceChildren();
+  for (const item of data.items) {
+    const row = document.createElement('div'); row.className = 'recording-item';
+    const info = document.createElement('div');
+    const name = document.createElement('strong'); name.textContent = item.filename;
+    const detail = document.createElement('small'); detail.textContent = `${(item.size_bytes / 1048576).toFixed(1)} MiB · ${new Date(item.created_at * 1000).toLocaleString()}`;
+    info.append(name, detail);
+    const actions = document.createElement('div'); actions.className = 'recording-actions';
+    actions.append(
+      recordingButton('试听', async () => {
+        state.lyrics = Array.isArray(item.lyrics) ? item.lyrics : [];
+        state.activeLyric = -2;
+        elements.preview.src = `/api/v1/karaoke/account/recordings/${item.recording_id}/stream`;
+        elements.previewCard.hidden = false; elements.previewHint.textContent = item.filename;
+        await elements.preview.play(); accountElements.accountModal.hidden = true;
+      }),
+      recordingButton('下载', async () => {
+        const anchor = document.createElement('a');
+        anchor.href = `/api/v1/karaoke/account/recordings/${item.recording_id}/download`; anchor.download = item.filename; anchor.click();
+      }),
+      recordingButton('删除', async () => {
+        if (!confirm(`删除录音 ${item.filename}？`)) return;
+        await accountApi(`/recordings/${item.recording_id}`, {method: 'DELETE', headers: karaokeHeaders(false)});
+        await refreshAccount();
+      }),
+    );
+    row.append(info, actions); accountElements.recordingList.append(row);
+  }
+  if (!data.items.length) accountElements.recordingList.textContent = '暂无已上传录音。';
+}
+
+function chooseStorage() {
+  return new Promise((resolve, reject) => {
+    fillStorageSelect(accountElements.uploadStorageNode);
+    if (!accountElements.uploadStorageNode.options.length) {
+      reject(new Error('当前没有可用的从节点录音存储；请联系管理员启用存储节点。')); return;
+    }
+    accountElements.storageModal.hidden = false;
+    accountElements.storageCancel.onclick = () => { accountElements.storageModal.hidden = true; reject(new Error('已取消上传')); };
+    accountElements.storageConfirm.onclick = () => {
+      accountElements.storageModal.hidden = true; resolve(accountElements.uploadStorageNode.value);
+    };
+  });
+}
+
+async function uploadBlob(blob, title, media = null) {
+  if (!state.account) throw new Error('请先登录 K歌账号');
+  let storage = state.account.storage_relationship_id;
+  if (!storage) {
+    storage = await chooseStorage();
+    await accountApi('/bind', {method: 'POST', headers: karaokeHeaders(), body: JSON.stringify({relationship_id: storage})});
+    await refreshAccount();
+  }
+  setStatus('正在预留个人空间…');
+  const ticket = await accountApi('/recordings/ticket', {method: 'POST', headers: karaokeHeaders(), body: JSON.stringify({
+    size_bytes: blob.size, content_type: blob.type || 'application/octet-stream', media, title, storage_relationship_id: storage,
+  })});
+  const headers = {'Content-Type': blob.type || 'application/octet-stream'};
+  if (ticket.direct) headers['X-Recording-Capability'] = ticket.capability;
+  else Object.assign(headers, karaokeHeaders(false));
+  setStatus(`正在${ticket.direct ? '直传' : '中继上传'}到录音存储节点…`);
+  try {
+    const uploaded = await fetch(ticket.upload_url, {method: 'PUT', headers, body: blob});
+    if (!uploaded.ok) throw new Error(`录音上传失败（HTTP ${uploaded.status}）`);
+    await accountApi(`/recordings/${ticket.recording_id}/finalize`, {method: 'POST', headers: karaokeHeaders(false)});
+  } catch (error) {
+    await accountApi(`/recordings/${ticket.recording_id}/pending`, {method: 'DELETE', headers: karaokeHeaders(false)}).catch(() => {});
+    throw error;
+  }
+  elements.previewHint.textContent = `已上传：${ticket.filename}`;
+  setStatus('录音已上传到个人空间。');
+  await refreshAccount();
+}
+
+elements.upload.addEventListener('click', () => {
+  if (!state.recordedBlob) return;
+  const media = new URLSearchParams(location.search).get('media');
+  uploadBlob(state.recordedBlob, state.context?.title, media).catch(error => setStatus(errorText(error), true));
+});
+elements.account.addEventListener('click', async () => {
+  accountElements.accountModal.hidden = false;
+  if (state.account) await loadRecordings();
+});
+accountElements.accountClose.onclick = () => { accountElements.accountModal.hidden = true; };
+accountElements.showLogin.onclick = () => setAuthMode('login');
+accountElements.showRegister.onclick = () => setAuthMode('register');
+accountElements.captchaRefresh.onclick = loadCaptcha;
+accountElements.authForm.onsubmit = async event => {
+  event.preventDefault(); accountElements.authMessage.textContent = '处理中…';
+  const payload = {
+    username: accountElements.authUsername.value, password: accountElements.authPassword.value,
+    challenge: accountElements.captchaImage.dataset.challenge || null,
+    captcha: accountElements.captchaValue.value || null,
+    webrtc_addresses: window.frontierCloudObservedAddresses || [],
+  };
+  try {
+    await accountApi(`/${state.authMode}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+    await refreshAccount(); accountElements.authMessage.textContent = ''; setStatus('K歌账号已登录。');
+  } catch (error) {
+    accountElements.authMessage.textContent = errorText(error);
+    if (state.authMode === 'register' || error.captchaRequired) showCaptcha(true);
+  }
+};
+accountElements.bindStorage.onclick = async () => {
+  await accountApi('/bind', {method: 'POST', headers: karaokeHeaders(), body: JSON.stringify({relationship_id: accountElements.storageNode.value})});
+  await refreshAccount();
+};
+accountElements.uploadFile.onclick = () => accountElements.uploadFileInput.click();
+accountElements.uploadFileInput.onchange = async event => {
+  const file = event.target.files[0]; if (!file) return;
+  try { await uploadBlob(file, file.name.replace(/\.[^.]+$/, ''), null); }
+  catch (error) { setStatus(errorText(error), true); }
+  finally { event.target.value = ''; }
+};
+accountElements.logoutAccount.onclick = async () => {
+  await accountApi('/logout', {method: 'POST', headers: karaokeHeaders(false)}); state.account = null; await refreshAccount();
+};
+accountElements.passwordForm.onsubmit = async event => {
+  event.preventDefault();
+  await accountApi('/password', {method: 'POST', headers: karaokeHeaders(), body: JSON.stringify({current_password: accountElements.currentPassword.value, new_password: accountElements.newPassword.value})});
+  state.account = null; accountElements.accountModal.hidden = true; await refreshAccount(); setStatus('密码已修改，请重新登录。');
+};
+accountElements.deleteAccount.onclick = async () => {
+  if (!confirm('注销账号会永久删除全部录音，确定继续？')) return;
+  await accountApi('', {method: 'DELETE', headers: karaokeHeaders(false)}); state.account = null; accountElements.accountModal.hidden = true; await refreshAccount();
+};
+
 window.addEventListener('pagehide', () => {
-  if (state.recorder?.state !== 'inactive') state.recorder.stop();
+  if (state.recorder && state.recorder.state !== 'inactive') state.recorder.stop();
   stopMicrophone();
   clearPreview();
   state.audioContext?.close();
 });
 
 requestAnimationFrame(lyricClock);
-initialize().catch(error => {
+Promise.all([initialize(), refreshAccount()]).catch(error => {
   setStatus(`K歌页面初始化失败：${errorText(error)}`, true);
   elements.record.disabled = true;
 });
+setAuthMode('login');

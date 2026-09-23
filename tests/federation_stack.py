@@ -229,6 +229,57 @@ print(json.dumps(asyncio.run(read())))
     def mode(self, value):
         self.api(f"/api/v1/media/admin/nodes/{self.relation}/mode", {"mode": value})
 
+    def recording_storage(self, enabled=True, capacity_gib=1):
+        return self.api(f"/api/v1/media/admin/nodes/{self.relation}/recording-storage",
+                        {"enabled": enabled, "capacity_gib": capacity_gib if enabled else 0})
+
+    def register_karaoke_user(self, username="ci_karaoke", password="Huawei@123"):
+        challenge = self.client.get(self.endpoint + "/api/v1/karaoke/account/captcha").json()["challenge"]
+        answer = self.web(
+            "import asyncio; from app.core.redis import redis_client; "
+            f"print(asyncio.run(redis_client.get('karaoke:captcha:{challenge}:image')))"
+        )
+        response = self.client.post(self.endpoint + "/api/v1/karaoke/account/register", json={
+            "username": username, "password": password, "challenge": challenge,
+            "captcha": answer, "webrtc_addresses": [],
+        })
+        assert response.status_code == 200, response.text
+        self.kcsrf = self.client.cookies.get("__Host-karaoke_csrf")
+        assert self.kcsrf
+        return response.json()["user"]
+
+    def karaoke_api(self, path, value=None, *, method="POST", expected=200):
+        headers = {"X-Karaoke-CSRF": self.kcsrf}
+        if value is not None:
+            headers["Content-Type"] = "application/json"
+        response = self.client.request(method, self.endpoint + "/api/v1/karaoke/account" + path,
+                                       headers=headers, json=value)
+        assert response.status_code == expected, f"karaoke {path}: {response.status_code} {response.text[:300]}"
+        return response.json() if response.content else {}
+
+    def upload_recording(self, blob, title):
+        ticket = self.karaoke_api("/recordings/ticket", {
+            "size_bytes": len(blob), "content_type": "audio/webm", "title": title,
+        })
+        headers = {"Content-Type": "audio/webm"}
+        if ticket["direct"]:
+            preflight = self.client.options(ticket["upload_url"], headers={
+                "Origin": self.endpoint,
+                "Access-Control-Request-Method": "PUT",
+                "Access-Control-Request-Headers": "Content-Type, X-Recording-Capability",
+            })
+            assert preflight.status_code == 200, preflight.text[:300]
+            assert preflight.headers.get("access-control-allow-origin") == self.endpoint
+            headers["X-Recording-Capability"] = ticket["capability"]
+            headers["Origin"] = self.endpoint
+        else:
+            headers["X-Karaoke-CSRF"] = self.kcsrf
+        response = self.client.put(ticket["upload_url"] if ticket["direct"] else self.endpoint + ticket["upload_url"],
+                                   headers=headers, content=blob)
+        assert response.status_code == 200, response.text[:300]
+        self.karaoke_api(f"/recordings/{ticket['recording_id']}/finalize", {})
+        return ticket
+
     def range(self, path, start=0, end=3):
         return self.client.get(self.endpoint + path, headers={"Range": f"bytes={start}-{end}"})
 
@@ -423,6 +474,7 @@ def browser_checks(browser, master, resource):
     expect(page.locator('#capabilities')).to_contain_text('输出设备选择', timeout=30000)
     assert page.locator('#inputDevice').count() == 1
     assert page.locator('#outputDevice').count() == 1
+    assert page.locator('#play').count() == 0
     assert not page.locator('#previewCard').is_visible()
     assert "Web Audio 人声处理" in page.locator('.route').text_content()
     page.locator('#fullLyrics').click()
@@ -436,10 +488,17 @@ def browser_checks(browser, master, resource):
     page.locator('#record').dispatch_event('click')
     expect(page.locator('#status')).to_contain_text('正在录制纯人声支路', timeout=15000)
     expect(page.locator('#stop')).to_be_enabled()
+    page.locator('#pauseResume').click()
+    expect(page.locator('#pauseResume')).to_have_text('恢复')
+    expect(page.locator('#status')).to_contain_text('已暂停')
+    page.locator('#pauseResume').click()
+    expect(page.locator('#pauseResume')).to_have_text('暂停')
+    expect(page.locator('#status')).to_contain_text('已恢复')
     page.wait_for_timeout(1100)
     page.locator('#stop').click()
     expect(page.locator('#previewCard')).to_be_visible(timeout=10000)
     expect(page.locator('#status')).to_contain_text('录音已停止')
+    assert page.locator('#upload').is_disabled()
     context.close()
 
 
@@ -543,6 +602,42 @@ def main():
                     assert stale.status_code == 200 and stale.content == source
                     assert (urlsplit_origin(full.url) == master.endpoint) == (mode == "Relay")
             report["checks"].append("Relay/Direct content, HEAD, 206, ETag, If-Range, continuity")
+            # User recording storage is explicitly enabled on a downstream node.
+            a.recording_storage(True, 1)
+            wait_for(lambda: any(bool(row.get("recording_storage_enabled")) for row in b.nodes()["relationships"]),
+                     description="recording storage configuration heartbeat")
+            user = a.register_karaoke_user()
+            status = a.client.get(a.endpoint + "/api/v1/karaoke/account/status").json()
+            assert status["authenticated"] and status["user"]["quota_bytes"] == 200 * 1024 * 1024
+            a.karaoke_api("/bind", {"relationship_id": a.relation})
+            lyrics_metadata = json.dumps({
+                "version": 1, "title": "round-trip", "lyrics": [{"time": 1.0, "text": "stored lyric"}],
+            }, ensure_ascii=False, separators=(",", ":")).encode()
+            trailer = len(lyrics_metadata).to_bytes(8, "big") + b"FRONTIERCLOUD-KARAOKE-V1"
+            recording_ids = []
+            for mode in ("Relay", "Direct"):
+                a.mode(mode)
+                ticket = a.upload_recording(b"WEBM-VOICE-ONLY" + lyrics_metadata + trailer, f"{mode} recording")
+                recording_ids.append(ticket["recording_id"])
+                listing = a.client.get(a.endpoint + "/api/v1/karaoke/account/recordings").json()["items"]
+                item = next(row for row in listing if row["recording_id"] == ticket["recording_id"])
+                assert item["title"] == "round-trip" and item["lyrics"][0]["text"] == "stored lyric"
+                streamed = a.client.get(a.endpoint + f"/api/v1/karaoke/account/recordings/{ticket['recording_id']}/stream")
+                assert streamed.status_code == 200 and streamed.content.startswith(b"WEBM-VOICE-ONLY")
+                assert streamed.headers["content-type"].startswith("audio/webm")
+                assert streamed.headers["content-disposition"].startswith("inline")
+                downloaded = a.client.get(a.endpoint + f"/api/v1/karaoke/account/recordings/{ticket['recording_id']}/download")
+                assert downloaded.status_code == 200 and "attachment" in downloaded.headers["content-disposition"]
+                assert downloaded.headers["content-type"].startswith("audio/webm")
+            # Admin ban invalidates user sessions; unban allows a later login.
+            a.api(f"/api/v1/media/admin/users/{user['user_id']}", {"action": "ban", "quota_mib": None})
+            assert a.client.get(a.endpoint + "/api/v1/karaoke/account/recordings").status_code == 403
+            a.api(f"/api/v1/media/admin/users/{user['user_id']}", {"action": "unban", "quota_mib": None})
+            # Use Admin deletion while logged out to verify remote files and rows are removed together.
+            a.api(f"/api/v1/media/admin/users/{user['user_id']}", {"action": "delete", "quota_mib": None})
+            assert not any((b.data / "recordings").rglob("*.bin"))
+            assert int(a.relationship().get("recording_used_bytes") or 0) == 0
+            report["checks"].append("captcha registration, quota, binding, Relay/Direct recording, lyric round-trip, ban and deletion")
             with sync_playwright() as playwright:
                 browser = launch_browser(playwright, nodes)
                 for mode in ("Relay", "Direct"):
