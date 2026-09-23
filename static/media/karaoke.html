@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>前沿娱乐 · K歌</title>
+  <link rel="stylesheet" href="{{KARAOKE_CSS_URL}}">
+</head>
+<body>
+<main class="shell">
+  <header>
+    <button id="back" class="quiet" type="button">← 返回播放器</button>
+    <div><p class="eyebrow">前沿娱乐</p><h1>K歌</h1></div>
+    <span class="stateless">本页关闭即清除录音</span>
+  </header>
+  <section class="song card">
+    <div><span id="kind" class="badge">媒体</span><h2 id="title">正在载入当前媒体…</h2></div>
+    <div class="mode"><button id="original" class="selected" type="button">原唱</button><button id="accompaniment" type="button">伴奏（中置消除）</button></div>
+  </section>
+  <section class="workspace">
+    <div class="stage card">
+      <video id="media" playsinline crossorigin="anonymous"></video>
+      <div id="lyrics" class="lyrics" aria-live="polite"><p>正在载入歌词…</p></div>
+      <div class="transport">
+        <button id="play" type="button">只播放歌曲</button>
+        <button id="record" class="primary" type="button">开始 K 歌</button>
+        <button id="stop" type="button" disabled>停止录音</button>
+        <button id="fullLyrics" type="button">歌词全屏</button>
+      </div>
+      <p id="status" class="status">正在检查浏览器实时音频能力…</p>
+    </div>
+    <aside class="mixer card">
+      <h3>设备与实时音频</h3>
+      <label>输入设备<select id="inputDevice"><option value="">系统默认麦克风</option></select></label>
+      <label>输出设备<select id="outputDevice"><option value="">系统默认输出</option></select></label>
+      <button id="refreshDevices" class="quiet" type="button">授权并刷新设备</button>
+      <label>媒体播放音量 <output id="songValue">100%</output><input id="songGain" type="range" min="0" max="100" value="100"></label>
+      <label class="switch"><input id="songMute" type="checkbox"> 静音媒体</label>
+      <label>录音人声增益 <output id="voiceValue">300%</output><input id="voiceGain" type="range" min="0" max="600" value="300"></label>
+      <label>返听增益 <output id="monitorValue">20%</output><input id="monitorGain" type="range" min="0" max="200" value="20"></label>
+      <label class="switch"><input id="monitor" type="checkbox"> 开启实时返听</label>
+      <label class="switch"><input id="aec" type="checkbox" checked> 回声消除</label>
+      <p class="route">麦克风 → Web Audio 人声处理 → 录音<br>麦克风 → Web Audio 人声处理 → 返听<br>媒体 → 输出（不进入录音）</p>
+      <p id="capabilities" class="capabilities"></p>
+      <p class="warning">推荐使用耳机。扬声器声音仍可能经空气进入麦克风。</p>
+    </aside>
+  </section>
+  <section id="previewCard" class="preview card" hidden>
+    <div><h3>本次录音</h3><p>仅存在于当前页面，刷新或关闭后清除。</p></div>
+    <audio id="preview" controls></audio>
+  </section>
+</main>
+<div id="lyricsOverlay" class="overlay" aria-hidden="true"><div id="overlayLines"></div><span>轻按任意位置返回 K 歌</span></div>
+<noscript>当前浏览器必须启用脚本才能使用 K歌。</noscript>
+<script src="{{KARAOKE_JS_URL}}" defer></script>
+</body>
+</html>

@@ -424,7 +424,7 @@ def browser_checks(browser, master, resource):
     assert page.locator('#inputDevice').count() == 1
     assert page.locator('#outputDevice').count() == 1
     assert not page.locator('#previewCard').is_visible()
-    assert "Rust DSP" in page.locator('.route').text_content()
+    assert "Web Audio 人声处理" in page.locator('.route').text_content()
     page.locator('#fullLyrics').click()
     expect(page.locator('#lyricsOverlay')).to_be_visible()
     page.locator('#lyricsOverlay').click(position={"x": 12, "y": 12})

@@ -8,10 +8,11 @@ import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
 from contextlib import suppress
+from functools import lru_cache
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -23,6 +24,7 @@ from app.core.client_ip import client_ip, resolve_client_identity
 from app.core.db import close_db, init_db
 from app.core.logging_config import bind_request_context, configure_logging, reset_request_context
 from app.core.metrics import MetricsMiddleware
+from app.core.static_assets import static_asset_url
 from app.core.upload_lifecycle import install_upload_lifecycle_guard
 from app.middleware.ip_security import IPSecurityMiddleware
 from app.services import admin_service
@@ -243,6 +245,13 @@ async def protected_redoc(_session: str = Depends(admin_service.require_admin)):
     )
 
 FAVICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "favicon.ico")
+KARAOKE_TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "media", "karaoke.html")
+
+
+@lru_cache(maxsize=1)
+def karaoke_template() -> str:
+    with open(KARAOKE_TEMPLATE_PATH, encoding="utf-8") as template:
+        return template.read()
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -255,6 +264,14 @@ def get_favicon():
 @app.get("/", include_in_schema=False)
 async def root():
     return RedirectResponse(url="/api/v1/media", status_code=307)
+
+
+@app.get("/karaoke/", response_class=HTMLResponse, include_in_schema=False)
+async def karaoke_page():
+    content = karaoke_template()
+    content = content.replace("{{KARAOKE_CSS_URL}}", static_asset_url("css/karaoke.css"))
+    content = content.replace("{{KARAOKE_JS_URL}}", static_asset_url("js/karaoke.js"))
+    return HTMLResponse(content, headers={"Cache-Control": "no-cache"})
 
 
 if __name__ == "__main__":
