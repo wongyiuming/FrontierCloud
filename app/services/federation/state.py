@@ -51,6 +51,17 @@ class State:
     def unseal(self, value: str) -> str:
         return self._vault.decrypt(value.encode()).decode()
 
+    def seal_client_identity(self, value: str) -> str:
+        """Encrypt a public opaque handle without exposing its business identity."""
+        if self._vault is None:
+            raise RuntimeError("Node state is not initialized")
+        return self.seal(value)
+
+    def unseal_client_identity(self, value: str) -> str:
+        if self._vault is None:
+            raise RuntimeError("Node state is not initialized")
+        return self.unseal(value)
+
     async def lock(self, conn) -> dict:
         row = (await conn.execute(select(s.identity).where(s.identity.c.singleton == 1).with_for_update())).mappings().first()
         if not row:

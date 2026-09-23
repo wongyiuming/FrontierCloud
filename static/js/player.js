@@ -1126,14 +1126,13 @@ function initGestureControl() {
 }
 
 function karaokeUrl(media) {
-    const query = new URLSearchParams({media_path: media.media_path});
-    if (media.resource_id) query.set('resource_id', media.resource_id);
+    const query = new URLSearchParams({media: media.karaoke_id});
     return `/karaoke/?${query}`;
 }
 
 function openKaraoke() {
     const media = currentMediaList?.[currentIndex];
-    if (!media) return;
+    if (!media?.karaoke_id) return;
     accountPlaybackTime();
     void reportValidPlayback();
     window.location.assign(karaokeUrl(media));

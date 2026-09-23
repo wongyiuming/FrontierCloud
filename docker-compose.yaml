@@ -63,27 +63,6 @@ services:
     stop_grace_period: 3s
     logging: *service_logging
 
-  karaoke:
-    build: {context: ., dockerfile: karaoke/Dockerfile}
-    image: frontiercloud-karaoke
-    restart: always
-    read_only: true
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    expose: ["8090"]
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8090/health"]
-      interval: 30s
-      start_interval: 1s
-      timeout: 3s
-      retries: 3
-      start_period: 5s
-    stop_grace_period: 2s
-    mem_limit: 32m
-    cpus: "0.20"
-    pids_limit: 32
-    logging: *service_logging
-
   redis:
     image: redis:7-alpine
     container_name: office_automation_redis
@@ -148,7 +127,6 @@ services:
       - ${ACME_WEBROOT:-./certs/acme}:/var/www/certbot:ro
     depends_on:
       web: {condition: service_healthy}
-      karaoke: {condition: service_healthy}
     stop_grace_period: 3s
     logging: *service_logging
 

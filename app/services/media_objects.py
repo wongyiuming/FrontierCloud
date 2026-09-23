@@ -195,3 +195,19 @@ async def bind_items(
     for item in enriched:
         item[id_key] = identities[normalize_object_path(str(item[path_key]))]
     return enriched
+
+
+async def object_by_id(media_id: str) -> dict[str, str] | None:
+    """Resolve one stable local object identity without accepting a path."""
+    if len(media_id) != 64 or any(character not in "0123456789abcdef" for character in media_id):
+        return None
+    async with engine.connect() as conn:
+        row = (await conn.execute(
+            text("""
+                SELECT media_id, object_kind, media_path
+                FROM media_objects
+                WHERE media_id=:media_id
+            """),
+            {"media_id": media_id},
+        )).mappings().first()
+    return dict(row) if row else None

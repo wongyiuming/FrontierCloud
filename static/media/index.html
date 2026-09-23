@@ -30,7 +30,7 @@ h1{justify-self:center;font-size:clamp(2rem,4vw,4rem);line-height:1.1}
 </main>
 <script>
 window.frontierCloudStunUrls={{STUN_URLS_JSON}};window.frontierCloudWebrtcIntervalMs={{WEBRTC_INTERVAL_MS}};
-function fiveRapidClicks(element,action){let count=0,last=0;element.addEventListener('click',event=>{event.preventDefault();const now=Date.now();count=now-last<=650?count+1:1;last=now;if(count===5){count=0;last=0;action()}})}
+function fiveRapidClicks(element,action){let count=0,started=0;element.addEventListener('click',event=>{event.preventDefault();const now=Date.now();if(!started||now-started>1800){count=1;started=now}else count+=1;if(count===5){count=0;started=0;action()}})}
 fiveRapidClicks(document.getElementById('refreshHotspot'),()=>location.assign('/api/v1/media/refresh'));
 fiveRapidClicks(document.getElementById('elevateHotspot'),async()=>{const token=prompt('请输入 Admin Key:');if(!token)return;const body=new URLSearchParams({token});try{const r=await fetch('/api/v1/media/admin/elevate',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const d=await r.json();if(!r.ok){const detail=d.detail;throw new Error(detail&&typeof detail==='object'?(detail.message||'登录失败'):(detail||'登录失败'))}location.href=d.redirect}catch(e){alert(e.message)}});
 </script><script src="{{NETWORK_OBSERVATION_JS_URL}}"></script>

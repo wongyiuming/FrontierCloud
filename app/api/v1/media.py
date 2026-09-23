@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import bindparam, text
 
 from app.services.media_catalog_cache import load_media_catalog, store_media_catalog
-from app.services import playback
+from app.services import karaoke_identity, playback
 from app.services import network_observation
 from app.services import lyrics
 from app.services import media_objects
@@ -306,65 +306,6 @@ async def stream_media_file(file_path: str | None = None, resource_id: str | Non
         return await _local_stream_response(file_path, request)
 
 
-@router.get("/karaoke/context")
-async def get_karaoke_context(
-    media_path: str = Query(..., min_length=1, max_length=1024),
-    resource_id: str | None = Query(None, pattern=r"^[a-f0-9]{64}$"),
-    request: Request = None,
-):
-    """Resolve one selected media object and its owner-bound lyrics for karaoke."""
-    if resource_id:
-        require_https(request)
-        row, _relation = await node_routing.resolve(resource_id, media_path)
-        payload = row["payload"]
-        media_type = payload["type"]
-        has_lyrics = media_type == "audio" and bool(payload.get("has_lyrics"))
-    else:
-        async with media_mutation_lock.shared():
-            ensure_media_mutations_ready()
-            try:
-                path = resolve_safe_path(MEDIA_ROOT, media_path)
-            except ValueError as exc:
-                raise HTTPException(status_code=403, detail="Forbidden path access") from exc
-            if path.is_symlink() or not path.is_file():
-                raise HTTPException(status_code=404, detail="Media file not found")
-            parts = path.relative_to(MEDIA_ROOT).parts
-            if len(parts) not in {3, 4} or parts[0] not in {"music", "vido"}:
-                raise HTTPException(status_code=403, detail="Forbidden media layout")
-            media_type = "audio" if parts[0] == "music" else "video"
-            allowed = AUDIO_EXTS if media_type == "audio" else VIDEO_EXTS
-            if path.suffix.lower() not in allowed:
-                raise HTTPException(status_code=403, detail="Forbidden media type")
-            normalized = path.relative_to(MEDIA_ROOT).as_posix()
-            metadata = await _local_stream_metadata(normalized, media_type)
-            if media_type == "audio":
-                linked = await lyrics.attach_links([{"media_id": metadata["media_id"]}])
-                has_lyrics = linked[0]["has_lyrics"]
-            else:
-                has_lyrics = False
-            media_path = normalized
-
-    query = {"file_path": media_path}
-    if resource_id:
-        query["resource_id"] = resource_id
-    stream_url = "/api/v1/media/stream?" + urllib.parse.urlencode(query)
-    lyrics_url = None
-    if has_lyrics:
-        lyric_query = {"track": media_path}
-        if resource_id:
-            lyric_query["resource_id"] = resource_id
-        lyrics_url = "/api/v1/media/lyrics/content?" + urllib.parse.urlencode(lyric_query)
-    return JSONResponse({
-        "media_path": media_path,
-        "resource_id": resource_id,
-        "title": Path(media_path).stem,
-        "type": media_type,
-        "has_lyrics": has_lyrics,
-        "stream_url": stream_url,
-        "lyrics_url": lyrics_url,
-    }, headers=NO_STORE_HEADERS)
-
-
 def _bind_response_media_audit(request: Request | None, response: Response) -> None:
     if request is not None:
         request.scope["media_audit"] = {
@@ -536,6 +477,7 @@ async def _get_player_or_subcategories(
         media_list = await lyrics.attach_links(media_list)
     if remote:
         media_list = playback.sort_media(media_list + await node_routing.attach_master_stats(remote), session_id)
+    karaoke_identity.attach(media_list)
     html = load_html_template(player_template)
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"{title_prefix} - {display_path}"))
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape(back_url, quote=True))
