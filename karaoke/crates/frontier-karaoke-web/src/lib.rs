@@ -127,13 +127,17 @@ impl App {
         stream: &MediaStream,
         prepared_context: Option<AudioContext>,
     ) -> Result<(), JsValue> {
-        if let Some(audio) = self.audio.borrow().as_ref() {
-            audio.replace_microphone(stream)?;
+        if self.audio.borrow().is_some() {
+            self.audio
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .replace_microphone(stream)?;
         } else {
             let context = prepared_context
                 .ok_or_else(|| JsValue::from_str("audio context was not prepared"))?;
             let session = AudioSession::build(context, self.media.clone(), stream).await?;
-            *self.audio.borrow_mut() = Some(session);
+            self.audio.replace(Some(session));
         }
         self.apply_levels();
         if let Some(audio) = self.audio.borrow().as_ref() {

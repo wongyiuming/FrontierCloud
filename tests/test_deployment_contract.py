@@ -38,6 +38,10 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("pub fn prepare_context()", audio)
         self.assertLess(audio.index("context.resume()?"), audio.index("pub async fn build("))
         self.assertIn("AudioSession::prepare_context()", web)
+        ensure_audio = web[web.index("async fn ensure_audio"):web.index("async fn apply_output")]
+        self.assertIn("if self.audio.borrow().is_some()", ensure_audio)
+        self.assertIn("self.audio.replace(Some(session))", ensure_audio)
+        self.assertNotIn("if let Some(audio) = self.audio.borrow().as_ref()", ensure_audio)
         self.assertIn("set_processor_options(Some(&processor_options))", audio)
         self.assertNotIn("JsFuture::from(self.media.play()?).await", web)
         self.assertNotIn("JsFuture::from(audio.context.resume()?).await", web)
