@@ -33,10 +33,8 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("registerProcessor('frontier-vocal-dsp'", worklet)
         self.assertNotIn("fetch(", worklet)
         self.assertIn("new WebAssembly.Instance(options.processorOptions.wasmModule)", worklet)
-        self.assertIn("this.port.postMessage({status: 'ready'})", worklet)
         self.assertIn("WebAssembly::compile(&bytes)", audio)
         self.assertIn("set_processor_options(Some(&processor_options))", audio)
-        self.assertIn("wait_for_worklet(&vocal_worklet).await", audio)
         self.assertIn('Reflect::get(&audio_context_prototype, &"setSinkId".into())', web)
         self.assertNotIn('targets.push(JsValue::from(self.media.clone()))', web)
 

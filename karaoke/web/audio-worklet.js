@@ -4,7 +4,6 @@ class FrontierVocalDsp extends AudioWorkletProcessor {
     this.instance = new WebAssembly.Instance(options.processorOptions.wasmModule);
     this.pointer = this.instance.exports.block_pointer();
     this.block = new Float32Array(this.instance.exports.memory.buffer, this.pointer, 128);
-    this.port.postMessage({status: 'ready'});
   }
 
   process(inputs, outputs) {

@@ -30,15 +30,14 @@ impl GraphPlan {
 
 #[cfg(target_arch = "wasm32")]
 pub mod browser {
-    use js_sys::{Object, Promise, Reflect, WebAssembly};
-    use wasm_bindgen::closure::Closure;
+    use js_sys::{Object, Reflect, WebAssembly};
     use wasm_bindgen::JsCast;
     use wasm_bindgen::JsValue;
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{
         AudioContext, AudioWorkletNode, AudioWorkletNodeOptions, BiquadFilterNode,
         BiquadFilterType, GainNode, HtmlMediaElement, MediaElementAudioSourceNode, MediaStream,
-        MediaStreamAudioDestinationNode, MessageEvent, Response,
+        MediaStreamAudioDestinationNode, Response,
     };
 
     async fn load_worklet_module() -> Result<JsValue, JsValue> {
@@ -55,41 +54,6 @@ pub mod browser {
         }
         let bytes = JsFuture::from(response.array_buffer()?).await?;
         JsFuture::from(WebAssembly::compile(&bytes)).await
-    }
-
-    async fn wait_for_worklet(node: &AudioWorkletNode) -> Result<(), JsValue> {
-        let port = node.port()?;
-        let handler_port = port.clone();
-        let promise = Promise::new(&mut move |resolve, reject| {
-            let handler_reject = reject.clone();
-            let handler =
-                Closure::<dyn FnMut(MessageEvent)>::once_into_js(move |event: MessageEvent| {
-                    let data = event.data();
-                    let status = Reflect::get(&data, &"status".into())
-                        .ok()
-                        .and_then(|value| value.as_string())
-                        .unwrap_or_default();
-                    if status == "ready" {
-                        let _ = resolve.call0(&JsValue::UNDEFINED);
-                        return;
-                    }
-                    let message = Reflect::get(&data, &"message".into())
-                        .ok()
-                        .and_then(|value| value.as_string())
-                        .unwrap_or_else(|| "Rust DSP failed to initialize".to_owned());
-                    let _ = handler_reject.call1(&JsValue::UNDEFINED, &JsValue::from_str(&message));
-                });
-            if let Err(error) =
-                Reflect::set(handler_port.as_ref(), &"onmessage".into(), handler.as_ref())
-            {
-                let _ = reject.call1(&JsValue::UNDEFINED, &error);
-                return;
-            }
-            handler_port.start();
-        });
-        JsFuture::from(promise).await?;
-        Reflect::set(port.as_ref(), &"onmessage".into(), &JsValue::NULL)?;
-        Ok(())
     }
 
     pub struct AudioSession {
@@ -134,7 +98,6 @@ pub mod browser {
             node_options.set_processor_options(Some(&processor_options));
             let vocal_worklet =
                 AudioWorkletNode::new_with_options(&context, "frontier-vocal-dsp", &node_options)?;
-            wait_for_worklet(&vocal_worklet).await?;
             microphone_source.connect_with_audio_node(&high_pass)?;
             high_pass.connect_with_audio_node(&low_pass)?;
             low_pass.connect_with_audio_node(&vocal_worklet)?;

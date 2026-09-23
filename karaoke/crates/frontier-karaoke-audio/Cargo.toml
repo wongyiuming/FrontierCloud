@@ -15,5 +15,5 @@ web-sys = { workspace = true, features = [
     "BiquadFilterNode", "BiquadFilterType", "DynamicsCompressorNode", "GainNode",
     "ChannelMergerNode", "ChannelSplitterNode",
     "HtmlMediaElement", "MediaElementAudioSourceNode", "MediaStream", "MediaStreamAudioDestinationNode",
-    "MediaStreamAudioSourceNode", "MessageEvent", "MessagePort", "Response", "Window", "Worklet"
+    "MediaStreamAudioSourceNode", "Response", "Window", "Worklet"
 ] }
