@@ -183,6 +183,11 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("Strict-Transport-Security", headers)
         self.assertIn("COPY nginx/security-headers.conf", dockerfile)
 
+    def test_karaoke_recording_collection_does_not_redirect_at_the_proxy_boundary(self):
+        nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+        self.assertIn("location ^~ /api/v1/karaoke/account/recordings {", nginx)
+        self.assertNotIn("location ^~ /api/v1/karaoke/account/recordings/ {", nginx)
+
     def test_media_storage_is_initialized_before_the_unprivileged_web_service(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         initializer = (ROOT / "app/services/media_storage_init.py").read_text(encoding="utf-8")
