@@ -86,7 +86,6 @@ jobs:
           node --check static/js/lyrics.js
           node --check karaoke/web/bootstrap.js
           node --check karaoke/web/audio-worklet.js
-          python3 tests/karaoke_contract.py
           node tests/admin_ui_smoke.mjs
           node tests/player_cache_smoke.mjs
 
@@ -105,6 +104,7 @@ jobs:
               ! -name 'test_federation_contract.py' \
               -printf '/app/%p\n' | sort
           )
+          docker compose exec -T web python -m tests.karaoke_contract
           docker compose exec -T web python -m unittest -v "${runtime_tests[@]}"
           docker compose exec -T nginx nginx -t
           docker compose exec -T redis redis-cli ping | grep PONG

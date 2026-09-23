@@ -17,7 +17,8 @@ COPY --chmod=0644 main.py .
 COPY app ./app
 COPY static ./static
 COPY tests ./tests
-RUN chmod -R a+rX /app/app /app/static /app/tests
+COPY contracts ./contracts
+RUN chmod -R a+rX /app/app /app/static /app/tests /app/contracts
 
 # The public service does not require root. A fixed UID simplifies host
 # permissions for the data directory.
