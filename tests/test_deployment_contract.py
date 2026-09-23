@@ -29,6 +29,11 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('max="600" value="300"', web)
         self.assertIn('value.clamp(0.0, 6.0)', audio)
         self.assertLess(audio.index('AudioWorkletNode::new'), audio.index('create_media_element_source'))
+        worklet = Path("karaoke/web/audio-worklet.js").read_text(encoding="utf-8")
+        self.assertIn("registerProcessor('frontier-vocal-dsp'", worklet)
+        self.assertNotIn("await WebAssembly.instantiateStreaming", worklet)
+        self.assertIn("this.port.postMessage({status: 'ready'})", worklet)
+        self.assertIn("wait_for_worklet(&vocal_worklet).await", audio)
         self.assertIn('Reflect::get(&audio_context_prototype, &"setSinkId".into())', web)
         self.assertNotIn('targets.push(JsValue::from(self.media.clone()))', web)
 
