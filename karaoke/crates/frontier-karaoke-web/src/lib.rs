@@ -134,12 +134,6 @@ impl App {
             audio.set_accompaniment(self.accompaniment.get())?;
         }
         self.apply_output().await?;
-        // Resume is initiated inside the user gesture, but its promise is not a
-        // recording prerequisite. Some browsers keep it pending while output
-        // policy settles even though the vocal recorder can already start.
-        if let Some(audio) = self.audio.borrow().as_ref() {
-            let _ = audio.context.resume()?;
-        }
         Ok(())
     }
 

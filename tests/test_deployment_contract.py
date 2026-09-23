@@ -35,6 +35,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("new WebAssembly.Instance(options.processorOptions.wasmModule)", worklet)
         self.assertIn("WebAssembly::Module::new(&bytes)", audio)
         self.assertNotIn("WebAssembly::compile(&bytes)", audio)
+        self.assertLess(audio.index("context.resume()?"), audio.index(".add_module("))
         self.assertIn("set_processor_options(Some(&processor_options))", audio)
         self.assertNotIn("JsFuture::from(self.media.play()?).await", web)
         self.assertNotIn("JsFuture::from(audio.context.resume()?).await", web)
