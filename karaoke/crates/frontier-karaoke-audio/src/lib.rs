@@ -75,9 +75,9 @@ pub mod browser {
             microphone: &MediaStream,
         ) -> Result<Self, JsValue> {
             let context = AudioContext::new()?;
-            // Start the context before waiting for worklet registration. Some
-            // browsers defer addModule() forever while the context is suspended.
-            let _ = context.resume()?;
+            // AudioWorklet initialization depends on a running render thread.
+            // The call is still inside the user's recording action.
+            JsFuture::from(context.resume()?).await?;
             JsFuture::from(
                 context
                     .audio_worklet()?
