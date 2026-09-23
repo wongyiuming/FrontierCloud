@@ -35,6 +35,8 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("new WebAssembly.Instance(options.processorOptions.wasmModule)", worklet)
         self.assertIn("WebAssembly::compile(&bytes)", audio)
         self.assertIn("set_processor_options(Some(&processor_options))", audio)
+        self.assertNotIn("JsFuture::from(self.media.play()?).await", web)
+        self.assertIn("录音继续，但媒体播放失败", web)
         self.assertIn('Reflect::get(&audio_context_prototype, &"setSinkId".into())', web)
         self.assertNotIn('targets.push(JsValue::from(self.media.clone()))', web)
 

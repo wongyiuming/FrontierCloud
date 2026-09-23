@@ -265,11 +265,20 @@ impl App {
         );
         self.by_id::<HtmlButtonElement>("stop").set_disabled(false);
         self.by_id::<HtmlInputElement>("aec").set_disabled(true);
-        let _ = JsFuture::from(self.media.play()?).await;
         self.status(
             "正在录制纯人声支路；媒体和返听数字信号不会进入录音。",
             false,
         );
+        let play = self.media.play()?;
+        let app = self.clone();
+        spawn_local(async move {
+            if let Err(error) = JsFuture::from(play).await {
+                app.status(
+                    &format!("录音继续，但媒体播放失败：{}", js_error(error)),
+                    true,
+                );
+            }
+        });
         Ok(())
     }
 
