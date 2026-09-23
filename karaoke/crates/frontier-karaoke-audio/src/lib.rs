@@ -53,7 +53,7 @@ pub mod browser {
             )));
         }
         let bytes = JsFuture::from(response.array_buffer()?).await?;
-        JsFuture::from(WebAssembly::compile(&bytes)).await
+        WebAssembly::Module::new(&bytes).map(JsValue::from)
     }
 
     pub struct AudioSession {
