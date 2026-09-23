@@ -11,8 +11,9 @@ wasm-bindgen-futures.workspace = true
 js-sys.workspace = true
 web-sys = { workspace = true, features = [
     "AudioContext", "AudioDestinationNode", "AudioNode", "AudioParam", "AudioWorklet", "AudioWorkletNode",
+    "AudioWorkletNodeOptions",
     "BiquadFilterNode", "BiquadFilterType", "DynamicsCompressorNode", "GainNode",
     "ChannelMergerNode", "ChannelSplitterNode",
     "HtmlMediaElement", "MediaElementAudioSourceNode", "MediaStream", "MediaStreamAudioDestinationNode",
-    "MediaStreamAudioSourceNode", "MessageEvent", "MessagePort", "Worklet"
+    "MediaStreamAudioSourceNode", "MessageEvent", "MessagePort", "Response", "Window", "Worklet"
 ] }

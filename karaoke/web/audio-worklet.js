@@ -1,30 +1,17 @@
-const dspReady = fetch('/karaoke/frontier_karaoke_worklet.wasm', {cache: 'force-cache'})
-  .then((response) => {
-    if (!response.ok) throw new Error(`Rust DSP ${response.status}`);
-    return WebAssembly.instantiateStreaming(response);
-  });
-
 class FrontierVocalDsp extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
-    this.instance = null;
-    this.pointer = 0;
-    this.block = null;
-    dspReady.then(({instance}) => {
-      this.instance = instance;
-      this.pointer = instance.exports.block_pointer();
-      this.block = new Float32Array(instance.exports.memory.buffer, this.pointer, 128);
-      this.port.postMessage({status: 'ready'});
-    }).catch((error) => {
-      this.port.postMessage({status: 'error', message: String(error)});
-    });
+    this.instance = new WebAssembly.Instance(options.processorOptions.wasmModule);
+    this.pointer = this.instance.exports.block_pointer();
+    this.block = new Float32Array(this.instance.exports.memory.buffer, this.pointer, 128);
+    this.port.postMessage({status: 'ready'});
   }
 
   process(inputs, outputs) {
     const input = inputs[0]?.[0];
     const output = outputs[0]?.[0];
     if (!output) return true;
-    if (!input || !this.instance || !this.block) {
+    if (!input) {
       output.fill(0);
       return true;
     }

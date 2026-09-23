@@ -30,15 +30,32 @@ impl GraphPlan {
 
 #[cfg(target_arch = "wasm32")]
 pub mod browser {
-    use js_sys::{Promise, Reflect};
+    use js_sys::{Object, Promise, Reflect, WebAssembly};
     use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
     use wasm_bindgen::JsValue;
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{
-        AudioContext, AudioWorkletNode, BiquadFilterNode, BiquadFilterType, GainNode,
-        HtmlMediaElement, MediaElementAudioSourceNode, MediaStream,
-        MediaStreamAudioDestinationNode, MessageEvent,
+        AudioContext, AudioWorkletNode, AudioWorkletNodeOptions, BiquadFilterNode,
+        BiquadFilterType, GainNode, HtmlMediaElement, MediaElementAudioSourceNode, MediaStream,
+        MediaStreamAudioDestinationNode, MessageEvent, Response,
     };
+
+    async fn load_worklet_module() -> Result<JsValue, JsValue> {
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("window unavailable"))?;
+        let response: Response =
+            JsFuture::from(window.fetch_with_str("/karaoke/frontier_karaoke_worklet.wasm"))
+                .await?
+                .dyn_into()?;
+        if !response.ok() {
+            return Err(JsValue::from_str(&format!(
+                "Rust DSP returned HTTP {}",
+                response.status()
+            )));
+        }
+        let bytes = JsFuture::from(response.array_buffer()?).await?;
+        JsFuture::from(WebAssembly::compile(&bytes)).await
+    }
 
     async fn wait_for_worklet(node: &AudioWorkletNode) -> Result<(), JsValue> {
         let port = node.port()?;
@@ -100,6 +117,7 @@ pub mod browser {
                     .add_module("/karaoke/audio-worklet.js")?,
             )
             .await?;
+            let worklet_module = load_worklet_module().await?;
             let destination = context.destination();
             let song_gain = context.create_gain()?;
             song_gain.connect_with_audio_node(&destination)?;
@@ -110,7 +128,12 @@ pub mod browser {
             let low_pass = context.create_biquad_filter()?;
             low_pass.set_type(BiquadFilterType::Lowpass);
             low_pass.frequency().set_value(14_000.0);
-            let vocal_worklet = AudioWorkletNode::new(&context, "frontier-vocal-dsp")?;
+            let processor_options = Object::new();
+            Reflect::set(&processor_options, &"wasmModule".into(), &worklet_module)?;
+            let node_options = AudioWorkletNodeOptions::new();
+            node_options.set_processor_options(Some(&processor_options));
+            let vocal_worklet =
+                AudioWorkletNode::new_with_options(&context, "frontier-vocal-dsp", &node_options)?;
             wait_for_worklet(&vocal_worklet).await?;
             microphone_source.connect_with_audio_node(&high_pass)?;
             high_pass.connect_with_audio_node(&low_pass)?;
