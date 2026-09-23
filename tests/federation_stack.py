@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 ACCEPTANCE_SUBNET = "172.30.251.0/24"
@@ -413,16 +413,16 @@ def browser_checks(browser, master, resource):
     )
     assert karaoke_id and resource["resource_id"] not in karaoke_id
     page.goto(master.endpoint + "/karaoke/?media=" + karaoke_id, wait_until="domcontentloaded")
-    page.wait_for_function("document.querySelector('#title')?.textContent !== '正在载入当前媒体…'", timeout=30000)
-    page.wait_for_function("document.querySelector('#capabilities')?.textContent.includes('输出设备选择')", timeout=30000)
+    expect(page.locator('#title')).not_to_have_text('正在载入当前媒体…', timeout=30000)
+    expect(page.locator('#capabilities')).to_contain_text('输出设备选择', timeout=30000)
     assert page.locator('#inputDevice').count() == 1
     assert page.locator('#outputDevice').count() == 1
     assert not page.locator('#previewCard').is_visible()
     assert "Rust DSP" in page.locator('.route').text_content()
     page.locator('#fullLyrics').click()
-    page.wait_for_function("document.querySelector('#lyricsOverlay').classList.contains('open')")
+    expect(page.locator('#lyricsOverlay')).to_be_visible()
     page.locator('#lyricsOverlay').click(position={"x": 12, "y": 12})
-    page.wait_for_function("!document.querySelector('#lyricsOverlay').classList.contains('open')")
+    expect(page.locator('#lyricsOverlay')).to_be_hidden()
     context.close()
 
 
