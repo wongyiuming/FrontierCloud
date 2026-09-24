@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import re
 import tempfile
@@ -17,11 +18,10 @@ from sqlalchemy import event, insert, select, text, update
 from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.requests import Request
 
-from app.api.v1 import media
 from app.core import db
 from app.core.config import settings
 from app.core.redis import redis_client
-from app.services import media_manager, media_objects, network_observation as observation, playback
+from app.services import media_manager, media_objects, network_observation as observation, playback, resource_pool
 from app.services.federation import routing, schema as s
 from app.services.federation.catalog import Catalog
 from app.services.federation.state import State
@@ -68,20 +68,25 @@ async def main():
 
         store = State(database, Fernet.generate_key())
         await store.initialize()
-        await store.promote("Master", "https://master.example.com", "fixture")
+        await store.promote("Master", "https://master.example.com", "fixture", 1024 ** 3)
         owner, relation_id = uuid.uuid4().hex, uuid.uuid4().hex
-        peer = dict(node_id=owner, endpoint="https://slave.example.com", public_key="a" * 43,
+        peer = dict(node_id=owner, endpoint="https://follower.example.com", public_key="a" * 43,
                     app_version="fixture")
         await store.prepare(relation_id, peer, "fixture-credential", "fixture")
         await store.activate(relation_id, "fixture")
         await store.heartbeat(relation_id, True)
         identifiers = [f"{number:064x}" for number in range(1, 9)]
+        relation = await store.relationship(relation_id)
         async with database.begin() as conn:
-            await conn.execute(insert(s.catalog), [dict(resource_id=identifier, owner_id=owner,
-                object_id=f"{100 + number:064x}", relationship_id=relation_id,
-                path=f"music/owner/song-{number}.mp3", version=number + 1, deleted=0,
-                payload=dict(play_score=7, preference=2, has_lyrics=False, type="audio"))
-                for number, identifier in enumerate(identifiers)])
+            await resource_pool.register_follower(relation, conn=conn)
+            await conn.execute(insert(s.global_media), [dict(
+                media_id=identifier, storage_member_id=owner,
+                object_id=f"{100 + number:064x}",
+                media_path=f"music/owner/song-{number}.mp3",
+                path_locator=hashlib.sha256(f"music/owner/song-{number}.mp3".encode()).hexdigest(),
+                object_kind="audio", size_bytes=1024, etag=f'"{number}"',
+                state="active", created_at=int(time.time()), updated_at=int(time.time()),
+            ) for number, identifier in enumerate(identifiers)])
         remote_catalog = Catalog(store)
 
         async def remote(identifier, session=None, preference=None):
@@ -98,13 +103,15 @@ async def main():
             session = str(uuid.uuid4())
             results = await asyncio.gather(*(remote(identifier, session) for identifier in identifiers for _ in range(3)))
             assert sum(result["counted"] for result in results) == len(identifiers)
-            assert await count("node_playback_events") == len(identifiers) + 1
+            assert await count("media_playback_events") == len(identifiers) + 1
 
             # Lock one media row; another media on the SAME relationship progresses.
             pending = None
             try:
                 async with database.begin() as locked:
-                    await locked.execute(select(s.stats).where(s.stats.c.resource_id == identifiers[0]).with_for_update())
+                    await locked.execute(text(
+                        "SELECT media_id FROM media_playback_stats WHERE media_id=:media_id FOR UPDATE"
+                    ), {"media_id": identifiers[0]})
                     pending = asyncio.create_task(remote(identifiers[0], str(uuid.uuid4())))
                     result = await asyncio.wait_for(remote(identifiers[2], str(uuid.uuid4())), 5)
                     assert result["counted"] and not pending.done()
@@ -117,7 +124,11 @@ async def main():
             await asyncio.gather(*(remote(identifiers[0], preference=500) for _ in range(12)))
             assert (await remote(identifiers[0], preference=500))["preference"] == 500
             async with database.begin() as conn:
-                await conn.execute(update(s.events).where(s.events.c.session_id == session).values(expires_at=int(time.time()) - 1))
+                await conn.execute(text(
+                    "UPDATE media_playback_events SET expires_at=:expired "
+                    "WHERE playback_session_id=:session"
+                ), {"expired": datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1),
+                    "session": session})
             results = await asyncio.gather(*(remote(identifier, session) for identifier in identifiers))
             assert all(result["counted"] for result in results)
             # Revocation blocks future updates without touching another source.
@@ -170,21 +181,6 @@ async def main():
                     assert await conn.scalar(text("SELECT COUNT(*) FROM media_objects WHERE media_path=:path"), {"path": selected_path}) == 0
                     assert await conn.scalar(text("SELECT COUNT(*) FROM media_objects WHERE media_path=:path"), {"path": sibling_path}) == 1
 
-                exported = Catalog(store)
-                with patch.object(media, "MEDIA_ROOT", root), patch.object(media, "_hidden_set", new=AsyncMock(return_value=set())):
-                    before = len(statements)
-                    await exported.scan(force=True)
-                    writes = [sql for sql, _ in statements[before:] if sql.lstrip().startswith("INSERT INTO node_media_exports")]
-                    assert len(writes) == 2, f"105 exports required {len(writes)} writes instead of two bounded batches"
-                    before = len(statements)
-                    await exported.scan(force=True)
-                    assert not any(sql.lstrip().startswith("INSERT INTO node_media_exports") for sql, _ in statements[before:])
-                    for path in paths[:3]:
-                        (root / path).unlink()
-                    await exported.scan(force=True)
-                    async with database.connect() as conn:
-                        assert await conn.scalar(select(s.exports.c.deleted).where(s.exports.c.path == paths[0])) == 1
-
         request = Request({"type": "http", "client": ("203.0.113.250", 32000), "headers": []})
         recent = datetime(2026, 9, 14, 7, 10)
         earlier = recent - timedelta(minutes=1)
@@ -216,7 +212,7 @@ async def main():
         assert await redis_client.eval(observation.RELEASE_RESERVATION, 1, key, "old-reservation") == 0
         assert await redis_client.get(key) in ("new-reservation", b"new-reservation")
         assert await redis_client.eval(observation.RELEASE_RESERVATION, 1, key, "new-reservation") == 1
-        print("mysql-concurrency-smoke-ok: independent resources, idempotence, expiry, revocation, registration, catalog batches, observation chronology/rollback; Redis reservation CAS")
+        print("mysql-concurrency-smoke-ok: global media, idempotence, expiry, revocation, registration, observation chronology/rollback; Redis reservation CAS")
     finally:
         inject_summary_failure = False
         if reservation_keys:

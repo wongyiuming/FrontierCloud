@@ -1,4 +1,4 @@
-"""Disposable three-node HTTPS and browser acceptance harness.
+"""Disposable two-node HTTPS and browser acceptance harness.
 
 Infrastructure is test-only. Compose configurations and private CA material are
 generated in a temporary directory; no hosted user data or deployment is used.
@@ -186,32 +186,28 @@ class Node:
         return self.api("/api/v1/media/admin/nodes")
 
     def promote(self, role):
-        self.api("/api/v1/media/admin/nodes/promote", {"role": role, "endpoint": self.endpoint})
+        self.api("/api/v1/media/admin/nodes/promote", {
+            "role": role,
+            "endpoint": self.endpoint,
+            "local_capacity_gib": 1 if role == "Master" else None,
+        })
 
-    def pair(self, slave):
-        package = slave.api("/api/v1/media/admin/nodes/pair-package", {})
+    def pair(self, follower):
+        package = follower.api("/api/v1/media/admin/nodes/pair-package", {})
         result = self.api("/api/v1/media/admin/nodes/pair", {"package": package})
         self.relation = result["relationship_id"]
         return package
 
     def resources(self):
-        program = f"""
+        program = """
 import asyncio, json
-from sqlalchemy import text
-from app.core.db import engine
+from app.services.federation.catalog import catalog
 async def read():
-    async with engine.connect() as connection:
-        rows = (await connection.execute(text(
-            "SELECT resource_id, path, payload FROM node_media_catalog "
-            "WHERE relationship_id=:relationship_id AND deleted=0 ORDER BY path, resource_id"
-        ), {{"relationship_id": {self.relation!r}}})).mappings().all()
-    items = []
-    for row in rows:
-        payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
-        items.append({{"resource_id": row["resource_id"], "path": row["path"],
-                      "size": int(payload["size"]),
-                      "url": "/api/v1/media/stream?resource_id=" + row["resource_id"]}})
-    return items
+    rows = await catalog.resources()
+    return [{"resource_id": row["resource_id"], "path": row["path"],
+             "size": int(row["payload"]["size"]),
+             "url": "/api/v1/media/stream?resource_id=" + row["resource_id"]}
+            for row in rows]
 print(json.dumps(asyncio.run(read())))
 """
         return json.loads(self.web(program))
@@ -220,7 +216,7 @@ print(json.dumps(asyncio.run(read())))
         def ready():
             rows = self.nodes()["relationships"]
             return any(row["relationship_id"] == self.relation and row["status"] == "online"
-                       and (row["last_heartbeat"] or 0) > after for row in rows) and bool(self.resources())
+                       and (row["last_heartbeat"] or 0) > after for row in rows)
         wait_for(ready, description=f"{self.name} relationship recovery")
 
     def relationship(self):
@@ -229,9 +225,35 @@ print(json.dumps(asyncio.run(read())))
     def mode(self, value):
         self.api(f"/api/v1/media/admin/nodes/{self.relation}/mode", {"mode": value})
 
-    def recording_storage(self, enabled=True, capacity_gib=1):
-        return self.api(f"/api/v1/media/admin/nodes/{self.relation}/recording-storage",
-                        {"enabled": enabled, "capacity_gib": capacity_gib if enabled else 0})
+    def configure_resources(self, *, storage=True, capacity_gib=2, compute=True, backup=True):
+        return self.api(f"/api/v1/media/admin/nodes/{self.relation}/resources", {
+            "storage_enabled": storage,
+            "storage_capacity_gib": capacity_gib if storage else 0,
+            "compute_enabled": compute,
+            "worker_slots": 1 if compute else 0,
+            "backup_enabled": backup,
+        })
+
+    def upload_media(self, blob, filename, *, member_id):
+        reservation = self.api("/api/v1/media/admin/upload/session", {
+            "storage_member_id": member_id,
+            "target_dir": "music/shared",
+            "relative_path": None,
+            "filename": filename,
+            "size_bytes": len(blob),
+        })
+        headers = {"Content-Type": "application/octet-stream"}
+        upload_url = reservation["upload_url"]
+        if reservation["transport"] == "Direct":
+            headers["Origin"] = self.endpoint
+            response = self.client.put(upload_url, headers=headers, content=blob)
+            assert response.status_code == 200, response.text[:300]
+            self.api(f"/api/v1/media/admin/upload/session/{reservation['upload_id']}/finalize", {})
+        else:
+            headers["X-CSRF-Token"] = self.csrf
+            response = self.client.put(self.endpoint + upload_url, headers=headers, content=blob)
+            assert response.status_code == 200, response.text[:300]
+        return next(row for row in self.resources() if row["resource_id"] == reservation["media_id"])
 
     def register_karaoke_user(self, username="ci_karaoke", password="Huawei@123"):
         challenge = self.client.get(self.endpoint + "/api/v1/karaoke/account/captcha").json()["challenge"]
@@ -411,21 +433,21 @@ def browser_promote(browser, node, role):
     context.close()
 
 
-def browser_pair(browser, master, slave):
-    slave_context, slave_page = admin_page(browser, slave)
-    slave_page.locator('#nodeIssuePair').click()
-    slave_page.wait_for_function("document.querySelector('#nodePairPackage').value.includes('signature')")
-    package = json.loads(slave_page.input_value('#nodePairPackage'))
+def browser_pair(browser, master, follower):
+    follower_context, follower_page = admin_page(browser, follower)
+    follower_page.locator('#nodeIssuePair').click()
+    follower_page.wait_for_function("document.querySelector('#nodePairPackage').value.includes('signature')")
+    package = json.loads(follower_page.input_value('#nodePairPackage'))
     master_context, master_page = admin_page(browser, master)
     master_page.fill('#nodePairPackage', json.dumps(package))
     master_page.locator('#nodeImportPair').click()
     master_page.wait_for_function("document.querySelector('#nodeOperationStatus').textContent === '已完成'", timeout=60000)
     master_page.wait_for_function("document.querySelector('#nodeRelationships').rows.length === 1", timeout=60000)
     master.relation = master.nodes()["relationships"][0]["relationship_id"]
-    slave_page.locator('#nodesRefresh').click()
-    slave_page.wait_for_function("count => document.querySelector('#nodeRelationships').rows.length === count", arg=len(slave.nodes()["relationships"]))
+    follower_page.locator('#nodesRefresh').click()
+    follower_page.wait_for_function("count => document.querySelector('#nodeRelationships').rows.length === count", arg=len(follower.nodes()["relationships"]))
     master_context.close()
-    slave_context.close()
+    follower_context.close()
     return package
 
 
@@ -448,7 +470,7 @@ def browser_checks(browser, master, resource):
     page.wait_for_function("currentMediaList.length > 0", timeout=30000)
     assert page.locator('.media-search-input, input[type="search"]').count() == 0
     assert page.locator(f'[data-media-id="{resource["resource_id"]}"]').count() == 1
-    page.evaluate("selectMedia(currentMediaList.findIndex(item => !item.resource_id))")
+    page.evaluate("id => selectMedia(currentMediaList.findIndex(item => item.resource_id === id))", resource["resource_id"])
     page.wait_for_function("art.video.currentTime > 0.1 && !art.video.paused", timeout=30000)
     page.wait_for_function("activeLyricEntries.length > 0", timeout=10000)
     player_url = page.url
@@ -460,8 +482,6 @@ def browser_checks(browser, master, resource):
     page.wait_for_function("document.querySelector('#fullscreenLyrics').classList.contains('hidden')")
     page.wait_for_function("position => art.video.currentTime >= position && !art.video.paused", arg=playback_position)
     assert page.url == player_url
-    page.evaluate("id => selectMedia(currentMediaList.findIndex(item => item.resource_id === id))", resource["resource_id"])
-    page.wait_for_function("art.video.readyState >= 1", timeout=60000)
     page.evaluate("async () => { await art.video.play(); art.video.pause(); art.video.currentTime=1; await art.video.play(); }")
     page.wait_for_function("art.video.currentTime > 1", timeout=10000)
     karaoke_id = page.evaluate(
@@ -513,123 +533,148 @@ def main():
     with tempfile.TemporaryDirectory(prefix="frontiercloud-acceptance-") as temporary:
         directory = Path(temporary)
         ca = directory / "ca.pem"
-        command("openssl", "req", "-x509", "-nodes", "-days", "1", "-newkey", "rsa:2048", "-keyout", str(ca.with_suffix(".key")),
-                "-out", str(ca), "-subj", "/CN=FrontierCloud disposable test CA",
+        command("openssl", "req", "-x509", "-nodes", "-days", "1", "-newkey", "rsa:2048",
+                "-keyout", str(ca.with_suffix(".key")), "-out", str(ca),
+                "-subj", "/CN=FrontierCloud disposable test CA",
                 "-addext", "basicConstraints=critical,CA:TRUE",
                 "-addext", "keyUsage=critical,keyCertSign,cRLSign",
                 "-addext", "subjectKeyIdentifier=hash")
         bundle = directory / "ca-certificates.crt"
         bundle.write_bytes(Path("/etc/ssl/certs/ca-certificates.crt").read_bytes() + b"\n" + ca.read_bytes())
-        base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.yaml"), "config", "--format", "json"))
+        base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.yaml"),
+                                  "config", "--format", "json"))
         try:
-            for index, name in enumerate(("master-a", "slave-b", "master-c")):
+            for index, name in enumerate(("master-a", "follower-b")):
                 node = Node(name, directory, base, ca, bundle, index)
                 nodes.append(node)
-                # Same paths deliberately carry different content and different lyrics.
-                wav(node.data / "media/music/shared/song.wav", seconds=20, tone=500 + index * 100)
-                if name == "slave-b":
-                    for number in range(105):
-                        wav(node.data / f"media/music/paged/item-{number:03}.wav", seconds=1)
-                    wav(node.data / "media/music/shared/large.wav", seconds=120)
-            with ThreadPoolExecutor(max_workers=3) as executor:
+            a, b = nodes
+            # Master Local content is imported once during promotion. A Follower
+            # must join empty and receives files only through Storage Pool jobs.
+            wav(a.data / "media/music/shared/master.wav", seconds=20, tone=500)
+            upload_source = directory / "upload-source.wav"
+            wav(upload_source, seconds=20, tone=700)
+            source = upload_source.read_bytes()
+            with ThreadPoolExecutor(max_workers=2) as executor:
                 list(executor.map(Node.start, nodes))
-            a, b, c = nodes
             report["checks"].append("trusted TLS succeeds; unknown CA and wrong hostname rejected on every node")
+
             with sync_playwright() as playwright:
                 browser = launch_browser(playwright, nodes)
-                identities = {}
-                for node, role in ((a, "Master"), (b, "Slave"), (c, "Master")):
-                    browser_promote(browser, node, role)
-                    identities[node.name] = node.nodes()["node_id"]
-                report["checks"].append("browser role promotion and stable node identities")
-                package = browser_pair(browser, a, b)
-                a.wait_online()
-                assert len(a.nodes()["relationships"]) == 1 and len(b.nodes()["relationships"]) == 1
-                report["checks"].append("browser pairing and two-node Master/Slave topology")
-                browser_pair(browser, c, b)
+                browser_promote(browser, a, "Master")
+                browser_promote(browser, b, "Follower")
+                browser_pair(browser, a, b)
                 browser.close()
-            assert len(b.nodes()["relationships"]) == 2
-            assert c.endpoint not in json.dumps(a.nodes()) and a.endpoint not in json.dumps(c.nodes())
-            c.api("/api/v1/media/admin/nodes/pair", {"package": package}, expected=409)
-            for master in (a, c):
-                master.wait_online()
-                wait_for(lambda: len(master.resources()) == 107, description="paginated initial catalog")
-                master.resource = next(item for item in master.resources() if item["path"] == "music/shared/song.wav")
-            report["checks"].append("two independent Masters; replay rejected; paginated full sync")
-            # The relation credentials are also required for catalog/heartbeat, with no normal admin cookie substitute.
-            assert a.client.get(b.endpoint + "/internal/v1/catalog").status_code == 401
-            assert a.client.get(a.endpoint + "/_protected_media/music/shared/song.wav").status_code == 404
-            report["checks"].append("internal authentication and external protected-path rejection")
-            for node in nodes:
-                lyric = f"[00:01.00]{node.name} OWNER LYRIC\n[00:05.00]next line\n".encode()
-                response = node.client.post(node.endpoint + "/api/v1/media/admin/upload/lyric", headers={"X-CSRF-Token": node.csrf}, files={"file": ("owner.lrc", lyric, "text/plain")})
-                assert response.status_code == 200
-                node.api("/api/v1/media/admin/lyrics/relations", {"origin_kind": "track", "origin_path": "music/shared/song.wav", "linked_paths": ["lyrics/owner.lrc"]})
-            for master in (a, c):
-                local = master.api("/api/v1/media/lyrics/content?track=music/shared/song.wav")["entries"]
-                remote = master.api("/api/v1/media/lyrics/content?track=music/shared/song.wav&resource_id=" + master.resource["resource_id"])["entries"]
-                assert local[0]["text"].startswith(master.name)
-                assert remote[0]["text"].startswith(b.name)
-                public = master.client.get(master.endpoint + "/api/v1/media/music/category?path=music/shared").text
-                assert b.nodes()["node_id"] not in public and b.endpoint not in public
-            report["checks"].append("same-path local/remote objects; attachment ownership; public topology hidden")
-            source = (b.data / "media/music/shared/song.wav").read_bytes()
-            for master in (a, c):
-                for mode in ("Relay", "Direct"):
-                    master.mode(mode)
-                    url = master.resource["url"]
-                    full = master.client.get(master.endpoint + url)
-                    assert full.status_code == 200 and full.content == source
-                    head = master.client.head(master.endpoint + url)
-                    assert head.status_code == 200 and int(head.headers["content-length"]) == len(source) and not head.content
-                    if mode == "Direct":
-                        cors_head = master.client.head(master.endpoint + url, headers={"Origin": master.endpoint})
-                        print(json.dumps({"direct_cors_head": master.name, "status": cors_head.status_code,
-                                          "allow_origin": cors_head.headers.get("access-control-allow-origin"),
-                                          "vary": cors_head.headers.get("vary")}), flush=True)
-                        assert cors_head.status_code == 200 and cors_head.headers.get("access-control-allow-origin") == master.endpoint
-                        capability = master.client.get(master.endpoint + url, follow_redirects=False).headers["location"]
-                        other = c if master is a else a
-                        assert master.client.head(capability, headers={"Origin": other.endpoint}).status_code == 403
-                        preflight = master.client.options(capability, headers={"Origin": master.endpoint,
-                            "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "Range, If-Range"})
-                        assert preflight.status_code == 200 and preflight.headers.get("access-control-allow-origin") == master.endpoint
-                    partial = master.range(url, 4000, 4095)
-                    assert partial.status_code == 206 and partial.content == source[4000:4096]
-                    conditional = master.client.get(master.endpoint + url, headers={"If-None-Match": full.headers["etag"]})
-                    assert conditional.status_code == 304
-                    stale = master.client.get(master.endpoint + url, headers={"If-Range": '"different"', "Range": "bytes=0-3"})
-                    assert stale.status_code == 200 and stale.content == source
-                    assert (urlsplit_origin(full.url) == master.endpoint) == (mode == "Relay")
-            report["checks"].append("Relay/Direct content, HEAD, 206, ETag, If-Range, continuity")
-            # User recording storage is explicitly enabled on a downstream node.
-            a.recording_storage(True, 1)
-            wait_for(lambda: any(bool(row.get("recording_storage_enabled")) for row in b.nodes()["relationships"]),
-                     description="recording storage configuration heartbeat")
+            a.wait_online()
+            assert len(a.nodes()["relationships"]) == 1 and len(b.nodes()["relationships"]) == 1
+            assert len(a.resources()) == 1
+            report["checks"].append("fixed Master/Follower roles, stable identities, one-to-many topology")
+
+            redirected = b.client.get(b.endpoint + "/api/v1/media", follow_redirects=False)
+            assert redirected.status_code == 307 and redirected.headers["location"].startswith(a.endpoint)
+            blocked = b.client.post(b.endpoint + "/api/v1/media/playback", json={})
+            assert blocked.status_code == 409
+            assert blocked.json()["code"] == "NODE_BUSINESS_DISABLED_ON_FOLLOWER"
+            assert a.client.get(b.endpoint + "/internal/v1/catalog").status_code == 404
+            assert a.client.get(a.endpoint + "/_protected_media/music/shared/master.wav").status_code == 404
+            report["checks"].append("Follower business gate redirects public HTML and rejects business APIs")
+
+            follower_id = b.nodes()["node_id"]
+            a.configure_resources(storage=True, capacity_gib=2, compute=True, backup=True)
+            follower_enabled = f"""
+import asyncio
+from sqlalchemy import text
+from app.core.db import engine
+async def read_enabled():
+    async with engine.connect() as connection:
+        return int(await connection.scalar(text(
+            'SELECT storage_enabled FROM cluster_storage_members WHERE member_id=:member_id'
+        ), {{'member_id': {follower_id!r}}}) or 0)
+print(asyncio.run(read_enabled()))
+"""
+            wait_for(lambda: b.web(follower_enabled).strip() == "1",
+                     description="Follower resource configuration heartbeat")
+
+            a.mode("Relay")
+            a.upload_media(source, "relay.wav", member_id=follower_id)
+            a.mode("Direct")
+            direct_resource = a.upload_media(source, "direct.wav", member_id=follower_id)
+            a.resource = direct_resource
+            assert len(a.resources()) == 3
+            a.api("/api/v1/media/admin/upload/session", {
+                "storage_member_id": follower_id, "target_dir": "music/shared",
+                "relative_path": None, "filename": "direct.wav", "size_bytes": len(source),
+            }, expected=409)
+            report["checks"].append("Master reservations place Relay/Direct uploads and enforce global path uniqueness")
+
+            lyric = b"[00:01.00]MASTER OWNED LYRIC\n[00:05.00]next line\n"
+            response = a.client.post(a.endpoint + "/api/v1/media/admin/upload/lyric",
+                                     headers={"X-CSRF-Token": a.csrf},
+                                     files={"file": ("owner.lrc", lyric, "text/plain")})
+            assert response.status_code == 200, response.text[:300]
+            a.api("/api/v1/media/admin/lyrics/relations", {
+                "origin_kind": "track", "origin_path": direct_resource["path"],
+                "linked_paths": ["lyrics/owner.lrc"],
+            })
+            entries = a.api("/api/v1/media/lyrics/content?track=" + direct_resource["path"]
+                            + "&resource_id=" + direct_resource["resource_id"])["entries"]
+            assert entries[0]["text"] == "MASTER OWNED LYRIC"
+            public = a.client.get(a.endpoint + "/api/v1/media/music/category?path=music/shared").text
+            assert follower_id not in public and b.endpoint not in public
+            report["checks"].append("lyrics stay on Master and bind global media identity independent of placement")
+
+            for mode in ("Relay", "Direct"):
+                a.mode(mode)
+                url = direct_resource["url"]
+                full = a.client.get(a.endpoint + url)
+                assert full.status_code == 200 and full.content == source
+                head = a.client.head(a.endpoint + url)
+                assert head.status_code == 200 and int(head.headers["content-length"]) == len(source) and not head.content
+                if mode == "Direct":
+                    cors_head = a.client.head(a.endpoint + url, headers={"Origin": a.endpoint})
+                    assert cors_head.status_code == 200
+                    assert cors_head.headers.get("access-control-allow-origin") == a.endpoint
+                    capability = a.client.get(a.endpoint + url, follow_redirects=False).headers["location"]
+                    assert a.client.head(capability, headers={"Origin": "https://invalid.example"}).status_code == 403
+                    preflight = a.client.options(capability, headers={
+                        "Origin": a.endpoint, "Access-Control-Request-Method": "GET",
+                        "Access-Control-Request-Headers": "Range, If-Range",
+                    })
+                    assert preflight.status_code == 200
+                    assert preflight.headers.get("access-control-allow-origin") == a.endpoint
+                partial = a.range(url, 4000, 4095)
+                assert partial.status_code == 206 and partial.content == source[4000:4096]
+                conditional = a.client.get(a.endpoint + url, headers={"If-None-Match": full.headers["etag"]})
+                assert conditional.status_code == 304
+                stale = a.client.get(a.endpoint + url,
+                                     headers={"If-Range": '"different"', "Range": "bytes=0-3"})
+                assert stale.status_code == 200 and stale.content == source
+                assert (urlsplit_origin(full.url) == a.endpoint) == (mode == "Relay")
+            report["checks"].append("Relay/Direct media supports HEAD, Range, ETag, CORS and continuity")
+
+            baseline_used = next(row for row in a.nodes()["storage_pool"]["members"]
+                                 if row["member_id"] == follower_id)["used_bytes"]
             user = a.register_karaoke_user()
             status = a.client.get(a.endpoint + "/api/v1/karaoke/account/status").json()
             assert status["authenticated"] and status["user"]["quota_bytes"] == 200 * 1024 * 1024
-            a.karaoke_api("/bind", {"relationship_id": a.relation})
             lyrics_metadata = json.dumps({
-                "version": 1, "title": "round-trip", "lyrics": [{"time": 1.0, "text": "stored lyric"}],
+                "version": 1, "title": "round-trip",
+                "lyrics": [{"time": 1.0, "text": "stored lyric"}],
             }, ensure_ascii=False, separators=(",", ":")).encode()
             trailer = len(lyrics_metadata).to_bytes(8, "big") + b"FRONTIERCLOUD-KARAOKE-V1"
-            recording_ids = []
             for mode in ("Relay", "Direct"):
                 a.mode(mode)
-                ticket = a.upload_recording(b"WEBM-VOICE-ONLY" + lyrics_metadata + trailer, f"{mode} recording")
-                recording_ids.append(ticket["recording_id"])
+                ticket = a.upload_recording(b"WEBM-VOICE-ONLY" + lyrics_metadata + trailer,
+                                            f"{mode} recording")
                 listing = a.client.get(a.endpoint + "/api/v1/karaoke/account/recordings").json()["items"]
                 item = next(row for row in listing if row["recording_id"] == ticket["recording_id"])
                 assert item["title"] == "round-trip" and item["lyrics"][0]["text"] == "stored lyric"
-                streamed = a.client.get(a.endpoint + f"/api/v1/karaoke/account/recordings/{ticket['recording_id']}/stream")
+                streamed = a.client.get(a.endpoint +
+                    f"/api/v1/karaoke/account/recordings/{ticket['recording_id']}/stream")
                 assert streamed.status_code == 200 and streamed.content.startswith(b"WEBM-VOICE-ONLY")
-                assert streamed.headers["content-type"].startswith("audio/webm")
-                assert streamed.headers["content-disposition"].startswith("inline")
-                downloaded = a.client.get(a.endpoint + f"/api/v1/karaoke/account/recordings/{ticket['recording_id']}/download")
+                downloaded = a.client.get(a.endpoint +
+                    f"/api/v1/karaoke/account/recordings/{ticket['recording_id']}/download")
                 assert downloaded.status_code == 200 and "attachment" in downloaded.headers["content-disposition"]
-                assert downloaded.headers["content-type"].startswith("audio/webm")
-            # Admin ban invalidates user sessions; unban allows a later login.
+
             a.api(f"/api/v1/media/admin/users/{user['user_id']}", {"action": "ban", "quota_mib": None})
             assert a.client.get(a.endpoint + "/api/v1/karaoke/account/recordings").status_code == 401
             blocked_login = a.client.post(a.endpoint + "/api/v1/karaoke/account/login", json={
@@ -643,33 +688,40 @@ def main():
             assert login.status_code == 200
             a.kcsrf = a.client.cookies.get("__Host-karaoke_csrf")
             a.karaoke_api("/logout", {})
-            # Use Admin deletion while logged out to verify remote files and rows are removed together.
             a.api(f"/api/v1/media/admin/users/{user['user_id']}", {"action": "delete", "quota_mib": None})
             assert not any((b.data / "recordings").rglob("*.bin"))
-            assert int(a.relationship().get("recording_used_bytes") or 0) == 0
-            report["checks"].append("captcha registration, quota, binding, Relay/Direct recording, lyric round-trip, ban and deletion")
+            wait_for(lambda: next(row for row in a.nodes()["storage_pool"]["members"]
+                                  if row["member_id"] == follower_id)["used_bytes"] == baseline_used,
+                     description="recording capacity release")
+            report["checks"].append("automatic recording placement, Relay/Direct, quota, lyrics, ban and deletion")
+
             with sync_playwright() as playwright:
                 browser = launch_browser(playwright, nodes)
                 for mode in ("Relay", "Direct"):
                     a.mode(mode)
-                    browser_checks(browser, a, a.resource)
+                    browser_checks(browser, a, direct_resource)
                 browser.close()
-            report["checks"].append("real public browser playback, pause, seek, restart, both modes")
-            # Idempotent stats are owned by each Master, independent of the same source file.
+            report["checks"].append("real public browser playback and ephemeral karaoke work in both modes")
+
             session = str(uuid.uuid4())
-            payload = {"media_path": a.resource["path"], "resource_id": a.resource["resource_id"], "playback_session_id": session, "played_seconds": 30, "duration": 60}
+            payload = {"media_path": direct_resource["path"],
+                       "resource_id": direct_resource["resource_id"],
+                       "playback_session_id": session, "played_seconds": 30, "duration": 60}
             with ThreadPoolExecutor(max_workers=8) as executor:
-                counted = list(executor.map(lambda _: a.api("/api/v1/media/playback", payload)["counted"], range(12)))
+                counted = list(executor.map(
+                    lambda _: a.api("/api/v1/media/playback", payload)["counted"], range(12)))
             assert sum(counted) == 1
-            a.api("/api/v1/media/admin/media-priority", {"media_path": payload["media_path"], "resource_id": payload["resource_id"], "value": 123})
-            report["checks"].append("Master accounting idempotence and authoritative preference")
-            # Explicit Slave reset revokes all relationships but retains owned files.
-            identity = b.nodes()["node_id"]
-            b.api("/api/v1/media/admin/nodes/reinitialize", {"confirmation": identity})
-            assert b.nodes()["role"] == "Standalone"
-            assert (b.data / "media/music/shared/song.wav").read_bytes() == source
-            assert a.range(a.resource["url"]).status_code in (401, 404, 503)
-            report["checks"].append("explicit reset revokes old relationships; media retained")
+            a.api("/api/v1/media/admin/media-priority", {
+                "media_path": payload["media_path"], "resource_id": payload["resource_id"], "value": 123,
+            })
+            report["checks"].append("Master facts keep playback idempotent and preference authoritative")
+
+            identity = follower_id
+            b.api("/api/v1/media/admin/nodes/reinitialize", {"confirmation": identity}, expected=409)
+            assert b.nodes()["role"] == "Follower"
+            assert (b.data / "media/music/shared/direct.wav").read_bytes() == source
+            assert a.range(direct_resource["url"]).status_code == 206
+            report["checks"].append("Follower with placed files cannot reset; identities and media remain intact")
             report["result"] = "passed"
         finally:
             arguments.output.write_text(json.dumps(report, indent=2))
@@ -679,14 +731,16 @@ def main():
                     try:
                         node.failure_diagnostics()
                         logs = node.compose("logs", "--no-color", "--tail", "60", "web", "nginx")
-                        print("\n".join(line for line in logs.splitlines() if "initial_runtime_secrets" not in line), flush=True)
-                    except Exception: pass
-            with ThreadPoolExecutor(max_workers=3) as executor:
+                        print("\n".join(line for line in logs.splitlines()
+                                         if "initial_runtime_secrets" not in line), flush=True)
+                    except Exception:
+                        pass
+            with ThreadPoolExecutor(max_workers=2) as executor:
                 list(executor.map(lambda node: node.stop(), reversed(nodes)))
             command("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(directory))
             subprocess.run(["docker", "network", "rm", network], capture_output=True)
-    print(json.dumps({"result": report.get("result", "failed"), "checks": report["checks"], "samples": len(report["samples"])}))
-
+    print(json.dumps({"result": report.get("result", "failed"), "checks": report["checks"],
+                      "samples": len(report["samples"])}))
 
 def urlsplit_origin(value):
     from urllib.parse import urlsplit

@@ -3,6 +3,7 @@ let selectionKind = null;
 let currentPath = '';
 let csrfCookieName = '__Host-admin-csrf';
 let uploadRunning = false;
+let clusterUpload = false;
 let mediaSearchTimer = null;
 let securityTimer = null;
 let securityLoading = false;
@@ -352,20 +353,40 @@ async function runUploadTask(fileList, relativePaths = null, lyricUpload = false
                 continue;
             }
 
-            const formData = new FormData();
-            if (!lyricUpload) formData.append('target_dir', currentPath);
-            if (!lyricUpload && relativePaths) formData.append('relative_path', relativePaths[index]);
-            formData.append('file', file, file.name);
-
             try {
-                const result = await uploadOne(formData, fraction => {
+                const progress = fraction => {
                     setProgress('currentProgress', 'currentPercent', fraction * 100);
                     setProgress(
                         'totalProgress',
                         'totalPercent',
                         (completedUnits + fileUnits * fraction) / totalUnits * 100,
                     );
-                }, lyricUpload ? '/api/v1/media/admin/upload/lyric' : '/api/v1/media/admin/upload/item');
+                };
+                let result;
+                if (clusterUpload && !lyricUpload) {
+                    const reservation = await api('/api/v1/media/admin/upload/session', {
+                        method: 'POST', headers: requestHeaders(), body: JSON.stringify({
+                            storage_member_id: $('uploadStorageMember').value,
+                            target_dir: currentPath,
+                            relative_path: relativePaths ? relativePaths[index] : null,
+                            filename: file.name,
+                            size_bytes: file.size,
+                        }),
+                    });
+                    await uploadRaw(reservation.upload_url, file, progress, reservation.transport === 'Direct');
+                    result = reservation.transport === 'Direct'
+                        ? await api(`/api/v1/media/admin/upload/session/${reservation.upload_id}/finalize`, {
+                            method: 'POST', headers: requestHeaders(), body: '{}',
+                        })
+                        : {path: reservation.path};
+                } else {
+                    const formData = new FormData();
+                    if (!lyricUpload) formData.append('target_dir', currentPath);
+                    if (!lyricUpload && relativePaths) formData.append('relative_path', relativePaths[index]);
+                    formData.append('file', file, file.name);
+                    result = await uploadOne(formData, progress,
+                        lyricUpload ? '/api/v1/media/admin/upload/lyric' : '/api/v1/media/admin/upload/item');
+                }
                 successCount += 1;
                 addUploadResult(displayName, 'ok', result.path);
             } catch (error) {
@@ -962,6 +983,23 @@ function priorityMediaRow(item, data) {
     return row;
 }
 
+function uploadRaw(url, file, onProgress, direct = false) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', url); xhr.responseType = 'json';
+        if (!direct) xhr.setRequestHeader('X-CSRF-Token', csrf());
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(event.loaded / event.total); };
+        xhr.onerror = () => reject(new Error('存储节点连接中断'));
+        xhr.onload = () => {
+            const data = parseXhrData(xhr);
+            if (xhr.status < 200 || xhr.status >= 300) reject(new Error(formatErrorDetail(data.detail)));
+            else resolve(data);
+        };
+        xhr.send(file);
+    });
+}
+
 function renderMediaPriority(data) {
     const list = $('priorityList');
     list.innerHTML = '';
@@ -1288,6 +1326,31 @@ $('logout').onclick = async () => {
         const status = await api('/api/v1/media/admin/status');
         uploadLimits = {...uploadLimits, ...status.limits};
         csrfCookieName = status.csrf_cookie_name || csrfCookieName;
+        if (status.node_role === 'Follower') {
+            document.body.classList.add('follower-admin');
+            for (const module of document.querySelectorAll('.admin-module')) {
+                if (module.dataset.adminModule === 'nodes') continue;
+                module.classList.remove('expanded');
+                module.classList.add('role-disabled');
+                module.querySelectorAll('button,input,select,textarea').forEach(control => { control.disabled = true; });
+            }
+            const notice = document.createElement('aside');
+            notice.className = 'follower-role-notice';
+            notice.textContent = `业务由 Master 管理${status.master_url ? ` · ${status.master_url}` : ''}`;
+            document.querySelector('.admin-console')?.prepend(notice);
+            return;
+        }
+        if (status.node_role === 'Master') {
+            const pool = await api('/api/v1/media/admin/storage-pool');
+            const target = $('uploadStorageMember'); target.replaceChildren();
+            for (const member of pool.members || []) {
+                if (!member.storage_enabled || member.health !== 'online' || !member.writable) continue;
+                const option = document.createElement('option'); option.value = member.member_id;
+                option.textContent = `${member.member_kind === 'MasterLocal' ? 'Master Local' : member.member_id} · ${member.transport} · ${(member.available_bytes / 1073741824).toFixed(2)} GiB 可写`;
+                target.append(option);
+            }
+            target.classList.remove('hidden'); clusterUpload = true;
+        }
         if (status.credential_kind !== 'persistent') {
             for (const id of ['randomKey', 'customKey', 'customKeyConfirm', 'customKeySubmit', 'temporaryKeyMinutes', 'temporaryKey']) {
                 $(id).disabled = true;
@@ -1329,7 +1392,7 @@ $('logout').onclick = async () => {
         const body = $u('usersList'); body.replaceChildren();
         for (const user of data.items) {
             const row = document.createElement('tr');
-            for (const text of [user.username, user.status, `${human(user.used_bytes)} / ${human(user.quota_bytes)}`, user.storage_relationship_id || '未绑定']) {
+            for (const text of [user.username, user.status, `${human(user.used_bytes)} / ${human(user.quota_bytes)}`]) {
                 const cell = document.createElement('td'); cell.textContent = text; row.append(cell);
             }
             const operations = document.createElement('td');
