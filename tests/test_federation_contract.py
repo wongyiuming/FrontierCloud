@@ -1,5 +1,6 @@
 """Deployment boundaries for the optional V1 control plane."""
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -33,6 +34,13 @@ class FederationContractTests(unittest.TestCase):
         limits = [int(value) for value in re.findall(r"^    timeout-minutes: (\d+)$", workflow, re.MULTILINE)]
         self.assertEqual(len(limits), 2)
         self.assertTrue(all(value <= 3 for value in limits), limits)
+
+    def test_integrity_client_javascript_parses(self):
+        for relative in (
+            "static/js/admin-upload-integrity.js",
+            "static/js/karaoke-audio-quality.js",
+        ):
+            subprocess.run(["node", "--check", str(ROOT / relative)], check=True)
 
     def test_relay_has_verified_tls_and_no_disk_buffering(self):
         nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
