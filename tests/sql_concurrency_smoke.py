@@ -22,7 +22,7 @@ from app.core import db
 from app.core.config import settings
 from app.core.redis import redis_client
 from app.services import media_manager, media_objects, network_observation as observation, playback, resource_pool
-from app.services.federation import routing, schema as s
+from app.services.federation import protocol as p, routing, schema as s
 from app.services.federation.catalog import Catalog
 from app.services.federation.state import State
 
@@ -131,7 +131,20 @@ async def main():
                     "session": session})
             results = await asyncio.gather(*(remote(identifier, session) for identifier in identifiers))
             assert all(result["counted"] for result in results)
-            # Revocation blocks future updates without touching another source.
+            # A follower holding active pool objects cannot be revoked. Drain its
+            # placements first, then revocation must block future updates.
+            try:
+                await store.revoke(relation_id, "fixture")
+            except p.ProtocolError:
+                pass
+            else:
+                raise AssertionError("relationship with active storage was revoked")
+            async with database.begin() as conn:
+                await conn.execute(text("DELETE FROM media_playback_events"))
+                await conn.execute(text("DELETE FROM media_playback_stats"))
+                await conn.execute(text(
+                    "DELETE FROM global_media_objects WHERE storage_member_id=:member_id"
+                ), {"member_id": owner})
             await store.revoke(relation_id, "fixture")
             try:
                 await remote(identifiers[0], str(uuid.uuid4()))
