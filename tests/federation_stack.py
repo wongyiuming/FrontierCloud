@@ -442,7 +442,11 @@ def browser_pair(browser, master, follower):
     master_page.fill('#nodePairPackage', json.dumps(package))
     master_page.locator('#nodeImportPair').click()
     master_page.wait_for_function("document.querySelector('#nodeOperationStatus').textContent === '已完成'", timeout=60000)
-    master_page.wait_for_function("document.querySelector('#nodeRelationships').rows.length === 1", timeout=60000)
+    master_page.wait_for_function(
+        "peer => Array.from(document.querySelector('#nodeRelationships').rows)"
+        ".some(row => row.textContent.includes(peer))",
+        arg=follower.nodes()["node_id"], timeout=60000,
+    )
     master.relation = master.nodes()["relationships"][0]["relationship_id"]
     follower_page.locator('#nodesRefresh').click()
     follower_page.wait_for_function("count => document.querySelector('#nodeRelationships').rows.length === count", arg=len(follower.nodes()["relationships"]))
