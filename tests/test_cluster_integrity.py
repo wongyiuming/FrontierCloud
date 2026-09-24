@@ -9,6 +9,16 @@ from app.api.v1 import admin_upload_guard
 from app.services.federation.state import state as node_state
 
 
+def effective_routes(routes):
+    """Flatten FastAPI 0.137+ preserved include-router trees for assertions."""
+    for route in routes:
+        candidates = getattr(route, "effective_candidates", None)
+        if callable(candidates):
+            yield from effective_routes(candidates())
+        else:
+            yield route
+
+
 class ClusterUploadPathTests(unittest.IsolatedAsyncioTestCase):
     async def test_folder_upload_from_media_root_is_validated_after_join(self):
         payload = cluster.ClusterUploadReservation(
@@ -80,16 +90,18 @@ class ClusterRouteIntegrityTests(unittest.IsolatedAsyncioTestCase):
             "/api/v1/media/admin/download": "app.api.v1.admin_cluster_integrity",
             "/api/v1/media/admin/nodes/{identifier}/revoke": "app.api.v1.admin_cluster_integrity",
         }
+        leaves = list(effective_routes(app.routes))
         for path, module in expected.items():
-            routes = [route for route in app.routes if getattr(route, "path", None) == path]
+            routes = [route for route in leaves if getattr(route, "path", None) == path]
             self.assertEqual(len(routes), 1, path)
             self.assertEqual(routes[0].endpoint.__module__, module)
 
     def test_follower_storage_put_has_single_crash_safe_owner(self):
         from main import app
 
+        leaves = list(effective_routes(app.routes))
         routes = [
-            route for route in app.routes
+            route for route in leaves
             if getattr(route, "path", None) == "/internal/v1/storage/{original}"
             and "PUT" in (getattr(route, "methods", None) or set())
         ]
