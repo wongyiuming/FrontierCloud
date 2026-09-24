@@ -81,8 +81,8 @@ class ClusterRouteIntegrityTests(unittest.IsolatedAsyncioTestCase):
         expected = {
             "/api/v1/media/admin/tree": "app.api.v1.admin_cluster_integrity",
             "/api/v1/media/admin/tree/search": "app.api.v1.admin_cluster_integrity",
-            "/api/v1/media/admin/storage-pool": "app.api.v1.admin_cluster_integrity",
-            "/api/v1/media/admin/upload/session": "app.api.v1.admin_cluster_integrity",
+            "/api/v1/media/admin/storage-pool": "app.api.v1.admin_masterlocal_recovery",
+            "/api/v1/media/admin/upload/session": "app.api.v1.admin_masterlocal_recovery",
             "/api/v1/media/admin/upload/session/{upload_id}/bytes": "app.api.v1.admin_cluster_integrity",
             "/api/v1/media/admin/upload/session/{upload_id}/finalize": "app.api.v1.admin_cluster_integrity",
             "/api/v1/media/admin/upload/item": "app.api.v1.admin_upload_guard",
@@ -96,17 +96,22 @@ class ClusterRouteIntegrityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(routes), 1, path)
             self.assertEqual(routes[0].endpoint.__module__, module)
 
-    def test_follower_storage_put_has_single_crash_safe_owner(self):
+    def test_follower_storage_integrity_routes_have_single_owner(self):
         from main import app
 
         leaves = list(effective_routes(app.routes))
-        routes = [
-            route for route in leaves
-            if getattr(route, "path", None) == "/internal/v1/storage/{original}"
-            and "PUT" in (getattr(route, "methods", None) or set())
-        ]
-        self.assertEqual(len(routes), 1)
-        self.assertEqual(routes[0].endpoint.__module__, "app.api.internal_storage_integrity")
+        expected = {
+            ("/internal/v1/storage/{original}", "PUT"),
+            ("/internal/v1/storage/{original}/stat", "POST"),
+        }
+        for path, method in expected:
+            routes = [
+                route for route in leaves
+                if getattr(route, "path", None) == path
+                and method in (getattr(route, "methods", None) or set())
+            ]
+            self.assertEqual(len(routes), 1, path)
+            self.assertEqual(routes[0].endpoint.__module__, "app.api.internal_storage_integrity")
 
     async def test_master_legacy_upload_is_rejected_before_disk_write(self):
         upload = UploadFile(filename="song.mp3", file=io.BytesIO(b"ID3payload"))
