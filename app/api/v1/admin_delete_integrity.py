@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import ssl
 import time
 
@@ -21,6 +22,7 @@ from app.services.media_manager import MEDIA_ROOT, MediaManager
 
 router = APIRouter()
 require_session = legacy_admin.require_session
+logger = logging.getLogger("frontiercloud.admin")
 
 
 async def _pending_media(media_id: str) -> dict | None:
@@ -67,15 +69,31 @@ async def retry_pending_media(media_id: str) -> bool:
             if response.status_code != 200:
                 return False
 
+        now = int(time.time())
         async with node_state.database.begin() as conn:
             await conn.execute(text("DELETE FROM media_lyric_links WHERE media_id=:id"), {"id": row["media_id"]})
             await conn.execute(text("DELETE FROM media_playback_events WHERE media_id=:id"), {"id": row["media_id"]})
             await conn.execute(text("DELETE FROM media_playback_stats WHERE media_id=:id"), {"id": row["media_id"]})
             if row["storage_member_id"] == node_state.node["node_id"]:
                 await conn.execute(text("DELETE FROM media_objects WHERE media_id=:id"), {"id": row["object_id"]})
-        await resource_pool.complete_delete(row["media_id"], node_state.database)
+            await conn.execute(text("""
+                UPDATE cluster_storage_members
+                SET used_bytes=CASE
+                    WHEN used_bytes > :size THEN used_bytes - :size
+                    ELSE 0
+                END,
+                updated_at=:now
+                WHERE member_id=:member_id
+            """), {"size": int(row["size_bytes"]), "now": now,
+                     "member_id": row["storage_member_id"]})
+            await conn.execute(text("DELETE FROM global_media_objects WHERE media_id=:id"),
+                               {"id": row["media_id"]})
         return True
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "pending_media_delete_retry_failed media_id=%s path=%s member_id=%s error=%s",
+            row["media_id"], row["media_path"], row["storage_member_id"], exc,
+        )
         return False
 
 
