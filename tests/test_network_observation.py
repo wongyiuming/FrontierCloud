@@ -108,6 +108,23 @@ class NetworkObservationTests(unittest.TestCase):
         self.assertEqual(refresh.status_code, 303)
         self.assertEqual(refresh.headers["clear-site-data"], '"cache"')
 
+    def test_category_shell_is_immediate_and_catalog_data_revalidates(self):
+        with patch.object(
+            media,
+            "get_media_categories",
+            new=AsyncMock(return_value=[{"name": "album", "url": "/album"}]),
+        ) as categories:
+            shell = asyncio.run(media.get_music_categories_page())
+            self.assertEqual(categories.await_count, 0)
+            catalog = asyncio.run(media.get_media_categories_data("music"))
+
+        body = shell.body.decode("utf-8")
+        self.assertIn("正在加载目录", body)
+        self.assertIn("/api/v1/media/catalog/categories?media_type=music", body)
+        self.assertNotIn('"name":"album"', body)
+        self.assertIn('"name":"album"', catalog.body.decode("utf-8"))
+        self.assertIn("stale-while-revalidate", catalog.headers["cache-control"])
+
     def test_observation_is_attached_to_the_same_request_log_context(self):
         scope = {
             "type": "http",

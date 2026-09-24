@@ -33,6 +33,9 @@ relationships = Table("node_relationships", metadata,
     Column("peer_version", String(64), nullable=False),
     Column("protocol", Integer, nullable=False),
     Column("summary", JSON, nullable=False),
+    Column("recording_storage_enabled", Integer, nullable=False, server_default="0"),
+    Column("recording_capacity_bytes", BigInteger, nullable=False, server_default="0"),
+    Column("recording_used_bytes", BigInteger, nullable=False, server_default="0"),
     Column("created_at", BigInteger, nullable=False),
     UniqueConstraint("peer_id", name="uq_node_relationship_peer"))
 

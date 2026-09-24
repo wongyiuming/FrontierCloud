@@ -1301,3 +1301,49 @@ $('logout').onclick = async () => {
         // api() handles expired sessions and navigation.
     }
 })();
+// Karaoke user controls reuse the existing Admin session and CSRF boundary.
+(() => {
+    const panel = document.getElementById('usersPanel');
+    if (!panel) return;
+    const $u = id => document.getElementById(id);
+    let page = 1, pages = 1;
+    const human = value => `${(Number(value || 0) / 1048576).toFixed(1)} MiB`;
+    async function mutate(userId, action, quotaMib = null) {
+        await api(`/api/v1/media/admin/users/${userId}`, {
+            method: 'POST', headers: requestHeaders(), body: JSON.stringify({action, quota_mib: quotaMib}),
+        });
+        await load();
+    }
+    function action(label, callback) {
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
+        button.onclick = () => callback().catch(error => alert(error.message)); return button;
+    }
+    async function load() {
+        const params = new URLSearchParams({page: String(page), page_size: '50'});
+        const query = $u('usersQuery').value.trim(); if (query) params.set('q', query);
+        const data = await api(`/api/v1/media/admin/users?${params}`);
+        page = data.pagination.page; pages = data.pagination.pages;
+        $u('usersSummary').textContent = `共 ${data.pagination.total} 个用户`;
+        $u('usersPageInfo').textContent = `第 ${page} / ${pages} 页`;
+        $u('usersPrev').disabled = page <= 1; $u('usersNext').disabled = page >= pages;
+        const body = $u('usersList'); body.replaceChildren();
+        for (const user of data.items) {
+            const row = document.createElement('tr');
+            for (const text of [user.username, user.status, `${human(user.used_bytes)} / ${human(user.quota_bytes)}`, user.storage_relationship_id || '未绑定']) {
+                const cell = document.createElement('td'); cell.textContent = text; row.append(cell);
+            }
+            const operations = document.createElement('td');
+            const quota = document.createElement('input'); quota.type = 'number'; quota.min = '1'; quota.value = String(Math.ceil(user.quota_bytes / 1048576)); quota.setAttribute('aria-label', `${user.username} 配额 MiB`);
+            operations.append(quota, action('保存配额', () => mutate(user.user_id, 'quota', Number(quota.value))),
+                action(user.status === 'banned' ? '解封' : '封禁', () => mutate(user.user_id, user.status === 'banned' ? 'unban' : 'ban')),
+                action('删除', async () => { if (confirm(`删除 ${user.username} 及全部录音？`)) await mutate(user.user_id, 'delete'); }));
+            row.append(operations); body.append(row);
+        }
+    }
+    const heading = panel.querySelector?.('.module-heading');
+    if (heading) heading.addEventListener('click', () => { if (panel.classList.contains('expanded')) load().catch(error => alert(error.message)); });
+    $u('usersFilterForm').onsubmit = event => { event.preventDefault(); page = 1; load().catch(error => alert(error.message)); };
+    $u('usersRefresh').onclick = () => load().catch(error => alert(error.message));
+    $u('usersPrev').onclick = () => { if (page > 1) { page -= 1; load().catch(error => alert(error.message)); } };
+    $u('usersNext').onclick = () => { if (page < pages) { page += 1; load().catch(error => alert(error.message)); } };
+})();

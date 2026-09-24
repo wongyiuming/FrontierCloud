@@ -15,18 +15,23 @@
             <span>四大发明</span>
             <span class="header-actions"><a href="{{CATEGORY_LIST_URL}}" class="back-btn">← 返回分类</a></span>
         </div>
+        <div class="player-controls">
+            <button id="karaokeLink" class="control-btn karaoke-link" type="button">K歌</button>
+        </div>
         <ul id="mediaList" class="media-list"></ul>
     </div>
 
     <script>
-        const currentMediaList = {{MEDIA_JSON}};
+        let currentMediaList = {{MEDIA_JSON}};
         const playbackSessionId = {{PLAYBACK_SESSION_ID}};
+        window.frontierCloudPlayerCatalogConfig = {{PLAYER_CATALOG_CONFIG_JSON}};
         window.frontierCloudStunUrls = {{STUN_URLS_JSON}};
         window.frontierCloudWebrtcIntervalMs = {{WEBRTC_INTERVAL_MS}};
         const PAGE_TITLE = '{{PAGE_TITLE}}';
         const PLAYER_KIND = 'video';
     </script>
     <script src="{{NETWORK_OBSERVATION_JS_URL}}"></script>
+    <script src="{{MEDIA_BROWSER_JS_URL}}"></script>
     <script src="{{PLAYER_JS_URL}}"></script>
 </body>
 </html>

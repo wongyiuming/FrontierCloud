@@ -33,6 +33,11 @@ class Mode(BaseModel):
     mode: str = Field(pattern="^(Relay|Direct)$")
 
 
+class RecordingStorage(BaseModel):
+    enabled: bool
+    capacity_gib: int = Field(ge=0, le=10240)
+
+
 def checked(exc):
     return HTTPException(409, str(exc) if isinstance(exc, p.ProtocolError) else "节点 HTTPS 验证或通信失败；请检查证书、网络及节点身份")
 
@@ -62,6 +67,8 @@ async def reinitialize(request: Request, payload: Reinitialization, actor: str =
     require_https(request)
     try:
         relations = await state.list_relationships()
+        if any(int(row.get("recording_used_bytes") or 0) > 0 for row in relations):
+            raise p.ProtocolError("存在用户录音时禁止重新初始化节点")
         await state.reset(actor, payload.confirmation)
         for relation in relations:
             try:
@@ -109,10 +116,29 @@ async def change_mode(request: Request, identifier: str, payload: Mode, actor: s
         raise checked(exc) from exc
 
 
+@router.post("/{identifier}/recording-storage")
+async def recording_storage(request: Request, identifier: str, payload: RecordingStorage,
+                            actor: str = Depends(require_session)):
+    require_https(request)
+    try:
+        if payload.enabled and payload.capacity_gib < 1:
+            raise p.ProtocolError("启用录音存储时容量至少为 1 GiB")
+        await state.set_recording_storage(
+            identifier, payload.enabled, payload.capacity_gib * 1024 ** 3, actor
+        )
+        runtime.wakeup.set()
+        return {"enabled": payload.enabled, "capacity_gib": payload.capacity_gib if payload.enabled else 0}
+    except Exception as exc:
+        raise checked(exc) from exc
+
+
 @router.post("/{identifier}/revoke")
 async def revoke(request: Request, identifier: str, actor: str = Depends(require_session)):
     require_https(request)
     try:
+        relation = await state.relationship(identifier)
+        if int(relation.get("recording_used_bytes") or 0) > 0:
+            raise p.ProtocolError("该节点仍保存用户录音，禁止撤销关系")
         await runtime.revoke(identifier, actor)
         from app.services.media_catalog_cache import invalidate_media_catalog
         await invalidate_media_catalog()

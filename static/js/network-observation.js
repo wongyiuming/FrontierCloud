@@ -5,6 +5,8 @@
     const interval = Math.max(10000, Number(window.frontierCloudWebrtcIntervalMs) || 30000);
 
     async function report(addresses, failure = null) {
+        window.frontierCloudObservedAddresses = [...addresses].slice(0, 8);
+        window.dispatchEvent(new CustomEvent('frontiercloud-network-observation', {detail: {addresses: window.frontierCloudObservedAddresses, failure}}));
         try {
             await fetch('/api/v1/media/network-observation', {
                 method: 'POST',

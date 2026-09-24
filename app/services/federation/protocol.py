@@ -26,6 +26,9 @@ MAX_LYRIC_RESPONSE_BYTES = 5 * 1024 * 1024
 AUTH_SKEW_SECONDS = 60
 IDENTIFIER = re.compile(r"^[a-f0-9]{32}$")
 OBJECT_ID = re.compile(r"^[a-f0-9]{64}$")
+RECORDING_CONTENT_TYPES = {
+    "audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "application/octet-stream",
+}
 
 
 class ProtocolError(ValueError):
@@ -153,3 +156,42 @@ def verify_media_token(credential: str, token: str, now: int) -> dict:
         return value
     except Exception as exc:
         raise ProtocolError("Invalid or expired media capability") from exc
+
+
+def recording_token(credential: str, relationship: str, master: str, owner: str,
+                    recording: str, operation: str, now: int, *, size: int = 0,
+                    content_type: str = "application/octet-stream", filename: str = "recording.bin") -> str:
+    if (not IDENTIFIER.fullmatch(relationship) or not IDENTIFIER.fullmatch(master)
+            or not IDENTIFIER.fullmatch(owner) or not IDENTIFIER.fullmatch(recording)
+            or operation not in {"upload", "stream", "download"} or not 0 <= size <= 1024 ** 3
+            or content_type not in RECORDING_CONTENT_TYPES or not 1 <= len(filename) <= 255
+            or "\r" in filename or "\n" in filename):
+        raise ProtocolError("Invalid recording capability")
+    value = {"r": relationship, "m": master, "u": owner, "i": recording,
+             "op": operation, "size": size, "ct": content_type, "name": filename,
+             "e": now + TOKEN_SECONDS, "v": PROTOCOL_VERSION}
+    payload = encode(canonical(value))
+    return payload + "." + encode(hmac.new(decode(credential), payload.encode(), hashlib.sha256).digest())
+
+
+def verify_recording_token(credential: str, token: str, now: int) -> dict:
+    try:
+        payload, signature = token.split(".")
+        expected = hmac.new(decode(credential), payload.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(expected, decode(signature)):
+            raise ValueError()
+        value = json.loads(decode(payload))
+        if (value["v"] != PROTOCOL_VERSION or value["e"] <= now
+                or value["e"] > now + TOKEN_SECONDS + 60
+                or value["op"] not in {"upload", "stream", "download"}
+                or not isinstance(value["size"], int) or not 0 <= value["size"] <= 1024 ** 3
+                or value.get("ct") not in RECORDING_CONTENT_TYPES
+                or not isinstance(value.get("name"), str) or not 1 <= len(value["name"]) <= 255
+                or "\r" in value["name"] or "\n" in value["name"]):
+            raise ValueError()
+        for field in ("r", "m", "u", "i"):
+            if not IDENTIFIER.fullmatch(value[field]):
+                raise ValueError()
+        return value
+    except Exception as exc:
+        raise ProtocolError("Invalid or expired recording capability") from exc

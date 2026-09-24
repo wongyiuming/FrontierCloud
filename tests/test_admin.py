@@ -186,6 +186,15 @@ class AdminKeyLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AdminKeyRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_admin_page_uses_content_hashed_static_assets(self):
+        response = await admin.admin_page(request=None, session_hash="test-session")
+        body = response.body.decode("utf-8")
+        self.assertRegex(body, r'/static/css/admin\.css\?v=[0-9a-f]{16}')
+        self.assertRegex(body, r'/static/js/admin\.js\?v=[0-9a-f]{16}')
+        self.assertRegex(body, r'/static/js/nodes\.js\?v=[0-9a-f]{16}')
+        self.assertNotIn("{{ADMIN_", body)
+        self.assertNotIn("{{NODES_", body)
+
     async def test_temporary_session_cannot_extend_itself_or_replace_the_persistent_key(self):
         request = _request()
         request.scope["admin_credential_kind"] = "temporary"

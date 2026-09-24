@@ -151,12 +151,19 @@ class PlayerUIContractTests(unittest.TestCase):
 
     def test_media_ui_assets_are_versioned_and_offer_cache_reset(self):
         api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")
+        assets = (ROOT / "app" / "core" / "static_assets.py").read_text(encoding="utf-8")
+        browser = (ROOT / "static" / "js" / "media-browser.js").read_text(encoding="utf-8")
         templates = [
             (ROOT / "static" / "media" / name).read_text(encoding="utf-8")
             for name in ("index.html", "category.html", "audio-player.html", "video-player.html")
         ]
 
-        self.assertIn("hashlib.sha256", api)
+        self.assertIn("hashlib.sha256", assets)
+        self.assertIn("requestIdleCallback", browser)
+        self.assertIn("sessionStorage", browser)
+        self.assertNotIn("eval(", browser)
+        self.assertNotIn("new Function", browser)
+        self.assertIn("/catalog/categories", api)
         self.assertIn('"Clear-Site-Data": \'"cache"\'', api)
         self.assertIn('"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"', api)
         self.assertIn("/api/v1/media/refresh", templates[0])
@@ -169,13 +176,16 @@ class PlayerUIContractTests(unittest.TestCase):
             self.assertIn("{{PLAYER_CSS_URL}}", template)
             self.assertIn("{{PLAYER_JS_URL}}", template)
 
-    def test_public_home_keeps_elevation_and_the_only_refresh_action(self):
+    def test_public_home_hides_elevation_and_refresh_behind_logo_hotspots(self):
         template = (ROOT / "static" / "media" / "index.html").read_text(encoding="utf-8")
 
         self.assertEqual(template.count('/api/v1/media/refresh'), 1)
-        self.assertIn('id="elevate"', template)
+        self.assertIn('id="elevateHotspot"', template)
+        self.assertIn('id="refreshHotspot"', template)
+        self.assertIn("count===5", template)
         self.assertIn("/api/v1/media/admin/elevate", template)
-        self.assertIn("提权", template)
+        self.assertNotIn(">提权</button>", template)
+        self.assertNotIn("↻ 刷新界面", template)
         self.assertIn("前沿娱乐", template)
         self.assertIn("前沿音乐", template)
         self.assertIn("前沿媒体", template)

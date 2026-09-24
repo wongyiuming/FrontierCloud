@@ -26,52 +26,14 @@
             <h1>{{PAGE_TITLE}}</h1>
             <a href="{{BACK_URL}}" class="back-btn">← 返回上级</a>
         </div>
-        <div id="categoryGrid" class="card-grid"></div>
+        <div id="categoryGrid" class="card-grid"><div class="empty">正在加载目录…</div></div>
     </div>
     <script>
         window.frontierCloudStunUrls = {{STUN_URLS_JSON}};
         window.frontierCloudWebrtcIntervalMs = {{WEBRTC_INTERVAL_MS}};
-        const categories = {{CATEGORIES_JSON}};
-
-        // Escape HTML before inserting user-controlled values into the DOM.
-        function escapeHTML(str) {
-            if (typeof str !== 'string') return str;
-            return str.replace(/[&<>'"]/g, tag => ({
-                '&': '&amp;',
-                '<': '&lt;',
-                '>': '&gt;',
-                "'": '&#39;',
-                '"': '&quot;'
-            }[tag] || tag));
-        }
-
-        function middleEllipsis(value, maximum = 44) {
-            const characters = Array.from(String(value));
-            if (characters.length <= maximum) return characters.join('');
-            const head = Math.ceil((maximum - 3) / 2);
-            const tail = Math.floor((maximum - 3) / 2);
-            return `${characters.slice(0, head).join('')}...${characters.slice(-tail).join('')}`;
-        }
-
-        window.addEventListener('DOMContentLoaded', () => {
-            const grid = document.getElementById('categoryGrid');
-            const heading = document.querySelector('h1');
-            heading.title = heading.textContent;
-            heading.textContent = middleEllipsis(heading.textContent, 52);
-            if (categories.length === 0) {
-                grid.innerHTML = '<div class="empty">暂无分类目录，请在 data/media/music 或 data/media/vido 下创建分类文件夹</div>';
-                return;
-            }
-
-            // Sanitize every user-controlled directory name and attribute before rendering.
-            grid.innerHTML = categories.map(cat => `
-                <a href="${escapeHTML(cat.url)}" class="card" title="${escapeHTML(cat.name)}">
-                    <div class="card-title">📁 ${escapeHTML(middleEllipsis(cat.name))}</div>
-                    <div class="card-arrow">→</div>
-                </a>
-            `).join('');
-        });
+        window.frontierCloudCatalogConfig = {{CATALOG_CONFIG_JSON}};
     </script>
+    <script src="{{MEDIA_BROWSER_JS_URL}}"></script>
     <script src="{{NETWORK_OBSERVATION_JS_URL}}"></script>
 </body>
 </html>

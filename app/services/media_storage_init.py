@@ -7,7 +7,7 @@ from pathlib import Path
 APP_UID = 10001
 APP_GID = 10001
 DATA_ROOT = Path("/app/data")
-MEDIA_DIRECTORIES = ("media", "media/music", "media/vido", "media/lyrics")
+MEDIA_DIRECTORIES = ("media", "media/music", "media/vido", "media/lyrics", "recordings")
 
 
 def _set_owner(path: Path, uid: int, gid: int) -> None:

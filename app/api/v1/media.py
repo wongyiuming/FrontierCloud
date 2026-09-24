@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import html as html_escape
 import json
 import mimetypes
@@ -14,12 +13,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import bindparam, text
 
 from app.services.media_catalog_cache import load_media_catalog, store_media_catalog
-from app.services import playback
+from app.services import karaoke_identity, playback
 from app.services import network_observation
 from app.services import lyrics
 from app.services import media_objects
 from app.core.config import settings
 from app.core.db import engine
+from app.core.static_assets import static_asset_url
 from app.api.internal_nodes import require_https
 from app.services.federation.state import state as node_state
 from app.services.federation.catalog import catalog as node_catalog
@@ -60,16 +60,13 @@ class NetworkObservation(BaseModel):
     failure: str | None = Field(None, max_length=32)
 
 
-@lru_cache(maxsize=16)
-def static_asset_url(relative_path: str) -> str:
-    path = (BASE_DIR / "static" / relative_path).resolve()
-    if not path.is_relative_to((BASE_DIR / "static").resolve()) or not path.is_file():
-        raise RuntimeError(f"Static asset is missing: {relative_path}")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-    return f"/static/{relative_path}?v={digest}"
-
-
 def inject_page_runtime(html: str) -> str:
+    player_assets = [
+        static_asset_url("js/player.js"),
+        static_asset_url("css/player.css"),
+        static_asset_url("js/lyrics.js"),
+        static_asset_url("css/lyrics.css"),
+    ]
     replacements = {
         "{{STUN_URLS_JSON}}": safe_json_dumps(settings.webrtc_stun_urls()),
         "{{WEBRTC_INTERVAL_MS}}": str(settings.WEBRTC_REPORT_COOLDOWN * 1000),
@@ -78,6 +75,8 @@ def inject_page_runtime(html: str) -> str:
         "{{PLAYER_CSS_URL}}": html_escape.escape(static_asset_url("css/player.css"), quote=True),
         "{{LYRICS_JS_URL}}": html_escape.escape(static_asset_url("js/lyrics.js"), quote=True),
         "{{LYRICS_CSS_URL}}": html_escape.escape(static_asset_url("css/lyrics.css"), quote=True),
+        "{{MEDIA_BROWSER_JS_URL}}": html_escape.escape(static_asset_url("js/media-browser.js"), quote=True),
+        "{{MEDIA_PREFETCH_ASSETS_JSON}}": safe_json_dumps(player_assets),
     }
     for marker, value in replacements.items():
         html = html.replace(marker, value)
@@ -174,6 +173,18 @@ async def get_media_categories(media_type, valid_exts):
         categories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
     await store_media_catalog(generation, "categories", media_type, categories)
     return categories
+
+
+@router.get("/catalog/categories")
+async def get_media_categories_data(
+    media_type: str = Query(..., pattern=r"^(music|video)$"),
+):
+    valid_exts = AUDIO_EXTS if media_type == "music" else VIDEO_EXTS
+    entries = await get_media_categories(media_type, valid_exts)
+    return JSONResponse(
+        {"entries": entries},
+        headers={"Cache-Control": "private, max-age=30, stale-while-revalidate=300"},
+    )
 
 
 def _get_media_subcategories_sync(media_type, category_subpath, valid_exts, hidden):
@@ -281,6 +292,62 @@ async def scan_media_files_by_category(category_subpath, valid_exts, media_type)
         media_list.extend(await node_routing.directory_items(category_subpath))
     await store_media_catalog(generation, "tracks-v2", identity, media_list)
     return media_list
+
+
+async def _public_category_parts(path: str, media_type: str) -> tuple[str, ...]:
+    try:
+        _, parts = _validated_public_directory(path, media_type)
+        return parts
+    except HTTPException:
+        parts = tuple(path.split("/"))
+        expected_root = _typed_media_root(media_type).name
+        if (
+            node_state.node["role"] != "Master"
+            or len(parts) not in (2, 3)
+            or parts[0] != expected_root
+            or any(not part or part.startswith(".") for part in parts)
+            or not await node_catalog.resources(directory=path)
+        ):
+            raise
+        return parts
+
+
+async def _player_entries(
+    path: str,
+    media_type: str,
+    playback_session_id: str,
+) -> list[dict]:
+    playback_type = "audio" if media_type == "music" else "video"
+    valid_exts = AUDIO_EXTS if media_type == "music" else VIDEO_EXTS
+    items = await scan_media_files_by_category(path, valid_exts, playback_type)
+    remote = [item for item in items if item.get("resource_id")]
+    media_list = await playback.attach_stats_and_sort(
+        [item for item in items if not item.get("resource_id")],
+        playback_session_id,
+    )
+    if playback_type == "audio":
+        media_list = await lyrics.attach_links(media_list)
+    if remote:
+        media_list = playback.sort_media(
+            media_list + await node_routing.attach_master_stats(remote),
+            playback_session_id,
+        )
+    karaoke_identity.attach(media_list)
+    return media_list
+
+
+@router.get("/catalog/media")
+async def get_media_catalog_data(
+    media_type: str = Query(..., pattern=r"^(music|video)$"),
+    path: str = Query(..., min_length=1, max_length=1024),
+    playback_session_id: str = Query(..., min_length=1, max_length=64),
+):
+    await _public_category_parts(path, media_type)
+    entries = await _player_entries(path, media_type, playback_session_id)
+    return JSONResponse(
+        {"entries": entries},
+        headers={"Cache-Control": "private, max-age=15, stale-while-revalidate=120"},
+    )
 
 
 @lru_cache(maxsize=16)
@@ -392,20 +459,35 @@ async def refresh_media_interface():
 
 @router.get("/music", response_class=HTMLResponse)
 async def get_music_categories_page():
-    html = load_html_template("category.html")
-    html = html.replace("{{PAGE_TITLE}}", html_escape.escape("前沿音乐"))
-    html = html.replace("{{BACK_URL}}", html_escape.escape("/api/v1/media"))
-    html = html.replace("{{CATEGORIES_JSON}}", safe_json_dumps(await get_media_categories("music", AUDIO_EXTS)))
-    html = inject_page_runtime(html)
-    return HTMLResponse(html, headers=NO_STORE_HEADERS)
+    return _render_category_page(
+        "前沿音乐",
+        "/api/v1/media",
+        {
+            "url": "/api/v1/media/catalog/categories?media_type=music",
+            "cacheKey": "categories:music",
+            "emptyText": "暂无音乐分类目录，请在 data/media/music 下创建分类文件夹",
+        },
+    )
 
 
 @router.get("/video", response_class=HTMLResponse)
 async def get_video_categories_page():
+    return _render_category_page(
+        "前沿视讯",
+        "/api/v1/media",
+        {
+            "url": "/api/v1/media/catalog/categories?media_type=video",
+            "cacheKey": "categories:video",
+            "emptyText": "暂无视频分类目录，请在 data/media/vido 下创建分类文件夹",
+        },
+    )
+
+
+def _render_category_page(page_title: str, back_url: str, config: dict) -> HTMLResponse:
     html = load_html_template("category.html")
-    html = html.replace("{{PAGE_TITLE}}", html_escape.escape("前沿视讯"))
-    html = html.replace("{{BACK_URL}}", html_escape.escape("/api/v1/media"))
-    html = html.replace("{{CATEGORIES_JSON}}", safe_json_dumps(await get_media_categories("video", VIDEO_EXTS)))
+    html = html.replace("{{PAGE_TITLE}}", html_escape.escape(page_title))
+    html = html.replace("{{BACK_URL}}", html_escape.escape(back_url, quote=True))
+    html = html.replace("{{CATALOG_CONFIG_JSON}}", safe_json_dumps(config))
     html = inject_page_runtime(html)
     return HTMLResponse(html, headers=NO_STORE_HEADERS)
 
@@ -428,11 +510,11 @@ def _validated_public_directory(path: str, media_type: str) -> tuple[Path, tuple
 
 
 def _render_subcategory_page(page_title: str, back_url: str, categories) -> HTMLResponse:
-    html = load_html_template("category.html")
-    html = html.replace("{{PAGE_TITLE}}", html_escape.escape(page_title))
-    html = html.replace("{{BACK_URL}}", html_escape.escape(back_url, quote=True))
-    html = html.replace("{{CATEGORIES_JSON}}", safe_json_dumps(categories))
-    return HTMLResponse(inject_page_runtime(html), headers=NO_STORE_HEADERS)
+    return _render_category_page(
+        page_title,
+        back_url,
+        {"bootstrap": categories, "cacheKey": "", "url": "", "emptyText": "暂无分类目录"},
+    )
 
 
 async def _get_player_or_subcategories(
@@ -444,14 +526,7 @@ async def _get_player_or_subcategories(
     title_prefix: str,
     direct: bool = False,
 ) -> HTMLResponse:
-    try:
-        _, parts = _validated_public_directory(path, media_type)
-    except HTTPException:
-        parts = tuple(path.split("/"))
-        if (node_state.node["role"] != "Master" or len(parts) not in (2, 3)
-                or parts[0] != _typed_media_root(media_type).name or any(not p or p.startswith(".") for p in parts)
-                or not await node_catalog.resources(directory=path)):
-            raise
+    parts = await _public_category_parts(path, media_type)
     type_list_url = f"/api/v1/media/{media_type}"
     display_path = "/".join(parts[1:])
     if len(parts) == 2:
@@ -470,18 +545,23 @@ async def _get_player_or_subcategories(
         back_url = _category_url(media_type, parent_path)
 
     session_id = str(uuid.uuid4())
-    items = await scan_media_files_by_category(path, valid_exts, playback_type)
-    remote = [item for item in items if item.get("resource_id")]
-    media_list = await playback.attach_stats_and_sort([item for item in items if not item.get("resource_id")], session_id)
-    if playback_type == "audio":
-        media_list = await lyrics.attach_links(media_list)
-    if remote:
-        media_list = playback.sort_media(media_list + await node_routing.attach_master_stats(remote), session_id)
+    catalog_query = urllib.parse.urlencode(
+        {
+            "media_type": media_type,
+            "path": path,
+            "playback_session_id": session_id,
+        }
+    )
+    catalog_config = {
+        "url": f"/api/v1/media/catalog/media?{catalog_query}",
+        "cacheKey": f"media:{media_type}:{path}",
+    }
     html = load_html_template(player_template)
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"{title_prefix} - {display_path}"))
     html = html.replace("{{CATEGORY_LIST_URL}}", html_escape.escape(back_url, quote=True))
-    html = html.replace("{{MEDIA_JSON}}", safe_json_dumps(media_list))
+    html = html.replace("{{MEDIA_JSON}}", "[]")
     html = html.replace("{{PLAYBACK_SESSION_ID}}", safe_json_dumps(session_id))
+    html = html.replace("{{PLAYER_CATALOG_CONFIG_JSON}}", safe_json_dumps(catalog_config))
     html = inject_page_runtime(html)
     return HTMLResponse(html, headers=NO_STORE_HEADERS)
 

@@ -16,25 +16,24 @@ h1{justify-self:center;font-size:clamp(2rem,4vw,4rem);line-height:1.1}
 .card:hover,.card:focus-visible{z-index:1;background:linear-gradient(145deg,#2b3b56,#182335);border-color:#5a86b4;outline:none;transform:translateY(-5px) scale(1.006)}
 .card-icon{font-size:clamp(4rem,10vw,9rem);line-height:1;filter:drop-shadow(0 14px 22px rgba(0,0,0,.3))}
 .card-title{font-size:clamp(1.9rem,4.5vw,4.8rem);line-height:1.15}
-.home-actions{display:flex;justify-content:center;gap:10px}
-.elevate{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:9px 20px;color:#bcc8d8;text-decoration:none;background:#171e29;border:1px solid #344056;border-radius:10px;cursor:pointer}
-.elevate:hover,.elevate:focus-visible{color:#fff;background:#222d3d;border-color:#526b8b;outline:none}
+.brand-hotspot{display:inline-block;user-select:none;-webkit-user-select:none}
 @media(max-width:560px){.container{gap:12px;padding:14px}.card-grid{gap:10px}.card{border-radius:16px}.card-title{font-size:clamp(1.45rem,8vw,2.2rem)}.card-icon{font-size:clamp(3.5rem,17vw,5.2rem)}h1{font-size:clamp(1.8rem,10vw,2.8rem)}}
 </style>
 </head>
 <body>
 <main class="container">
-    <h1 class="brand">前沿娱乐</h1>
+    <h1 class="brand" aria-label="前沿娱乐"><span id="refreshHotspot" class="brand-hotspot">前沿</span><span id="elevateHotspot" class="brand-hotspot">娱乐</span></h1>
     <nav class="card-grid" aria-label="媒体类型">
-        <a href="/api/v1/media/music" class="card"><div class="card-icon" aria-hidden="true">🎵</div><div class="card-title brand">前沿音乐</div></a>
-        <a href="/api/v1/media/video" class="card"><div class="card-icon" aria-hidden="true">🎬</div><div class="card-title brand">前沿媒体</div></a>
+        <a href="/api/v1/media/music" class="card" data-catalog-prefetch="/api/v1/media/catalog/categories?media_type=music" data-catalog-cache-key="categories:music"><div class="card-icon" aria-hidden="true">🎵</div><div class="card-title brand">前沿音乐</div></a>
+        <a href="/api/v1/media/video" class="card" data-catalog-prefetch="/api/v1/media/catalog/categories?media_type=video" data-catalog-cache-key="categories:video"><div class="card-icon" aria-hidden="true">🎬</div><div class="card-title brand">前沿媒体</div></a>
     </nav>
-    <div class="home-actions"><button class="elevate" id="elevate">提权</button><a class="elevate" href="/api/v1/media/refresh">↻ 刷新界面</a></div>
 </main>
 <script>
 window.frontierCloudStunUrls={{STUN_URLS_JSON}};window.frontierCloudWebrtcIntervalMs={{WEBRTC_INTERVAL_MS}};
-const btn=document.getElementById('elevate');
-btn.onclick=async()=>{const token=prompt('请输入 Admin Key:');if(!token)return;const body=new URLSearchParams({token});try{const r=await fetch('/api/v1/media/admin/elevate',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const d=await r.json();if(!r.ok){const detail=d.detail;throw new Error(detail&&typeof detail==='object'?(detail.message||'登录失败'):(detail||'登录失败'))}location.href=d.redirect}catch(e){alert(e.message)}};
-</script><script src="{{NETWORK_OBSERVATION_JS_URL}}"></script>
+window.frontierCloudPrefetchAssets={{MEDIA_PREFETCH_ASSETS_JSON}};
+function fiveRapidClicks(element,action){let count=0,started=0;element.addEventListener('click',event=>{event.preventDefault();const now=Date.now();if(!started||now-started>1800){count=1;started=now}else count+=1;if(count===5){count=0;started=0;action()}})}
+fiveRapidClicks(document.getElementById('refreshHotspot'),()=>location.assign('/api/v1/media/refresh'));
+fiveRapidClicks(document.getElementById('elevateHotspot'),async()=>{const token=prompt('请输入 Admin Key:');if(!token)return;const body=new URLSearchParams({token});try{const r=await fetch('/api/v1/media/admin/elevate',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const d=await r.json();if(!r.ok){const detail=d.detail;throw new Error(detail&&typeof detail==='object'?(detail.message||'登录失败'):(detail||'登录失败'))}location.href=d.redirect}catch(e){alert(e.message)}});
+</script><script src="{{MEDIA_BROWSER_JS_URL}}"></script><script src="{{NETWORK_OBSERVATION_JS_URL}}"></script>
 </body>
 </html>

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿娱乐 · Admin</title>
-    <link rel="stylesheet" href="/static/css/admin.css?v=20260921-5">
+    <link rel="stylesheet" href="{{ADMIN_CSS_URL}}">
 </head>
 <body>
     <main class="admin-console">
@@ -182,9 +182,19 @@
                 <div class="nodes-toolbar"><strong id="nodeIdentity">尚未加载</strong><button id="nodesRefresh" type="button">刷新</button></div>
                 <form id="nodePromotion" class="nodes-toolbar hidden"><select id="nodeRole" aria-label="节点角色"><option>Master</option><option>Slave</option></select><input id="nodeEndpoint" type="url" required placeholder="当前节点 HTTPS 根地址"><button type="submit">固定角色</button></form>
                 <div id="nodePairing" class="hidden"><div class="nodes-toolbar"><button id="nodeIssuePair" type="button">生成一次性配对包</button><button id="nodeImportPair" type="button">导入 Slave 配对包</button></div><textarea id="nodePairPackage" rows="4" aria-label="一次性配对包" placeholder="配对包只用于建立当前关系，五分钟后过期"></textarea></div>
-                <div class="nodes-table-scroll"><table class="nodes-table"><thead><tr><th>节点 / HTTPS 地址</th><th>状态 / RTT / 心跳</th><th>版本 / 同步 / 存储</th><th>当前关系操作</th></tr></thead><tbody id="nodeRelationships"></tbody></table></div>
+                <div class="nodes-table-scroll"><table class="nodes-table"><thead><tr><th>节点 / HTTPS 地址</th><th>状态 / RTT / 心跳</th><th>版本 / 同步 / 磁盘</th><th>传输与用户录音存储</th></tr></thead><tbody id="nodeRelationships"></tbody></table></div>
                 <form id="nodeReinitialize" class="nodes-toolbar hidden"><input id="nodeResetConfirmation" autocomplete="off" placeholder="输入当前节点 ID 确认重置"><button type="submit">重新初始化节点</button><span>撤销旧关系，保留媒体文件</span></form>
                 <div id="nodeOperationStatus" role="status"></div>
+            </div>
+        </section>
+
+        <section id="usersPanel" class="admin-module users-panel" data-admin-module="users">
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>K歌用户管理</strong><small>封禁、删除及空间配额；删除同时清除用户录音</small></span><b>＋</b></button>
+            <div class="module-content">
+                <form id="usersFilterForm" class="nodes-toolbar"><input id="usersQuery" type="search" maxlength="64" placeholder="用户名（至少 2 个字符）"><button type="submit">查询</button><button id="usersRefresh" type="button">刷新</button></form>
+                <div id="usersSummary">尚未加载</div>
+                <div class="nodes-table-scroll"><table class="nodes-table"><thead><tr><th>用户</th><th>状态</th><th>录音空间</th><th>绑定节点</th><th>操作</th></tr></thead><tbody id="usersList"></tbody></table></div>
+                <div class="priority-pagination"><button id="usersPrev" type="button">上一页</button><span id="usersPageInfo">第 1 / 1 页</span><button id="usersNext" type="button">下一页</button></div>
             </div>
         </section>
 
@@ -246,7 +256,7 @@
         </div>
     </div>
 
-    <script src="/static/js/admin.js?v=20260921-4"></script>
-    <script src="/static/js/nodes.js?v=20260921-1"></script>
+    <script src="{{ADMIN_JS_URL}}"></script>
+    <script src="{{NODES_JS_URL}}"></script>
 </body>
 </html>

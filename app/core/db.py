@@ -466,6 +466,16 @@ async def init_db() -> None:
             from app.services.federation.schema import migration_statements
             for statement in migration_statements():
                 await _commit_ddl(conn, statement)
+            for column_name, definition in (
+                ("recording_storage_enabled", "TINYINT NOT NULL DEFAULT 0"),
+                ("recording_capacity_bytes", "BIGINT UNSIGNED NOT NULL DEFAULT 0"),
+                ("recording_used_bytes", "BIGINT UNSIGNED NOT NULL DEFAULT 0"),
+            ):
+                if not await _column_exists(conn, "node_relationships", column_name):
+                    await _commit_ddl(conn, f"ALTER TABLE node_relationships ADD COLUMN {column_name} {definition}")
+            from app.services.karaoke_schema import migration_statements as karaoke_migrations
+            for statement in karaoke_migrations():
+                await _commit_ddl(conn, statement)
             if not await _index_exists(conn, "node_media_catalog", "idx_node_catalog_path"):
                 await _commit_ddl(conn, "CREATE INDEX idx_node_catalog_path ON node_media_catalog (path(191))")
             if not await _index_exists(conn, "node_playback_events", "idx_node_playback_resource"):

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import secrets
 import time
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -129,11 +130,28 @@ async def heartbeat(request: Request):
                     raise p.ProtocolError("Invalid relationship mode")
                 if mode != relation["mode"]:
                     await state.accept_mode(relation["relationship_id"], mode, relation["peer_id"])
+            storage_enabled = value.get("recording_storage_enabled")
+            storage_capacity = value.get("recording_capacity_bytes")
+            if storage_enabled is not None or storage_capacity is not None:
+                if (relation["direction"] != "upstream" or not isinstance(storage_enabled, bool)
+                        or not isinstance(storage_capacity, int) or isinstance(storage_capacity, bool)
+                        or storage_capacity < 0 or storage_capacity > 10 * 1024 ** 4):
+                    raise p.ProtocolError("Invalid recording storage configuration")
+                await state.accept_recording_storage(
+                    relation["relationship_id"], storage_enabled, storage_capacity
+                )
         except (ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(400, "Invalid heartbeat configuration") from exc
     # Only our own outbound probe establishes peer reachability. Incoming probes
     # must not hide a peer whose HTTPS/media ingress is broken.
-    return await catalog.summary()
+    summary = await catalog.summary()
+    if relation["direction"] == "upstream":
+        from app.services.karaoke_storage import storage_usage
+        refreshed = await state.relationship(relation["relationship_id"])
+        summary["recording_storage_enabled"] = bool(refreshed.get("recording_storage_enabled"))
+        summary["recording_capacity_bytes"] = int(refreshed.get("recording_capacity_bytes") or 0)
+        summary["recording_used_bytes"] = storage_usage(relation["relationship_id"])
+    return summary
 
 
 @router.get("/catalog")
@@ -208,3 +226,87 @@ async def owned_media(request: Request, original: str, token: str | None = None)
         "X-Media-Parent-Request-ID": payload.get("request_id", ""), "X-Audit-Trace-ID": payload.get("trace_id", ""),
     })
     return response
+
+
+def _recording_cors(relation: dict, origin: str | None) -> dict[str, str]:
+    headers = {"Cache-Control": "no-store", "Vary": "Origin"}
+    if origin:
+        if origin != relation["peer_endpoint"]:
+            raise HTTPException(403, "Unpaired recording origin")
+        headers.update({
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, HEAD, PUT, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, X-Recording-Capability",
+            "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, ETag, Last-Modified",
+        })
+    return headers
+
+
+@router.options("/recordings/{recording_id}")
+async def recording_preflight(request: Request, recording_id: str):
+    require_https(request)
+    origin = request.headers.get("origin")
+    relations = await state.list_relationships()
+    relation = next((row for row in relations if row["direction"] == "upstream"
+                     and row["state"] == "active" and row["peer_endpoint"] == origin), None)
+    if relation is None:
+        raise HTTPException(403, "Unpaired recording origin")
+    return Response(headers=_recording_cors(relation, origin))
+
+
+@router.api_route("/recordings/{recording_id}", methods=["PUT", "GET", "HEAD"])
+async def recording_bytes(request: Request, recording_id: str):
+    from app.services import karaoke_storage
+    require_https(request)
+    token = request.headers.get("x-recording-capability") or request.query_params.get("token", "")
+    operation = "upload" if request.method == "PUT" else "read"
+    relation, value = await karaoke_storage.capability(token, operation, recording_id)
+    cors = _recording_cors(relation, request.headers.get("origin"))
+    if request.method == "PUT":
+        result = await karaoke_storage.receive(request, relation, value)
+        return JSONResponse(result, headers=cors)
+    redirect = karaoke_storage.protected_redirect(
+        relation["relationship_id"], value["u"], recording_id
+    )
+    disposition = ("attachment" if value["op"] == "download" else "inline")
+    return Response(headers={**cors, "X-Accel-Redirect": redirect,
+                             "Content-Type": value["ct"],
+                             "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(value['name'])}"})
+
+
+@router.post("/recordings/{recording_id}/stat")
+async def recording_stat(request: Request, recording_id: str):
+    from app.services import karaoke_storage
+    relation = await authenticated(request)
+    if state.node["role"] != "Slave" or relation["direction"] != "upstream":
+        raise HTTPException(403, "Only a Slave stores recordings")
+    try:
+        value = json.loads(request.state.node_control_body or b"{}")
+        return karaoke_storage.stat(relation["relationship_id"], value["user_id"], recording_id)
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(400, "Invalid recording stat request") from exc
+
+
+@router.post("/recordings/{recording_id}/delete")
+async def recording_delete(request: Request, recording_id: str):
+    from app.services import karaoke_storage
+    relation = await authenticated(request)
+    if state.node["role"] != "Slave" or relation["direction"] != "upstream":
+        raise HTTPException(403, "Only a Slave stores recordings")
+    try:
+        value = json.loads(request.state.node_control_body or b"{}")
+        karaoke_storage.remove(relation["relationship_id"], value["user_id"], recording_id)
+        return {"status": "deleted"}
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(400, "Invalid recording delete request") from exc
+
+
+@router.post("/recordings/users/{user_id}/delete")
+async def recording_user_delete(request: Request, user_id: str):
+    from app.services import karaoke_storage
+    relation = await authenticated(request)
+    if state.node["role"] != "Slave" or relation["direction"] != "upstream":
+        raise HTTPException(403, "Only a Slave stores recordings")
+    return {"status": "deleted", "removed_bytes": karaoke_storage.remove_user(
+        relation["relationship_id"], user_id
+    )}

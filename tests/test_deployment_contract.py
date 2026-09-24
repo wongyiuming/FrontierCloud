@@ -11,6 +11,67 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentContractTests(unittest.TestCase):
+    def test_native_karaoke_keeps_recording_local_until_authenticated_upload(self):
+        web = (ROOT / "static/js/karaoke.js").read_text(encoding="utf-8")
+        page = (ROOT / "static/media/karaoke.html").read_text(encoding="utf-8")
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("  karaoke:", compose)
+        for storage in ("localStorage", "sessionStorage", "indexedDB"):
+            self.assertNotIn(storage, web)
+        self.assertIn("recordedBlob", web)
+        self.assertIn("/recordings/ticket", web)
+        self.assertIn("elements.upload.disabled = !authenticated", web)
+        self.assertNotIn("重录", web)
+        self.assertNotIn("只播放歌曲", page)
+        self.assertIn('id="pauseResume"', page)
+        self.assertIn('id="upload"', page)
+        self.assertIn("createMediaStreamDestination", web)
+        self.assertIn("lowPass.connect(recordGain)", web)
+        self.assertIn("limiter.connect(recordDestination)", web)
+        self.assertIn("lowPass.connect(monitorGain)", web)
+        self.assertNotIn("mediaSource.connect(recordGain)", web)
+        self.assertNotIn("mediaSource.connect(recordDestination)", web)
+        self.assertIn("echoCancellation: elements.aec.checked", web)
+        self.assertIn("noiseSuppression: false", web)
+        self.assertIn("autoGainControl: false", web)
+        self.assertIn('id="inputDevice"', page)
+        self.assertIn('id="outputDevice"', page)
+        self.assertIn('max="600" value="300"', page)
+        self.assertIn("Math.min(6", web)
+        self.assertIn("if (state.graph)", web)
+        self.assertIn("context.createMediaElementSource(elements.media)", web)
+        self.assertIn("state.graph = graph", web)
+        self.assertIn("录音继续，但媒体播放失败", web)
+        self.assertIn("state.audioContext.setSinkId", web)
+        self.assertFalse((ROOT / "karaoke").exists())
+        self.assertFalse((ROOT / "contracts/karaoke-openapi.json").exists())
+
+    def test_hashed_static_assets_are_immutable(self):
+        nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+        admin = (ROOT / "static/media/admin.html").read_text(encoding="utf-8")
+        self.assertIn('"~^[0-9a-f]{16}$" "public, max-age=31536000, immutable"', nginx)
+        for asset in ("admin.js", "admin.css", "player.js", "player.css", "network-observation.js", "karaoke.js", "karaoke.css"):
+            line = next(value for value in nginx.splitlines() if f"/{asset}" in value)
+            self.assertIn("$versioned_static_cache_control", line)
+            self.assertNotIn("no-store", line)
+        self.assertIn("{{ADMIN_CSS_URL}}", admin)
+        self.assertIn("{{ADMIN_JS_URL}}", admin)
+        self.assertIn("{{NODES_JS_URL}}", admin)
+
+    def test_karaoke_and_hidden_home_gestures_match_the_product_contract(self):
+        player = (ROOT / "static/js/player.js").read_text(encoding="utf-8")
+        home = (ROOT / "static/media/index.html").read_text(encoding="utf-8")
+        self.assertIn("event.touches.length !== 3", player)
+        self.assertIn("}, 1500)", player)
+        self.assertIn("media: media.karaoke_id", player)
+        self.assertNotIn("media_path: media.media_path", player[player.index("function karaokeUrl"):player.index("function openKaraoke")])
+        self.assertIn("count===5", home)
+        self.assertIn("now-started>1800", home)
+        self.assertIn('id="refreshHotspot"', home)
+        self.assertIn('id="elevateHotspot"', home)
+        self.assertNotIn(">提权</button>", home)
+        self.assertNotIn("↻ 刷新界面", home)
+
     def test_runtime_dependencies_are_reproducibly_pinned(self):
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
         unpinned = [dependency for dependency in project["dependencies"] if "==" not in dependency]
@@ -121,6 +182,11 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("X-Frame-Options", headers)
         self.assertIn("Strict-Transport-Security", headers)
         self.assertIn("COPY nginx/security-headers.conf", dockerfile)
+
+    def test_karaoke_recording_collection_does_not_redirect_at_the_proxy_boundary(self):
+        nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+        self.assertIn("location ^~ /api/v1/karaoke/account/recordings {", nginx)
+        self.assertNotIn("location ^~ /api/v1/karaoke/account/recordings/ {", nginx)
 
     def test_media_storage_is_initialized_before_the_unprivileged_web_service(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
@@ -249,7 +315,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertNotIn('"admin_key": secrets.admin_key', runtime)
         self.assertNotIn('"metrics_token": secrets.metrics_token', runtime)
         self.assertIn("persistent `runtime_secrets` volume", readme)
-        self.assertIn("privilege-elevation control", readme)
+        self.assertIn("Rapidly click the second half of the home logo five times", readme)
 
     def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")

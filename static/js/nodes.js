@@ -38,10 +38,13 @@
                 const heartbeat = relation.last_heartbeat ? new Date(relation.last_heartbeat * 1000).toLocaleString() : '尚无心跳';
                 const summary = relation.summary || {};
                 const recovered = summary.recovered_at ? new Date(summary.recovered_at * 1000).toLocaleString() : '-';
+                const recordingWaterline = relation.recording_storage_enabled
+                    ? `\n用户录音 ${(Number(relation.recording_used_bytes || 0) / 1073741824).toFixed(2)} / ${(Number(relation.recording_capacity_bytes || 0) / 1073741824).toFixed(2)} GiB`
+                    : '\n用户录音 未启用';
                 for (const text of [
                     `${relation.peer_id}\n${relation.peer_endpoint}`,
                     `${relation.state} / ${relation.status}\n${relation.rtt_ms} ms · ${heartbeat}\n失败 ${relation.failures} / 恢复 ${relation.recoveries} · ${recovered}`,
-                    `${summary.app_version || relation.peer_version} / v${relation.protocol}\n同步 ${relation.cursor} / ${summary.catalog_version || 0} · 媒体 ${summary.media_count || 0}\n可用空间 ${summary.storage_free == null ? '-' : (summary.storage_free / 1073741824).toFixed(2) + ' GiB'}`,
+                    `${summary.app_version || relation.peer_version} / v${relation.protocol}\n同步 ${relation.cursor} / ${summary.catalog_version || 0} · 媒体 ${summary.media_count || 0}\n可用空间 ${summary.storage_free == null ? '-' : (summary.storage_free / 1073741824).toFixed(2) + ' GiB'}${recordingWaterline}`,
                 ]) {
                     const cell = document.createElement('td'); cell.textContent = text; cell.style.whiteSpace = 'pre-line'; row.appendChild(cell);
                 }
@@ -52,7 +55,18 @@
                     for (const value of ['Relay', 'Direct']) mode.appendChild(option(value, value));
                     mode.value = relation.mode;
                     mode.onchange = () => action(() => post(`/${relation.relationship_id}/mode`, {mode: mode.value}));
-                    operations.append(mode, button('修复同步', () => post(`/${relation.relationship_id}/sync`)));
+                    const storage = document.createElement('label'); storage.className = 'node-storage-control';
+                    const enabled = document.createElement('input'); enabled.type = 'checkbox';
+                    enabled.checked = Boolean(relation.recording_storage_enabled);
+                    const capacity = document.createElement('input'); capacity.type = 'number'; capacity.min = '1'; capacity.max = '10240';
+                    capacity.value = String(Math.max(1, Math.round(Number(relation.recording_capacity_bytes || 0) / 1073741824)));
+                    capacity.setAttribute('aria-label', '录音存储容量 GiB'); capacity.disabled = !enabled.checked;
+                    enabled.onchange = () => { capacity.disabled = !enabled.checked; };
+                    storage.append(enabled, document.createTextNode(' 录音存储 '), capacity, document.createTextNode(' GiB'));
+                    const saveStorage = button('保存存储设置', () => post(`/${relation.relationship_id}/recording-storage`, {
+                        enabled: enabled.checked, capacity_gib: enabled.checked ? Number(capacity.value) : 0,
+                    }));
+                    operations.append(mode, storage, saveStorage, button('修复同步', () => post(`/${relation.relationship_id}/sync`)));
                 } else {
                     const mode = document.createElement('span'); mode.textContent = relation.mode; operations.appendChild(mode);
                 }

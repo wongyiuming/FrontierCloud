@@ -37,7 +37,10 @@ class Transport:
         if relation:
             headers.update(p.auth_headers(credential, relation, method, path, body))
         self.open()
-        limit = p.MAX_LYRIC_RESPONSE_BYTES if path.startswith("/internal/v1/lyrics/") and method == "GET" else p.MAX_CONTROL_BYTES
+        limit = (p.MAX_LYRIC_RESPONSE_BYTES
+                 if ((path.startswith("/internal/v1/lyrics/") and method == "GET")
+                     or (path.startswith("/internal/v1/recordings/") and path.endswith("/stat")))
+                 else p.MAX_CONTROL_BYTES)
         async with self.client.stream(method, origin + path, content=body, headers=headers) as response:
             if response.status_code != 200:
                 # Do not log pairing tokens, credentials, or arbitrary upstream bodies.

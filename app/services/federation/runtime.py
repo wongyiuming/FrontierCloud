@@ -148,7 +148,10 @@ class Runtime:
                 await transport.identity(relation["peer_endpoint"], expected_id=relation["peer_id"],
                     expected_key=relation["peer_key"], role="Slave" if relation["direction"] == "downstream" else "Master")
             summary = await self.call(relation, "/internal/v1/heartbeat",
-                {"mode": relation["mode"]} if relation["direction"] == "downstream" else {})
+                {"mode": relation["mode"],
+                 "recording_storage_enabled": bool(relation.get("recording_storage_enabled")),
+                 "recording_capacity_bytes": int(relation.get("recording_capacity_bytes") or 0)}
+                if relation["direction"] == "downstream" else {})
             if summary.get("protocol") != p.PROTOCOL_VERSION:
                 raise p.ProtocolError("Heartbeat protocol mismatch")
             await state.heartbeat(identifier, True, int((time.monotonic() - start) * 1000), summary)
