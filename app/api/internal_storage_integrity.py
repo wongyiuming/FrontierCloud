@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import time
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from sqlalchemy import func, select, text, update
 
 from app.api import internal_nodes as legacy_internal
 from app.services import resource_pool
+from app.services.federation import protocol as p
 from app.services.federation import schema as s
 from app.services.federation.state import state
 from app.services.media_manager import MEDIA_ROOT, MediaManager, SIGNATURES
@@ -115,9 +117,38 @@ async def storage_upload(request: Request, original: str):
         raise
 
 
+@router.post("/storage/{original}/stat")
+async def storage_stat(request: Request, original: str):
+    """Report the authenticated physical object even if local indexing crashed."""
+    relation = await legacy_internal.authenticated(request)
+    if (state.node["role"] != "Follower" or relation["direction"] != "upstream"
+            or not p.OBJECT_ID.fullmatch(original)):
+        raise HTTPException(403, "Only a Follower reports storage objects")
+    try:
+        value = json.loads(request.state.node_control_body or b"{}")
+        path = str(value["path"])
+        resource_pool.validate_media_path(path)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError, p.ProtocolError) as exc:
+        raise HTTPException(400, "Invalid storage stat request") from exc
+    target = (MEDIA_ROOT / path).resolve()
+    if MEDIA_ROOT not in target.parents or not target.is_file():
+        raise HTTPException(404, "Storage object not found")
+    digest = hashlib.sha256()
+    with target.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {"object_id": original, "size_bytes": target.stat().st_size,
+            "sha256": digest.hexdigest(), "etag": f'"{digest.hexdigest()}"'}
+
+
 def install() -> None:
     legacy_internal.router.routes[:] = [
         route for route in legacy_internal.router.routes
-        if not (route.path == "/internal/v1/storage/{original}" and "PUT" in (route.methods or set()))
+        if not (
+            (getattr(route, "path", None) == "/internal/v1/storage/{original}"
+             and "PUT" in (getattr(route, "methods", None) or set()))
+            or (getattr(route, "path", None) == "/internal/v1/storage/{original}/stat"
+                and "POST" in (getattr(route, "methods", None) or set()))
+        )
     ]
     legacy_internal.router.include_router(router)
