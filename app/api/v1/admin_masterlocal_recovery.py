@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select, text
 
 from app.api.v1 import admin_cluster_integrity as cluster
+from app.api.v1 import admin_delete_integrity as delete_integrity
 from app.services import resource_pool
 from app.services.federation import protocol as p
 from app.services.federation import schema as s
@@ -71,4 +72,6 @@ async def storage_pool(session_hash: str = Depends(cluster.require_session)):
 async def create_upload_session(payload: cluster.ClusterUploadReservation, request: Request,
                                 session_hash: str = Depends(cluster.require_session)):
     await recover_expired_masterlocal()
+    path = await cluster._upload_logical_path(payload)
+    await delete_integrity.reconcile_upload_path(path)
     return await cluster.create_upload_session(payload, request, session_hash)
