@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException, UploadFile
 
 from app.api.v1 import admin_cluster_integrity as cluster
+from app.api.v1 import admin_upload_guard
 from app.services.federation.state import state as node_state
 
 
@@ -65,38 +66,44 @@ class ClusterUploadPathTests(unittest.IsolatedAsyncioTestCase):
 
 class ClusterRouteIntegrityTests(unittest.IsolatedAsyncioTestCase):
     def test_master_admin_routes_have_single_integrity_owner(self):
-        from app.api.v1.endpoints import router
+        from main import app
 
         expected = {
-            "/media/admin/tree",
-            "/media/admin/tree/search",
-            "/media/admin/storage-pool",
-            "/media/admin/upload/session",
-            "/media/admin/upload/session/{upload_id}/bytes",
-            "/media/admin/upload/session/{upload_id}/finalize",
-            "/media/admin/upload/item",
-            "/media/admin/hide",
-            "/media/admin/download",
-            "/media/admin/nodes/{identifier}/revoke",
+            "/api/v1/media/admin/tree": "app.api.v1.admin_cluster_integrity",
+            "/api/v1/media/admin/tree/search": "app.api.v1.admin_cluster_integrity",
+            "/api/v1/media/admin/storage-pool": "app.api.v1.admin_cluster_integrity",
+            "/api/v1/media/admin/upload/session": "app.api.v1.admin_cluster_integrity",
+            "/api/v1/media/admin/upload/session/{upload_id}/bytes": "app.api.v1.admin_cluster_integrity",
+            "/api/v1/media/admin/upload/session/{upload_id}/finalize": "app.api.v1.admin_cluster_integrity",
+            "/api/v1/media/admin/upload/item": "app.api.v1.admin_upload_guard",
+            "/api/v1/media/admin/hide": "app.api.v1.admin_cluster_integrity",
+            "/api/v1/media/admin/download": "app.api.v1.admin_cluster_integrity",
+            "/api/v1/media/admin/nodes/{identifier}/revoke": "app.api.v1.admin_cluster_integrity",
         }
-        for path in expected:
-            routes = [route for route in router.routes if route.path == path]
+        for path, module in expected.items():
+            routes = [route for route in app.routes if getattr(route, "path", None) == path]
             self.assertEqual(len(routes), 1, path)
-            self.assertEqual(routes[0].endpoint.__module__, "app.api.v1.admin_cluster_integrity")
+            self.assertEqual(routes[0].endpoint.__module__, module)
 
     def test_follower_storage_put_has_single_crash_safe_owner(self):
-        from app.api import internal_nodes
-        routes = [route for route in internal_nodes.router.routes
-                  if route.path == "/internal/v1/storage/{original}" and "PUT" in (route.methods or set())]
+        from main import app
+
+        routes = [
+            route for route in app.routes
+            if getattr(route, "path", None) == "/internal/v1/storage/{original}"
+            and "PUT" in (getattr(route, "methods", None) or set())
+        ]
         self.assertEqual(len(routes), 1)
         self.assertEqual(routes[0].endpoint.__module__, "app.api.internal_storage_integrity")
 
     async def test_master_legacy_upload_is_rejected_before_disk_write(self):
         upload = UploadFile(filename="song.mp3", file=io.BytesIO(b"ID3payload"))
         with patch.object(node_state, "node", {"role": "Master"}), \
-             patch.object(cluster.admin_service, "audit", new=AsyncMock()):
+             patch.object(admin_upload_guard.admin_service, "audit", new=AsyncMock()):
             with self.assertRaises(HTTPException) as raised:
-                await cluster.upload_item(object(), upload, "music/artist", None, "actor")
+                await admin_upload_guard.upload_item(
+                    object(), upload, "music/artist", None, "actor"
+                )
         self.assertEqual(raised.exception.status_code, 409)
         self.assertTrue(upload.file.closed)
 
