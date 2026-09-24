@@ -22,7 +22,7 @@ async def _resolve(token: str, request: Request | None) -> dict:
     except karaoke_identity.InvalidKaraokeIdentity as exc:
         raise HTTPException(404, "Karaoke media not found") from exc
 
-    if kind == "remote":
+    if kind == "global":
         media_api.require_https(request)
         row, _relationship = await node_routing.resolve(identifier)
         payload = row["payload"]
@@ -31,8 +31,7 @@ async def _resolve(token: str, request: Request | None) -> dict:
             raise HTTPException(404, "Karaoke media not found")
         has_lyrics = False
         if media_type == "audio":
-            # The owner's live attachment state is authoritative; a cached
-            # Catalog flag can lag behind a newly saved lyric relationship.
+            # Master lyric relations are authoritative and independent of placement.
             has_lyrics = bool(await node_routing.lyric_entries(identifier))
         return {
             "kind": kind,
@@ -88,7 +87,7 @@ async def context(
 @router.api_route("/stream", methods=["GET", "HEAD"], include_in_schema=False)
 async def stream(media: str = Query(..., min_length=80, max_length=512), request: Request = None):
     resolved = await _resolve(media, request)
-    if resolved["kind"] == "remote":
+    if resolved["kind"] == "global":
         response = await node_routing.stream(resolved["identifier"])
         media_api._bind_response_media_audit(request, response)
         return response
@@ -103,7 +102,7 @@ async def lyric_entries(media: str = Query(..., min_length=80, max_length=512), 
     if not resolved["has_lyrics"]:
         raise HTTPException(404, "Lyrics not found")
     try:
-        if resolved["kind"] == "remote":
+        if resolved["kind"] == "global":
             entries = await node_routing.lyric_entries(resolved["identifier"])
         else:
             _lyric_path, entries = await lyrics.load_for_track(resolved["path"])

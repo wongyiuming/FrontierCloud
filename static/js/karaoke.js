@@ -443,10 +443,9 @@ navigator.mediaDevices?.addEventListener?.('devicechange', () => {
 const accountElements = Object.fromEntries([
   'accountModal', 'accountClose', 'guestAccount', 'profile', 'showLogin', 'showRegister',
   'authForm', 'authUsername', 'authPassword', 'authSubmit', 'authMessage', 'captchaRow',
-  'captchaImage', 'captchaValue', 'captchaRefresh', 'profileSummary', 'storageNode',
+  'captchaImage', 'captchaValue', 'captchaRefresh', 'profileSummary',
   'bindStorage', 'uploadFile', 'uploadFileInput', 'logoutAccount', 'passwordForm',
   'currentPassword', 'newPassword', 'recordingList', 'deleteAccount', 'storageModal',
-  'uploadStorageNode', 'storageCancel', 'storageConfirm',
 ].map(id => [id, document.getElementById(id)]));
 
 function cookie(name) {
@@ -499,13 +498,8 @@ function setAuthMode(mode) {
 
 function fillStorageSelect(select) {
   select.replaceChildren();
-  const nodes = state.accountStatus?.storage_nodes || [];
-  for (const node of nodes) {
-    const free = (node.available_bytes / 1073741824).toFixed(2);
-    select.add(new Option(`${node.name} · ${node.mode} · 可用 ${free} GiB`, node.relationship_id));
-  }
-  if (state.account?.storage_relationship_id) select.value = state.account.storage_relationship_id;
-  select.disabled = !nodes.length;
+  select.add(new Option('由 Master Storage Scheduler 自动选择', 'auto'));
+  select.disabled = true;
 }
 
 function renderAccount() {
@@ -517,7 +511,6 @@ function renderAccount() {
   accountElements.profile.hidden = !authenticated;
   if (authenticated) {
     accountElements.profileSummary.textContent = `${state.account.username} · 已用 ${(state.account.used_bytes / 1048576).toFixed(1)} / ${(state.account.quota_bytes / 1048576).toFixed(1)} MiB`;
-    fillStorageSelect(accountElements.storageNode);
   }
 }
 
@@ -566,31 +559,11 @@ async function loadRecordings() {
   if (!data.items.length) accountElements.recordingList.textContent = '暂无已上传录音。';
 }
 
-function chooseStorage() {
-  return new Promise((resolve, reject) => {
-    fillStorageSelect(accountElements.uploadStorageNode);
-    if (!accountElements.uploadStorageNode.options.length) {
-      reject(new Error('当前没有可用的从节点录音存储；请联系管理员启用存储节点。')); return;
-    }
-    accountElements.storageModal.hidden = false;
-    accountElements.storageCancel.onclick = () => { accountElements.storageModal.hidden = true; reject(new Error('已取消上传')); };
-    accountElements.storageConfirm.onclick = () => {
-      accountElements.storageModal.hidden = true; resolve(accountElements.uploadStorageNode.value);
-    };
-  });
-}
-
 async function uploadBlob(blob, title, media = null) {
   if (!state.account) throw new Error('请先登录 K歌账号');
-  let storage = state.account.storage_relationship_id;
-  if (!storage) {
-    storage = await chooseStorage();
-    await accountApi('/bind', {method: 'POST', headers: karaokeHeaders(), body: JSON.stringify({relationship_id: storage})});
-    await refreshAccount();
-  }
   setStatus('正在预留个人空间…');
   const ticket = await accountApi('/recordings/ticket', {method: 'POST', headers: karaokeHeaders(), body: JSON.stringify({
-    size_bytes: blob.size, content_type: blob.type || 'application/octet-stream', media, title, storage_relationship_id: storage,
+    size_bytes: blob.size, content_type: blob.type || 'application/octet-stream', media, title,
   })});
   const headers = {'Content-Type': blob.type || 'application/octet-stream'};
   if (ticket.direct) headers['X-Recording-Capability'] = ticket.capability;
@@ -637,10 +610,6 @@ accountElements.authForm.onsubmit = async event => {
     accountElements.authMessage.textContent = errorText(error);
     if (state.authMode === 'register' || error.captchaRequired) showCaptcha(true);
   }
-};
-accountElements.bindStorage.onclick = async () => {
-  await accountApi('/bind', {method: 'POST', headers: karaokeHeaders(), body: JSON.stringify({relationship_id: accountElements.storageNode.value})});
-  await refreshAccount();
 };
 accountElements.uploadFile.onclick = () => accountElements.uploadFileInput.click();
 accountElements.uploadFileInput.onchange = async event => {

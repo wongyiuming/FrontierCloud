@@ -45,10 +45,14 @@ async def list_users(q: str = "", page: int = 1, page_size: int = 50,
             "pagination": {"page": page, "pages": max(1, (total + page_size - 1) // page_size), "total": total}}
 
 
-async def _remove_files(user: dict) -> None:
-    if user.get("storage_relationship_id"):
-        relation = await state.relationship(user["storage_relationship_id"])
-        await runtime.call(relation, f"/internal/v1/recordings/users/{user['user_id']}/delete", {})
+async def _remove_files(user: dict) -> list[dict]:
+    from app.api.v1.karaoke_users import _remove_recording_bytes
+    async with state.database.connect() as conn:
+        recordings = [dict(row) for row in (await conn.execute(select(ks.recordings).where(
+            ks.recordings.c.user_id == user["user_id"]))).mappings()]
+    for recording in recordings:
+        await _remove_recording_bytes(recording)
+    return recordings
 
 
 @router.post("/{user_id}")
@@ -61,7 +65,7 @@ async def mutate_user(user_id: str, payload: UserAction, request: Request,
         raise HTTPException(404, "用户不存在")
     user = dict(user)
     if payload.action == "delete":
-        await _remove_files(user)
+        recordings = await _remove_files(user)
         async with state.database.begin() as conn:
             locked = (await conn.execute(select(ks.users).where(
                 ks.users.c.user_id == user_id
@@ -71,12 +75,14 @@ async def mutate_user(user_id: str, payload: UserAction, request: Request,
             await accounts.audit(request, user_id, "admin-user-delete", "success", detail={"actor": actor}, conn=conn)
             await conn.execute(delete(ks.recordings).where(ks.recordings.c.user_id == user_id))
             await conn.execute(delete(ks.users).where(ks.users.c.user_id == user_id))
-            if user.get("storage_relationship_id"):
-                await conn.execute(update(fs.relationships).where(
-                    fs.relationships.c.relationship_id == user["storage_relationship_id"]
-                ).values(recording_used_bytes=func.greatest(
-                    0, fs.relationships.c.recording_used_bytes - int(locked["used_bytes"])
-                )))
+            by_member: dict[str, int] = {}
+            for recording in recordings:
+                by_member[recording["storage_member_id"]] = by_member.get(recording["storage_member_id"], 0) + int(recording["size_bytes"])
+            for member_id, removed in by_member.items():
+                await conn.execute(update(fs.storage_members).where(
+                    fs.storage_members.c.member_id == member_id
+                ).values(used_bytes=func.greatest(0, fs.storage_members.c.used_bytes - removed),
+                         reserved_bytes=func.greatest(0, fs.storage_members.c.reserved_bytes - removed)))
         await accounts.invalidate_user_sessions(user_id)
         return {"status": "deleted"}
     values = {"updated_at": int(time.time())}

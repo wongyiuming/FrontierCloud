@@ -207,7 +207,7 @@ class AdminKeyRouteTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AdminMediaPriorityTests(unittest.IsolatedAsyncioTestCase):
-    async def test_listing_reuses_existing_scores_and_keeps_node_identity_out_of_ui_data(self):
+    async def test_master_listing_uses_global_catalog_without_local_duplicates(self):
         local = [{"media_id": "local", "media_path": "music/artist/local.mp3",
                   "title": "local", "type": "audio", "hidden": False}]
         scored = [{**local[0], "preference": 2, "play_score": 9}]
@@ -215,6 +215,7 @@ class AdminMediaPriorityTests(unittest.IsolatedAsyncioTestCase):
                       "payload": {"type": "audio", "play_score": 1,
                                   "preference": 5, "has_lyrics": False}}
         with (
+            patch("app.services.federation.state.state.node", {"role": "Master"}),
             patch.object(admin.MediaManager, "list_media_objects", new=AsyncMock(return_value=local)),
             patch.object(admin.playback, "attach_stats_and_sort", new=AsyncMock(return_value=scored)),
             patch.object(admin.node_catalog, "resources", new=AsyncMock(return_value=[remote_row])),
@@ -228,7 +229,7 @@ class AdminMediaPriorityTests(unittest.IsolatedAsyncioTestCase):
                 session_hash="session",
             )
 
-        self.assertEqual([item["title"] for item in result["items"]], ["remote", "local"])
+        self.assertEqual([item["title"] for item in result["items"]], ["remote"])
         self.assertEqual(result["items"][0]["preference"], 5)
         self.assertEqual(result["scope"], "music/artist")
         self.assertEqual(result["directories"], [])
