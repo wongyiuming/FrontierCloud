@@ -102,7 +102,7 @@ async def ensure_object(
     return str(resolved)
 
 
-async def ensure_objects(items: Iterable[tuple[str, str]]) -> dict[str, str]:
+async def ensure_objects(items: Iterable[tuple[str, str]], database=None) -> dict[str, str]:
     requested_by_path: dict[str, str] = {}
     for raw_path, kind in items:
         path = normalize_object_path(raw_path)
@@ -136,7 +136,8 @@ async def ensure_objects(items: Iterable[tuple[str, str]]) -> dict[str, str]:
         return found
 
     paths = sorted(requested_by_path, key=_path_locator)
-    async with engine.begin() as conn:
+    database = database or engine
+    async with database.begin() as conn:
         resolved = await lookup(conn, paths)
         missing = [path for path in paths if path not in resolved]
         legacy_ids = {path: legacy_object_id(path) for path in missing}

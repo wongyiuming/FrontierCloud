@@ -17,8 +17,9 @@ router = APIRouter(prefix="/nodes")
 
 
 class Promotion(BaseModel):
-    role: str = Field(pattern="^(Master|Slave)$")
+    role: str = Field(pattern="^(Master|Follower)$")
     endpoint: str = Field(max_length=512)
+    local_capacity_gib: int | None = Field(None, ge=1, le=10240)
 
 
 class Reinitialization(BaseModel):
@@ -33,9 +34,12 @@ class Mode(BaseModel):
     mode: str = Field(pattern="^(Relay|Direct)$")
 
 
-class RecordingStorage(BaseModel):
-    enabled: bool
-    capacity_gib: int = Field(ge=0, le=10240)
+class ResourceSettings(BaseModel):
+    storage_enabled: bool = False
+    storage_capacity_gib: int = Field(ge=0, le=10240)
+    compute_enabled: bool = False
+    worker_slots: int = Field(ge=0, le=256)
+    backup_enabled: bool = False
 
 
 def checked(exc):
@@ -45,9 +49,11 @@ def checked(exc):
 @router.get("")
 async def status(actor: str = Depends(require_session)):
     relations = await state.list_relationships()
+    from app.services import resource_pool
     return {"node_id": state.node["node_id"], "role": state.node["role"], "endpoint": state.node["endpoint"],
             "app_version": p.APP_VERSION, "protocol": p.PROTOCOL_VERSION,
-            "relationships": [{key: value for key, value in row.items() if key not in ("credential", "peer_key")} for row in relations]}
+            "relationships": [{key: value for key, value in row.items() if key not in ("credential", "peer_key")} for row in relations],
+            "storage_pool": await resource_pool.pool_summary(state.database) if state.node["role"] == "Master" else None}
 
 
 @router.post("/promote")
@@ -55,7 +61,11 @@ async def promote(request: Request, payload: Promotion, actor: str = Depends(req
     require_https(request)
     try:
         await transport.identity(payload.endpoint, expected_id=state.node["node_id"], role="Standalone")
-        await state.promote(payload.role, payload.endpoint, actor)
+        from app.services import resource_pool
+        if payload.role == "Follower":
+            await resource_pool.ensure_follower_business_empty(state.database)
+        await state.promote(payload.role, payload.endpoint, actor,
+                            payload.local_capacity_gib * 1024 ** 3 if payload.local_capacity_gib else None)
         runtime.start()
         return {"role": state.node["role"]}
     except Exception as exc:
@@ -67,8 +77,6 @@ async def reinitialize(request: Request, payload: Reinitialization, actor: str =
     require_https(request)
     try:
         relations = await state.list_relationships()
-        if any(int(row.get("recording_used_bytes") or 0) > 0 for row in relations):
-            raise p.ProtocolError("存在用户录音时禁止重新初始化节点")
         await state.reset(actor, payload.confirmation)
         for relation in relations:
             try:
@@ -116,18 +124,22 @@ async def change_mode(request: Request, identifier: str, payload: Mode, actor: s
         raise checked(exc) from exc
 
 
-@router.post("/{identifier}/recording-storage")
-async def recording_storage(request: Request, identifier: str, payload: RecordingStorage,
+@router.post("/{identifier}/resources")
+async def resource_settings(request: Request, identifier: str, payload: ResourceSettings,
                             actor: str = Depends(require_session)):
     require_https(request)
     try:
-        if payload.enabled and payload.capacity_gib < 1:
-            raise p.ProtocolError("启用录音存储时容量至少为 1 GiB")
-        await state.set_recording_storage(
-            identifier, payload.enabled, payload.capacity_gib * 1024 ** 3, actor
+        from app.services import resource_pool
+        relation = None if identifier == state.node["node_id"] else await state.relationship(identifier)
+        await resource_pool.configure_member(
+            state.node["node_id"] if relation is None else relation["peer_id"],
+            storage_enabled=payload.storage_enabled,
+            allocated_bytes=payload.storage_capacity_gib * 1024 ** 3 if payload.storage_enabled else 0,
+            compute_enabled=payload.compute_enabled, worker_slots=payload.worker_slots,
+            backup_enabled=payload.backup_enabled, actor=actor, store=state,
         )
         runtime.wakeup.set()
-        return {"enabled": payload.enabled, "capacity_gib": payload.capacity_gib if payload.enabled else 0}
+        return {"status": "ok"}
     except Exception as exc:
         raise checked(exc) from exc
 
@@ -136,31 +148,9 @@ async def recording_storage(request: Request, identifier: str, payload: Recordin
 async def revoke(request: Request, identifier: str, actor: str = Depends(require_session)):
     require_https(request)
     try:
-        relation = await state.relationship(identifier)
-        if int(relation.get("recording_used_bytes") or 0) > 0:
-            raise p.ProtocolError("该节点仍保存用户录音，禁止撤销关系")
         await runtime.revoke(identifier, actor)
         from app.services.media_catalog_cache import invalidate_media_catalog
         await invalidate_media_catalog()
         return {"state": "revoked"}
-    except Exception as exc:
-        raise checked(exc) from exc
-
-
-@router.post("/{identifier}/sync")
-async def repair(request: Request, identifier: str, actor: str = Depends(require_session)):
-    require_https(request)
-    try:
-        relation = await state.relationship(identifier)
-        if state.node["role"] != "Master" or relation["direction"] != "downstream" or relation["state"] != "active":
-            raise p.ProtocolError("Only Master repairs an active downstream catalog")
-        from sqlalchemy import update
-        from app.services.federation import schema as s
-        async with state.database.begin() as conn:
-            await state.lock(conn)
-            await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == identifier).values(cursor=0))
-            await state.log(conn, "catalog-repair", actor, identifier)
-        runtime.start()
-        return {"state": "repair-scheduled"}
     except Exception as exc:
         raise checked(exc) from exc

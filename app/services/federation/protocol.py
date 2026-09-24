@@ -14,13 +14,12 @@ from urllib.parse import urlsplit
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, PublicFormat, NoEncryption
 
-PROTOCOL_VERSION = 1
-APP_VERSION = "1.2.0rc0"
+PROTOCOL_VERSION = 2
+APP_VERSION = "2.0.0rc0"
 HEARTBEAT_SECONDS = 30
 OFFLINE_SECONDS = 120
 PAIR_SECONDS = 300
 TOKEN_SECONDS = 300
-PAGE_SIZE = 100
 MAX_CONTROL_BYTES = 512 * 1024
 MAX_LYRIC_RESPONSE_BYTES = 5 * 1024 * 1024
 AUTH_SKEW_SECONDS = 60
@@ -124,9 +123,12 @@ def verify_auth(credential: str, headers, method: str, path: str, body: bytes, n
         raise ProtocolError("Invalid or expired relationship authentication") from exc
 
 
-def media_token(credential: str, relationship: str, master: str, owner: str, original: str, now: int,
+def media_token(credential: str, relationship: str, master: str, owner: str, original: str,
+                media_id: str, now: int,
                 *, request_id: str | None = None, trace_id: str | None = None) -> str:
-    value = {"r": relationship, "m": master, "o": owner, "i": original,
+    if not OBJECT_ID.fullmatch(media_id):
+        raise ProtocolError("Invalid global media identity")
+    value = {"r": relationship, "m": master, "o": owner, "i": original, "g": media_id,
              "e": now + TOKEN_SECONDS, "v": PROTOCOL_VERSION}
     # Optional signed provenance joins Direct and Relay transfers to the issuing
     # request without trusting public headers or logging the capability itself.
@@ -147,6 +149,8 @@ def verify_media_token(credential: str, token: str, now: int) -> dict:
         if value["v"] != PROTOCOL_VERSION or value["e"] <= now or value["e"] > now + TOKEN_SECONDS + 60:
             raise ValueError()
         resource_id(value["o"], value["i"])
+        if not OBJECT_ID.fullmatch(value["g"]):
+            raise ValueError()
         if not IDENTIFIER.fullmatch(value["r"]) or not IDENTIFIER.fullmatch(value["m"]):
             raise ValueError()
         for name in ("request_id", "trace_id"):
@@ -156,6 +160,45 @@ def verify_media_token(credential: str, token: str, now: int) -> dict:
         return value
     except Exception as exc:
         raise ProtocolError("Invalid or expired media capability") from exc
+
+
+def storage_token(credential: str, relationship: str, master: str, storage_node: str,
+                  media_id: str, object_id: str, operation: str, path: str, size: int,
+                  now: int) -> str:
+    if (not all(IDENTIFIER.fullmatch(value) for value in (relationship, master, storage_node))
+            or not OBJECT_ID.fullmatch(media_id) or not OBJECT_ID.fullmatch(object_id)
+            or operation not in {"upload", "delete"} or not 0 <= size <= 10 * 1024 ** 3
+            or not isinstance(path, str) or not 1 <= len(path) <= 1024):
+        raise ProtocolError("Invalid storage capability")
+    value = {"r": relationship, "m": master, "n": storage_node, "g": media_id,
+             "i": object_id, "op": operation, "path": path, "size": size,
+             "e": now + TOKEN_SECONDS, "v": PROTOCOL_VERSION}
+    payload = encode(canonical(value))
+    return payload + "." + encode(hmac.new(decode(credential), payload.encode(), hashlib.sha256).digest())
+
+
+def verify_storage_token(credential: str, token: str, now: int) -> dict:
+    try:
+        payload, signature = token.split(".")
+        expected = hmac.new(decode(credential), payload.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(expected, decode(signature)):
+            raise ValueError()
+        value = json.loads(decode(payload))
+        if (value["v"] != PROTOCOL_VERSION or value["e"] <= now
+                or value["e"] > now + TOKEN_SECONDS + 60
+                or value["op"] not in {"upload", "delete"}
+                or not isinstance(value["size"], int) or not 0 <= value["size"] <= 10 * 1024 ** 3
+                or not isinstance(value["path"], str) or not 1 <= len(value["path"]) <= 1024):
+            raise ValueError()
+        for field in ("r", "m", "n"):
+            if not IDENTIFIER.fullmatch(value[field]):
+                raise ValueError()
+        for field in ("g", "i"):
+            if not OBJECT_ID.fullmatch(value[field]):
+                raise ValueError()
+        return value
+    except Exception as exc:
+        raise ProtocolError("Invalid or expired storage capability") from exc
 
 
 def recording_token(credential: str, relationship: str, master: str, owner: str,

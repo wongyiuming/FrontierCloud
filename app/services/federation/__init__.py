@@ -1,1 +1,1 @@
-"""Optional node federation; the default node is an independent Standalone."""
+"""Centralized Master control plane and Follower resource execution."""
