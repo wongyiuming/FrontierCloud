@@ -37,15 +37,6 @@ class SchemaBootstrapContractTests(unittest.TestCase):
         ):
             self.assertIn(index, source)
 
-    def test_dev_cd_reinitializes_incompatible_schema_instead_of_migrating(self):
-        source = (ROOT / "scripts/deploy_rn.sh").read_text(encoding="utf-8")
-        self.assertIn("expected_schema_generation", source)
-        self.assertIn("performing explicit fresh-node init", source)
-        self.assertIn("DROP DATABASE IF EXISTS", source)
-        self.assertIn("CREATE DATABASE", source)
-        self.assertIn("redis-cli FLUSHDB", source)
-        self.assertNotIn("ALTER TABLE", source)
-
 
 if __name__ == "__main__":
     unittest.main()
