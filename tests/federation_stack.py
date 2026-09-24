@@ -202,7 +202,9 @@ class Node:
         program = """
 import asyncio, json
 from app.services.federation.catalog import catalog
+from app.services.federation.state import state
 async def read():
+    await state.initialize()
     rows = await catalog.resources()
     return [{"resource_id": row["resource_id"], "path": row["path"],
              "size": int(row["payload"]["size"]),
