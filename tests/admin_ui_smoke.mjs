@@ -223,7 +223,10 @@ assert(adminJs.includes('function middleEllipsis'));
 assert(adminJs.includes('结果按所在目录分类'));
 assert(adminJs.includes('N=${relationCount}'));
 assert(adminJs.includes("params.set('match_mode'"));
-assert(!nodesJs.includes('/resources'));
+assert(nodesJs.includes('/resources'));
+assert(nodesJs.includes('Storage'));
+assert(nodesJs.includes('Compute'));
+assert(nodesJs.includes('Backup'));
 assert(!nodesJs.includes('nodeTest'));
 
 const adminCss = fs.readFileSync('static/css/admin.css', 'utf8');

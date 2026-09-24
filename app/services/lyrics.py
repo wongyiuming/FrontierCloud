@@ -113,14 +113,48 @@ def _catalog_scope(relative_scope: str, kind: str) -> tuple[str, Path]:
         )
     from app.services.media_manager import resolve_safe_path
     current = resolve_safe_path(MEDIA_ROOT, normalized)
+    from app.services.federation.state import state as node_state
+    logical_master_track = kind == "track" and node_state.node.get("role") == "Master"
     if (
         not current.is_relative_to(MEDIA_ROOT)
-        or not current.exists()
-        or not current.is_dir()
-        or current.is_symlink()
+        or (not logical_master_track and not current.exists())
+        or (current.exists() and (not current.is_dir() or current.is_symlink()))
     ):
         raise ValueError("查询目录不存在")
     return current.relative_to(MEDIA_ROOT).as_posix(), current
+
+
+async def _global_track_catalog(scope: str, query: str) -> tuple[list[dict], list[dict], int, bool]:
+    from app.services.federation import schema as fs
+    prefix = scope.rstrip("/") + "/"
+    async with engine.connect() as conn:
+        rows = [dict(row) for row in (await conn.execute(
+            text("""SELECT media_id, media_path FROM global_media_objects
+                    WHERE object_kind='audio' AND state='active'
+                      AND LEFT(media_path, CHAR_LENGTH(:prefix))=:prefix
+                    ORDER BY media_path, media_id"""), {"prefix": prefix})).mappings()]
+    direct, directories, seen = [], [], set()
+    for row in rows:
+        remainder = row["media_path"][len(prefix):]
+        if "/" in remainder:
+            name = remainder.split("/", 1)[0]
+            path = prefix + name
+            if name not in seen:
+                seen.add(name); directories.append({"name": name, "path": path})
+        elif not query or media_search.matches_search(
+                media_search.build_search_text(Path(row["media_path"]).stem, row["media_path"]), query):
+            direct.append({"path": row["media_path"], "name": Path(row["media_path"]).stem,
+                           "media_id": row["media_id"]})
+    if query:
+        directories = []
+        direct = []
+        for row in rows:
+            if media_search.matches_search(media_search.build_search_text(
+                    Path(row["media_path"]).stem, row["media_path"]), query):
+                direct.append({"path": row["media_path"], "name": Path(row["media_path"]).stem,
+                               "media_id": row["media_id"]})
+    truncated = len(direct) > media_search.MAX_SEARCH_RESULTS
+    return direct[:media_search.MAX_SEARCH_RESULTS], directories, len(rows), truncated
 
 
 def _scan_catalog_scope_sync(
@@ -185,14 +219,12 @@ async def catalog(
     normalized_lyric_query = media_search.normalized_query(lyric_query) if lyric_query else ""
     track_scope, track_root = _catalog_scope(track_scope, "track")
     lyric_scope, lyric_root = _catalog_scope(lyric_scope, "lyric")
+    from app.services.federation.state import state as node_state
+    track_work = (_global_track_catalog(track_scope, normalized_track_query)
+                  if node_state.node.get("role") == "Master" else asyncio.to_thread(
+                      _scan_catalog_scope_sync, track_scope, track_root, "track", normalized_track_query))
     track_scan, lyric_scan = await asyncio.gather(
-        asyncio.to_thread(
-            _scan_catalog_scope_sync,
-            track_scope,
-            track_root,
-            "track",
-            normalized_track_query,
-        ),
+        track_work,
         asyncio.to_thread(
             _scan_catalog_scope_sync,
             lyric_scope,
@@ -203,19 +235,21 @@ async def catalog(
     )
     tracks, track_directories, track_total, track_truncated = track_scan
     lyric_files, lyric_directories, lyric_total, lyric_truncated = lyric_scan
-    tracks = await media_objects.bind_items(
-        tracks, "audio", path_key="path", id_key="media_id"
-    )
+    if node_state.node.get("role") != "Master":
+        tracks = await media_objects.bind_items(
+            tracks, "audio", path_key="path", id_key="media_id"
+        )
     lyric_files = await media_objects.bind_items(
         lyric_files, "lyric", path_key="path", id_key="lyric_id"
     )
     valid_tracks = {item["path"] for item in tracks}
     valid_lyrics = {item["path"] for item in lyric_files}
+    track_table = "global_media_objects" if node_state.node.get("role") == "Master" else "media_objects"
     async with engine.connect() as conn:
-        relation_count = await conn.scalar(text("""
+        relation_count = await conn.scalar(text(f"""
             SELECT COUNT(*)
             FROM media_lyric_links AS link
-            INNER JOIN media_objects AS media_object ON media_object.media_id=link.media_id
+            INNER JOIN {track_table} AS media_object ON media_object.media_id=link.media_id
             INNER JOIN media_objects AS lyric_object ON lyric_object.media_id=link.lyric_id
             WHERE LEFT(media_object.media_path, CHAR_LENGTH(:track_scope))=:track_scope
               AND SUBSTRING(media_object.media_path, CHAR_LENGTH(:track_scope) + 1, 1)='/'
@@ -246,7 +280,7 @@ async def catalog(
             result = await conn.execute(text(f"""
             SELECT media_object.media_path, lyric_object.media_path AS lyric_path
             FROM media_lyric_links AS link
-            INNER JOIN media_objects AS media_object ON media_object.media_id=link.media_id
+            INNER JOIN {track_table} AS media_object ON media_object.media_id=link.media_id
             INNER JOIN media_objects AS lyric_object ON lyric_object.media_id=link.lyric_id
             WHERE {' OR '.join(conditions)}
             """), parameters)
@@ -276,6 +310,31 @@ async def catalog(
     }
 
 
+def normalize_track_reference(relative_path: str) -> str:
+    normalized = media_objects.normalize_object_path(relative_path)
+    parts = Path(normalized).parts
+    if (len(parts) not in (3, 4) or parts[0] != "music"
+            or Path(normalized).suffix.lower() not in AUDIO_EXTS):
+        raise ValueError("曲目文件无效")
+    return normalized
+
+
+async def _track_identity(conn, relative_path: str) -> tuple[str, str]:
+    normalized = normalize_track_reference(relative_path)
+    from app.services.federation.state import state as node_state
+    if node_state.node.get("role") == "Master":
+        identifier = await conn.scalar(text("""
+            SELECT media_id FROM global_media_objects
+            WHERE path_locator=:locator AND BINARY media_path=BINARY :path
+              AND object_kind='audio' AND state='active'
+        """), {"locator": media_objects.legacy_object_id(normalized), "path": normalized})
+        if identifier:
+            return normalized, str(identifier)
+        raise ValueError("曲目不在 Master 全局媒体目录中")
+    validate_track(normalized)
+    return normalized, await media_objects.ensure_object(conn, normalized, "audio")
+
+
 async def replace_relations(origin_kind: str, origin_path: str, linked_paths: list[str], *, audit=None) -> int:
     if origin_kind not in {"track", "lyric"}:
         raise ValueError("关联起点类型无效")
@@ -286,27 +345,24 @@ async def replace_relations(origin_kind: str, origin_path: str, linked_paths: li
         raise ValueError("一首曲目最多关联一份歌词")
 
     if origin_kind == "track":
-        origin_path, _ = validate_track(origin_path)
+        origin_path = normalize_track_reference(origin_path)
         normalized_targets = [validate_lyric(path)[0] for path in normalized_targets]
     else:
         origin_path, _ = validate_lyric(origin_path)
-        normalized_targets = [validate_track(path)[0] for path in normalized_targets]
+        normalized_targets = [normalize_track_reference(path) for path in normalized_targets]
 
     from app.services.media_manager import ensure_media_mutations_ready, media_mutation_lock
     async with media_mutation_lock:
         ensure_media_mutations_ready()
         if origin_kind == "track":
-            validate_track(origin_path)
             for path in normalized_targets:
                 validate_lyric(path)
         else:
             validate_lyric(origin_path)
-            for path in normalized_targets:
-                validate_track(path)
         now = _utcnow()
         async with engine.begin() as conn:
             if origin_kind == "track":
-                origin_id = await media_objects.ensure_object(conn, origin_path, "audio")
+                origin_path, origin_id = await _track_identity(conn, origin_path)
                 await conn.execute(
                     text("DELETE FROM media_lyric_links WHERE media_id=:origin_id"),
                     {"origin_id": origin_id},
@@ -320,7 +376,7 @@ async def replace_relations(origin_kind: str, origin_path: str, linked_paths: li
                 )
                 pairs = [(path, origin_path) for path in normalized_targets]
             for track, lyric in pairs:
-                media_id = await media_objects.ensure_object(conn, track, "audio")
+                track, media_id = await _track_identity(conn, track)
                 lyric_id = await media_objects.ensure_object(conn, lyric, "lyric")
                 await conn.execute(text("""
                     INSERT INTO media_lyric_links
@@ -367,6 +423,14 @@ async def load_for_track(track_path: str) -> tuple[str, list[dict[str, Any]]]:
     normalized_track, _ = validate_track(track_path)
     async with engine.begin() as conn:
         media_id = await media_objects.ensure_object(conn, normalized_track, "audio")
+    return await load_for_media(media_id)
+
+
+async def load_for_media(media_id: str) -> tuple[str, list[dict[str, Any]]]:
+    """Load a Master-owned lyric by global media identity, independent of placement."""
+    if len(media_id) != 64 or any(character not in "0123456789abcdef" for character in media_id):
+        raise FileNotFoundError("曲目没有关联歌词")
+    async with engine.connect() as conn:
         lyric_path = await conn.scalar(text("""
             SELECT lyric_object.media_path
             FROM media_lyric_links AS link

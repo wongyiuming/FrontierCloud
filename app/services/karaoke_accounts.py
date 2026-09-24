@@ -289,7 +289,7 @@ async def register(request: Request, response: Response, username: str, password
             await conn.execute(insert(ks.users).values(
                 user_id=user_id, username=name, username_key=key, password_hash=encoded,
                 status="active", quota_bytes=DEFAULT_QUOTA_BYTES, used_bytes=0,
-                storage_relationship_id=None, created_at=now, updated_at=now,
+                created_at=now, updated_at=now,
             ))
             await audit(request, user_id, "register", "success", addresses, {}, conn)
             await conn.execute(update(ks.registration_daily).where(
@@ -298,7 +298,7 @@ async def register(request: Request, response: Response, username: str, password
         user = {"user_id": user_id, "username": name}
         await create_session(user, response)
         return public_user({**user, "status": "active", "quota_bytes": DEFAULT_QUOTA_BYTES,
-                            "used_bytes": 0, "storage_relationship_id": None})
+                            "used_bytes": 0})
     except (ValueError, RedisError, IntegrityError) as exc:
         await _record_registration_failure(ip)
         await audit(request, None, "register", "failure", addresses, {"reason": str(exc)[:200]})
@@ -339,20 +339,16 @@ async def login(request: Request, response: Response, username: str, password: s
 
 def public_user(row: dict) -> dict:
     return {key: row.get(key) for key in (
-        "user_id", "username", "status", "quota_bytes", "used_bytes", "storage_relationship_id"
+        "user_id", "username", "status", "quota_bytes", "used_bytes"
     )}
 
 
 async def available_storage_nodes() -> list[dict]:
     if state.node.get("role") != "Master":
         return []
-    now = int(time.time())
-    rows = await state.list_relationships()
-    return [{
-        "relationship_id": row["relationship_id"], "name": row["peer_id"], "mode": row["mode"],
-        "used_bytes": int(row.get("recording_used_bytes") or 0),
-        "capacity_bytes": int(row.get("recording_capacity_bytes") or 0),
-        "available_bytes": max(0, int(row.get("recording_capacity_bytes") or 0) - int(row.get("recording_used_bytes") or 0)),
-    } for row in rows if row["direction"] == "downstream" and row["state"] == "active"
-            and row["status"] == "online" and now - int(row["last_heartbeat"]) < p.OFFLINE_SECONDS
-            and bool(row.get("recording_storage_enabled"))]
+    from app.services import resource_pool
+    return [{"member_id": row["member_id"], "name": "Master Local" if row["member_kind"] == "MasterLocal" else row["member_id"],
+             "mode": row["transport"], "used_bytes": row["used_bytes"],
+             "capacity_bytes": row["allocated_bytes"], "available_bytes": row["available_bytes"]}
+            for row in await resource_pool.list_members(state.database)
+            if row["storage_enabled"] and row["health"] == "online" and row["writable"]]

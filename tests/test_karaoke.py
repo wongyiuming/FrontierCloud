@@ -7,26 +7,26 @@ from app.services import karaoke_identity
 
 
 class KaraokeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_remote_context_uses_live_owner_lyrics_instead_of_stale_catalog_flag(self):
+    async def test_global_context_uses_master_lyrics_independent_of_placement(self):
         resource_id = "a" * 64
         row = {
             "path": "music/shared/song.mp3",
             "payload": {"type": "audio", "has_lyrics": False},
         }
         with (
-            patch.object(karaoke.karaoke_identity, "resolve", return_value=("remote", resource_id)),
+            patch.object(karaoke.karaoke_identity, "resolve", return_value=("global", resource_id)),
             patch.object(karaoke.media_api, "require_https"),
             patch.object(karaoke.node_routing, "resolve", AsyncMock(return_value=(row, {}))),
-            patch.object(karaoke.node_routing, "lyric_entries", AsyncMock(return_value=[{"time": 1, "text": "owner"}])) as owner,
+            patch.object(karaoke.node_routing, "lyric_entries", AsyncMock(return_value=[{"time": 1, "text": "master"}])) as master_lyrics,
         ):
             resolved = await karaoke._resolve("opaque", request=object())
         self.assertTrue(resolved["has_lyrics"])
-        owner.assert_awaited_once_with(resource_id)
+        master_lyrics.assert_awaited_once_with(resource_id)
 
     async def test_context_exposes_only_opaque_identity_and_api_urls(self):
         opaque = "A" * 100
         with patch.object(karaoke, "_resolve", AsyncMock(return_value={
-            "kind": "local", "identifier": "b" * 64, "path": "music/shared/song.mp3",
+            "kind": "standalone", "identifier": "b" * 64, "path": "music/shared/song.mp3",
             "type": "audio", "has_lyrics": True,
         })):
             payload = await karaoke.context(opaque, request=object())
@@ -41,23 +41,23 @@ class KaraokeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_video_without_lyrics_is_valid(self):
         with patch.object(karaoke, "_resolve", AsyncMock(return_value={
-            "kind": "remote", "identifier": "c" * 64, "path": "vido/live/video.mp4",
+            "kind": "global", "identifier": "c" * 64, "path": "vido/live/video.mp4",
             "type": "video", "has_lyrics": False,
         })):
             payload = await karaoke.context("D" * 100, request=object())
         self.assertFalse(payload.has_lyrics)
         self.assertIsNone(payload.lyrics_url)
 
-    async def test_remote_lyrics_use_resolved_owner_only(self):
+    async def test_global_lyrics_use_master_relation(self):
         opaque = "E" * 100
         entries = [{"time": 1.25, "text": "line"}]
         with patch.object(karaoke, "_resolve", AsyncMock(return_value={
-            "kind": "remote", "identifier": "f" * 64, "path": "music/shared/song.mp3",
+            "kind": "global", "identifier": "f" * 64, "path": "music/shared/song.mp3",
             "type": "audio", "has_lyrics": True,
-        })), patch.object(karaoke.node_routing, "lyric_entries", AsyncMock(return_value=entries)) as owner:
+        })), patch.object(karaoke.node_routing, "lyric_entries", AsyncMock(return_value=entries)) as master_lyrics:
             response = await karaoke.lyric_entries(opaque, request=object())
         self.assertEqual(json.loads(response.body), {"entries": entries})
-        owner.assert_awaited_once_with("f" * 64)
+        master_lyrics.assert_awaited_once_with("f" * 64)
 
     def test_identity_is_encrypted_and_round_trips_without_path(self):
         payload = None
@@ -69,7 +69,7 @@ class KaraokeTests(unittest.IsolatedAsyncioTestCase):
              patch.object(karaoke_identity.state, "unseal_client_identity", side_effect=lambda _token: payload):
             token = karaoke_identity.issue(media_id="a" * 64)
             self.assertEqual(token, "opaque-token")
-            self.assertEqual(karaoke_identity.resolve(token), ("local", "a" * 64))
+            self.assertEqual(karaoke_identity.resolve(token), ("standalone", "a" * 64))
             self.assertNotIn("media_path", payload)
 if __name__ == "__main__":
     unittest.main()

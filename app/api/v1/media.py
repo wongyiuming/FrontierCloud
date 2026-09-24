@@ -164,13 +164,16 @@ async def get_media_categories(media_type, valid_exts):
     if cached is not None:
         return cached
     hidden = await _hidden_set()
-    categories = await asyncio.to_thread(_get_media_categories_sync, media_type, valid_exts, hidden)
     if node_state.node["role"] == "Master":
-        merged = {entry["name"]: entry for entry in categories}
+        merged = {}
         for entry in await node_catalog.resources(root=_typed_media_root(media_type).name):
+            if _is_publicly_hidden(entry["path"], hidden):
+                continue
             name = entry["path"].split("/")[1]
             merged.setdefault(name, {"name": name, "url": _category_url(media_type, _typed_media_root(media_type).name + "/" + name)})
         categories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
+    else:
+        categories = await asyncio.to_thread(_get_media_categories_sync, media_type, valid_exts, hidden)
     await store_media_catalog(generation, "categories", media_type, categories)
     return categories
 
@@ -222,21 +225,24 @@ async def get_media_subcategories(media_type, category_subpath, valid_exts):
     if cached is not None:
         return cached
     hidden = await _hidden_set()
-    subcategories = await asyncio.to_thread(
-        _get_media_subcategories_sync,
-        media_type,
-        category_subpath,
-        valid_exts,
-        hidden,
-    )
     if node_state.node["role"] == "Master":
-        merged = {entry["name"]: entry for entry in subcategories}
+        merged = {}
         for entry in await node_catalog.resources(directory=category_subpath):
+            if _is_publicly_hidden(entry["path"], hidden):
+                continue
             parts = entry["path"].split("/")
             if len(parts) == 4:
                 name = parts[2]
                 merged.setdefault(name, {"name": name, "url": _category_url(media_type, category_subpath + "/" + name)})
         subcategories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
+    else:
+        subcategories = await asyncio.to_thread(
+            _get_media_subcategories_sync,
+            media_type,
+            category_subpath,
+            valid_exts,
+            hidden,
+        )
     await store_media_catalog(generation, "subcategories", identity, subcategories)
     return subcategories
 
@@ -277,19 +283,22 @@ async def scan_media_files_by_category(category_subpath, valid_exts, media_type)
     generation, cached = await load_media_catalog("tracks-v2", identity)
     if cached is not None:
         return cached
-    async with media_mutation_lock.shared():
-        ensure_media_mutations_ready()
-        hidden = await _hidden_set()
-        media_list = await asyncio.to_thread(
-            _scan_media_files_by_category_sync,
-            category_subpath,
-            valid_exts,
-            media_type,
-            hidden,
-        )
-        media_list = await media_objects.bind_items(media_list, media_type)
     if node_state.node["role"] == "Master":
-        media_list.extend(await node_routing.directory_items(category_subpath))
+        hidden = await _hidden_set()
+        media_list = [item for item in await node_routing.directory_items(category_subpath)
+                      if not _is_publicly_hidden(item["media_path"], hidden)]
+    else:
+        async with media_mutation_lock.shared():
+            ensure_media_mutations_ready()
+            hidden = await _hidden_set()
+            media_list = await asyncio.to_thread(
+                _scan_media_files_by_category_sync,
+                category_subpath,
+                valid_exts,
+                media_type,
+                hidden,
+            )
+            media_list = await media_objects.bind_items(media_list, media_type)
     await store_media_catalog(generation, "tracks-v2", identity, media_list)
     return media_list
 

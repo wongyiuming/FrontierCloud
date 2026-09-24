@@ -147,6 +147,9 @@ select { color-scheme: dark; }
     flex: 1 1 0;
 }
 
+.follower-role-notice { position: sticky; top: 0; z-index: 20; padding: 12px 16px; border: 1px solid #7c6cff; border-radius: 12px; background: #191a31; color: #ddd8ff; font-weight: 700; }
+.admin-module.role-disabled { opacity: .42; filter: grayscale(.7); pointer-events: none; }
+
 .admin-module > .module-heading { flex: 0 0 56px; }
 
 .module-heading {

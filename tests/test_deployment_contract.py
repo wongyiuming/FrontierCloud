@@ -175,7 +175,8 @@ class DeploymentContractTests(unittest.TestCase):
         nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
         headers = (ROOT / "nginx/security-headers.conf").read_text(encoding="utf-8")
         dockerfile = (ROOT / "nginx/Dockerfile").read_text(encoding="utf-8")
-        self.assertEqual(nginx.count("client_max_body_size 8705M"), 1)
+        self.assertEqual(nginx.count("client_max_body_size 8705M"), 2)
+        self.assertIn("location ^~ /internal/v1/storage/", nginx)
         self.assertIn("location /api/v1/media/admin/upload/", nginx)
         self.assertIn("client_max_body_size 64k", nginx)
         self.assertIn("X-Content-Type-Options", headers)
@@ -320,7 +321,8 @@ class DeploymentContractTests(unittest.TestCase):
     def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         deploy_script = (ROOT / "scripts/deploy_rn.sh").read_text(encoding="utf-8")
-        deploy = workflow.split("  deploy-rn:", 1)[1]
+        deploy = workflow.split("  deploy-rn:", 1)[1].split("  deploy-evoxt:", 1)[0]
+        evoxt = workflow.split("  deploy-evoxt:", 1)[1]
         self.assertIn("needs: [test-cluster, test-compose, prepare-rn]", deploy)
         self.assertIn("github.event_name == 'push'", deploy)
         self.assertIn("github.ref == 'refs/heads/dev'", deploy)
@@ -342,7 +344,8 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("group: rn", deploy)
         self.assertIn("name: rn", deploy)
         self.assertIn('sh scripts/deploy_rn.sh "$override"', deploy)
-        self.assertIn("timeout-minutes: 1", deploy)
+        self.assertIn("timeout-minutes: 2", deploy)
+        self.assertIn("timeout-minutes: 2", evoxt)
         self.assertNotRegex(deploy, r"(?i)\b(?:production|preproduction|staging|development)\b")
 
 

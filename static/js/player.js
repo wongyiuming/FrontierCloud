@@ -758,7 +758,7 @@ async function loadInlineLyrics(media) {
         return;
     }
     const lyricIdentity = media.resource_id || media.media_id || media.media_path;
-    const ownerQuery = media.resource_id ? `&resource_id=${encodeURIComponent(media.resource_id)}` : '';
+    const resourceQuery = media.resource_id ? `&resource_id=${encodeURIComponent(media.resource_id)}` : '';
     const cached = inlineLyricsCache.get(lyricIdentity);
     if (cached) {
         showSynchronizedLyrics(cached, art?.currentTime || 0);
@@ -767,7 +767,7 @@ async function loadInlineLyrics(media) {
     const controller = new AbortController();
     inlineLyricsRequest = controller;
     try {
-        const response = await fetch(`/api/v1/media/lyrics/content?track=${encodeURIComponent(media.media_path)}${ownerQuery}`, {
+        const response = await fetch(`/api/v1/media/lyrics/content?track=${encodeURIComponent(media.media_path)}${resourceQuery}`, {
             cache: 'no-store',
             signal: controller.signal,
         });

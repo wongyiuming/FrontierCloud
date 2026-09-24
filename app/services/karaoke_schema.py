@@ -14,7 +14,6 @@ users = Table(
     Column("status", String(16), nullable=False),
     Column("quota_bytes", BigInteger, nullable=False),
     Column("used_bytes", BigInteger, nullable=False),
-    Column("storage_relationship_id", String(32)),
     Column("created_at", BigInteger, nullable=False),
     Column("updated_at", BigInteger, nullable=False),
     UniqueConstraint("username_key", name="uq_karaoke_user_name"),
@@ -25,7 +24,7 @@ recordings = Table(
     "karaoke_recordings", metadata,
     Column("recording_id", String(32), primary_key=True),
     Column("user_id", String(32), nullable=False),
-    Column("storage_relationship_id", String(32), nullable=False),
+    Column("storage_member_id", String(32), nullable=False),
     Column("filename", String(255), nullable=False),
     Column("content_type", String(96), nullable=False),
     Column("size_bytes", BigInteger, nullable=False),
@@ -37,7 +36,7 @@ recordings = Table(
     Column("updated_at", BigInteger, nullable=False),
 )
 Index("idx_karaoke_recording_user_time", recordings.c.user_id, recordings.c.created_at)
-Index("idx_karaoke_recording_storage", recordings.c.storage_relationship_id, recordings.c.state)
+Index("idx_karaoke_recording_member", recordings.c.storage_member_id, recordings.c.state)
 
 audit = Table(
     "karaoke_audit_log", metadata,

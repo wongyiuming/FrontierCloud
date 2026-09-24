@@ -1,4 +1,4 @@
-"""Bounded recording-file operations on a configured Slave."""
+"""Bounded recording-file operations on a configured Follower."""
 from __future__ import annotations
 
 import hashlib
@@ -75,13 +75,20 @@ async def capability(token: str, operation: str, recording_id: str) -> tuple[dic
         hint = json.loads(p.decode(token.split(".", 1)[0]))
         relation = await state.relationship(hint["r"])
         value = p.verify_recording_token(state.unseal(relation["credential"]), token, int(time.time()))
-        if (state.node["role"] != "Slave" or relation["direction"] != "upstream"
+        if (state.node["role"] != "Follower" or relation["direction"] != "upstream"
                 or relation["state"] != "active" or value["m"] != relation["peer_id"]
                 or value["i"] != recording_id
                 or (operation == "upload" and value["op"] != "upload")
-                or (operation == "read" and value["op"] not in {"stream", "download"})
-                or not relation.get("recording_storage_enabled")):
+                or (operation == "read" and value["op"] not in {"stream", "download"})):
             raise p.ProtocolError("Recording relationship mismatch")
+        from app.services.federation import schema as fs
+        from sqlalchemy import select
+        async with state.database.connect() as conn:
+            member = (await conn.execute(select(fs.storage_members).where(
+                fs.storage_members.c.member_id == state.node["node_id"]))).mappings().first()
+        if not member or not member["storage_enabled"]:
+            raise p.ProtocolError("Recording storage is disabled")
+        relation = {**relation, "allocated_capacity_bytes": int(member["allocated_bytes"])}
         return relation, value
     except (KeyError, TypeError, ValueError, p.ProtocolError) as exc:
         raise HTTPException(401, "Recording capability invalid or expired") from exc
@@ -89,9 +96,28 @@ async def capability(token: str, operation: str, recording_id: str) -> tuple[dic
 
 async def receive(request: Request, relation: dict, value: dict) -> dict:
     expected = int(value["size"])
-    capacity = int(relation.get("recording_capacity_bytes") or 0)
+    capacity = int(relation.get("allocated_capacity_bytes") or 0)
     if expected <= 0 or expected > capacity:
         raise HTTPException(413, "Recording exceeds storage allocation")
+    local_reserved = False
+    if state.node.get("role") == "Follower":
+        from sqlalchemy import func, select, update
+        from app.services.federation import schema as fs
+        from app.services import resource_pool
+        async with state.database.begin() as conn:
+            member = (await conn.execute(select(fs.storage_members).where(
+                fs.storage_members.c.member_id == state.node["node_id"]).with_for_update())).mappings().first()
+            logical = (int(member["allocated_bytes"]) - int(member["used_bytes"])
+                       - int(member["reserved_bytes"])) if member else 0
+            physical = resource_pool.physical_free(ROOT) - resource_pool.PHYSICAL_RESERVE_BYTES
+            if (not member or not member["storage_enabled"] or not member["writable"]
+                    or min(logical, physical) < expected):
+                raise HTTPException(507, "Recording storage node is full")
+            await conn.execute(update(fs.storage_members).where(
+                fs.storage_members.c.member_id == state.node["node_id"]
+            ).values(reserved_bytes=fs.storage_members.c.reserved_bytes + expected,
+                     physical_free_bytes=resource_pool.physical_free(ROOT), updated_at=int(time.time())))
+            local_reserved = True
     async with _write_lock:
         target = _path(relation["relationship_id"], value["u"], value["i"])
         temporary = target.with_suffix(".part")
@@ -120,8 +146,28 @@ async def receive(request: Request, relation: dict, value: dict) -> dict:
                 raise HTTPException(400, "Recording body size does not match reservation")
             os.replace(temporary, target)
             _usage_cache[relation["relationship_id"]] = storage_usage(relation["relationship_id"]) + written
+            if local_reserved:
+                from sqlalchemy import func, update
+                from app.services.federation import schema as fs
+                from app.services import resource_pool
+                async with state.database.begin() as conn:
+                    await conn.execute(update(fs.storage_members).where(
+                        fs.storage_members.c.member_id == state.node["node_id"]
+                    ).values(reserved_bytes=func.greatest(
+                        0, fs.storage_members.c.reserved_bytes - expected),
+                        used_bytes=fs.storage_members.c.used_bytes + written,
+                        physical_free_bytes=resource_pool.physical_free(ROOT), updated_at=int(time.time())))
+                local_reserved = False
         except BaseException:
             temporary.unlink(missing_ok=True)
+            if local_reserved:
+                from sqlalchemy import func, update
+                from app.services.federation import schema as fs
+                async with state.database.begin() as conn:
+                    await conn.execute(update(fs.storage_members).where(
+                        fs.storage_members.c.member_id == state.node["node_id"]
+                    ).values(reserved_bytes=func.greatest(
+                        0, fs.storage_members.c.reserved_bytes - expected), updated_at=int(time.time())))
             raise
     return {"size_bytes": written, "sha256": digest.hexdigest(), "metadata": parse_trailer(target)}
 
@@ -137,11 +183,12 @@ def stat(relationship: str, user_id: str, recording_id: str) -> dict:
     return {"size_bytes": target.stat().st_size, "sha256": digest.hexdigest(), "metadata": parse_trailer(target)}
 
 
-def remove(relationship: str, user_id: str, recording_id: str) -> None:
+def remove(relationship: str, user_id: str, recording_id: str) -> int:
     target = _path(relationship, user_id, recording_id)
     size = target.stat().st_size if target.is_file() else 0
     target.unlink(missing_ok=True)
     _usage_cache[relationship] = max(0, storage_usage(relationship) - size)
+    return size
 
 
 def remove_user(relationship: str, user_id: str) -> int:

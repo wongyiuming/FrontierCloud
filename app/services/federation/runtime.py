@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import logging
 import secrets
 import time
@@ -11,22 +13,22 @@ from contextlib import suppress
 from app.core.config import settings
 
 from . import protocol as p
-from .catalog import catalog
 from .state import state
 from .transport import transport
 
 logger = logging.getLogger("frontiercloud.nodes")
+BACKUP_INTERVAL_SECONDS = 24 * 60 * 60
 
 
 class Runtime:
     def __init__(self):
         self.task = None
-        self.scan_task = None
         self.wakeup = asyncio.Event()
+        self.backup_attempts: dict[str, int] = {}
 
     def start(self, *, revocations=False):
         if state.node["role"] != "Standalone" and not settings.TLS_ENABLED:
-            raise p.ProtocolError("固定为 Master/Slave 的节点必须启用有效 HTTPS；请恢复 TLS_ENABLED 后启动，不会自动重置角色")
+            raise p.ProtocolError("固定为 Master/Follower 的节点必须启用有效 HTTPS；请恢复 TLS_ENABLED 后启动，不会自动重置角色")
         if (state.node["role"] != "Standalone" or revocations) and (self.task is None or self.task.done()):
             transport.open()
             self.task = asyncio.create_task(self.run(), name="node-control")
@@ -38,25 +40,7 @@ class Runtime:
             with suppress(asyncio.CancelledError):
                 await self.task
             self.task = None
-        await self.stop_scan()
         await transport.close()
-
-    async def stop_scan(self):
-        if self.scan_task:
-            self.scan_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self.scan_task
-            self.scan_task = None
-
-    async def scan_inventory(self):
-        try:
-            await catalog.scan()
-        except Exception as exc:
-            logger.warning("Node inventory deferred: %s", type(exc).__name__)
-
-    def schedule_scan(self):
-        if state.node["role"] != "Standalone" and (self.scan_task is None or self.scan_task.done()):
-            self.scan_task = asyncio.create_task(self.scan_inventory(), name="node-inventory")
 
     async def call(self, relation: dict, path: str, value=None):
         return await transport.request(relation["peer_endpoint"], path,
@@ -69,7 +53,7 @@ class Runtime:
             if package["protocol"] != p.PROTOCOL_VERSION or package["expires_at"] <= int(time.time()):
                 raise p.ProtocolError("配对包过期或协议不兼容")
             peer = await transport.identity(package["endpoint"], expected_id=package["node_id"],
-                expected_key=package["public_key"], role="Slave")
+                expected_key=package["public_key"], role="Follower")
         except (KeyError, TypeError) as exc:
             raise p.ProtocolError("Invalid pairing package") from exc
         for old in await state.list_relationships(include_revoked=True):
@@ -111,20 +95,6 @@ class Runtime:
                 s.relationships.c.state == "revoked").values(summary={"revocation_acknowledged": True}))
             await state.log(conn, "revocation-acknowledged", "peer", relation["relationship_id"])
 
-    async def sync(self, relation: dict):
-        from app.services.media_catalog_cache import invalidate_media_catalog
-        cursor, head = relation["cursor"], None
-        # Bound one cycle; large inventories resume at the committed cursor.
-        for _ in range(10):
-            path = f"/internal/v1/catalog?cursor={cursor}" + (f"&head={head}" if head is not None else "")
-            page = await self.call(relation, path)
-            cursor = await catalog.apply(relation, page, cursor)
-            head = page["head"]
-            if page["items"]:
-                await invalidate_media_catalog()
-            if page["complete"]:
-                break
-
     async def tick(self, relation: dict):
         identifier = relation["relationship_id"]
         if relation["state"] == "revoked":
@@ -140,40 +110,107 @@ class Runtime:
                 await state.activate(identifier, "pair-recovery")
                 relation = await state.relationship(identifier)
             else:
-                return  # The Master owns confirmation; a pending Slave never routes.
+                return  # The Master owns confirmation; a pending Follower never routes.
         start = time.monotonic()
         try:
             # Check the pinned identity on recovery, not an arbitrary replacement endpoint.
             if relation["status"] != "online":
                 await transport.identity(relation["peer_endpoint"], expected_id=relation["peer_id"],
-                    expected_key=relation["peer_key"], role="Slave" if relation["direction"] == "downstream" else "Master")
-            summary = await self.call(relation, "/internal/v1/heartbeat",
-                {"mode": relation["mode"],
-                 "recording_storage_enabled": bool(relation.get("recording_storage_enabled")),
-                 "recording_capacity_bytes": int(relation.get("recording_capacity_bytes") or 0)}
-                if relation["direction"] == "downstream" else {})
+                    expected_key=relation["peer_key"], role="Follower" if relation["direction"] == "downstream" else "Master")
+            value = {}
+            if relation["direction"] == "downstream":
+                from app.services import resource_pool
+                value = {"mode": relation["mode"],
+                         "resources": await resource_pool.member_configuration(relation["peer_id"], state.database)}
+            summary = await self.call(relation, "/internal/v1/heartbeat", value)
             if summary.get("protocol") != p.PROTOCOL_VERSION:
                 raise p.ProtocolError("Heartbeat protocol mismatch")
             await state.heartbeat(identifier, True, int((time.monotonic() - start) * 1000), summary)
             if relation["direction"] == "downstream":
-                await self.sync(relation)
+                await self.maybe_backup(relation)
+            elif relation["direction"] == "upstream":
+                await self.work_once(relation)
         except Exception:
             await state.heartbeat(identifier, False)
             raise
+
+    async def maybe_backup(self, relation: dict):
+        from app.services import resource_pool
+        member = next((item for item in await resource_pool.list_members(state.database)
+                       if item["member_id"] == relation["peer_id"]), None)
+        if not member or not member["backup"].get("enabled"):
+            return
+        now = int(time.time())
+        last = max(int(member["backup"].get("last_success") or 0),
+                   int(self.backup_attempts.get(relation["relationship_id"], 0)))
+        if now - last < BACKUP_INTERVAL_SECONDS:
+            return
+        self.backup_attempts[relation["relationship_id"]] = now
+        generation, artifact, checksum = await resource_pool.build_business_backup(state.database)
+        try:
+            await self.call(relation, "/internal/v1/backup/begin", {"generation": generation})
+            with artifact.open("rb") as source:
+                chunk_index = 0
+                while chunk := source.read(192 * 1024):
+                    await self.call(relation, "/internal/v1/backup/chunk", {
+                        "generation": generation, "chunk_index": chunk_index,
+                        "chunk": base64.b64encode(chunk).decode("ascii"),
+                    })
+                    chunk_index += 1
+            await self.call(relation, "/internal/v1/backup/commit", {
+                "generation": generation, "checksum": checksum,
+            })
+        finally:
+            artifact.unlink(missing_ok=True)
+
+    async def work_once(self, relation: dict):
+        from app.services import resource_pool
+        local = await resource_pool.follower_resource_summary(state.node, state.database)
+        compute = local.get("compute") or {}
+        if not compute.get("enabled") or int(compute.get("available_slots") or 0) <= 0:
+            return
+        capabilities = compute.get("capabilities") or []
+        response = await self.call(relation, "/internal/v1/jobs/lease", {"capabilities": capabilities})
+        job = response.get("job")
+        if not isinstance(job, dict):
+            return
+        payload = job.get("payload") or {}
+        object_id = str(payload.get("object_id") or "")
+        from sqlalchemy import text
+        async with state.database.connect() as conn:
+            path = await conn.scalar(text("SELECT media_path FROM media_objects WHERE media_id=:id"), {"id": object_id})
+        if not path:
+            result = {"error": "object_not_found"}
+        else:
+            from app.api.v1.media import MEDIA_ROOT
+            target = (MEDIA_ROOT / path).resolve()
+            if MEDIA_ROOT not in target.parents or not target.is_file():
+                result = {"error": "object_not_found"}
+            else:
+                info = target.stat()
+                result = {"size_bytes": info.st_size, "updated_at": info.st_mtime_ns}
+                if job["job_type"] == "hash":
+                    digest = hashlib.sha256()
+                    with target.open("rb") as source:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    result["sha256"] = digest.hexdigest()
+        await self.call(relation, f"/internal/v1/jobs/{job['job_id']}/complete",
+                        {"lease": job["lease"], "result": result})
 
     async def run(self):
         try:
             while True:
                 self.wakeup.clear()
                 try:
-                    self.schedule_scan()
                     await state.cleanup_playback_events()
+                    if state.node["role"] == "Master":
+                        from app.services import resource_pool
+                        await resource_pool.retry_pending_deletes(state)
                     relations = await state.list_relationships(include_revoked=True)
                     pending = [row for row in relations if row["state"] == "revoked" and not row["summary"].get("revocation_acknowledged")]
                     if state.node["role"] == "Standalone" and not pending:
                         break
-                    if state.node["role"] == "Standalone":
-                        await self.stop_scan()
                     semaphore = asyncio.Semaphore(4)
                     async def checked_tick(relation):
                         async with semaphore:
@@ -184,13 +221,12 @@ class Runtime:
                                                extra={"context": {"relationship_id": relation["relationship_id"]}})
                     await asyncio.gather(*(checked_tick(row) for row in relations if row["state"] != "revoked" or row in pending))
                 except Exception as exc:
-                    logger.warning("Node inventory deferred: %s", type(exc).__name__)
+                    logger.warning("Node resource control deferred: %s", type(exc).__name__)
                 try:
                     await asyncio.wait_for(self.wakeup.wait(), timeout=p.HEARTBEAT_SECONDS)
                 except TimeoutError:
                     pass
         finally:
-            await self.stop_scan()
             await transport.close()
 
 

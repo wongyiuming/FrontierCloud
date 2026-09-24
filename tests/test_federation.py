@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from cryptography.fernet import Fernet
-from sqlalchemy import create_engine, insert, select, update
+from sqlalchemy import create_engine, insert, select, text, update
 from sqlalchemy.dialects.mysql.dml import Insert as MySQLInsert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from starlette.requests import Request
@@ -18,7 +18,7 @@ from starlette.requests import Request
 from app.api.internal_nodes import require_https
 from app.api import internal_nodes
 from app.services.federation import protocol as p, schema as s, routing
-from app.services.federation.catalog import Catalog, valid_payload
+from app.services.federation.catalog import Catalog
 from app.services.federation.state import State, vault_key
 from app.services.federation.runtime import Runtime
 from app.services.federation.transport import Transport
@@ -27,6 +27,10 @@ from app.services.federation.transport import Transport
 class Connection:
     def __init__(self, connection):
         self.connection = connection
+        self.dialect = connection.dialect
+
+    async def scalar(self, statement, parameters=None):
+        return self.connection.scalar(statement, parameters or {})
 
     async def execute(self, statement, parameters=None):
         if isinstance(statement, MySQLInsert):
@@ -44,8 +48,7 @@ class Connection:
             if statement._post_values_clause is not None:
                 columns = [column.name for column in statement.table.primary_key]
                 converted = converted.on_conflict_do_update(index_elements=columns,
-                    set_={name: converted.excluded[name] for name in rows[0] if name not in columns}
-                    if statement.table != s.stats else {"resource_id": converted.excluded.resource_id})
+                    set_={name: converted.excluded[name] for name in rows[0] if name not in columns})
             else:
                 converted = converted.prefix_with("OR IGNORE")
             statement = converted
@@ -72,6 +75,22 @@ class Database:
     def __init__(self):
         self.engine = create_engine("sqlite://")
         s.metadata.create_all(self.engine)
+        with self.engine.begin() as conn:
+            conn.execute(text("""CREATE TABLE media_objects (
+                media_id TEXT PRIMARY KEY, object_kind TEXT NOT NULL, media_path TEXT NOT NULL,
+                path_locator TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"""))
+            conn.execute(text("""CREATE TABLE media_playback_stats (
+                media_id TEXT PRIMARY KEY, media_path TEXT NOT NULL, play_score INTEGER NOT NULL DEFAULT 0,
+                preference INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"""))
+            conn.execute(text("""CREATE TABLE media_playback_events (
+                playback_session_id TEXT NOT NULL, media_id TEXT NOT NULL, counted_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL, PRIMARY KEY (playback_session_id, media_id))"""))
+            conn.execute(text("""CREATE TABLE media_lyric_links (
+                media_id TEXT PRIMARY KEY, media_path TEXT NOT NULL, lyric_id TEXT NOT NULL,
+                lyric_path TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"""))
+            conn.execute(text("""CREATE TABLE karaoke_recordings (
+                recording_id TEXT PRIMARY KEY, storage_member_id TEXT, state TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL DEFAULT 0)"""))
         self.lock = asyncio.Lock()
 
     def begin(self):
@@ -94,6 +113,14 @@ def media_payload(path="music/same/song.wav", preference=2, score=7):
 
 class NodeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self.media_directory = tempfile.TemporaryDirectory()
+        self.media_root = Path(self.media_directory.name)
+        for name in ("music", "vido", "lyrics"):
+            (self.media_root / name).mkdir()
+        self.media_patch = patch("app.api.v1.media.MEDIA_ROOT", self.media_root)
+        self.media_patch.start()
+        self.recording_patch = patch("app.services.karaoke_storage.ROOT", self.media_root / "recordings")
+        self.recording_patch.start()
         self.database = Database()
         self.key = Fernet.generate_key()
         self.store = State(self.database, self.key)
@@ -101,9 +128,12 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.database.engine.dispose()
+        self.media_patch.stop()
+        self.recording_patch.stop()
+        self.media_directory.cleanup()
 
-    async def slave(self):
-        await self.store.promote("Slave", "https://slave.example.com", "admin")
+    async def follower(self):
+        await self.store.promote("Follower", "https://follower.example.com", "admin")
 
     async def consumed(self, master=None):
         master = master or peer()
@@ -114,16 +144,16 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_promotion_persists_and_cannot_change_online(self):
         original = self.store.node["node_id"]
-        await self.slave()
+        await self.follower()
         restarted = State(self.database, self.key)
         await restarted.initialize()
-        self.assertEqual(restarted.node["role"], "Slave")
+        self.assertEqual(restarted.node["role"], "Follower")
         self.assertEqual(restarted.node["node_id"], original)
         with self.assertRaises(p.ProtocolError):
             await restarted.promote("Master", "https://other.example.com", "admin")
 
     async def test_explicit_reset_revokes_relationships_without_filesystem_changes(self):
-        await self.slave()
+        await self.follower()
         identifier, _, _, _ = await self.consumed()
         await self.store.activate(identifier, "master")
         original = self.store.node["node_id"]
@@ -139,23 +169,33 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(self.store.node["node_id"], original)
         self.assertEqual((await self.store.relationship(identifier))["state"], "revoked")
 
-    async def test_pair_is_one_time_and_multi_master_revoke_is_independent(self):
-        await self.slave()
+    async def test_follower_with_placed_media_cannot_revoke_upstream(self):
+        await self.follower()
+        identifier, _, _, _ = await self.consumed()
+        await self.store.activate(identifier, "master")
+        async with self.database.begin() as conn:
+            await conn.execute(text("""
+                INSERT INTO media_objects
+                (media_id, object_kind, media_path, path_locator, created_at, updated_at)
+                VALUES (:id, 'audio', 'music/shared/song.mp3', :locator, 'now', 'now')
+            """), {"id": "a" * 64, "locator": "b" * 64})
+        with self.assertRaises(p.ProtocolError):
+            await self.store.revoke(identifier, "admin")
+        self.assertEqual((await self.store.relationship(identifier))["state"], "active")
+
+    async def test_pair_is_one_time_and_follower_accepts_only_one_master(self):
+        await self.follower()
         a, credential, package, master = await self.consumed()
         with self.assertRaises(p.ProtocolError):
             await self.store.consume(package["payload"], uuid.uuid4().hex, peer(name="other"), credential)
-        b, other_credential, _, _ = await self.consumed(peer(name="other"))
-        self.assertNotEqual(credential, other_credential)
         await self.store.activate(a, master["node_id"])
-        await self.store.activate(b, "other")
         await self.store.accept_mode(a, "Direct", master["node_id"])
         self.assertEqual((await self.store.relationship(a))["mode"], "Direct")
-        self.assertEqual((await self.store.relationship(b))["mode"], "Relay")
-        await self.store.revoke(a, "admin")
-        self.assertEqual((await self.store.relationship(b))["state"], "active")
+        with self.assertRaises(p.ProtocolError):
+            await self.consumed(peer(name="other"))
 
     async def test_pair_expiration_and_wrong_owner_leave_no_relationship(self):
-        await self.slave()
+        await self.follower()
         package = (await self.store.create_pair("admin"))["payload"]
         with patch("app.services.federation.state.time.time", return_value=package["expires_at"]):
             with self.assertRaises(p.ProtocolError):
@@ -166,7 +206,7 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.store.list_relationships(), [])
 
     async def test_pending_cannot_authenticate_before_confirmation(self):
-        await self.slave()
+        await self.follower()
         identifier, credential, _, _ = await self.consumed()
         headers = {k.lower(): v for k, v in p.auth_headers(credential, identifier, "POST", "/internal/v1/confirm", b"{}").items()}
         with self.assertRaises(p.ProtocolError):
@@ -177,10 +217,10 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             await self.store.authenticate(headers, "POST", "/internal/v1/confirm", b"{}", allow_pending=True)
 
     async def test_request_signature_binds_method_query_and_body(self):
-        await self.slave()
+        await self.follower()
         identifier, credential, _, _ = await self.consumed()
         await self.store.activate(identifier, "master")
-        path = "/internal/v1/catalog?cursor=2"
+        path = "/internal/v1/heartbeat?probe=2"
         headers = {k.lower(): v for k, v in p.auth_headers(credential, identifier, "GET", path).items()}
         for method, wrong_path, body in (("POST", path, b""), ("GET", path + "0", b""), ("GET", path, b"x")):
             with self.assertRaises(p.ProtocolError):
@@ -192,10 +232,10 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             await self.store.authenticate(new, "GET", path, b"")
 
     async def test_future_timestamp_nonce_remains_used_at_window_boundary(self):
-        await self.slave()
+        await self.follower()
         identifier, credential, _, _ = await self.consumed()
         await self.store.activate(identifier, "master")
-        now, path = int(time.time()), "/internal/v1/catalog"
+        now, path = int(time.time()), "/internal/v1/heartbeat"
         with patch("app.services.federation.protocol.time.time", return_value=now + 60):
             headers = {key.lower(): value for key, value in p.auth_headers(credential, identifier, "GET", path).items()}
         with patch("app.services.federation.state.time.time", return_value=now):
@@ -207,7 +247,7 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
     async def test_state_and_audit_rollback_together(self):
         with patch.object(self.store, "log", new=AsyncMock(side_effect=RuntimeError("audit unavailable"))):
             with self.assertRaises(RuntimeError):
-                await self.slave()
+                await self.follower()
         restarted = State(self.database, self.key)
         await restarted.initialize()
         self.assertEqual(restarted.node["role"], "Standalone")
@@ -215,14 +255,14 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
     async def test_authenticated_peer_revocation_needs_no_reverse_notification(self):
         from fastapi import FastAPI
         import httpx
-        await self.slave()
+        await self.follower()
         identifier, credential, _, _ = await self.consumed()
         await self.store.activate(identifier, "master")
         application = FastAPI()
         application.include_router(internal_nodes.router)
         path, body = "/internal/v1/revoke", b"{}"
         with patch.object(internal_nodes, "state", self.store), patch.object(internal_nodes.settings, "TLS_ENABLED", True), patch("app.services.media_catalog_cache.invalidate_media_catalog", new=AsyncMock()):
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="https://slave.example.com") as client:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="https://follower.example.com") as client:
                 for _ in range(2):
                     response = await client.post(path, content=body, headers=p.auth_headers(credential, identifier, "POST", path, body))
                     self.assertEqual(response.status_code, 200)
@@ -231,8 +271,8 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(row["summary"].get("revocation_acknowledged"))
 
     async def test_repair_preserves_unacknowledged_revocation_credentials(self):
-        await self.store.promote("Master", "https://master.example.com", "admin")
-        owner, old_id, new_id = peer("Slave"), uuid.uuid4().hex, uuid.uuid4().hex
+        await self.store.promote("Master", "https://master.example.com", "admin", 1024 ** 3)
+        owner, old_id, new_id = peer("Follower"), uuid.uuid4().hex, uuid.uuid4().hex
         credential = secrets.token_urlsafe(48)
         await self.store.prepare(old_id, owner, credential, "admin")
         await self.store.activate(old_id, "admin")
@@ -248,76 +288,104 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         await self.store.prepare(new_id, owner, secrets.token_urlsafe(48), "admin")
         self.assertEqual((await self.store.relationship(new_id))["state"], "pending")
 
-    async def test_catalog_distinguishes_same_path_and_rejects_stale_cursor(self):
-        await self.store.promote("Master", "https://master.example.com", "admin")
-        relations = []
-        for name in ("one", "two"):
-            owner = peer("Slave", name)
-            identifier = uuid.uuid4().hex
-            await self.store.prepare(identifier, owner, secrets.token_urlsafe(48), "admin")
-            await self.store.activate(identifier, "admin")
-            relations.append(await self.store.relationship(identifier))
-        catalog = Catalog(self.store)
-        original = hashlib.sha256(b"legacy-same-path").hexdigest()
-        for relation in relations:
-            page = {"owner_id": relation["peer_id"], "head": 1, "cursor": 1, "complete": True,
-                "items": [{"object_id": original, "version": 1, "deleted": False, "payload": media_payload()}]}
-            await catalog.apply(relation, page, 0)
-            with self.assertRaises(p.ProtocolError):
-                await catalog.apply(relation, page, 0)
-        rows = await catalog.resources(directory="music/same")
-        self.assertEqual(len(rows), 2)
-        self.assertNotEqual(rows[0]["resource_id"], rows[1]["resource_id"])
-        self.assertEqual(rows[0]["path"], rows[1]["path"])
-        relation = relations[0]
-        deleted = {"owner_id": relation["peer_id"], "head": 2, "cursor": 2, "complete": True,
-            "items": [{"object_id": original, "version": 2, "deleted": True, "payload": media_payload()}]}
-        await catalog.apply(relation, deleted, 1)
-        self.assertEqual(len(await catalog.resources()), 1)
-
-    async def test_catalog_invalid_page_rolls_back_items_and_cursor(self):
-        await self.store.promote("Master", "https://master.example.com", "admin")
-        identifier = uuid.uuid4().hex
-        await self.store.prepare(identifier, peer("Slave", "slave"), secrets.token_urlsafe(48), "admin")
-        await self.store.activate(identifier, "admin")
-        relation = await self.store.relationship(identifier)
-        page = {"owner_id": relation["peer_id"], "head": 2, "cursor": 2, "complete": True,
-            "items": [{"object_id": "a" * 64, "version": 1, "deleted": False, "payload": media_payload()},
-                      {"object_id": "b" * 64, "version": 2, "deleted": False, "payload": media_payload("/data/media/music/song.wav")}]}
+    async def test_global_catalog_rejects_duplicate_logical_paths(self):
+        from app.services import resource_pool
+        await self.store.promote("Master", "https://master.example.com", "admin", 1024 ** 3)
+        first = await resource_pool.reserve_upload(
+            "music/same/song.wav", 4096, self.store.node["node_id"], self.database,
+        )
         with self.assertRaises(p.ProtocolError):
-            await Catalog(self.store).apply(relation, page, 0)
-        self.assertEqual((await self.store.relationship(identifier))["cursor"], 0)
-        self.assertEqual(await Catalog(self.store).resources(), [])
+            await resource_pool.reserve_upload(
+                "music/same/song.wav", 4096, self.store.node["node_id"], self.database,
+            )
+        await resource_pool.finalize_upload(first["upload_id"], object_id=first["media_id"],
+                                            actual_size=4096, etag='"test"', database=self.database)
+        rows = await Catalog(self.store).resources(directory="music/same")
+        self.assertEqual([(row["resource_id"], row["path"]) for row in rows],
+                         [(first["media_id"], "music/same/song.wav")])
 
-    async def test_master_stats_fallback_then_concurrent_master_updates_are_authoritative(self):
-        await self.store.promote("Master", "https://master.example.com", "admin")
+    async def test_business_backup_chunks_are_ordered_and_checksum_verified(self):
+        from app.services import resource_pool
+        await self.follower()
+        now = int(time.time())
+        async with self.database.begin() as conn:
+            await conn.execute(insert(s.backup_members).values(
+                member_id=self.store.node["node_id"], enabled=1, generation=0,
+                last_success=0, lag_seconds=0, checksum="", state="pending", updated_at=now,
+            ))
+        master_id, generation = "a" * 32, 7
+        payload = b"first-second"
+        await resource_pool.backup_begin(master_id, generation, self.database)
+        await resource_pool.backup_append(master_id, generation, 0, b"first-", self.database)
+        await resource_pool.backup_append(master_id, generation, 1, b"second", self.database)
+        with self.assertRaises(p.ProtocolError):
+            await resource_pool.backup_commit(master_id, generation, "0" * 64,
+                                              self.store.node, self.database)
+        size = await resource_pool.backup_commit(master_id, generation,
+            hashlib.sha256(payload).hexdigest(), self.store.node, self.database)
+        self.assertEqual(size, len(payload))
+        async with self.database.connect() as conn:
+            row = (await conn.execute(select(s.business_backups).where(
+                s.business_backups.c.master_id == master_id,
+                s.business_backups.c.generation == generation))).mappings().one()
+        self.assertEqual((row["state"], row["chunk_count"], row["size_bytes"]),
+                         ("ready", 2, len(payload)))
+
+    async def test_worker_lease_is_idempotent_and_rejects_stale_completion(self):
+        from app.services import resource_pool
+        key = hashlib.sha256(b"job").hexdigest()
+        first = await resource_pool.enqueue_job("hash", {"object_id": "b" * 64}, key,
+                                                member_id="c" * 32, database=self.database)
+        second = await resource_pool.enqueue_job("hash", {"object_id": "b" * 64}, key,
+                                                 member_id="c" * 32, database=self.database)
+        self.assertEqual(first, second)
+        leased = await resource_pool.lease_job("c" * 32, ["hash"], self.database)
+        self.assertEqual(leased["job_id"], first)
+        with self.assertRaises(p.ProtocolError):
+            await resource_pool.complete_job("c" * 32, first, "wrong", {}, self.database)
+        await resource_pool.complete_job("c" * 32, first, leased["lease"],
+                                         {"sha256": "d" * 64}, self.database)
+        self.assertIsNone(await resource_pool.lease_job("c" * 32, ["hash"], self.database))
+
+    async def test_master_stats_are_single_authoritative_record(self):
+        await self.store.promote("Master", "https://master.example.com", "admin", 1024 ** 3)
         identifier = uuid.uuid4().hex
-        await self.store.prepare(identifier, peer("Slave", "slave"), secrets.token_urlsafe(48), "admin")
+        await self.store.prepare(identifier, peer("Follower", "follower"), secrets.token_urlsafe(48), "admin")
         await self.store.activate(identifier, "admin")
         relation = await self.store.relationship(identifier)
         resource = dict(resource_id="a" * 64, relationship_id=identifier, path="music/same/song.wav", payload=media_payload())
         async with self.database.begin() as conn:
-            await conn.execute(insert(s.catalog).values(**resource, owner_id=relation["peer_id"], object_id="b" * 64,
-                version=1, deleted=0))
+            await conn.execute(insert(s.global_media).values(
+                media_id=resource["resource_id"], storage_member_id=relation["peer_id"],
+                object_id="b" * 64, media_path=resource["path"],
+                path_locator=hashlib.sha256(resource["path"].encode()).hexdigest(),
+                object_kind="audio", size_bytes=4096, etag='"1"', state="active",
+                created_at=1, updated_at=1,
+            ))
         resolve = AsyncMock(return_value=(resource, relation))
         with patch.object(routing, "state", self.store), patch.object(routing, "resolve", resolve):
             session = str(uuid.uuid4())
             results = await asyncio.gather(*(routing.mutate_stats(resource["resource_id"], resource["path"], session=session, played=30, duration=60) for _ in range(12)))
             self.assertEqual(sum(result["counted"] for result in results), 1)
-            self.assertEqual(results[-1]["play_score"], 8)
+            self.assertEqual(results[-1]["play_score"], 1)
             await routing.mutate_stats(resource["resource_id"], resource["path"], preference=500)
             item = {"resource_id": resource["resource_id"], "play_score": 999, "preference": -7}
             result = (await routing.attach_master_stats([item]))[0]
-            self.assertEqual((result["play_score"], result["preference"]), (8, 500))
+            self.assertEqual((result["play_score"], result["preference"]), (1, 500))
 
-    async def test_lyrics_lookup_stays_on_the_resolved_owner(self):
-        row = dict(object_id="a" * 64, path="music/same/song.wav", owner_id="b" * 32)
+    async def test_lyrics_lookup_always_uses_master_business_data(self):
+        from app.services import lyrics
+        row = dict(resource_id="d" * 64, object_id="a" * 64,
+                   path="music/same/song.wav", owner_id="b" * 32)
         relation = dict(relationship_id="c" * 32)
-        entries = [{"time": 1, "text": "Slave's lyric"}]
-        call = AsyncMock(return_value={"entries": entries})
-        with patch.object(routing, "resolve", new=AsyncMock(return_value=(row, relation))), patch.object(routing.runtime, "call", call):
+        entries = [{"time": 1, "text": "Master lyric"}]
+        load = AsyncMock(return_value=("lyrics/master.lrc", entries))
+        with patch.object(routing, "resolve", new=AsyncMock(return_value=(row, relation))), \
+             patch.object(lyrics, "load_for_media", load), \
+             patch.object(routing.runtime, "call", new=AsyncMock()) as call:
             self.assertEqual(await routing.lyric_entries("d" * 64, row["path"]), entries)
-        call.assert_awaited_once_with(relation, "/internal/v1/lyrics/" + row["object_id"])
+        load.assert_awaited_once_with(row["resource_id"])
+        call.assert_not_awaited()
 
     async def test_standalone_does_not_open_transport_or_start_loop(self):
         runtime = Runtime()
@@ -326,26 +394,17 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(runtime.task)
             opened.assert_not_called()
 
-    async def test_inventory_scan_does_not_block_heartbeats_and_stop_awaits_it(self):
-        await self.slave()
+    async def test_runtime_has_no_legacy_catalog_scan_and_stops_cleanly(self):
+        await self.follower()
         runtime = Runtime()
-        started, cancelled, heartbeat = asyncio.Event(), asyncio.Event(), asyncio.Event()
-
-        async def blocked_scan():
-            started.set()
-            try:
-                await asyncio.Event().wait()
-            finally:
-                cancelled.set()
+        heartbeat = asyncio.Event()
 
         async def tick(_relation):
-            await started.wait()
             heartbeat.set()
 
         relation = {"state": "active", "relationship_id": "a" * 32}
         with patch("app.services.federation.runtime.state", self.store), \
              patch("app.services.federation.runtime.settings.TLS_ENABLED", True), \
-             patch("app.services.federation.runtime.catalog.scan", new=AsyncMock(side_effect=blocked_scan)), \
              patch.object(self.store, "cleanup_playback_events", new=AsyncMock()), \
              patch.object(self.store, "list_relationships", new=AsyncMock(return_value=[relation])), \
              patch.object(runtime, "tick", new=AsyncMock(side_effect=tick)), \
@@ -354,22 +413,12 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             runtime.start()
             try:
                 await asyncio.wait_for(heartbeat.wait(), 1)
-                self.assertFalse(cancelled.is_set())
             finally:
                 await runtime.stop()
-            self.assertTrue(cancelled.is_set())
-            self.assertIsNone(runtime.scan_task)
-
-    async def test_catalog_page_uses_committed_snapshot_without_scanning(self):
-        await self.slave()
-        catalog = Catalog(self.store)
-        with patch.object(catalog, "scan", new=AsyncMock(side_effect=AssertionError("page cannot scan"))):
-            page = await catalog.page(0, None)
-        self.assertTrue(page["complete"])
-        self.assertEqual(page["items"], [])
+            self.assertIsNone(runtime.task)
 
     async def test_fixed_role_cannot_start_with_tls_disabled_or_reset_itself(self):
-        await self.store.promote("Master", "https://master.example.com", "admin")
+        await self.store.promote("Master", "https://master.example.com", "admin", 1024 ** 3)
         runtime = Runtime()
         with patch("app.services.federation.runtime.state", self.store), patch("app.services.federation.runtime.settings.TLS_ENABLED", False), patch("app.services.federation.runtime.transport.open") as opened:
             with self.assertRaises(p.ProtocolError):
@@ -379,7 +428,7 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.node["role"], "Master")
 
     async def test_recovery_timestamp_survives_later_healthy_heartbeats(self):
-        await self.slave()
+        await self.follower()
         identifier, _, _, _ = await self.consumed()
         await self.store.activate(identifier, "master")
         now = int(time.time())
@@ -398,7 +447,8 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_incoming_heartbeat_cannot_mask_broken_peer_ingress(self):
         with patch.object(internal_nodes, "authenticated", new=AsyncMock()), patch.object(internal_nodes.catalog, "summary", new=AsyncMock(return_value={"protocol": 1})), patch.object(internal_nodes.state, "heartbeat", new=AsyncMock()) as recorded:
-            self.assertEqual(await internal_nodes.heartbeat(None), {"protocol": 1})
+            self.assertEqual(await internal_nodes.heartbeat(None),
+                             {"app_version": p.APP_VERSION, "protocol": p.PROTOCOL_VERSION})
             recorded.assert_not_awaited()
 
 
@@ -430,13 +480,13 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
 
         async def incompatible_identity(origin, path):
             return p.sign(private, {"node_id": identifier, "public_key": p.public_key(private),
-                "role": "Slave", "endpoint": origin, "challenge": path.split("=", 1)[1],
+                "role": "Follower", "endpoint": origin, "challenge": path.split("=", 1)[1],
                 "protocol": p.PROTOCOL_VERSION + 1, "app_version": p.APP_VERSION})
 
         with patch.object(client, "request", new=AsyncMock(side_effect=incompatible_identity)):
             with self.assertRaises(p.ProtocolError):
-                await client.identity("https://slave.example.com", expected_id=identifier,
-                    expected_key=p.public_key(private), role="Slave")
+                await client.identity("https://follower.example.com", expected_id=identifier,
+                    expected_key=p.public_key(private), role="Follower")
         self.assertIsNone(client.client)
 
 
@@ -445,14 +495,21 @@ class ProtocolTests(unittest.TestCase):
         statements = list(s.migration_statements())
         self.assertTrue(all("COLLATE utf8mb4_bin" in statement for statement in statements))
         self.assertTrue(all("COLLATION=" not in statement for statement in statements))
-        self.assertTrue(any("INDEX idx_node_catalog_path (path(191))" in statement for statement in statements))
+        global_media = next(statement for statement in statements if "global_media_objects" in statement)
+        self.assertIn("INDEX idx_global_media_path (media_path(191))", global_media)
+        self.assertIn("CONSTRAINT uq_global_media_path UNIQUE (path_locator)", global_media)
 
     def test_media_token_binds_owner_resource_master_relation_and_expiry(self):
         credential = secrets.token_urlsafe(48)
         now = int(time.time())
-        token = p.media_token(credential, "a" * 32, "b" * 32, "c" * 32, "d" * 64, now)
+        token = p.media_token(
+            credential, "a" * 32, "b" * 32, "c" * 32, "d" * 64, "e" * 64, now,
+        )
         payload = p.verify_media_token(credential, token, now)
-        self.assertEqual((payload["r"], payload["m"], payload["o"], payload["i"]), ("a" * 32, "b" * 32, "c" * 32, "d" * 64))
+        self.assertEqual(
+            (payload["r"], payload["m"], payload["o"], payload["i"], payload["g"]),
+            ("a" * 32, "b" * 32, "c" * 32, "d" * 64, "e" * 64),
+        )
         for wrong_credential, wrong_token, stamp in ((secrets.token_urlsafe(48), token, now), (credential, token[:-1] + "!", now), (credential, token, now + p.TOKEN_SECONDS)):
             with self.assertRaises(p.ProtocolError):
                 p.verify_media_token(wrong_credential, wrong_token, stamp)
@@ -477,10 +534,11 @@ class ProtocolTests(unittest.TestCase):
             require_https(request)
         self.assertEqual(rejected.exception.status_code, 403)
 
-    def test_catalog_rejects_global_roots_and_unsupported_attachments(self):
+    def test_global_media_path_rejects_roots_and_unsupported_attachments(self):
+        from app.services.resource_pool import validate_media_path
         for path in ("/data/media/song.wav", "music/../song.wav", "lyrics/same.lrc", "music/same/song.lrc", "music/same/sub/deep/song.wav"):
             with self.subTest(path=path), self.assertRaises(p.ProtocolError):
-                valid_payload(media_payload(path))
+                validate_media_path(path)
 
     def test_vault_key_is_persistent_and_temporary_files_are_cleaned(self):
         with tempfile.TemporaryDirectory() as directory:

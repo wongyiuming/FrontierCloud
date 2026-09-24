@@ -28,6 +28,7 @@ from app.core.metrics import MetricsMiddleware
 from app.core.static_assets import static_asset_url
 from app.core.upload_lifecycle import install_upload_lifecycle_guard
 from app.middleware.ip_security import IPSecurityMiddleware
+from app.middleware.node_role import NodeRoleMiddleware
 from app.services import admin_service
 from app.services.health import live_status, readiness_response
 from app.services.ip_security import initialize_ip_security_cache, retry_edge_projection
@@ -53,6 +54,8 @@ async def lifespan(app: FastAPI):
         await recover_interrupted_media_deletions()
         await initialize_ip_security_cache()
         await node_state.initialize()
+        if node_state.node["role"] != "Standalone" and not settings.TLS_ENABLED:
+            raise RuntimeError("Master/Follower 节点必须启用 TLS；请恢复 TLS 配置或显式重新初始化节点")
         pending_revocations = any(row["state"] == "revoked" and not row["summary"].get("revocation_acknowledged")
                                   for row in await node_state.list_relationships(include_revoked=True))
         node_runtime.start(revocations=pending_revocations)
@@ -201,6 +204,7 @@ def render_query_log(target: str) -> str:
 app.add_middleware(IPSecurityMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RealIPLogMiddleware)
+app.add_middleware(NodeRoleMiddleware)
 app.include_router(api_v1_router, prefix="/api/v1")
 
 

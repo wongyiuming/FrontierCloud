@@ -66,7 +66,7 @@
     </div>
     <div id="profile" hidden>
       <div id="profileSummary"></div>
-      <label>录音存储节点<select id="storageNode"></select></label><button id="bindStorage" type="button">保存绑定</button>
+      <p class="status">录音由 Master Storage Scheduler 自动选择可写存储成员。</p>
       <div class="profile-actions"><button id="uploadFile" type="button">上传已有录音</button><input id="uploadFileInput" type="file" accept="audio/*,.webm,.ogg,.m4a,.mp3,.wav" hidden><button id="logoutAccount" type="button">退出登录</button></div>
       <form id="passwordForm"><input id="currentPassword" type="password" placeholder="当前密码" required><input id="newPassword" type="password" placeholder="新密码，例如 Huawei@123" required><button type="submit">修改密码</button></form>
       <div id="recordingList" class="recording-list"></div>
@@ -74,7 +74,6 @@
     </div>
   </section>
 </div>
-<div id="storageModal" class="dialog-backdrop" hidden><section class="dialog card" role="dialog" aria-modal="true"><h2>选择录音存储节点</h2><p>选择后会继续上传，本次录音不会丢失。</p><select id="uploadStorageNode"></select><div class="dialog-actions"><button id="storageCancel" type="button">取消</button><button id="storageConfirm" class="primary" type="button">绑定并上传</button></div></section></div>
 <noscript>当前浏览器必须启用脚本才能使用 K歌。</noscript>
 <script>window.frontierCloudStunUrls={{STUN_URLS}};window.frontierCloudWebrtcIntervalMs={{WEBRTC_INTERVAL_MS}};</script>
 <script src="{{NETWORK_OBSERVATION_JS_URL}}" defer></script>

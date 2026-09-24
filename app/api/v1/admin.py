@@ -1,4 +1,8 @@
 import json
+import hashlib
+import os
+import ssl
+import time
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
@@ -15,6 +19,7 @@ from fastapi import (
     Query,
 )
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+import httpx
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
@@ -26,9 +31,10 @@ from app.services import lyrics
 from app.services import network_observation
 from app.services import media_search, playback
 from app.services.federation import routing as node_routing
+from app.services.federation import protocol as p
 from app.services.federation.catalog import catalog as node_catalog
 from app.services.media_catalog_cache import invalidate_media_catalog
-from app.services.media_manager import MEDIA_ROOT, MediaManager
+from app.services.media_manager import MEDIA_ROOT, MediaManager, SIGNATURES
 
 
 router = APIRouter()
@@ -38,6 +44,14 @@ class MediaPriorityChange(BaseModel):
     media_path: str = Field(min_length=1, max_length=1024)
     resource_id: str | None = Field(None, pattern=r"^[a-f0-9]{64}$")
     value: int = Field(ge=-7, le=500)
+
+
+class UploadReservation(BaseModel):
+    storage_member_id: str | None = Field(None, pattern=r"^[a-f0-9]{32}$")
+    target_dir: str = Field(max_length=1024)
+    relative_path: str | None = Field(None, max_length=1024)
+    filename: str = Field(min_length=1, max_length=255)
+    size_bytes: int = Field(gt=0, le=10 * 1024 ** 3)
 
 
 def _media_priority_scope(value: str) -> str:
@@ -219,9 +233,18 @@ async def admin_status(
     request: Request,
     session_hash: str = Depends(require_session),
 ):
+    from app.services.federation.state import state as node_state
+    master_url = ""
+    if node_state.node["role"] == "Follower":
+        relationships = await node_state.list_relationships()
+        upstream = next((row for row in relationships if row["direction"] == "upstream"
+                         and row["state"] in ("pending", "active")), None)
+        master_url = upstream["peer_endpoint"] if upstream else ""
     return {
         "status": "ok",
         "session": True,
+        "node_role": node_state.node["role"],
+        "master_url": master_url,
         "limits": {
             "max_upload_file_size": settings.ADMIN_MAX_UPLOAD_FILE_SIZE,
             "max_upload_task_files": settings.ADMIN_MAX_UPLOAD_TASK_FILES,
@@ -246,12 +269,15 @@ async def media_priority(
     page_size: int = Query(100, ge=1, le=100),
     session_hash: str = Depends(require_session),
 ):
-    local = await playback.attach_stats_and_sort(
-        await MediaManager.list_media_objects(), "admin-media-priority"
-    )
-    remote = [node_routing.item(row) for row in await node_catalog.resources()]
-    remote = await node_routing.attach_master_stats(remote)
-    items = local + remote
+    from app.services.federation.state import state as node_state
+    if node_state.node["role"] == "Master":
+        # The global catalog already includes Master Local placements.  Mixing
+        # a local filesystem scan into it would duplicate those media objects.
+        items = [node_routing.item(row) for row in await node_catalog.resources()]
+    else:
+        items = await playback.attach_stats_and_sort(
+            await MediaManager.list_media_objects(), "admin-media-priority"
+        )
     if media_type:
         items = [item for item in items if item["type"] == media_type]
     try:
@@ -313,6 +339,28 @@ async def admin_tree(
     path: str = "",
     session_hash: str = Depends(require_session),
 ):
+    from app.services.federation.state import state as node_state
+    if node_state.node["role"] == "Master" and path and path.split("/", 1)[0] in {"music", "vido"}:
+        scope = _media_priority_scope(path)
+        parts = scope.split("/")
+        if len(parts) > 3:
+            raise HTTPException(400, "目录不在受支持的媒体层级内")
+        prefix = scope.rstrip("/") + "/"
+        rows = await node_catalog.resources(directory=scope)
+        items: dict[str, dict] = {}
+        for row in rows:
+            remainder = row["path"][len(prefix):]
+            if "/" in remainder:
+                name = remainder.split("/", 1)[0]
+                child = prefix + name
+                items.setdefault(child, {"name": name, "path": child, "kind": "directory",
+                                         "size": None, "hidden": False, "media": False, "hideable": True})
+            else:
+                items[row["path"]] = {"name": remainder, "path": row["path"], "kind": "file",
+                    "size": row["payload"]["size"], "hidden": False, "media": True, "hideable": False,
+                    "media_id": row["resource_id"], "storage_member_id": row["owner_id"],
+                    "transport": row.get("transport"), "node_health": row.get("health")}
+        return {"path": scope, "items": sorted(items.values(), key=lambda item: (item["kind"] != "directory", item["name"].casefold()))}
     return await MediaManager.list_tree(path)
 
 
@@ -324,6 +372,21 @@ async def admin_tree_search(
     session_hash: str = Depends(require_session),
 ):
     try:
+        from app.services.federation.state import state as node_state
+        if node_state.node["role"] == "Master" and path.split("/", 1)[0] in {"music", "vido"}:
+            normalized = media_search.normalized_query(q)
+            rows = await node_catalog.resources(directory=_media_priority_scope(path))
+            matches = []
+            for row in rows:
+                if media_search.matches_search(media_search.build_search_text(
+                        row["path"].rsplit("/", 1)[-1], row["path"]), normalized):
+                    matches.append({"name": row["path"].rsplit("/", 1)[-1], "path": row["path"],
+                        "kind": "file", "size": row["payload"]["size"], "hidden": False, "media": True,
+                        "hideable": False, "media_id": row["resource_id"],
+                        "storage_member_id": row["owner_id"], "transport": row.get("transport"),
+                        "node_health": row.get("health")})
+            return {"path": path, "query": q, "items": matches[:media_search.MAX_SEARCH_RESULTS],
+                    "truncated": len(matches) > media_search.MAX_SEARCH_RESULTS}
         return await MediaManager.search_tree(q, path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -333,6 +396,176 @@ async def admin_tree_search(
 # 5. Single-file upload; browsers submit multi-file and folder jobs one file
 # at a time so progress remains accurate.
 # ============================================================
+
+async def _upload_logical_path(payload: UploadReservation) -> str:
+    """Validate a pool path without requiring its directory on the Master disk."""
+    try:
+        target_dir = MediaManager.normalize_relative(payload.target_dir)
+        directory_parts = target_dir.split("/")
+        if len(directory_parts) not in (2, 3) or directory_parts[0] not in {"music", "vido"}:
+            raise HTTPException(400, "上传目录必须是 music/vido 下的分类目录或其一层子目录")
+        if payload.relative_path:
+            relative = MediaManager.normalize_relative(payload.relative_path)
+            relative_parts = relative.split("/")
+            name = MediaManager.validate_name(relative_parts[-1])
+            logical = "/".join(directory_parts + relative_parts[:-1] + [name])
+        else:
+            logical = "/".join(directory_parts + [MediaManager.validate_name(payload.filename)])
+        from app.services import resource_pool
+        resource_pool.validate_media_path(logical)
+    except p.ProtocolError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    # One category uses either a flat layout or one nested directory level.
+    category = "/".join(logical.split("/")[:2])
+    existing = await node_catalog.resources(root=category)
+    depth = len(logical.split("/"))
+    if any(len(str(row["path"]).split("/")) != depth for row in existing):
+        detail = ("该分类已使用子目录，禁止在分类目录直接上传媒体" if depth == 3
+                  else "该分类已有直接媒体，禁止再使用子目录存放媒体")
+        raise HTTPException(409, detail)
+    return logical
+
+
+@router.get("/storage-pool")
+async def storage_pool(_session: str = Depends(require_session)):
+    from app.services.federation.state import state as node_state
+    from app.services import resource_pool
+    if node_state.node["role"] != "Master":
+        return {"members": [], "standalone": True}
+    return await resource_pool.pool_summary(node_state.database)
+
+
+@router.post("/upload/session")
+async def create_upload_session(payload: UploadReservation, request: Request,
+                                session_hash: str = Depends(require_session)):
+    from app.services.federation.state import state as node_state
+    from app.services import resource_pool
+    if node_state.node["role"] != "Master":
+        raise HTTPException(409, "Storage Pool uploads require a Master")
+    if payload.size_bytes > settings.ADMIN_MAX_UPLOAD_FILE_SIZE:
+        raise HTTPException(413, "文件超过单文件上传限制")
+    path = await _upload_logical_path(payload)
+    try:
+        reservation = await resource_pool.reserve_upload(path, payload.size_bytes,
+                                                          payload.storage_member_id, node_state.database)
+        member = reservation["member"]
+        result = {"upload_id": reservation["upload_id"], "media_id": reservation["media_id"],
+                  "path": path, "transport": member["transport"], "member_id": member["member_id"],
+                  "upload_url": f"/api/v1/media/admin/upload/session/{reservation['upload_id']}/bytes"}
+        if member["transport"] == "Direct":
+            relation = await node_state.relationship(member["relationship_id"])
+            token = p.storage_token(node_state.unseal(relation["credential"]), relation["relationship_id"],
+                node_state.node["node_id"], member["member_id"], reservation["media_id"],
+                reservation["media_id"], "upload", path, payload.size_bytes, int(time.time()))
+            result["upload_url"] = relation["peer_endpoint"] + f"/internal/v1/storage/{reservation['media_id']}?token={token}"
+        await admin_service.audit(session_hash, "upload-reserved", 1, path, "success",
+                                  member["member_id"], request)
+        return result
+    except p.ProtocolError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+async def _local_storage_receive(request: Request, row: dict) -> dict:
+    destination = (MEDIA_ROOT / row["media_path"]).resolve()
+    if MEDIA_ROOT not in destination.parents or destination.exists():
+        raise HTTPException(409, "目标位置已存在同名文件")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = (MEDIA_ROOT / f".cluster-upload-{row['upload_id']}.part").resolve()
+    written, digest, head = 0, hashlib.sha256(), b""
+    try:
+        with temporary.open("xb") as output:
+            async for chunk in request.stream():
+                if not head:
+                    head = chunk[:4096]
+                written += len(chunk)
+                if written > int(row["expected_bytes"]):
+                    raise HTTPException(413, "上传内容超过预留大小")
+                digest.update(chunk); output.write(chunk)
+            output.flush(); os.fsync(output.fileno())
+        if written != int(row["expected_bytes"]):
+            raise HTTPException(400, "上传内容大小与预留不一致")
+        if not SIGNATURES.get(destination.suffix.lower(), lambda _data: False)(head):
+            raise HTTPException(400, "媒体内容与扩展名不匹配")
+        os.replace(temporary, destination)
+        from datetime import datetime, timezone
+        from app.core.db import engine
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                INSERT INTO media_objects
+                (media_id, object_kind, media_path, path_locator, created_at, updated_at)
+                VALUES (:media_id, :kind, :path, :locator, :now, :now)
+                ON DUPLICATE KEY UPDATE media_path=VALUES(media_path), updated_at=VALUES(updated_at)
+            """), {"media_id": row["media_id"], "kind": row["object_kind"], "path": row["media_path"],
+                     "locator": hashlib.sha256(row["media_path"].encode()).hexdigest(),
+                     "now": datetime.now(timezone.utc).replace(tzinfo=None)})
+        return {"object_id": row["media_id"], "size_bytes": written,
+                "sha256": digest.hexdigest(), "etag": f'"{digest.hexdigest()}"'}
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+@router.put("/upload/session/{upload_id}/bytes")
+async def upload_session_bytes(upload_id: str, request: Request,
+                               session_hash: str = Depends(require_session)):
+    from app.services.federation.state import state as node_state
+    from app.services import resource_pool
+    try:
+        row = await resource_pool.upload_session(upload_id, node_state.database)
+        if row["state"] != "reserved" or row["expires_at"] <= int(time.time()):
+            raise p.ProtocolError("Upload reservation is unavailable")
+        if row["member_kind"] == "MasterLocal":
+            result = await _local_storage_receive(request, row)
+        else:
+            relation = await node_state.relationship(row["relationship_id"])
+            token = p.storage_token(node_state.unseal(relation["credential"]), relation["relationship_id"],
+                node_state.node["node_id"], row["storage_member_id"], row["media_id"], row["media_id"],
+                "upload", row["media_path"], int(row["expected_bytes"]), int(time.time()))
+            headers = {"X-Storage-Capability": token, "Content-Type": "application/octet-stream"}
+            timeout = httpx.Timeout(None, connect=10)
+            async with httpx.AsyncClient(verify=ssl.create_default_context(), trust_env=False, timeout=timeout) as client:
+                async with client.stream("PUT", relation["peer_endpoint"] + f"/internal/v1/storage/{row['media_id']}",
+                                         headers=headers, content=request.stream()) as upstream:
+                    payload = await upstream.aread()
+                    if upstream.status_code != 200 or len(payload) > p.MAX_CONTROL_BYTES:
+                        raise p.ProtocolError(f"Follower storage upload HTTP {upstream.status_code}")
+                    result = json.loads(payload)
+        media = await resource_pool.finalize_upload(upload_id, object_id=result["object_id"],
+            actual_size=int(result["size_bytes"]), etag=str(result["etag"]), database=node_state.database)
+        await invalidate_media_catalog()
+        await admin_service.audit(session_hash, "upload-finalized", 1, row["media_path"], "success",
+                                  row["storage_member_id"], request)
+        return {"path": media["media_path"], "media_id": media["media_id"]}
+    except Exception as exc:
+        await resource_pool.fail_upload(upload_id, node_state.database)
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(409, str(exc) if isinstance(exc, p.ProtocolError) else "存储上传失败") from exc
+
+
+@router.post("/upload/session/{upload_id}/finalize")
+async def finalize_direct_upload(upload_id: str, request: Request,
+                                 session_hash: str = Depends(require_session)):
+    from app.services.federation.state import state as node_state
+    from app.services.federation.runtime import runtime as node_runtime
+    from app.services import resource_pool
+    try:
+        row = await resource_pool.upload_session(upload_id, node_state.database)
+        if row["transport"] != "Direct" or not row["relationship_id"]:
+            raise p.ProtocolError("Upload session is not Direct")
+        relation = await node_state.relationship(row["relationship_id"])
+        result = await node_runtime.call(relation, f"/internal/v1/storage/{row['media_id']}/stat",
+                                         {"path": row["media_path"]})
+        media = await resource_pool.finalize_upload(upload_id, object_id=result["object_id"],
+            actual_size=int(result["size_bytes"]), etag=str(result["etag"]), database=node_state.database)
+        await invalidate_media_catalog()
+        await admin_service.audit(session_hash, "upload-finalized", 1, row["media_path"], "success",
+                                  row["storage_member_id"], request)
+        return {"path": media["media_path"], "media_id": media["media_id"]}
+    except Exception as exc:
+        await resource_pool.fail_upload(upload_id, node_state.database)
+        raise HTTPException(409, str(exc) if isinstance(exc, p.ProtocolError) else "Direct 上传校验失败") from exc
 
 @router.post("/upload/item")
 async def upload_item(
@@ -669,6 +902,61 @@ async def network_observations(
 # 6. Delete
 # ============================================================
 
+async def _delete_global_paths(paths: list[str], request: Request, session_hash: str) -> dict:
+    from app.services.federation.state import state as node_state
+    from app.services import resource_pool
+    rows = await resource_pool.list_media(node_state.database)
+    selected = [row for row in rows if any(row["media_path"] == path or row["media_path"].startswith(path.rstrip("/") + "/") for path in paths)]
+    if not selected:
+        raise HTTPException(404, "对象不存在")
+    await resource_pool.mark_pending_delete([row["media_id"] for row in selected], node_state.database)
+    deleted, pending = 0, []
+    for row in selected:
+        try:
+            if row["storage_member_id"] == node_state.node["node_id"]:
+                target = (MEDIA_ROOT / row["media_path"]).resolve()
+                if MEDIA_ROOT not in target.parents:
+                    raise p.ProtocolError("Invalid local placement")
+                target.unlink(missing_ok=True)
+            else:
+                member, relation = await _member_and_relation_for_admin(row["storage_member_id"])
+                if relation["status"] == "offline":
+                    raise p.ProtocolError("Follower offline")
+                token = p.storage_token(node_state.unseal(relation["credential"]), relation["relationship_id"],
+                    node_state.node["node_id"], row["storage_member_id"], row["media_id"], row["object_id"],
+                    "delete", row["media_path"], int(row["size_bytes"]), int(time.time()))
+                async with httpx.AsyncClient(verify=ssl.create_default_context(), trust_env=False,
+                                             timeout=httpx.Timeout(20, connect=8)) as client:
+                    response = await client.post(relation["peer_endpoint"] + f"/internal/v1/storage/{row['object_id']}/delete",
+                                                 headers={"X-Storage-Capability": token})
+                if response.status_code != 200:
+                    raise p.ProtocolError(f"Follower delete HTTP {response.status_code}")
+            async with node_state.database.begin() as conn:
+                await conn.execute(text("DELETE FROM media_lyric_links WHERE media_id=:id"), {"id": row["media_id"]})
+                await conn.execute(text("DELETE FROM media_playback_events WHERE media_id=:id"), {"id": row["media_id"]})
+                await conn.execute(text("DELETE FROM media_playback_stats WHERE media_id=:id"), {"id": row["media_id"]})
+                if row["storage_member_id"] == node_state.node["node_id"]:
+                    await conn.execute(text("DELETE FROM media_objects WHERE media_id=:id"), {"id": row["object_id"]})
+            await resource_pool.complete_delete(row["media_id"], node_state.database)
+            deleted += 1
+        except Exception:
+            pending.append(row["media_id"])
+    await admin_service.audit(session_hash, "global-media-delete", len(selected),
+                              json.dumps(paths, ensure_ascii=False), "success" if not pending else "pending",
+                              json.dumps({"deleted": deleted, "pending_delete": pending}), request)
+    await invalidate_media_catalog()
+    return {"deleted": deleted, "pending_delete": pending}
+
+
+async def _member_and_relation_for_admin(member_id: str) -> tuple[dict, dict]:
+    from app.services.federation.state import state as node_state
+    from app.services import resource_pool
+    member = next((item for item in await resource_pool.list_members(node_state.database)
+                   if item["member_id"] == member_id), None)
+    if not member or not member["relationship_id"]:
+        raise p.ProtocolError("Storage member unavailable")
+    return member, await node_state.relationship(member["relationship_id"])
+
 @router.post("/delete")
 async def delete_objects(
     request: Request,
@@ -689,6 +977,9 @@ async def delete_objects(
         )
 
     try:
+        from app.services.federation.state import state as node_state
+        if node_state.node["role"] == "Master" and all(str(path).split("/", 1)[0] in {"music", "vido"} for path in paths):
+            return await _delete_global_paths(paths, request, session_hash)
         count = await MediaManager.delete(paths, audit=_mutation_audit(session_hash, "delete", paths, request))
     except HTTPException as exc:
         await _mutation_audit(session_hash, "delete", paths, request)(None, "failed", len(paths), {"reason": str(exc.detail)})

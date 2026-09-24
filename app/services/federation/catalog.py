@@ -1,251 +1,119 @@
-"""Persistent, paginated object catalog. Paths never establish ownership."""
+"""Master-owned global media catalog.
+
+Follower files are placements inside this catalog. Followers never publish or
+own an independent business catalog.
+"""
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import shutil
-import time
-from pathlib import PurePosixPath
 
-from sqlalchemy import case, select, update, text, func
-from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy import func, select, text
 
-from app.services import media_objects
-from app.services.media_manager import media_mutation_lock, ensure_media_mutations_ready
 from . import protocol as p
 from . import schema as s
 from .state import State, state
 
 
-def valid_payload(payload: dict) -> dict:
-    try:
-        path = payload["path"]
-        parts = PurePosixPath(path).parts
-        if (not isinstance(path, str) or len(path) > 1024 or "\\" in path or path.startswith("/")
-                or path != "/".join(parts) or any(part.startswith(".") for part in parts)
-                or len(parts) not in (3, 4) or parts[0] not in ("music", "vido")):
-            raise ValueError()
-        extensions = {"music": {".mp3", ".m4a", ".flac", ".wav"}, "vido": {".mp4", ".webm", ".mkv"}}
-        if PurePosixPath(path).suffix.lower() not in extensions[parts[0]]:
-            raise ValueError()
-        score, preference, size = int(payload["play_score"]), int(payload["preference"]), int(payload["size"])
-        if score < 0 or score > 2**63 - 1 or not -7 <= preference <= 500 or not 0 <= size <= 2**63 - 1:
-            raise ValueError()
-        return dict(path=path, size=size, etag=str(payload["etag"])[:128], updated_at=int(payload["updated_at"]),
-                    play_score=score, preference=preference, has_lyrics=bool(payload.get("has_lyrics")),
-                    type="audio" if parts[0] == "music" else "video")
-    except (ValueError, TypeError, KeyError) as exc:
-        raise p.ProtocolError("Invalid media catalog entry") from exc
-
-
-def _inventory(root, hidden):
-    # Filesystem metadata only; no hashing or reading hosted media.
-    hidden = set(hidden)
-    for kind, extensions in (("music", {".mp3", ".m4a", ".flac", ".wav"}), ("vido", {".mp4", ".webm", ".mkv"})):
-        base = root / kind
-        if not base.exists():
-            continue
-        for directory in base.iterdir():
-            if not directory.is_dir() or directory.is_symlink() or directory.name.startswith("."):
-                continue
-            for candidate in directory.iterdir():
-                if candidate.name.startswith("."):
-                    continue
-                candidates = candidate.iterdir() if candidate.is_dir() and not candidate.is_symlink() else (candidate,)
-                for file in candidates:
-                    if file.is_symlink() or not file.is_file() or file.name.startswith(".") or file.suffix.lower() not in extensions:
-                        continue
-                    relative = file.relative_to(root).as_posix()
-                    parts = relative.split("/")
-                    if any("/".join(parts[:length]) in hidden for length in range(1, len(parts) + 1)):
-                        continue
-                    try:
-                        info = file.stat()
-                    except FileNotFoundError:
-                        continue
-                    yield {"media_path": relative, "size": info.st_size, "updated_at": info.st_mtime_ns,
-                           "etag": f'"{int(info.st_mtime):x}-{info.st_size:x}"', "type": "audio" if kind == "music" else "video"}
-
-
-def _next_batch(iterator):
-    result = []
-    for _ in range(p.PAGE_SIZE):
-        try:
-            result.append(next(iterator))
-        except StopIteration:
-            break
-    return result
-
-
 class Catalog:
     def __init__(self, store: State = state):
         self.store = store
-        self.scan_lock = asyncio.Lock()
-        self.last_scan = 0.0
-        self.storage = {}
 
-    async def scan(self, force=False):
-        if self.store.node["role"] == "Standalone":
-            return
-        async with self.scan_lock:
-            if not force and time.monotonic() - self.last_scan < 30:
-                return
-            from app.api.v1.media import MEDIA_ROOT, _hidden_set
-            seen = set()
-            node_id = self.store.node["node_id"]
-            async with media_mutation_lock.shared():
-                ensure_media_mutations_ready()
-                hidden = await _hidden_set()
-                iterator = _inventory(MEDIA_ROOT, hidden)
-                while batch := await asyncio.to_thread(_next_batch, iterator):
-                    objects = []
-                    for kind in ("audio", "video"):
-                        objects.extend(await media_objects.bind_items([item for item in batch if item["type"] == kind], kind))
-                    identifiers = [item["media_id"] for item in objects]
-                    params = {f"i{n}": value for n, value in enumerate(identifiers)}
-                    placeholders = ",".join(":" + name for name in params)
-                    async with self.store.database.begin() as conn:
-                        identity = await self.store.lock(conn)
-                        if identity["node_id"] != node_id or identity["role"] == "Standalone":
-                            return  # An explicit reset must stop publication by the old scan.
-                        scores = {row["media_id"]: dict(row) for row in (await conn.execute(text(
-                            f"SELECT media_id, play_score, preference FROM media_playback_stats WHERE media_id IN ({placeholders})"), params)).mappings()}
-                        lyric_ids = set((await conn.execute(text(
-                            f"SELECT media_id FROM media_lyric_links WHERE media_id IN ({placeholders})"), params)).scalars())
-                        existing = {row["object_id"]: dict(row) for row in (await conn.execute(select(s.exports).where(s.exports.c.object_id.in_(identifiers)))).mappings()}
-                        version = identity["catalog_version"]
-                        changes = []
-                        for item in objects:
-                            original = item["media_id"]
-                            seen.add(original)
-                            score = scores.get(original, {})
-                            payload = valid_payload(dict(path=item["media_path"], size=item["size"], etag=item["etag"], updated_at=item["updated_at"],
-                                play_score=score.get("play_score", 0), preference=score.get("preference", 0), has_lyrics=original in lyric_ids))
-                            fingerprint = hashlib.sha256(p.canonical(payload)).hexdigest()
-                            previous = existing.get(original)
-                            if previous and previous["fingerprint"] == fingerprint and not previous["deleted"]:
-                                continue
-                            version += 1
-                            changes.append(dict(object_id=original, path=payload["path"], version=version,
-                                                deleted=0, fingerprint=fingerprint, payload=payload))
-                        if changes:
-                            statement = mysql_insert(s.exports).values(changes)
-                            await conn.execute(statement.on_duplicate_key_update(**{
-                                name: statement.inserted[name] for name in ("path", "version", "deleted", "fingerprint", "payload")
-                            }))
-                            await conn.execute(update(s.identity).where(s.identity.c.singleton == 1).values(catalog_version=version))
-                # Tombstones retain IDs so retries and offline nodes cannot resurrect deletion.
-                async with self.store.database.begin() as conn:
-                    identity = await self.store.lock(conn)
-                    if identity["node_id"] != node_id or identity["role"] == "Standalone":
-                        return
-                    version = identity["catalog_version"]
-                    rows = (await conn.execute(select(s.exports.c.object_id).where(s.exports.c.deleted == 0))).scalars()
-                    tombstones = {}
-                    for original in rows:
-                        if original not in seen:
-                            version += 1
-                            tombstones[original] = version
-                    identifiers = list(tombstones)
-                    for start in range(0, len(identifiers), p.PAGE_SIZE):
-                        batch_ids = identifiers[start:start + p.PAGE_SIZE]
-                        await conn.execute(update(s.exports).where(s.exports.c.object_id.in_(batch_ids)).values(
-                            deleted=1, version=case({original: tombstones[original] for original in batch_ids}, value=s.exports.c.object_id)))
-                    if tombstones:
-                        await conn.execute(update(s.identity).where(s.identity.c.singleton == 1).values(catalog_version=version))
-            self.last_scan = time.monotonic()
-            disk = await asyncio.to_thread(shutil.disk_usage, MEDIA_ROOT)
-            self.storage = {"storage_total": disk.total, "storage_used": disk.used, "storage_free": disk.free}
-
-    async def page(self, cursor: int, head: int | None):
-        if cursor < 0 or (head is not None and head < cursor):
-            raise p.ProtocolError("Invalid sync cursor")
-        # Runtime owns inventory refresh. Serving a committed page never waits for
-        # a full filesystem scan or delays a peer's heartbeats behind that scan.
-        async with self.store.database.connect() as conn:
-            current = (await conn.execute(select(s.identity.c.catalog_version))).scalar_one()
-            if head is None:
-                head = current
-            if head > current:
-                raise p.ProtocolError("Catalog head ahead of owner")
-            rows = [dict(row) for row in (await conn.execute(select(s.exports).where(
-                s.exports.c.version > cursor, s.exports.c.version <= head).order_by(s.exports.c.version).limit(p.PAGE_SIZE))).mappings()]
-        next_cursor = rows[-1]["version"] if len(rows) == p.PAGE_SIZE else head
-        return {"owner_id": self.store.node["node_id"], "head": head, "cursor": next_cursor,
-                "complete": next_cursor == head, "items": [{"object_id": row["object_id"], "version": row["version"],
-                    "deleted": bool(row["deleted"]), "payload": row["payload"]} for row in rows]}
-
-    async def apply(self, relation: dict, page: dict, requested_cursor: int):
-        try:
-            head, cursor = int(page["head"]), int(page["cursor"])
-            items = page["items"]
-            if (page["owner_id"] != relation["peer_id"] or not requested_cursor <= cursor <= head
-                    or not isinstance(items, list) or len(items) > p.PAGE_SIZE
-                    or bool(page["complete"]) != (cursor == head)):
-                raise ValueError()
-            parsed, previous_version = [], requested_cursor
-            for item in items:
-                version = int(item["version"])
-                if not previous_version < version <= cursor or type(item["deleted"]) is not bool:
-                    raise ValueError()
-                previous_version = version
-                parsed.append((p.resource_id(relation["peer_id"], item["object_id"]), item, valid_payload(item["payload"])))
-            if not page["complete"] and (not items or cursor == requested_cursor):
-                raise ValueError()
-        except (KeyError, TypeError, ValueError) as exc:
-            raise p.ProtocolError("Invalid, unordered or mismatched catalog page") from exc
-        async with self.store.database.begin() as conn:
-            current = (await conn.execute(select(s.relationships).where(
-                s.relationships.c.relationship_id == relation["relationship_id"]).with_for_update())).mappings().first()
-            if not current or current["state"] != "active" or current["cursor"] != requested_cursor:
-                raise p.ProtocolError("Catalog relationship revoked or cursor changed")
-            existing = {row["resource_id"]: dict(row) for row in (await conn.execute(
-                select(s.catalog.c.resource_id, s.catalog.c.version, s.catalog.c.relationship_id).where(
-                    s.catalog.c.resource_id.in_([identifier for identifier, _item, _payload in parsed])))).mappings()}
-            changes = []
-            for identifier, item, payload in parsed:
-                previous = existing.get(identifier)
-                if (previous and previous["relationship_id"] == relation["relationship_id"]
-                        and previous["version"] >= item["version"]):
-                    continue
-                changes.append(dict(resource_id=identifier, owner_id=relation["peer_id"], object_id=item["object_id"],
-                    relationship_id=relation["relationship_id"], path=payload["path"], version=item["version"],
-                    deleted=int(bool(item["deleted"])), payload=payload))
-            if changes:
-                statement = mysql_insert(s.catalog).values(changes)
-                await conn.execute(statement.on_duplicate_key_update(**{
-                    name: statement.inserted[name] for name in ("owner_id", "object_id", "relationship_id", "path", "version", "deleted", "payload")
-                }))
-            await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == relation["relationship_id"]).values(cursor=cursor))
-        return cursor
-
-    async def resources(self, directory: str | None = None, root: str | None = None):
+    async def resources(self, directory: str | None = None, root: str | None = None,
+                        path: str | None = None) -> list[dict]:
         if self.store.node["role"] != "Master":
             return []
-        query = select(s.catalog).join(s.relationships, s.catalog.c.relationship_id == s.relationships.c.relationship_id).where(
-            s.catalog.c.deleted == 0, s.relationships.c.state == "active")
-        if directory is not None or root is not None:
+        query = select(
+            s.global_media,
+            s.storage_members.c.relationship_id,
+            s.storage_members.c.health,
+            s.storage_members.c.transport,
+        ).join(
+            s.storage_members,
+            s.global_media.c.storage_member_id == s.storage_members.c.member_id,
+        ).where(s.global_media.c.state == "active")
+        if path is not None:
+            query = query.where(
+                s.global_media.c.path_locator == hashlib.sha256(path.encode("utf-8")).hexdigest(),
+                s.global_media.c.media_path == path,
+            )
+        elif directory is not None or root is not None:
             prefix = (directory or root).rstrip("/") + "/"
-            query = query.where(s.catalog.c.path.startswith(prefix, autoescape=True))
-        async with self.store.database.connect() as conn:
-            return [dict(row) for row in (await conn.execute(query.order_by(s.catalog.c.path, s.catalog.c.resource_id))).mappings()]
+            query = query.where(s.global_media.c.media_path.startswith(prefix, autoescape=True))
 
-    async def resource(self, identifier: str):
+        async with self.store.database.connect() as conn:
+            media_rows = [dict(row) for row in (await conn.execute(query.order_by(
+                s.global_media.c.media_path, s.global_media.c.media_id))).mappings()]
+            identifiers = [row["media_id"] for row in media_rows]
+            stats: dict[str, dict] = {}
+            linked: set[str] = set()
+            for offset in range(0, len(identifiers), 500):
+                batch = identifiers[offset:offset + 500]
+                placeholders = ",".join(f":i{index}" for index in range(len(batch)))
+                parameters = {f"i{index}": value for index, value in enumerate(batch)}
+                result = await conn.execute(text(
+                    "SELECT media_id, play_score, preference FROM media_playback_stats "
+                    f"WHERE media_id IN ({placeholders})"
+                ), parameters)
+                stats.update({str(row["media_id"]): dict(row) for row in result.mappings()})
+                result = await conn.execute(text(
+                    "SELECT media_id FROM media_lyric_links "
+                    f"WHERE media_id IN ({placeholders})"
+                ), parameters)
+                linked.update(str(value) for value in result.scalars())
+
+        rows = []
+        for row in media_rows:
+            score = stats.get(row["media_id"], {})
+            rows.append({
+                "resource_id": row["media_id"],
+                "owner_id": row["storage_member_id"],
+                "object_id": row["object_id"],
+                "relationship_id": row["relationship_id"],
+                "path": row["media_path"],
+                "health": row["health"],
+                "transport": row["transport"],
+                "payload": {
+                    "path": row["media_path"], "size": row["size_bytes"], "etag": row["etag"],
+                    "updated_at": row["updated_at"], "play_score": int(score.get("play_score", 0)),
+                    "preference": int(score.get("preference", 0)),
+                    "has_lyrics": row["media_id"] in linked, "type": row["object_kind"],
+                },
+            })
+        return rows
+
+    async def resource(self, identifier: str) -> dict:
         if self.store.node["role"] != "Master" or not p.OBJECT_ID.fullmatch(identifier):
             raise p.ProtocolError("Invalid resource identity")
         async with self.store.database.connect() as conn:
-            row = (await conn.execute(select(s.catalog).where(s.catalog.c.resource_id == identifier, s.catalog.c.deleted == 0))).mappings().first()
+            row = (await conn.execute(select(
+                s.global_media,
+                s.storage_members.c.relationship_id,
+                s.storage_members.c.health,
+                s.storage_members.c.transport,
+            ).join(
+                s.storage_members,
+                s.global_media.c.storage_member_id == s.storage_members.c.member_id,
+            ).where(
+                s.global_media.c.media_id == identifier,
+                s.global_media.c.state == "active",
+            ))).mappings().first()
         if not row:
             raise p.ProtocolError("Resource not found")
-        return dict(row)
+        row = dict(row)
+        return {
+            "resource_id": row["media_id"], "owner_id": row["storage_member_id"],
+            "object_id": row["object_id"], "relationship_id": row["relationship_id"],
+            "path": row["media_path"], "health": row["health"], "transport": row["transport"],
+            "payload": {"path": row["media_path"], "size": row["size_bytes"], "etag": row["etag"],
+                        "updated_at": row["updated_at"], "type": row["object_kind"]},
+        }
 
-    async def summary(self):
+    async def summary(self) -> dict:
         async with self.store.database.connect() as conn:
-            count = (await conn.execute(select(func.count()).select_from(s.exports).where(s.exports.c.deleted == 0))).scalar_one()
-            # Inventory metadata, not directory traversal per heartbeat.
-            version = (await conn.execute(select(s.identity.c.catalog_version))).scalar_one()
-        return {"media_count": count, "catalog_version": version, "app_version": p.APP_VERSION,
-                "protocol": p.PROTOCOL_VERSION, **self.storage}
+            count = int(await conn.scalar(select(func.count()).select_from(s.global_media).where(
+                s.global_media.c.state == "active")) or 0)
+        return {"media_count": count, "app_version": p.APP_VERSION,
+                "protocol": p.PROTOCOL_VERSION}
 
 
 catalog = Catalog()
