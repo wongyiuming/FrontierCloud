@@ -1,66 +1,51 @@
-import asyncio
+import re
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.core import db
 
 
-class _MigrationConnection:
-    def __init__(
-        self,
-        preference_check="(`preference` between -(7) and 500)",
-        *,
-        get_lock_error=None,
-        release_result=1,
-        first_commit_error=None,
-    ):
-        self.preference_check = preference_check
-        self.get_lock_error = get_lock_error
-        self.release_result = release_result
-        self.first_commit_error = first_commit_error
+class _Rows:
+    def __init__(self, rows=()):
+        self.rows = list(rows)
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
+class _BootstrapConnection:
+    def __init__(self, *, tables=(), generation=None):
+        self.tables = set(tables)
+        self.generation = generation
         self.executed = []
-        self.scalar_queries = []
         self.commits = 0
-        self.rollbacks = 0
-        self.invalidations = 0
+
+    async def execute(self, statement, params=None):
+        sql = str(statement)
+        if "FROM information_schema.tables" in sql:
+            return _Rows((name,) for name in sorted(self.tables))
+
+        parameters = params or {}
+        self.executed.append((sql, parameters))
+        created = re.search(
+            r"CREATE TABLE(?: IF NOT EXISTS)?\s+`?([A-Za-z0-9_]+)`?",
+            sql,
+            re.IGNORECASE,
+        )
+        if created:
+            self.tables.add(created.group(1))
+        if "INSERT INTO frontiercloud_schema" in sql:
+            self.generation = parameters["generation"]
+        return _Rows()
 
     async def scalar(self, statement, _params=None):
         sql = str(statement)
-        self.scalar_queries.append(sql)
-        if "GET_LOCK" in sql:
-            if self.get_lock_error is not None:
-                raise self.get_lock_error
-            return 1
-        if "RELEASE_LOCK" in sql:
-            return self.release_result
-        if "COLLATION_NAME" in sql:
-            return "utf8mb4_bin"
-        if "DATA_TYPE" in sql:
-            return "smallint"
-        if "information_schema.columns" in sql:
-            return 1
-        if "information_schema.statistics" in sql:
-            return 1
-        if "CHECK_CLAUSE" in sql:
-            return self.preference_check
-        if "COUNT(*) FROM ip_security_summary" in sql:
-            return 1
+        if "SELECT generation FROM frontiercloud_schema" in sql:
+            return self.generation
         raise AssertionError(f"Unexpected scalar query: {sql}")
-
-    async def execute(self, statement, params=None):
-        self.executed.append((str(statement), params or {}))
-        return object()
 
     async def commit(self):
         self.commits += 1
-        if self.first_commit_error is not None and self.commits == 1:
-            raise self.first_commit_error
-
-    async def rollback(self):
-        self.rollbacks += 1
-
-    async def invalidate(self):
-        self.invalidations += 1
 
 
 class _ConnectContext:
@@ -74,7 +59,7 @@ class _ConnectContext:
         return False
 
 
-class _MigrationEngine:
+class _BootstrapEngine:
     def __init__(self, connection):
         self.connection = connection
 
@@ -82,79 +67,59 @@ class _MigrationEngine:
         return _ConnectContext(self.connection)
 
 
-class SchemaMigrationTransactionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_repeated_cancellation_does_not_cancel_lock_cleanup(self):
-        started = asyncio.Event()
-        finish = asyncio.Event()
-
-        async def cleanup():
-            started.set()
-            await finish.wait()
-            return True
-
-        cleanup_task = asyncio.create_task(cleanup())
-        waiter = asyncio.create_task(db._await_cleanup_task(cleanup_task))
-        await started.wait()
-        waiter.cancel()
-        await asyncio.sleep(0)
-        waiter.cancel()
-        await asyncio.sleep(0)
-        self.assertFalse(cleanup_task.cancelled())
-        finish.set()
-        completed, cancellation = await waiter
-        self.assertTrue(completed)
-        self.assertIsInstance(cancellation, asyncio.CancelledError)
-
-    async def test_constraint_replacement_is_one_atomic_mysql_ddl(self):
-        connection = _MigrationConnection("(`preference` between 0 and 7)")
-        with patch.object(db, "engine", _MigrationEngine(connection)):
-            await db.init_db()
-
-        alterations = [
-            sql
-            for sql, _params in connection.executed
-            if "ALTER TABLE media_playback_stats" in sql
-        ]
-        self.assertEqual(len(alterations), 1)
-        self.assertIn("DROP CHECK chk_media_preference", alterations[0])
-        self.assertIn("ADD CONSTRAINT chk_media_preference", alterations[0])
-        self.assertTrue(any("RELEASE_LOCK" in sql for sql in connection.scalar_queries))
-
-    async def test_exact_constraint_does_not_trigger_destructive_ddl(self):
-        connection = _MigrationConnection()
-        with patch.object(db, "engine", _MigrationEngine(connection)):
-            await db.init_db()
-
-        alterations = [
-            sql
-            for sql, _params in connection.executed
-            if "ALTER TABLE media_playback_stats" in sql
-        ]
-        self.assertEqual(alterations, [])
-
-    async def test_schema_declares_one_active_ban_per_ip(self):
-        connection = _MigrationConnection()
-        with patch.object(db, "engine", _MigrationEngine(connection)):
+class SchemaBootstrapTransactionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_database_bootstraps_complete_current_schema(self):
+        connection = _BootstrapConnection()
+        with patch.object(db, "engine", _BootstrapEngine(connection)):
             await db.init_db()
 
         schema = "\n".join(sql for sql, _params in connection.executed)
-        self.assertIn("CREATE TABLE IF NOT EXISTS ip_security_locks", schema)
-        self.assertIn("GENERATED ALWAYS AS", schema)
+        self.assertEqual(connection.generation, db.SCHEMA_GENERATION)
+        self.assertEqual(db._required_tables() - connection.tables, set())
+        self.assertIn("CREATE TABLE frontiercloud_schema", schema)
+        self.assertIn("storage_member_id", schema)
+        self.assertIn("CHECK (preference BETWEEN -7 AND 500)", schema)
         self.assertIn("UNIQUE INDEX uq_ip_ban_active_ip", schema)
-
-    async def test_schema_declares_durable_webrtc_observations(self):
-        connection = _MigrationConnection()
-        with patch.object(db, "engine", _MigrationEngine(connection)):
-            await db.init_db()
-
-        schema = "\n".join(sql for sql, _params in connection.executed)
-        self.assertIn("CREATE TABLE IF NOT EXISTS webrtc_observation_events", schema)
-        self.assertIn("CREATE TABLE IF NOT EXISTS webrtc_observation_summary", schema)
         self.assertIn("idx_webrtc_client_time", schema)
-        self.assertIn("idx_webrtc_observed_time", schema)
-        self.assertIn("PRIMARY KEY (client_ip, webrtc_ip_key)", schema)
-        self.assertIn("CREATE TABLE IF NOT EXISTS ip_security_summary", schema)
-        self.assertIn("idx_ip_security_last_attack", schema)
+        self.assertNotIn("ALTER TABLE", schema)
+
+    async def test_existing_unmarked_database_is_rejected_without_mutation(self):
+        connection = _BootstrapConnection(tables={"karaoke_recordings"})
+        with patch.object(db, "engine", _BootstrapEngine(connection)):
+            with self.assertRaisesRegex(RuntimeError, "不支持数据库迁移"):
+                await db.init_db()
+        self.assertEqual(connection.executed, [])
+
+    async def test_current_initialized_database_is_read_only_on_startup(self):
+        connection = _BootstrapConnection(
+            tables=db._required_tables(),
+            generation=db.SCHEMA_GENERATION,
+        )
+        with patch.object(db, "engine", _BootstrapEngine(connection)):
+            await db.init_db()
+        self.assertEqual(connection.executed, [])
+        self.assertEqual(connection.commits, 0)
+
+    async def test_generation_mismatch_is_rejected_without_mutation(self):
+        connection = _BootstrapConnection(
+            tables=db._required_tables(),
+            generation=db.SCHEMA_GENERATION + 1,
+        )
+        with patch.object(db, "engine", _BootstrapEngine(connection)):
+            with self.assertRaisesRegex(RuntimeError, "初始化代际不兼容"):
+                await db.init_db()
+        self.assertEqual(connection.executed, [])
+
+    async def test_missing_current_table_is_rejected_without_mutation(self):
+        tables = db._required_tables() - {"karaoke_recordings"}
+        connection = _BootstrapConnection(
+            tables=tables,
+            generation=db.SCHEMA_GENERATION,
+        )
+        with patch.object(db, "engine", _BootstrapEngine(connection)):
+            with self.assertRaisesRegex(RuntimeError, "karaoke_recordings"):
+                await db.init_db()
+        self.assertEqual(connection.executed, [])
 
     async def test_close_db_disposes_the_connection_pool(self):
         fake_engine = MagicMock()
@@ -162,32 +127,6 @@ class SchemaMigrationTransactionTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(db, "engine", fake_engine):
             await db.close_db()
         fake_engine.dispose.assert_awaited_once()
-
-    async def test_commit_failure_after_get_lock_still_releases_session_lock(self):
-        connection = _MigrationConnection(first_commit_error=RuntimeError("commit failed"))
-        with patch.object(db, "engine", _MigrationEngine(connection)):
-            with self.assertRaises(RuntimeError):
-                await db.init_db()
-
-        self.assertTrue(any("RELEASE_LOCK" in sql for sql in connection.scalar_queries))
-        self.assertEqual(connection.invalidations, 0)
-
-    async def test_unknown_get_lock_outcome_invalidates_physical_connection(self):
-        connection = _MigrationConnection(get_lock_error=RuntimeError("connection lost"))
-        with patch.object(db, "engine", _MigrationEngine(connection)):
-            with self.assertRaises(RuntimeError):
-                await db.init_db()
-
-        self.assertFalse(any("RELEASE_LOCK" in sql for sql in connection.scalar_queries))
-        self.assertEqual(connection.invalidations, 1)
-
-    async def test_unconfirmed_release_invalidates_physical_connection(self):
-        connection = _MigrationConnection(release_result=0)
-        with patch.object(db, "engine", _MigrationEngine(connection)):
-            with self.assertRaises(RuntimeError):
-                await db.init_db()
-
-        self.assertEqual(connection.invalidations, 1)
 
 
 class LifespanCleanupTests(unittest.IsolatedAsyncioTestCase):

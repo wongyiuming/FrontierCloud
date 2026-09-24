@@ -115,14 +115,14 @@ class PlaybackPolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             playback.normalize_session_id("not-a-session")
 
-    def test_database_constraint_migration_preserves_rows_and_expands_the_ceiling(self):
+    def test_initial_schema_declares_current_preference_constraint(self):
         source = (Path(__file__).resolve().parents[1] / "app" / "core" / "db.py").read_text(
             encoding="utf-8"
         )
 
         self.assertIn("CHECK (preference BETWEEN -7 AND 500)", source)
         self.assertIn("preference SMALLINT", source)
-        self.assertIn("DROP CHECK chk_media_preference", source)
+        self.assertNotIn("ALTER TABLE media_playback_stats", source)
         self.assertNotIn("UPDATE media_playback_stats", source)
 
 
