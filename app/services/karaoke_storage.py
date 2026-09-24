@@ -99,9 +99,10 @@ async def receive(request: Request, relation: dict, value: dict) -> dict:
     capacity = int(relation.get("allocated_capacity_bytes") or 0)
     if expected <= 0 or expected > capacity:
         raise HTTPException(413, "Recording exceeds storage allocation")
+
     local_reserved = False
     if state.node.get("role") == "Follower":
-        from sqlalchemy import func, select, update
+        from sqlalchemy import select, update
         from app.services.federation import schema as fs
         from app.services import resource_pool
         async with state.database.begin() as conn:
@@ -118,34 +119,43 @@ async def receive(request: Request, relation: dict, value: dict) -> dict:
             ).values(reserved_bytes=fs.storage_members.c.reserved_bytes + expected,
                      physical_free_bytes=resource_pool.physical_free(ROOT), updated_at=int(time.time())))
             local_reserved = True
-    async with _write_lock:
-        target = _path(relation["relationship_id"], value["u"], value["i"])
-        temporary = target.with_suffix(".part")
-        if temporary.exists():
-            temporary.unlink()
-            _usage_cache.pop(relation["relationship_id"], None)
-        if storage_usage(relation["relationship_id"]) + expected > capacity:
-            raise HTTPException(507, "Recording storage node is full")
-        if target.exists():
-            raise HTTPException(409, "Recording already uploaded")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        written, digest = 0, hashlib.sha256()
-        try:
+
+    target = _path(relation["relationship_id"], value["u"], value["i"])
+    temporary = target.with_suffix(".part")
+    published = False
+    written, digest = 0, hashlib.sha256()
+    try:
+        async with _write_lock:
+            if temporary.exists():
+                temporary.unlink()
+                _usage_cache.pop(relation["relationship_id"], None)
+            if storage_usage(relation["relationship_id"]) + expected > capacity:
+                raise HTTPException(507, "Recording storage node is full")
+            if target.exists():
+                raise HTTPException(409, "Recording already uploaded")
+            target.parent.mkdir(parents=True, exist_ok=True)
             with temporary.open("xb") as output:
                 async for chunk in request.stream():
                     if len(chunk) > CHUNK_LIMIT:
                         for offset in range(0, len(chunk), CHUNK_LIMIT):
                             piece = chunk[offset:offset + CHUNK_LIMIT]
-                            written += len(piece); digest.update(piece); output.write(piece)
+                            written += len(piece)
+                            digest.update(piece)
+                            output.write(piece)
                     else:
-                        written += len(chunk); digest.update(chunk); output.write(chunk)
+                        written += len(chunk)
+                        digest.update(chunk)
+                        output.write(chunk)
                     if written > expected:
                         raise HTTPException(413, "Recording body exceeds reserved size")
-                output.flush(); os.fsync(output.fileno())
+                output.flush()
+                os.fsync(output.fileno())
             if written != expected:
                 raise HTTPException(400, "Recording body size does not match reservation")
             os.replace(temporary, target)
-            _usage_cache[relation["relationship_id"]] = storage_usage(relation["relationship_id"]) + written
+            published = True
+            _usage_cache.pop(relation["relationship_id"], None)
+
             if local_reserved:
                 from sqlalchemy import func, update
                 from app.services.federation import schema as fs
@@ -158,17 +168,21 @@ async def receive(request: Request, relation: dict, value: dict) -> dict:
                         used_bytes=fs.storage_members.c.used_bytes + written,
                         physical_free_bytes=resource_pool.physical_free(ROOT), updated_at=int(time.time())))
                 local_reserved = False
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            if local_reserved:
-                from sqlalchemy import func, update
-                from app.services.federation import schema as fs
-                async with state.database.begin() as conn:
-                    await conn.execute(update(fs.storage_members).where(
-                        fs.storage_members.c.member_id == state.node["node_id"]
-                    ).values(reserved_bytes=func.greatest(
-                        0, fs.storage_members.c.reserved_bytes - expected), updated_at=int(time.time())))
-            raise
+            published = False
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        if published:
+            target.unlink(missing_ok=True)
+        _usage_cache.pop(relation["relationship_id"], None)
+        if local_reserved:
+            from sqlalchemy import func, update
+            from app.services.federation import schema as fs
+            async with state.database.begin() as conn:
+                await conn.execute(update(fs.storage_members).where(
+                    fs.storage_members.c.member_id == state.node["node_id"]
+                ).values(reserved_bytes=func.greatest(
+                    0, fs.storage_members.c.reserved_bytes - expected), updated_at=int(time.time())))
+        raise
     return {"size_bytes": written, "sha256": digest.hexdigest(), "metadata": parse_trailer(target)}
 
 
