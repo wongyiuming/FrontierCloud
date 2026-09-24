@@ -299,7 +299,7 @@ jobs:
       contents: read
       deployments: write
     runs-on: [self-hosted, Linux, X64, rn]
-    timeout-minutes: 2
+    timeout-minutes: 1
     concurrency:
       group: rn
       cancel-in-progress: false
@@ -367,7 +367,7 @@ jobs:
       contents: read
       deployments: write
     runs-on: [self-hosted, Linux, X64, evoxt]
-    timeout-minutes: 2
+    timeout-minutes: 1
     concurrency:
       group: evoxt
       cancel-in-progress: false
