@@ -113,6 +113,29 @@ class ClusterRouteIntegrityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(routes), 1, path)
             self.assertEqual(routes[0].endpoint.__module__, "app.api.internal_storage_integrity")
 
+    def test_karaoke_mutation_routes_have_single_recoverable_owner(self):
+        from main import app
+
+        leaves = list(effective_routes(app.routes))
+        expected = {
+            ("/api/v1/karaoke/account/status", "GET"): "app.api.v1.karaoke_integrity",
+            ("/api/v1/karaoke/account/recordings", "GET"): "app.api.v1.karaoke_integrity",
+            ("/api/v1/karaoke/account/recordings/ticket", "POST"): "app.api.v1.karaoke_integrity",
+            ("/api/v1/karaoke/account/recordings/{recording_id}/pending", "DELETE"): "app.api.v1.karaoke_integrity",
+            ("/api/v1/karaoke/account/recordings/{recording_id}", "DELETE"): "app.api.v1.karaoke_integrity",
+            ("/api/v1/karaoke/account", "DELETE"): "app.api.v1.karaoke_integrity",
+            ("/api/v1/media/admin/users", "GET"): "app.api.v1.admin_karaoke_integrity",
+            ("/api/v1/media/admin/users/{user_id}", "POST"): "app.api.v1.admin_karaoke_integrity",
+        }
+        for (path, method), module in expected.items():
+            routes = [
+                route for route in leaves
+                if getattr(route, "path", None) == path
+                and method in (getattr(route, "methods", None) or set())
+            ]
+            self.assertEqual(len(routes), 1, f"{method} {path}")
+            self.assertEqual(routes[0].endpoint.__module__, module)
+
     async def test_master_legacy_upload_is_rejected_before_disk_write(self):
         upload = UploadFile(filename="song.mp3", file=io.BytesIO(b"ID3payload"))
         with patch.object(node_state, "node", {"role": "Master"}), \
