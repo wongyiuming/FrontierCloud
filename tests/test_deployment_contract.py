@@ -36,7 +36,11 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("autoGainControl: false", web)
         self.assertIn('id="inputDevice"', page)
         self.assertIn('id="outputDevice"', page)
-        self.assertIn('max="600" value="300"', page)
+        self.assertIn('id="voiceGain" type="range" min="0" max="200" value="100"', page)
+        self.assertIn('id="monitorGain" type="range" min="0" max="200" value="100"', page)
+        self.assertIn('id="monitor" type="checkbox" checked', page)
+        self.assertIn('id="aec" type="checkbox"', page)
+        self.assertNotIn('id="aec" type="checkbox" checked', page)
         self.assertIn("Math.min(6", web)
         self.assertIn("if (state.graph)", web)
         self.assertIn("context.createMediaElementSource(elements.media)", web)
@@ -318,35 +322,18 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("persistent `runtime_secrets` volume", readme)
         self.assertIn("Rapidly click the second half of the home logo five times", readme)
 
-    def test_cd_can_only_deploy_a_successful_dev_push_to_rn(self):
+    def test_github_actions_has_no_node_deployment_path(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         deploy_script = (ROOT / "scripts/deploy_rn.sh").read_text(encoding="utf-8")
-        deploy = workflow.split("  deploy-rn:", 1)[1].split("  deploy-evoxt:", 1)[0]
-        evoxt = workflow.split("  deploy-evoxt:", 1)[1]
-        self.assertIn("needs: [test-cluster, test-compose, prepare-rn]", deploy)
-        self.assertIn("github.event_name == 'push'", deploy)
-        self.assertIn("github.ref == 'refs/heads/dev'", deploy)
-        self.assertNotIn("refs/heads/main", deploy)
+        for marker in (
+            "  prepare-rn:", "  deploy-rn:", "  prepare-evoxt:", "  deploy-evoxt:",
+            "self-hosted", "RN_DEPLOY_PATH", "EVOXT_DEPLOY_PATH", "deployments: write",
+        ):
+            self.assertNotIn(marker, workflow)
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertNotIn("workflow_dispatch", deploy)
         self.assertIn("python3 scripts/validate_env_contract.py", workflow)
         self.assertIn("python3 scripts/validate_env_contract.py", deploy_script)
-        self.assertIn("runs-on: [self-hosted, Linux, X64, rn]", deploy)
-        self.assertIn("mapfile -d '' tracked_paths", deploy)
-        self.assertIn('git diff --quiet "$GITHUB_SHA" -- "$path"', deploy)
-        self.assertIn('git restore --source=HEAD --staged --worktree -- "${tracked_paths[@]}"', deploy)
-        self.assertIn('[ "${#tracked_paths[@]}" -eq 1 ] && [ "${tracked_paths[0]}" = nginx/nginx.conf ]', deploy)
-        self.assertIn('git stash push -m "rn-preserved-nginx-before-$GITHUB_SHA" -- nginx/nginx.conf', deploy)
-        self.assertIn('test -z "$(git status --porcelain --untracked-files=no)"', deploy)
-        self.assertLess(deploy.index("git fetch --no-tags origin dev"), deploy.index("mapfile -d '' tracked_paths"))
-        self.assertIn("git switch dev", deploy)
-        self.assertLess(deploy.index("git switch dev"), deploy.index('git merge --ff-only "$GITHUB_SHA"'))
-        self.assertIn("group: rn", deploy)
-        self.assertIn("name: rn", deploy)
-        self.assertIn('sh scripts/deploy_rn.sh "$override"', deploy)
-        self.assertIn("timeout-minutes: 2", deploy)
-        self.assertIn("timeout-minutes: 2", evoxt)
-        self.assertNotRegex(deploy, r"(?i)\b(?:production|preproduction|staging|development)\b")
+        self.assertIn("--no-build", deploy_script)
 
 
 if __name__ == "__main__":
