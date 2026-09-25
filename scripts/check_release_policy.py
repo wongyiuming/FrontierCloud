@@ -35,6 +35,9 @@ require('refs/remotes/origin/{RELEASE_BRANCH}' in updater,
         "Updater must maintain an explicit origin/main remote-tracking ref")
 require('refs/heads/{RELEASE_BRANCH}' in updater,
         "Updater fetch must not depend on a pre-existing remote fetch refspec")
+require('FORCE_OPEN_FLAG = ROOT / "data" / ".frontiercloud-force-open"' in updater
+        and 'FORCE_OPEN_FLAG.unlink(missing_ok=True)' in updater,
+        "Every updater must clear stale open overrides before entering release maintenance")
 require('followers_need_convergence' in release and 'cluster_convergence_needed' in release,
         "Web release control must allow retrying partial cluster convergence")
 require('dev CI:' not in nodes and '${branch} CI:' in nodes,
