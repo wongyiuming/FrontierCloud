@@ -15,6 +15,7 @@ class FederationContractTests(unittest.TestCase):
 
     def test_github_actions_is_ci_only(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
+        self.assertIn("  browser-ui:", workflow)
         self.assertIn("  test-cluster:", workflow)
         self.assertIn("  test-compose:", workflow)
         for marker in (
@@ -28,14 +29,25 @@ class FederationContractTests(unittest.TestCase):
         self.assertNotIn("ignore_https_errors", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
         self.assertIn("ignore-certificate-errors-spki-list", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
 
+    def test_round_one_browser_ui_is_part_of_authoritative_dev_ci(self):
+        workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
+        browser = workflow.split("  browser-ui:", 1)[1].split("  test-cluster:", 1)[0]
+        self.assertIn("github.ref == 'refs/heads/dev'", browser)
+        self.assertIn("tests/browser_ui_regression.py", browser)
+        self.assertIn("docker compose up -d --build", browser)
+        self.assertIn("PLAYWRIGHT_CHROMIUM_EXECUTABLE", browser)
+        self.assertFalse((ROOT / ".github/workflows/ui-regression.yml").exists())
+
     def test_ci_jobs_have_role_appropriate_hard_limits(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         promotion = workflow.split("  promote-main:", 1)[1].split("  verify-promotion-query:", 1)[0]
-        verification = workflow.split("  verify-promotion-query:", 1)[1].split("  test-cluster:", 1)[0]
+        verification = workflow.split("  verify-promotion-query:", 1)[1].split("  browser-ui:", 1)[0]
+        browser = workflow.split("  browser-ui:", 1)[1].split("  test-cluster:", 1)[0]
         cluster = workflow.split("  test-cluster:", 1)[1].split("  test-compose:", 1)[0]
         compose = workflow.split("  test-compose:", 1)[1]
         self.assertIn("timeout-minutes: 1", promotion)
         self.assertIn("timeout-minutes: 1", verification)
+        self.assertIn("timeout-minutes: 5", browser)
         self.assertIn("timeout-minutes: 3", cluster)
         self.assertIn("timeout-minutes: 3", compose)
 
