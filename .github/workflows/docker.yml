@@ -2,19 +2,63 @@ name: Build and Test Docker Compose
 
 permissions:
   contents: read
+  actions: read
 
 on:
   push:
     branches: ["dev", "main"]
-  pull_request:
-    branches: ["main"]
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
 
 jobs:
+  promote-main:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Promote already-tested dev tree
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const mainCommit = await github.rest.repos.getCommit({
+              owner,
+              repo,
+              ref: context.sha,
+            });
+            const mainTree = mainCommit.data.commit.tree.sha;
+            const runs = await github.paginate(
+              github.rest.actions.listWorkflowRuns,
+              {
+                owner,
+                repo,
+                workflow_id: 'docker.yml',
+                branch: 'dev',
+                event: 'push',
+                per_page: 100,
+              },
+              response => response.data.workflow_runs,
+            );
+            const run = runs.find(item => item.head_commit?.tree_id === mainTree);
+            if (!run) {
+              core.setFailed(`main tree ${mainTree} has no matching dev CI run`);
+              return;
+            }
+            if (run.status !== 'completed' || run.conclusion !== 'success') {
+              core.setFailed(`dev CI #${run.run_number} for tree ${mainTree} is ${run.status}/${run.conclusion || 'unknown'}`);
+              return;
+            }
+            core.notice(`main ${context.sha} promotes dev ${run.head_sha} from CI #${run.run_number}; tree ${mainTree}`);
+            core.setOutput('source_sha', run.head_sha);
+            core.setOutput('run_number', String(run.run_number));
+            core.setOutput('tree_sha', mainTree);
+
   test-cluster:
-    if: github.event_name != 'pull_request' || github.head_ref != 'dev'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest
     timeout-minutes: 3
     concurrency:
@@ -46,7 +90,10 @@ jobs:
           path: /tmp/federation-acceptance.json
 
   test-compose:
-    if: github.event_name != 'pull_request' || github.head_ref != 'dev'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest
     timeout-minutes: 3
     concurrency:
