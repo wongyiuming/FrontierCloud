@@ -25,11 +25,14 @@ maintenance_page = read("nginx/maintenance.html")
 workflow = read(".github/workflows/docker.yml")
 
 require('RELEASE_BRANCH = "main"' in release, "Web release control must target main")
+require('CI_BRANCH = "dev"' in release, "Production verification must reuse dev CI")
 require('RELEASE_BRANCH = "main"' in updater, "Updater must target main")
 require('BRANCH_URL = f"{REPOSITORY_API}/branches/{RELEASE_BRANCH}"' in release,
         "Web release control must verify the current main HEAD")
-require('"branch": RELEASE_BRANCH' in release and '"event": "push"' in release,
-        "Web release control must verify a main push CI run")
+require('"branch": CI_BRANCH' in release and '"event": "push"' in release,
+        "Web release control must verify dev push CI")
+require('tree_id' in release and 'tree_sha' in release and '_matching_ci_run' in release,
+        "Production publishability must bind main tree to a tested dev tree")
 require('origin/dev' not in updater, "Updater must not validate releases against dev")
 require('refs/remotes/origin/{RELEASE_BRANCH}' in updater,
         "Updater must maintain an explicit origin/main remote-tracking ref")
@@ -53,11 +56,19 @@ require('.frontiercloud-maintenance' in maintenance_gate and '.frontiercloud-for
 require('前沿娱乐 · 系统维护' in maintenance_page and '立即重试' in maintenance_page,
         "Public maintenance page must use the branded maintenance UI")
 require('branches: ["dev", "main"]' in workflow,
-        "CI must run again after a PR is merged into main")
+        "Workflow must retain a lightweight main migration/promotion run")
+require('promote-main:' in workflow and "github.ref == 'refs/heads/main'" in workflow,
+        "Main push must use the lightweight promotion gate")
+require("github.ref == 'refs/heads/dev'" in workflow,
+        "Full CI must run on dev pushes")
+require('actions/github-script@v7' in workflow and 'tree_id' in workflow,
+        "Main promotion must verify the already tested dev tree")
+require("github.event_name != 'pull_request' || github.head_ref != 'dev'" not in workflow,
+        "Full CI must not rerun automatically on main")
 
 for path in ("Dockerfile", "nginx/Dockerfile", "updater/Dockerfile"):
     source = read(path)
     require("COPY --chmod=" not in source, f"{path} requires BuildKit COPY --chmod")
     require("RUN --mount=" not in source, f"{path} requires BuildKit RUN --mount")
 
-print("Release policy contract passed: production follows tested main only")
+print("Release policy contract passed: main promotes an already-tested dev tree")
