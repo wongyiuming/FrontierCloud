@@ -28,7 +28,8 @@ jobs:
               ref: context.sha,
             });
             const mainTree = mainCommit.data.commit.tree.sha;
-            const runs = await github.paginate(
+            let run = null;
+            for await (const response of github.paginate.iterator(
               github.rest.actions.listWorkflowRuns,
               {
                 owner,
@@ -38,9 +39,13 @@ jobs:
                 event: 'push',
                 per_page: 100,
               },
-              response => response.data.workflow_runs,
-            );
-            const run = runs.find(item => item.head_commit?.tree_id === mainTree);
+            )) {
+              const pageRuns = Array.isArray(response.data?.workflow_runs)
+                ? response.data.workflow_runs
+                : [];
+              run = pageRuns.find(item => item?.head_commit?.tree_id === mainTree) || null;
+              if (run) break;
+            }
             if (!run) {
               core.setFailed(`main tree ${mainTree} has no matching dev CI run`);
               return;
