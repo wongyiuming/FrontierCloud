@@ -1,5 +1,5 @@
-# Use the official Debian-based Python 3.14 slim image.
-FROM python:3.14-slim
+# Use a patch-pinned official Debian-based Python 3.14 slim image.
+FROM python:3.14.7-slim
 
 # Set the application working directory.
 WORKDIR /app
