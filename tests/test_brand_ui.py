@@ -1,3 +1,4 @@
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +79,33 @@ class BrandUIContractTests(unittest.TestCase):
                 self.assertTrue(brand_assets.delete_custom("music"))
                 restored = brand_assets.effective_logo("music")
                 self.assertEqual(restored.source, "default")
+
+    def test_public_logo_url_changes_with_content_and_is_long_lived(self):
+        default_dir = ROOT / "static" / "brand"
+        api_source = (ROOT / "app" / "api" / "v1" / "brand.py").read_text(encoding="utf-8")
+        self.assertIn('"Cache-Control": "public, max-age=31536000, immutable"', api_source)
+        self.assertIn("RedirectResponse", api_source)
+        self.assertNotIn('"Cache-Control": "no-cache, max-age=0"', api_source)
+
+        with tempfile.TemporaryDirectory() as directory:
+            custom_dir = Path(directory)
+            with patch.object(brand_assets, "DEFAULT_BRAND_DIR", default_dir), patch.object(
+                brand_assets, "CUSTOM_BRAND_DIR", custom_dir
+            ):
+                default_url = brand_assets.public_logo_url("music")
+                self.assertRegex(default_url, r"/logo/music\?v=[0-9a-f]{16}$")
+
+                payload_one = b"RIFF" + (20).to_bytes(4, "little") + b"WEBP" + b"a" * 16
+                brand_assets.store_custom("music", payload_one)
+                first_custom_url = brand_assets.public_logo_url("music")
+                self.assertNotEqual(first_custom_url, default_url)
+
+                payload_two = b"RIFF" + (20).to_bytes(4, "little") + b"WEBP" + b"b" * 16
+                brand_assets.store_custom("music", payload_two)
+                second_custom_url = brand_assets.public_logo_url("music")
+                self.assertNotEqual(second_custom_url, first_custom_url)
+                self.assertEqual(brand_assets.describe("music")["url"], second_custom_url)
+                self.assertTrue(re.fullmatch(r"[0-9a-f]{16}", brand_assets.describe("music")["version"]))
 
     def test_upload_signature_and_size_validation(self):
         self.assertEqual(

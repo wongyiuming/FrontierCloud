@@ -1,4 +1,4 @@
-"""Web-facing release control and cached GitHub Actions status."""
+"""Web-facing release control and cached GitHub Actions verification."""
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +14,7 @@ from app.services.federation.state import state
 
 CONTROL_SOCKET = "/run/frontiercloud-updater/control.sock"
 RELEASE_BRANCH = "main"
+CI_BRANCH = "dev"
 REPOSITORY_API = "https://api.github.com/repos/wongyiuming/FrontierCloud"
 CI_URL = f"{REPOSITORY_API}/actions/workflows/docker.yml/runs"
 BRANCH_URL = f"{REPOSITORY_API}/branches/{RELEASE_BRANCH}"
@@ -52,6 +53,21 @@ async def agent_status() -> dict:
     }
 
 
+def _matching_ci_run(runs: list[dict], tree_sha: str) -> dict | None:
+    """Return the newest dev push CI run whose tested Git tree matches main."""
+    if not SHA_RE.fullmatch(tree_sha):
+        return None
+    for item in runs:
+        head_commit = item.get("head_commit") if isinstance(item.get("head_commit"), dict) else {}
+        if (
+            item.get("head_branch") == CI_BRANCH
+            and item.get("event") == "push"
+            and str(head_commit.get("tree_id") or "") == tree_sha
+        ):
+            return item
+    return None
+
+
 async def ci_status(*, force: bool = False) -> dict:
     global _ci_cache
     now = time.monotonic()
@@ -68,56 +84,56 @@ async def ci_status(*, force: bool = False) -> dict:
                 headers={"Accept": "application/vnd.github+json", "User-Agent": "FrontierCloud-release-control"},
             ) as client:
                 runs_response, branch_response = await asyncio.gather(
-                    client.get(CI_URL, params={"branch": RELEASE_BRANCH, "event": "push", "per_page": 5}),
+                    client.get(CI_URL, params={"branch": CI_BRANCH, "event": "push", "per_page": 100}),
                     client.get(BRANCH_URL),
                 )
                 runs_response.raise_for_status()
                 branch_response.raise_for_status()
                 runs = runs_response.json().get("workflow_runs") or []
                 branch_payload = branch_response.json()
-            main_sha = str((branch_payload.get("commit") or {}).get("sha") or "")
-            run = next(
-                (
-                    item for item in runs
-                    if item.get("head_branch") == RELEASE_BRANCH and item.get("event") == "push"
-                ),
-                None,
-            )
-            if not SHA_RE.fullmatch(main_sha):
+            main_commit = branch_payload.get("commit") if isinstance(branch_payload.get("commit"), dict) else {}
+            main_sha = str(main_commit.get("sha") or "")
+            commit_payload = main_commit.get("commit") if isinstance(main_commit.get("commit"), dict) else {}
+            tree_payload = commit_payload.get("tree") if isinstance(commit_payload.get("tree"), dict) else {}
+            main_tree = str(tree_payload.get("sha") or "")
+            run = _matching_ci_run(runs, main_tree)
+            if not SHA_RE.fullmatch(main_sha) or not SHA_RE.fullmatch(main_tree):
                 value = {
                     "available": False,
                     "branch": RELEASE_BRANCH,
+                    "source_branch": CI_BRANCH,
                     "status": "unknown",
                     "conclusion": None,
-                    "detail": "main HEAD is unavailable",
+                    "detail": "main HEAD tree is unavailable",
                     "publishable": False,
                 }
             elif not run:
                 value = {
                     "available": True,
                     "branch": RELEASE_BRANCH,
+                    "source_branch": CI_BRANCH,
                     "sha": main_sha,
+                    "tree_sha": main_tree,
                     "status": "unknown",
                     "conclusion": None,
-                    "detail": "main CI run not found",
+                    "detail": "main HEAD tree has no matching dev CI result",
                     "publishable": False,
                 }
             else:
                 ci_sha = str(run.get("head_sha") or "")
-                tested_head = ci_sha == main_sha
                 completed = run.get("status") == "completed"
                 succeeded = run.get("conclusion") == "success"
                 detail = ""
-                if not tested_head:
-                    detail = "main HEAD is waiting for its CI run"
-                elif not completed:
-                    detail = "main CI is still running"
+                if not completed:
+                    detail = "dev CI for the main HEAD tree is still running"
                 elif not succeeded:
-                    detail = f"main CI failed ({run.get('conclusion') or 'unknown'})"
+                    detail = f"dev CI for the main HEAD tree failed ({run.get('conclusion') or 'unknown'})"
                 value = {
                     "available": True,
                     "branch": RELEASE_BRANCH,
+                    "source_branch": CI_BRANCH,
                     "sha": main_sha,
+                    "tree_sha": main_tree,
                     "ci_sha": ci_sha,
                     "status": run.get("status"),
                     "conclusion": run.get("conclusion"),
@@ -125,12 +141,13 @@ async def ci_status(*, force: bool = False) -> dict:
                     "html_url": run.get("html_url"),
                     "updated_at": run.get("updated_at"),
                     "detail": detail,
-                    "publishable": tested_head and completed and succeeded,
+                    "publishable": completed and succeeded,
                 }
         except Exception as exc:
             value = {
                 "available": False,
                 "branch": RELEASE_BRANCH,
+                "source_branch": CI_BRANCH,
                 "status": "unavailable",
                 "conclusion": None,
                 "detail": f"GitHub Actions unavailable: {type(exc).__name__}",
@@ -212,7 +229,7 @@ async def start_upgrade() -> dict:
     ci = await ci_status(force=True)
     target = str(ci.get("sha") or "")
     if not ci.get("publishable") or not SHA_RE.fullmatch(target):
-        raise RuntimeError("Current main HEAD has not passed main CI")
+        raise RuntimeError("Current main HEAD does not match a successful dev CI tree")
     local = await agent_status()
     followers = await follower_release_statuses()
     policy_ready, policy_detail = updater_policy_status(local, followers)

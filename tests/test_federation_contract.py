@@ -29,11 +29,16 @@ class FederationContractTests(unittest.TestCase):
         self.assertNotIn("ignore_https_errors", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
         self.assertIn("ignore-certificate-errors-spki-list", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
 
-    def test_every_ci_job_has_a_three_minute_hard_limit(self):
+    def test_ci_jobs_have_role_appropriate_hard_limits(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         limits = [int(value) for value in re.findall(r"^    timeout-minutes: (\d+)$", workflow, re.MULTILINE)]
-        self.assertEqual(len(limits), 2)
-        self.assertTrue(all(value <= 3 for value in limits), limits)
+        self.assertEqual(sorted(limits), [1, 3, 3])
+        promotion = workflow.split("  promote-main:", 1)[1].split("  test-cluster:", 1)[0]
+        cluster = workflow.split("  test-cluster:", 1)[1].split("  test-compose:", 1)[0]
+        compose = workflow.split("  test-compose:", 1)[1]
+        self.assertIn("timeout-minutes: 1", promotion)
+        self.assertIn("timeout-minutes: 3", cluster)
+        self.assertIn("timeout-minutes: 3", compose)
 
     def test_integrity_client_javascript_parses(self):
         for relative in (

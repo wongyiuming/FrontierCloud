@@ -1,6 +1,6 @@
 """Public and Admin endpoints for brand logo assets."""
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from app.services import admin_service, brand_assets
 
@@ -24,12 +24,24 @@ async def require_admin(request: Request) -> str:
 
 
 @public_router.get("/logo/{kind}", include_in_schema=False)
-async def public_logo(kind: str):
+async def public_logo(kind: str, v: str | None = None):
     logo = _logo(kind)
+    version = brand_assets.logo_version(logo)
+    if v != version:
+        return RedirectResponse(
+            brand_assets.public_logo_url(kind),
+            status_code=307,
+            headers={
+                "Cache-Control": "public, max-age=10, stale-while-revalidate=60",
+            },
+        )
     return FileResponse(
         logo.path,
         media_type=logo.media_type,
-        headers={"Cache-Control": "no-cache, max-age=0"},
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": f'"brand-{version}"',
+        },
     )
 
 

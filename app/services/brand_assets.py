@@ -1,9 +1,11 @@
 """Persistent brand logo storage with versioned built-in fallbacks."""
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -91,6 +93,36 @@ def effective_logo(kind: str) -> BrandLogo:
     )
 
 
+@lru_cache(maxsize=64)
+def _version_for_file(
+    path_value: str,
+    size: int,
+    mtime_ns: int,
+    ctime_ns: int,
+) -> str:
+    del size, mtime_ns, ctime_ns
+    digest = hashlib.sha256()
+    with Path(path_value).open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()[:16]
+
+
+def logo_version(logo: BrandLogo) -> str:
+    stat = logo.path.stat()
+    return _version_for_file(
+        str(logo.path),
+        stat.st_size,
+        stat.st_mtime_ns,
+        stat.st_ctime_ns,
+    )
+
+
+def public_logo_url(kind: str) -> str:
+    logo = effective_logo(kind)
+    return f"/api/v1/media/brand/logo/{kind}?v={logo_version(logo)}"
+
+
 def inspect_upload(data: bytes) -> tuple[str, str]:
     if not data:
         raise ValueError("Logo 文件为空")
@@ -122,6 +154,7 @@ def store_custom(kind: str, data: bytes) -> BrandLogo:
                 candidate.unlink(missing_ok=True)
     finally:
         temporary.unlink(missing_ok=True)
+    _version_for_file.cache_clear()
     return effective_logo(kind)
 
 
@@ -133,11 +166,14 @@ def delete_custom(kind: str) -> bool:
                 raise ValueError("拒绝删除符号链接 Logo")
             path.unlink()
             changed = True
+    if changed:
+        _version_for_file.cache_clear()
     return changed
 
 
 def describe(kind: str) -> dict:
     logo = effective_logo(kind)
+    version = logo_version(logo)
     return {
         "kind": kind,
         "label": logo.label,
@@ -145,7 +181,8 @@ def describe(kind: str) -> dict:
         "custom": logo.custom,
         "format": logo.suffix.lstrip("."),
         "size_bytes": logo.path.stat().st_size,
-        "url": f"/api/v1/media/brand/logo/{kind}",
+        "version": version,
+        "url": f"/api/v1/media/brand/logo/{kind}?v={version}",
     }
 
 
