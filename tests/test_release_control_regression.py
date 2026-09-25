@@ -21,7 +21,7 @@ PREVIOUS_SHA = "e" * 40
 
 
 class FakeResponse:
-    def __init__(self, payload: dict):
+    def __init__(self, payload):
         self.payload = payload
 
     def raise_for_status(self) -> None:
@@ -32,10 +32,12 @@ class FakeResponse:
 
 
 class FakeClient:
-    def __init__(self, *, branch: dict, runs: dict | None = None, source: dict | None = None):
+    def __init__(self, *, branch: dict, runs: dict | None = None, source: dict | None = None,
+                 pulls: list[dict] | None = None):
         self.branch = branch
         self.runs = runs or {"workflow_runs": []}
         self.source = source or {}
+        self.pulls = [promotion_pr()] if pulls is None else pulls
         self.requests: list[tuple[str, dict | None]] = []
 
     async def __aenter__(self):
@@ -50,18 +52,29 @@ class FakeClient:
             return FakeResponse(self.branch)
         if url == release_control.CI_URL:
             return FakeResponse(self.runs)
+        if url == f"{release_control.REPOSITORY_API}/commits/{MAIN_SHA}/pulls":
+            return FakeResponse(self.pulls)
         if url == f"{release_control.REPOSITORY_API}/commits/{SOURCE_SHA}":
             return FakeResponse(self.source)
         raise AssertionError(f"unexpected GitHub request: {url}")
 
 
-def branch_payload(*, tree: str = TREE_SHA, source: str = SOURCE_SHA) -> dict:
+def branch_payload(*, tree: str = TREE_SHA) -> dict:
     return {
         "commit": {
             "sha": MAIN_SHA,
             "commit": {"tree": {"sha": tree}},
-            "parents": [{"sha": OLD_SHA}, {"sha": source}],
+            "parents": [{"sha": OLD_SHA}],
         }
+    }
+
+
+def promotion_pr(*, source: str = SOURCE_SHA, base: str = "main", head: str = "dev",
+                 repo: str = "wongyiuming/FrontierCloud", merged_at: str | None = "2026-09-25T00:00:00Z") -> dict:
+    return {
+        "merged_at": merged_at,
+        "base": {"ref": base},
+        "head": {"ref": head, "sha": source, "repo": {"full_name": repo}},
     }
 
 
@@ -93,7 +106,7 @@ class ReleaseCiRegressionTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(release_control.httpx, "AsyncClient", return_value=client):
             return await release_control.ci_status(force=True)
 
-    async def test_publishable_requires_exact_dev_push_for_second_parent_and_same_tree(self):
+    async def test_publishable_requires_reviewed_dev_pr_exact_push_and_same_tree(self):
         client = FakeClient(
             branch=branch_payload(),
             source=source_payload(),
@@ -129,11 +142,23 @@ class ReleaseCiRegressionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(result["publishable"])
                 self.assertIn(detail, result["detail"])
 
-    async def test_non_merge_main_head_is_never_publishable(self):
-        payload = branch_payload(source="")
-        result = await self.run_ci(FakeClient(branch=payload))
+    async def test_main_without_unique_reviewed_dev_pr_is_never_publishable(self):
+        result = await self.run_ci(FakeClient(branch=branch_payload(), pulls=[]))
         self.assertFalse(result["publishable"])
-        self.assertIn("not a reviewed dev merge commit", result["detail"])
+        self.assertIn("no unique merged dev->main PR association", result["detail"])
+
+    async def test_merge_method_is_irrelevant_but_pr_provenance_is_strict(self):
+        for pulls in (
+            [promotion_pr(head="feature")],
+            [promotion_pr(repo="example/fork")],
+            [promotion_pr(merged_at=None)],
+            [promotion_pr(), promotion_pr(source="f" * 40)],
+        ):
+            with self.subTest(pulls=pulls):
+                release_control._ci_cache = (0.0, {})
+                result = await self.run_ci(FakeClient(branch=branch_payload(), pulls=pulls))
+                self.assertFalse(result["publishable"])
+                self.assertIn("no unique merged dev->main PR association", result["detail"])
 
 
 class ReleasePolicyRegressionTests(unittest.IsolatedAsyncioTestCase):

@@ -15,7 +15,8 @@ from app.services.federation.state import state
 CONTROL_SOCKET = "/run/frontiercloud-updater/control.sock"
 RELEASE_BRANCH = "main"
 CI_BRANCH = "dev"
-REPOSITORY_API = "https://api.github.com/repos/wongyiuming/FrontierCloud"
+REPOSITORY_FULL_NAME = "wongyiuming/FrontierCloud"
+REPOSITORY_API = f"https://api.github.com/repos/{REPOSITORY_FULL_NAME}"
 CI_URL = f"{REPOSITORY_API}/actions/workflows/docker.yml/runs"
 BRANCH_URL = f"{REPOSITORY_API}/branches/{RELEASE_BRANCH}"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -54,7 +55,7 @@ async def agent_status() -> dict:
 
 
 def _matching_ci_run(runs: list[dict], source_sha: str) -> dict | None:
-    """Return the exact dev push CI run for the commit merged into main."""
+    """Return the exact dev push CI run for one reviewed PR head commit."""
     if not SHA_RE.fullmatch(source_sha):
         return None
     for item in runs:
@@ -67,6 +68,26 @@ def _matching_ci_run(runs: list[dict], source_sha: str) -> dict | None:
         ):
             return item
     return None
+
+
+def _promotion_source_sha(pulls: list[dict]) -> str:
+    """Resolve exactly one merged same-repository dev -> main PR head SHA."""
+    matches: set[str] = set()
+    for item in pulls:
+        if not isinstance(item, dict) or not item.get("merged_at"):
+            continue
+        base = item.get("base") if isinstance(item.get("base"), dict) else {}
+        head = item.get("head") if isinstance(item.get("head"), dict) else {}
+        head_repo = head.get("repo") if isinstance(head.get("repo"), dict) else {}
+        source_sha = str(head.get("sha") or "")
+        if (
+            base.get("ref") == RELEASE_BRANCH
+            and head.get("ref") == CI_BRANCH
+            and head_repo.get("full_name") == REPOSITORY_FULL_NAME
+            and SHA_RE.fullmatch(source_sha)
+        ):
+            matches.add(source_sha)
+    return next(iter(matches)) if len(matches) == 1 else ""
 
 
 async def ci_status(*, force: bool = False) -> dict:
@@ -92,9 +113,13 @@ async def ci_status(*, force: bool = False) -> dict:
                 commit_payload = main_commit.get("commit") if isinstance(main_commit.get("commit"), dict) else {}
                 tree_payload = commit_payload.get("tree") if isinstance(commit_payload.get("tree"), dict) else {}
                 main_tree = str(tree_payload.get("sha") or "")
-                parents = main_commit.get("parents") if isinstance(main_commit.get("parents"), list) else []
-                source_parent = parents[1] if len(parents) > 1 and isinstance(parents[1], dict) else {}
-                source_sha = str(source_parent.get("sha") or "")
+                source_sha = ""
+                if SHA_RE.fullmatch(main_sha):
+                    pulls_response = await client.get(f"{REPOSITORY_API}/commits/{main_sha}/pulls")
+                    pulls_response.raise_for_status()
+                    pulls_payload = pulls_response.json()
+                    pulls = pulls_payload if isinstance(pulls_payload, list) else []
+                    source_sha = _promotion_source_sha(pulls)
 
                 if not SHA_RE.fullmatch(main_sha) or not SHA_RE.fullmatch(main_tree):
                     value = {
@@ -115,7 +140,7 @@ async def ci_status(*, force: bool = False) -> dict:
                         "tree_sha": main_tree,
                         "status": "unknown",
                         "conclusion": None,
-                        "detail": "main HEAD is not a reviewed dev merge commit",
+                        "detail": "main HEAD has no unique merged dev->main PR association",
                         "publishable": False,
                     }
                 else:
@@ -142,7 +167,7 @@ async def ci_status(*, force: bool = False) -> dict:
                             "ci_sha": source_sha,
                             "status": "unknown",
                             "conclusion": None,
-                            "detail": "main HEAD tree differs from the merged dev tree",
+                            "detail": "main HEAD tree differs from the reviewed dev PR tree",
                             "publishable": False,
                         }
                     elif not run:
@@ -155,7 +180,7 @@ async def ci_status(*, force: bool = False) -> dict:
                             "ci_sha": source_sha,
                             "status": "unknown",
                             "conclusion": None,
-                            "detail": "merged dev commit has no matching dev push CI result",
+                            "detail": "reviewed dev PR head has no matching dev push CI result",
                             "publishable": False,
                         }
                     else:
@@ -163,9 +188,9 @@ async def ci_status(*, force: bool = False) -> dict:
                         succeeded = run.get("conclusion") == "success"
                         detail = ""
                         if not completed:
-                            detail = "dev CI for the merged commit is still running"
+                            detail = "dev CI for the reviewed PR head is still running"
                         elif not succeeded:
-                            detail = f"dev CI for the merged commit failed ({run.get('conclusion') or 'unknown'})"
+                            detail = f"dev CI for the reviewed PR head failed ({run.get('conclusion') or 'unknown'})"
                         value = {
                             "available": True,
                             "branch": RELEASE_BRANCH,

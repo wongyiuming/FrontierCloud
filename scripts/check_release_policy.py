@@ -29,12 +29,17 @@ require('CI_BRANCH = "dev"' in release, "Production verification must reuse dev 
 require('RELEASE_BRANCH = "main"' in updater, "Updater must target main")
 require('BRANCH_URL = f"{REPOSITORY_API}/branches/{RELEASE_BRANCH}"' in release,
         "Web release control must verify the current main HEAD")
-require('main_commit.get("parents")' in release and 'parents[1]' in release,
-        "Web release control must derive the exact dev commit merged into main")
+require('REPOSITORY_FULL_NAME = "wongyiuming/FrontierCloud"' in release,
+        "Web release control must bind promotion provenance to this repository")
+require('f"{REPOSITORY_API}/commits/{main_sha}/pulls"' in release and '_promotion_source_sha(pulls)' in release,
+        "Web release control must resolve the reviewed PR associated with main HEAD")
+require('base.get("ref") == RELEASE_BRANCH' in release and 'head.get("ref") == CI_BRANCH' in release
+        and 'head_repo.get("full_name") == REPOSITORY_FULL_NAME' in release,
+        "Web release control must require a merged same-repository dev-to-main PR")
 require('"head_sha": source_sha' in release and '_matching_ci_run(runs, source_sha)' in release,
-        "Web release control must query the exact merged dev SHA")
+        "Web release control must query the exact reviewed dev PR head SHA")
 require('source_tree != main_tree' in release,
-        "Web release control must reject a main tree that differs from the merged dev tree")
+        "Web release control must reject a main tree that differs from the reviewed dev PR tree")
 require('item.get("head_sha")' in release and 'item.get("head_branch") == CI_BRANCH' in release,
         "Web release control must require the exact dev push CI")
 require('origin/dev' not in updater, "Updater must not validate releases against dev")
@@ -65,12 +70,17 @@ require('promote-main:' in workflow and "github.ref == 'refs/heads/main'" in wor
         "Main push must use the lightweight promotion gate")
 require("github.ref == 'refs/heads/dev'" in workflow,
         "Full CI must run on dev pushes")
-require('actions/github-script@v7' in workflow and 'mainCommit.data.parents' in workflow,
-        "Main promotion must derive the exact merged dev commit")
-require('parents[1]?.sha' in workflow and 'sourceTree !== mainTree' in workflow,
-        "Main promotion must verify that the merged dev tree equals the main tree")
+require('actions/github-script@v7' in workflow and 'listPullRequestsAssociatedWithCommit' in workflow,
+        "Main promotion must resolve the reviewed PR associated with main HEAD")
+require("pr?.base?.ref === 'main'" in workflow and "pr?.head?.ref === 'dev'" in workflow
+        and 'pr?.head?.repo?.full_name === `${owner}/${repo}`' in workflow,
+        "Main promotion must require a merged same-repository dev-to-main PR")
+require('sourceTree !== mainTree' in workflow,
+        "Main promotion must verify that the reviewed dev PR tree equals the main tree")
 require('head_sha: sourceSha' in workflow and 'item?.head_sha === sourceSha' in workflow,
-        "Main promotion must query the exact merged dev SHA instead of scanning historical trees")
+        "Main promotion must query the exact reviewed dev PR head SHA")
+require('mainCommit.data.parents' not in workflow and 'parents[1]' not in release,
+        "Production promotion must not depend on the GitHub merge method")
 require('verify-promotion-query:' in workflow and 'head_sha: context.sha' in workflow,
         "Dev CI must verify that the exact-SHA promotion lookup works before merge")
 require('github.paginate' not in workflow,
@@ -83,4 +93,4 @@ for path in ("Dockerfile", "nginx/Dockerfile", "updater/Dockerfile"):
     require("COPY --chmod=" not in source, f"{path} requires BuildKit COPY --chmod")
     require("RUN --mount=" not in source, f"{path} requires BuildKit RUN --mount")
 
-print("Release policy contract passed: main promotes an already-tested dev commit")
+print("Release policy contract passed: main promotes an already-tested reviewed dev PR tree")
