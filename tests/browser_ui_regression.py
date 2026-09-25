@@ -166,8 +166,9 @@ def tesla_player_layout_check(browser) -> None:
 
     page.set_viewport_size({"width": 600, "height": 900})
     page.wait_for_function("!window.FrontierPlayerLayout.metrics().wideLayout", timeout=5000)
+    page.wait_for_function("() => document.querySelector('#playerSidebar').getBoundingClientRect().width >= 590", timeout=3000)
     require(page.locator("#sidebarToggle").evaluate("element => getComputedStyle(element).display") == "none", "portrait layout must hide the floating queue toggle")
-    require(page.locator("#playerSidebar").bounding_box()["width"] >= 560, "portrait queue must return to the full-width stacked layout")
+    require(page.locator("#playerSidebar").bounding_box()["width"] >= 590, "portrait queue must return to the full-width stacked layout")
     context.close()
 
 
