@@ -21,6 +21,7 @@ SOCKET_PATH = CONTROL_DIR / "control.sock"
 STATUS_PATH = CONTROL_DIR / "status.json"
 MAINTENANCE_DIR = pathlib.Path("/run/frontiercloud-maintenance")
 MAINTENANCE_FLAG = MAINTENANCE_DIR / "enabled"
+FORCE_OPEN_FLAG = ROOT / "data" / ".frontiercloud-force-open"
 RELEASE_BRANCH = "main"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 TASKS: queue.Queue[tuple[str, str, bool]] = queue.Queue(maxsize=1)
@@ -262,6 +263,7 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
         state="running", phase="validating", mode=mode, target_sha=target,
         current_sha=old_sha, previous_sha=previous_sha, detail="", started_at=started,
     )
+    FORCE_OPEN_FLAG.unlink(missing_ok=True)
     maintenance(True, target)
     engine = None
     snapshots: dict[str, dict] = {}
