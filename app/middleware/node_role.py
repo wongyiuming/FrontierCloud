@@ -11,7 +11,7 @@ from app.services.federation.state import state
 class NodeRoleMiddleware:
     ALLOWED_PREFIXES = (
         "/static/", "/internal/v1/", "/health", "/metrics", "/api/v1/health",
-        "/api/v1/media/admin/nodes", "/api/v1/media/admin/elevate",
+        "/api/v1/media/admin/nodes", "/api/v1/media/admin/site", "/api/v1/media/admin/elevate",
         "/api/v1/media/admin/status", "/api/v1/media/admin/logout",
     )
     ADMIN_PAGE_PATHS = frozenset(("/api/v1/media/admin", "/api/v1/media/admin/"))
@@ -59,7 +59,6 @@ class NodeRoleMiddleware:
         }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         await send({"type": "http.response.start", "status": 409, "headers": [
             (b"content-type", b"application/json; charset=utf-8"),
-            (b"cache-control", b"no-store"),
-            (b"content-length", str(len(body)).encode("ascii")),
+            (b"cache-control", b"no-store"), (b"content-length", str(len(body)).encode("ascii")),
         ]})
         await send({"type": "http.response.body", "body": body})

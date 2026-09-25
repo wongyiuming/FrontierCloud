@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.api.internal_nodes import require_https
 from app.api.v1.admin import require_session
-from app.services import release_control
+from app.services import release_control, site_control
 from app.services.federation import protocol as p
 from app.services.federation.runtime import runtime
 from app.services.federation.state import state
@@ -66,6 +66,7 @@ async def release_status(refresh_ci: bool = False, actor: str = Depends(require_
 async def release_upgrade(request: Request, actor: str = Depends(require_session)):
     require_https(request)
     try:
+        site_control.prepare_release()
         return await release_control.start_upgrade()
     except Exception as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -75,6 +76,7 @@ async def release_upgrade(request: Request, actor: str = Depends(require_session
 async def release_rollback(request: Request, actor: str = Depends(require_session)):
     require_https(request)
     try:
+        site_control.prepare_release()
         return await release_control.start_rollback()
     except Exception as exc:
         raise HTTPException(409, str(exc)) from exc

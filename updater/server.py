@@ -21,6 +21,7 @@ SOCKET_PATH = CONTROL_DIR / "control.sock"
 STATUS_PATH = CONTROL_DIR / "status.json"
 MAINTENANCE_DIR = pathlib.Path("/run/frontiercloud-maintenance")
 MAINTENANCE_FLAG = MAINTENANCE_DIR / "enabled"
+FORCE_OPEN_FLAG = ROOT / "data" / ".frontiercloud-force-open"
 RELEASE_BRANCH = "main"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 TASKS: queue.Queue[tuple[str, str, bool]] = queue.Queue(maxsize=1)
@@ -212,13 +213,18 @@ def validate_target(target: str, mode: str) -> None:
         raise RuntimeError("target must be a full commit SHA")
     if git("status", "--porcelain", "--untracked-files=no", timeout=20):
         raise RuntimeError("tracked working tree changes block release")
-    git("fetch", "--no-tags", "origin", RELEASE_BRANCH, timeout=120)
-    main_head = git("rev-parse", f"origin/{RELEASE_BRANCH}", timeout=20)
+    remote_ref = f"refs/remotes/origin/{RELEASE_BRANCH}"
+    git(
+        "fetch", "--no-tags", "origin",
+        f"+refs/heads/{RELEASE_BRANCH}:{remote_ref}",
+        timeout=120,
+    )
+    main_head = git("rev-parse", remote_ref, timeout=20)
     git("cat-file", "-e", f"{target}^{{commit}}", timeout=20)
     if mode == "upgrade" and target != main_head:
         raise RuntimeError("upgrade target is not the current origin/main head")
     result = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", target, f"origin/{RELEASE_BRANCH}"],
+        ["git", "merge-base", "--is-ancestor", target, remote_ref],
         cwd=ROOT, check=False, timeout=20,
     )
     if result.returncode != 0:
@@ -257,6 +263,7 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
         state="running", phase="validating", mode=mode, target_sha=target,
         current_sha=old_sha, previous_sha=previous_sha, detail="", started_at=started,
     )
+    FORCE_OPEN_FLAG.unlink(missing_ok=True)
     maintenance(True, target)
     engine = None
     snapshots: dict[str, dict] = {}

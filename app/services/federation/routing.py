@@ -1,6 +1,7 @@
 """Resolve one global media identity to its transparent storage placement."""
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode, urlsplit
@@ -8,6 +9,7 @@ from urllib.parse import urlencode, urlsplit
 from fastapi import HTTPException
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 
 from app.core.logging_config import request_id_context, trace_id_context
 from app.services import playback
@@ -16,6 +18,25 @@ from . import schema as s
 from .catalog import catalog
 from .runtime import runtime
 from .state import state
+
+MYSQL_LOCK_RETRY_CODES = frozenset({1205, 1213})
+MYSQL_LOCK_RETRY_ATTEMPTS = 4
+
+
+def _mysql_error_code(exc: BaseException) -> int | None:
+    current: BaseException | None = exc
+    for _ in range(4):
+        if current is None:
+            break
+        args = getattr(current, "args", ())
+        if args and isinstance(args[0], int):
+            return args[0]
+        current = getattr(current, "orig", None)
+    return None
+
+
+def _retryable_mysql_lock_error(exc: BaseException) -> bool:
+    return isinstance(exc, OperationalError) and _mysql_error_code(exc) in MYSQL_LOCK_RETRY_CODES
 
 
 async def resolve(identifier: str, path: str | None = None):
@@ -102,20 +123,7 @@ async def attach_master_stats(items):
     return items
 
 
-async def mutate_stats(identifier, path, *, preference=None, session=None, played=None, duration=None, audit=None):
-    row, _relation = await resolve(identifier, path)
-    if preference is not None and (
-        isinstance(preference, bool) or not isinstance(preference, int)
-        or not playback.MIN_PREFERENCE <= preference <= playback.MAX_PREFERENCE
-    ):
-        raise p.ProtocolError(
-            f"Preference must be between {playback.MIN_PREFERENCE} and {playback.MAX_PREFERENCE}"
-        )
-    if session is not None:
-        session = playback.normalize_session_id(session)
-        if played + .05 < playback.valid_playback_threshold(duration):
-            raise p.ProtocolError("Playback threshold not reached")
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+async def _mutate_stats_transaction(identifier, row, *, preference, session, now, audit):
     counted = False
     async with state.database.begin() as conn:
         # Master owns these events; keep cleanup in the same configured DB.
@@ -177,4 +185,34 @@ async def mutate_stats(identifier, path, *, preference=None, session=None, playe
                 "preference": values["preference"],
                 "play_score": values["play_score"],
             })
-    return {"media_id": identifier, "play_score": values["play_score"], "preference": values["preference"], "counted": counted}
+    return values, counted
+
+
+async def mutate_stats(identifier, path, *, preference=None, session=None, played=None, duration=None, audit=None):
+    row, _relation = await resolve(identifier, path)
+    if preference is not None and (
+        isinstance(preference, bool) or not isinstance(preference, int)
+        or not playback.MIN_PREFERENCE <= preference <= playback.MAX_PREFERENCE
+    ):
+        raise p.ProtocolError(
+            f"Preference must be between {playback.MIN_PREFERENCE} and {playback.MAX_PREFERENCE}"
+        )
+    if session is not None:
+        session = playback.normalize_session_id(session)
+        if played + .05 < playback.valid_playback_threshold(duration):
+            raise p.ProtocolError("Playback threshold not reached")
+
+    for attempt in range(MYSQL_LOCK_RETRY_ATTEMPTS):
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        try:
+            values, counted = await _mutate_stats_transaction(
+                identifier, row, preference=preference, session=session, now=now, audit=audit,
+            )
+            return {"media_id": identifier, "play_score": values["play_score"],
+                    "preference": values["preference"], "counted": counted}
+        except OperationalError as exc:
+            if not _retryable_mysql_lock_error(exc) or attempt + 1 >= MYSQL_LOCK_RETRY_ATTEMPTS:
+                raise
+            await asyncio.sleep(.025 * (2 ** attempt))
+
+    raise RuntimeError("unreachable playback stats retry state")

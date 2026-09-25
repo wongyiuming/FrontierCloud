@@ -25,10 +25,17 @@ async def admin_page(request: Request,
         "{{NODES_JS_URL}}": "js/nodes.js",
     }.items():
         content = content.replace(marker, static_asset_url(asset))
-    integrity = static_asset_url("js/admin-upload-integrity.js")
-    brand_admin = static_asset_url("js/brand-admin.js")
-    content = content.replace(
-        "</body>",
-        f'<script src="{brand_admin}"></script>\n<script src="{integrity}"></script>\n</body>',
-    )
+
+    system_css = static_asset_url("css/admin-system-modules.css")
+    content = content.replace("</head>", f'<link rel="stylesheet" href="{system_css}">\n</head>')
+
+    scripts = [
+        static_asset_url("js/release-admin.js"),
+        static_asset_url("js/maintenance-admin.js"),
+        static_asset_url("js/brand-admin.js"),
+        static_asset_url("js/admin-focus.js"),
+        static_asset_url("js/admin-upload-integrity.js"),
+    ]
+    tags = "\n".join(f'<script src="{source}"></script>' for source in scripts)
+    content = content.replace("</body>", f"{tags}\n</body>")
     return HTMLResponse(content=content, headers={"Cache-Control": "no-store"})

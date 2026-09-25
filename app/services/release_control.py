@@ -172,6 +172,16 @@ def updater_policy_status(local: dict, followers: list[dict]) -> tuple[bool, str
     return True, ""
 
 
+def followers_need_convergence(followers: list[dict], target: str) -> bool:
+    if not target:
+        return False
+    for item in followers:
+        status = item.get("status") if isinstance(item.get("status"), dict) else {}
+        if not item.get("reachable") or status.get("current_sha") != target or status.get("state") != "success":
+            return True
+    return False
+
+
 async def release_status(*, refresh_ci: bool = False) -> dict:
     local, ci = await asyncio.gather(agent_status(), ci_status(force=refresh_ci))
     followers = await follower_release_statuses()
@@ -179,6 +189,7 @@ async def release_status(*, refresh_ci: bool = False) -> dict:
     current = str(local.get("current_sha") or "")
     busy = local.get("state") in {"queued", "running", "distributing"}
     policy_ready, policy_detail = updater_policy_status(local, followers)
+    convergence_needed = followers_need_convergence(followers, target)
     return {
         "role": state.node.get("role"),
         "release_branch": RELEASE_BRANCH,
@@ -187,8 +198,9 @@ async def release_status(*, refresh_ci: bool = False) -> dict:
         "followers": followers,
         "release_policy_ready": policy_ready,
         "release_policy_detail": policy_detail,
+        "cluster_convergence_needed": convergence_needed,
         "can_upgrade": state.node.get("role") == "Master" and policy_ready and bool(ci.get("publishable"))
-                       and target != current and not busy,
+                       and (target != current or convergence_needed) and not busy,
         "can_rollback": state.node.get("role") == "Master" and policy_ready
                         and bool(local.get("previous_sha")) and not busy,
     }
@@ -206,8 +218,8 @@ async def start_upgrade() -> dict:
     policy_ready, policy_detail = updater_policy_status(local, followers)
     if not policy_ready:
         raise RuntimeError(policy_detail)
-    if target == local.get("current_sha"):
-        raise RuntimeError("Latest tested main commit is already running")
+    if target == local.get("current_sha") and not followers_need_convergence(followers, target):
+        raise RuntimeError("Latest tested main commit is already converged across the cluster")
     response = await agent_request({
         "action": "start", "target_sha": target, "mode": "upgrade", "hold_maintenance": True,
     })
