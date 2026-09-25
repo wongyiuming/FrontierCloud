@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release agent: git + Docker Engine only, never Docker Compose or systemd."""
+"""Release agent: git + Docker Engine only, without the Compose CLI or systemd."""
 from __future__ import annotations
 
 import copy
