@@ -218,10 +218,12 @@ jobs:
           path: /tmp/federation-acceptance.json
 
   test-compose:
+    needs: [verify-promotion-query, browser-ui, test-cluster]
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'merge_group' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/dev')
+      always() &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event_name == 'merge_group' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/dev'))
     runs-on: ubuntu-latest
     timeout-minutes: 3
     concurrency:
@@ -229,6 +231,16 @@ jobs:
       cancel-in-progress: true
 
     steps:
+      - name: Enforce upstream release gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ needs.browser-ui.result }}" = "success"
+          test "${{ needs.test-cluster.result }}" = "success"
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/dev" ]]; then
+            test "${{ needs.verify-promotion-query.result }}" = "success"
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v4
 
