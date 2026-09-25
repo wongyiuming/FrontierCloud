@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import HTTPException, Request
 
 from app.core.client_ip import resolve_client_identity
-from app.core.config import settings
 
 
 def secure_admin_transport(request: Request) -> bool:
@@ -17,5 +16,5 @@ def secure_admin_transport(request: Request) -> bool:
 
 
 async def require_secure_admin_transport(request: Request) -> None:
-    if settings.TLS_ENABLED and not secure_admin_transport(request):
-        raise HTTPException(426, "已启用 TLS，安全控制台只允许通过 HTTPS 访问")
+    if not secure_admin_transport(request):
+        raise HTTPException(426, "安全控制台只允许通过 HTTPS 访问；仅本机回环 HTTP 例外")
