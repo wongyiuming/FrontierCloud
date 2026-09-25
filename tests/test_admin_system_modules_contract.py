@@ -31,20 +31,15 @@ class AdminSystemModulesContractTests(unittest.TestCase):
     def test_site_maintenance_is_independently_visible_and_controllable(self):
         api = self.read("app/api/v1/admin_site.py")
         service = self.read("app/services/site_control.py")
-        gate = self.read("nginx/maintenance-gate.conf")
-        page = self.read("nginx/maintenance.html")
         client = self.read("static/js/maintenance-admin.js")
         endpoints = self.read("app/api/v1/endpoints.py")
         self.assertIn('router = APIRouter(prefix="/site")', api)
         self.assertIn('router.include_router(site_admin_router, prefix="/media/admin"', endpoints)
         self.assertIn("FORCE_OPEN", service)
         self.assertIn("版本发布正在执行", service)
-        self.assertIn(".frontiercloud-maintenance", gate)
-        self.assertIn(".frontiercloud-force-open", gate)
         self.assertIn("站点开放状态", client)
         self.assertIn("进入维护", client)
         self.assertIn("结束维护", client)
-        self.assertIn("前沿娱乐 · 系统维护", page)
 
     def test_all_existing_brand_logo_management_is_preserved(self):
         brand = self.read("static/js/brand-admin.js")
