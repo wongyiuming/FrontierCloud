@@ -117,11 +117,17 @@ jobs:
       - name: Prepare disposable UI fixture
         run: |
           mkdir -p certs data/media/music/ui-regression
-          : > certs/fullchain.pem
-          : > certs/privkey.pem
+          openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+            -keyout certs/privkey.pem \
+            -out certs/fullchain.pem \
+            -subj "/CN=ui.frontiercloud.local" \
+            -addext "subjectAltName=DNS:ui.frontiercloud.local,DNS:nginx" \
+            -addext "basicConstraints=critical,CA:TRUE"
+          echo '127.0.0.1 ui.frontiercloud.local' | sudo tee -a /etc/hosts
           cat <<'EOF' > .env
-          TLS_ENABLED=false
+          TLS_ENABLED=true
           INSTANCE_NAME=frontiercloud-ui-regression
+          SERVER_NAME=ui.frontiercloud.local
           PUBLIC_BIND_ADDRESS=0.0.0.0
           HTTP_PORT=18080
           HTTPS_PORT=18443
@@ -146,12 +152,23 @@ jobs:
           python3 -m venv /tmp/frontiercloud-ui-regression
           /tmp/frontiercloud-ui-regression/bin/pip install playwright==1.62.0
           test -x /usr/bin/google-chrome
+          SPKI=$(openssl x509 -in certs/fullchain.pem -pubkey -noout \
+            | openssl pkey -pubin -outform der \
+            | openssl dgst -sha256 -binary \
+            | base64 -w0)
+          cat > /tmp/frontiercloud-ui-chrome <<EOF
+          #!/bin/sh
+          exec /usr/bin/google-chrome --ignore-certificate-errors-spki-list=$SPKI "\$@"
+          EOF
+          chmod +x /tmp/frontiercloud-ui-chrome
       - name: Start real application stack
         run: docker compose up -d --build --remove-orphans --wait --wait-timeout 180
       - name: Run Chromium UI regression
         env:
-          BASE_URL: http://127.0.0.1:18080
-          PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
+          BASE_URL: https://ui.frontiercloud.local:18443
+          PLAYWRIGHT_CHROMIUM_EXECUTABLE: /tmp/frontiercloud-ui-chrome
+          NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/certs/fullchain.pem
+          SSL_CERT_FILE: ${{ github.workspace }}/certs/fullchain.pem
         run: |
           ADMIN_KEY=$(docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key')
           export ADMIN_KEY
@@ -254,7 +271,10 @@ jobs:
 
       - name: Run source configuration tests
         run: |
-          python3 -m unittest -v tests/test_deployment_contract.py tests/test_federation_contract.py
+          python3 -m unittest -v \
+            tests/test_deployment_contract.py \
+            tests/test_federation_contract.py \
+            tests/test_updater_p0_contract.py
 
       - name: Run unit and runtime tests
         run: |
@@ -262,6 +282,7 @@ jobs:
             find tests -maxdepth 1 -type f -name 'test_*.py' \
               ! -name 'test_deployment_contract.py' \
               ! -name 'test_federation_contract.py' \
+              ! -name 'test_updater_p0_contract.py' \
               -printf '/app/%p\n' | sort
           )
           docker compose exec -T web python -m unittest -v "${runtime_tests[@]}"
