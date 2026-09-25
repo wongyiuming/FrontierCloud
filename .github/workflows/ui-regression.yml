@@ -27,7 +27,7 @@ jobs:
           cat <<'EOF' > .env
           TLS_ENABLED=false
           INSTANCE_NAME=frontiercloud-ui-regression
-          PUBLIC_BIND_ADDRESS=127.0.0.1
+          PUBLIC_BIND_ADDRESS=0.0.0.0
           HTTP_PORT=18080
           HTTPS_PORT=18443
           EOF
