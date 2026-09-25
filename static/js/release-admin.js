@@ -50,13 +50,15 @@
 
     function ciText(value) {
         const ci = value.ci || {};
-        if (!ci.available) return ci.detail || 'CI 不可用';
+        if (!ci.available) return ci.detail || '发布验证不可用';
         const state = ci.publishable
             ? '通过'
             : ci.status === 'completed'
                 ? `失败 · ${ci.conclusion || 'unknown'}`
                 : ci.status || 'unknown';
-        return `${value.release_branch || ci.branch || 'main'} · ${state} · #${ci.run_number || '-'} · ${shortSha(ci.sha)}`;
+        const releaseBranch = value.release_branch || ci.branch || 'main';
+        const sourceBranch = ci.source_branch || 'dev';
+        return `${releaseBranch} ${shortSha(ci.sha)} · ${sourceBranch} CI #${ci.run_number || '-'} ${state} · ${shortSha(ci.ci_sha)}`;
     }
 
     function convergence(value) {
@@ -142,7 +144,7 @@
 
         element('systemReleaseCi').textContent = ciText(value);
         element('systemReleasePolicy').textContent = value.release_policy_ready
-            ? `ready · 仅允许 ${value.release_branch || 'main'} HEAD + CI success`
+            ? `ready · ${value.release_branch || 'main'} HEAD 代码树已通过 ${ci.source_branch || 'dev'} CI`
             : `blocked · ${value.release_policy_detail || '发布策略未就绪'}`;
         element('systemReleaseTarget').textContent = shortSha(ci.sha);
         element('systemReleaseCurrent').textContent = shortSha(local.current_sha);
@@ -233,13 +235,13 @@
             </button>
             <div class="system-module-content">
                 <div class="system-toolbar">
-                    <button id="systemReleaseRefresh" type="button">刷新 main CI</button>
+                    <button id="systemReleaseRefresh" type="button">刷新发布验证</button>
                     <span class="spacer"></span>
                     <button id="systemReleaseUpgrade" type="button" disabled>升级并分发</button>
                     <button id="systemReleaseRollback" type="button" disabled>一键回滚</button>
                 </div>
                 <div class="release-overview">
-                    <div class="release-stat"><small>main CI</small><strong id="systemReleaseCi">尚未加载</strong></div>
+                    <div class="release-stat"><small>发布验证</small><strong id="systemReleaseCi">尚未加载</strong></div>
                     <div class="release-stat"><small>发布策略</small><strong id="systemReleasePolicy">尚未加载</strong></div>
                     <div class="release-stat"><small>版本</small><strong><span id="systemReleaseCurrent">-</span> → <span id="systemReleaseTarget">-</span></strong></div>
                 </div>
