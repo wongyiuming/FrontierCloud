@@ -5,7 +5,7 @@ permissions:
 
 on:
   push:
-    branches: ["dev"]
+    branches: ["dev", "main"]
   pull_request:
     branches: ["main"]
   merge_group:
@@ -79,6 +79,7 @@ jobs:
       - name: Validate configuration and frontend syntax
         run: |
           python3 scripts/validate_env_contract.py
+          python3 scripts/check_release_policy.py
           docker compose config --quiet
           python3 scripts/check_english_comments.py
           node --check static/js/admin.js
