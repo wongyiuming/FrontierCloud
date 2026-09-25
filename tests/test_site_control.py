@@ -55,10 +55,10 @@ class SiteControlTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "版本发布正在执行"):
                 await site_control.set_maintenance(False)
 
-    def test_new_release_clears_previous_open_override(self):
+    def test_web_release_preflight_does_not_clear_open_override(self):
         self.force_open.write_text("test\n", encoding="utf-8")
         site_control.prepare_release()
-        self.assertFalse(self.force_open.exists())
+        self.assertTrue(self.force_open.exists())
 
 
 if __name__ == "__main__":
