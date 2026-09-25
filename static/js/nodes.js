@@ -4,12 +4,14 @@
     const panel = element('nodesPanel');
     if (!panel) return;
     let refreshQueue = Promise.resolve();
+    let releaseTimer = null;
     const status = text => { element('nodeOperationStatus').textContent = text; };
     const visible = (id, show) => element(id).classList.toggle('hidden', !show);
     const post = (path, value = {}) => api(`/api/v1/media/admin/nodes${path}`, {
         method: 'POST', headers: requestHeaders(), body: JSON.stringify(value),
     });
     const gib = value => `${(Number(value || 0) / 1073741824).toFixed(2)} GiB`;
+    const shortSha = value => value ? String(value).slice(0, 12) : '-';
     async function action(work) {
         try { status('处理中'); await work(); await refresh(); status('已完成'); }
         catch (error) { status(error.message); }
@@ -21,6 +23,60 @@
     function cell(row, text) {
         const value = document.createElement('td'); value.textContent = text; value.style.whiteSpace = 'pre-line'; row.appendChild(value); return value;
     }
+    function ensureReleasePanel() {
+        if (element('nodeReleasePanel')) return;
+        const box = document.createElement('section');
+        box.id = 'nodeReleasePanel'; box.className = 'nodes-pool-summary hidden';
+        const toolbar = document.createElement('div'); toolbar.className = 'nodes-toolbar';
+        const title = document.createElement('strong'); title.textContent = 'Web 版本发布';
+        const refreshButton = document.createElement('button'); refreshButton.type = 'button'; refreshButton.id = 'nodeReleaseRefresh'; refreshButton.textContent = '刷新 CI';
+        const upgradeButton = document.createElement('button'); upgradeButton.type = 'button'; upgradeButton.id = 'nodeReleaseUpgrade'; upgradeButton.textContent = '升级并分发';
+        const rollbackButton = document.createElement('button'); rollbackButton.type = 'button'; rollbackButton.id = 'nodeReleaseRollback'; rollbackButton.textContent = '一键回滚';
+        toolbar.append(title, refreshButton, upgradeButton, rollbackButton);
+        const ci = document.createElement('div'); ci.id = 'nodeReleaseCi'; ci.textContent = 'CI 尚未加载';
+        const local = document.createElement('div'); local.id = 'nodeReleaseLocal'; local.textContent = '本机版本尚未加载';
+        const followers = document.createElement('div'); followers.id = 'nodeReleaseFollowers'; followers.textContent = 'Follower 尚未加载'; followers.style.whiteSpace = 'pre-line';
+        box.append(toolbar, ci, local, followers);
+        element('storagePoolSummary').before(box);
+        refreshButton.onclick = () => action(() => refreshRelease(true));
+        upgradeButton.onclick = () => action(async () => {
+            await post('/release/upgrade');
+            status('已进入维护，Master 正在升级并向 Follower 分发同一版本');
+            startReleasePolling();
+        });
+        rollbackButton.onclick = () => action(async () => {
+            await post('/release/rollback');
+            status('已进入维护，正在回滚 Master 并向 Follower 收敛上一版本');
+            startReleasePolling();
+        });
+    }
+    function releaseBusy(local) { return ['queued', 'running', 'distributing'].includes(local?.state); }
+    async function refreshRelease(force = false) {
+        ensureReleasePanel();
+        const value = await api(`/api/v1/media/admin/nodes/release${force ? '?refresh_ci=true' : ''}`);
+        const ci = value.ci || {}; const local = value.local || {};
+        const ciState = ci.publishable ? '通过' : (ci.status === 'completed' ? `失败(${ci.conclusion || 'unknown'})` : (ci.status || '不可用'));
+        element('nodeReleaseCi').textContent = `dev CI: ${ciState} · #${ci.run_number || '-'} · ${shortSha(ci.sha)}${ci.updated_at ? ` · ${new Date(ci.updated_at).toLocaleString()}` : ''}`;
+        element('nodeReleaseLocal').textContent = `Master: ${shortSha(local.current_sha)} · ${local.state || 'unknown'} / ${local.phase || '-'}${local.target_sha ? ` · target ${shortSha(local.target_sha)}` : ''}${local.previous_sha ? ` · rollback ${shortSha(local.previous_sha)}` : ''}${local.detail ? ` · ${local.detail}` : ''}`;
+        const followerLines = (value.followers || []).map(item => {
+            const peer = item.peer_endpoint || item.peer_id; const release = item.status || {};
+            if (!item.reachable) return `${peer} · unreachable${item.detail ? ` (${item.detail})` : ''}`;
+            return `${peer} · ${shortSha(release.current_sha)} · ${release.state || 'unknown'} / ${release.phase || '-'}${release.target_sha ? ` · target ${shortSha(release.target_sha)}` : ''}`;
+        });
+        element('nodeReleaseFollowers').textContent = followerLines.length ? followerLines.join('\n') : '无 Follower；仅更新 Master';
+        element('nodeReleaseUpgrade').disabled = !value.can_upgrade;
+        element('nodeReleaseRollback').disabled = !value.can_rollback;
+        if (!releaseBusy(local) && releaseTimer) stopReleasePolling();
+        return value;
+    }
+    function startReleasePolling() {
+        if (releaseTimer) return;
+        releaseTimer = setInterval(() => {
+            if (!panel.classList.contains('expanded')) return;
+            refreshRelease(false).catch(error => status(error.message));
+        }, 5000);
+    }
+    function stopReleasePolling() { if (releaseTimer) { clearInterval(releaseTimer); releaseTimer = null; } }
     function resourceControls(member, relation) {
         const box = document.createElement('div'); box.className = 'node-resource-controls';
         const storage = document.createElement('label');
@@ -65,6 +121,11 @@
             visible('nodePromotion', node.role === 'Standalone'); visible('nodePairing', node.role !== 'Standalone');
             visible('nodeIssuePair', node.role === 'Follower'); visible('nodeImportPair', node.role === 'Master');
             visible('nodeReinitialize', node.role !== 'Standalone'); element('nodePairPackage').readOnly = node.role === 'Follower';
+            ensureReleasePanel(); visible('nodeReleasePanel', node.role === 'Master');
+            if (node.role === 'Master') {
+                const release = await refreshRelease(false);
+                if (releaseBusy(release.local || {})) startReleasePolling();
+            } else stopReleasePolling();
             const role = element('nodeRole'); const capacity = element('masterLocalCapacity');
             capacity.disabled = role.value !== 'Master'; role.onchange = () => { capacity.disabled = role.value !== 'Master'; };
             const pool = node.storage_pool;
@@ -109,7 +170,10 @@
         refreshQueue = current.catch(() => {}); return current;
     }
     element('nodesRefresh').onclick = () => action(async () => {});
-    panel.querySelector('.module-heading').addEventListener('click', () => { if (panel.classList.contains('expanded')) refresh().catch(error => status(error.message)); });
+    panel.querySelector('.module-heading').addEventListener('click', () => {
+        if (panel.classList.contains('expanded')) refresh().catch(error => status(error.message));
+        else stopReleasePolling();
+    });
     element('nodePromotion').onsubmit = event => {
         event.preventDefault(); const role = element('nodeRole').value;
         action(() => post('/promote', {role, endpoint: element('nodeEndpoint').value,
