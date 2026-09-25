@@ -6,156 +6,36 @@
     <title>{{PAGE_TITLE}}</title>
     <link rel="stylesheet" href="{{PLAYER_CSS_URL}}">
     <style>
-        .audio-player-page {
-            --player-sidebar-width: 320px;
-            --player-viewport-height: 100dvh;
-            height: var(--player-viewport-height);
-            min-height: 0;
-        }
-        .audio-player-page .player-section {
-            flex: 1 1 auto;
-            min-width: 0;
-        }
-        .audio-player-page #playerSidebar {
-            flex: 0 0 var(--player-sidebar-width);
-            width: var(--player-sidebar-width);
-            min-width: 0;
-            max-width: min(38vw, 360px);
-            overflow: hidden;
-            opacity: 1;
-            transition: flex-basis .22s ease, width .22s ease, max-width .22s ease, opacity .18s ease, border-color .18s ease;
-            will-change: width, flex-basis, opacity;
-        }
-        .audio-player-page.sidebar-collapsed #playerSidebar {
-            flex-basis: 0;
-            width: 0;
-            max-width: 0;
-            border-left-color: transparent;
-            opacity: 0;
-            pointer-events: none;
-        }
-        .audio-player-page #playerSidebar .sidebar-header {
-            padding: clamp(12px, 1.1vw, 18px);
-        }
-        .audio-player-page #playerSidebar .player-controls {
-            padding: clamp(8px, .8vw, 12px);
-        }
-        .audio-player-page #playerSidebar .media-item {
-            padding: clamp(10px, .9vw, 14px);
-        }
-        .audio-player-page #playerSidebar .media-item img {
-            width: clamp(38px, 3vw, 48px);
-            height: clamp(38px, 3vw, 48px);
-            margin-right: clamp(9px, .8vw, 13px);
-        }
-        .sidebar-toggle {
-            position: absolute;
-            top: 12px;
-            right: 12px;
-            z-index: 12;
-            width: 44px;
-            height: 44px;
-            display: grid;
-            place-items: center;
-            padding: 0;
-            color: rgba(255,255,255,.94);
-            background: rgba(18,18,18,.74);
-            border: 1px solid rgba(255,255,255,.18);
-            border-radius: 12px;
-            box-shadow: 0 4px 18px rgba(0,0,0,.28);
-            font: 700 25px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            cursor: pointer;
-            backdrop-filter: blur(8px);
-            touch-action: manipulation;
-            user-select: none;
-        }
-        .sidebar-toggle:hover,
-        .sidebar-toggle:focus-visible {
-            background: rgba(42,42,42,.9);
-            outline: 2px solid rgba(255,255,255,.38);
-            outline-offset: 2px;
-        }
-        .audio-player-page:not(.sidebar-collapsed) .sidebar-toggle {
-            opacity: .64;
-        }
-        .audio-player-page.sidebar-collapsed .sidebar-toggle {
-            opacity: 1;
-        }
+        .audio-player-page { --player-sidebar-width: 320px; --player-viewport-height: 100dvh; height: var(--player-viewport-height); min-height: 0; }
+        .audio-player-page .player-section { flex: 1 1 auto; min-width: 0; }
+        .audio-player-page #playerSidebar { flex: 0 0 var(--player-sidebar-width); width: var(--player-sidebar-width); min-width: 0; max-width: min(38vw, 360px); overflow: hidden; opacity: 1; transition: flex-basis .22s ease, width .22s ease, max-width .22s ease, opacity .18s ease, border-color .18s ease; will-change: width, flex-basis, opacity; }
+        .audio-player-page.sidebar-collapsed #playerSidebar { flex-basis: 0; width: 0; max-width: 0; border-left-color: transparent; opacity: 0; pointer-events: none; }
+        .audio-player-page #playerSidebar .sidebar-header { padding: clamp(12px, 1.1vw, 18px); }
+        .audio-player-page #playerSidebar .player-controls { padding: clamp(8px, .8vw, 12px); }
+        .audio-player-page #playerSidebar .media-item { padding: clamp(10px, .9vw, 14px); }
+        .audio-player-page #playerSidebar .media-item img { width: clamp(38px, 3vw, 48px); height: clamp(38px, 3vw, 48px); margin-right: clamp(9px, .8vw, 13px); }
+        .sidebar-toggle { position: absolute; top: 12px; right: 12px; z-index: 12; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; color: rgba(255,255,255,.94); background: rgba(18,18,18,.74); border: 1px solid rgba(255,255,255,.18); border-radius: 12px; box-shadow: 0 4px 18px rgba(0,0,0,.28); font: 700 25px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; cursor: pointer; backdrop-filter: blur(8px); touch-action: manipulation; user-select: none; }
+        .sidebar-toggle:hover, .sidebar-toggle:focus-visible { background: rgba(42,42,42,.9); outline: 2px solid rgba(255,255,255,.38); outline-offset: 2px; }
+        .audio-player-page:not(.sidebar-collapsed) .sidebar-toggle { opacity: .64; }
+        .audio-player-page.sidebar-collapsed .sidebar-toggle { opacity: 1; }
         @media (max-width: 700px) and (orientation: portrait) {
-            .audio-player-page {
-                height: 100dvh;
-            }
-            .audio-player-page #playerSidebar,
-            .audio-player-page.sidebar-collapsed #playerSidebar {
-                flex: 1 1 auto;
-                width: 100%;
-                max-width: none;
-                min-width: 0;
-                border-left: 0;
-                border-top: 1px solid #282828;
-                opacity: 1;
-                pointer-events: auto;
-            }
-            .sidebar-toggle {
-                display: none;
-            }
+            .audio-player-page { height: 100dvh; }
+            .audio-player-page #playerSidebar, .audio-player-page.sidebar-collapsed #playerSidebar { flex: 1 1 auto; width: 100%; max-width: none; min-width: 0; border-left: 0; border-top: 1px solid #282828; opacity: 1; pointer-events: auto; }
+            .sidebar-toggle { display: none; }
         }
     </style>
 </head>
 <body class="audio-player-page">
     <div class="player-section" id="playerSection">
         <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-controls="playerSidebar" aria-expanded="true" aria-label="收起播放队列">›</button>
-        <section id="inlineLyrics" class="inline-lyrics hidden" aria-live="polite" aria-label="当前曲目歌词">
-            <div id="inlineLyricsLines" class="sync-lyrics-lines">
-                <div id="inlineLyricsTrack" class="sync-lyrics-track"></div>
-            </div>
-        </section>
+        <section id="inlineLyrics" class="inline-lyrics hidden" aria-live="polite" aria-label="当前曲目歌词"><div id="inlineLyricsLines" class="sync-lyrics-lines"><div id="inlineLyricsTrack" class="sync-lyrics-track"></div></div></section>
         <div id="artplayer" class="artplayer-app"></div>
-        <div class="audio-interaction-guide" aria-hidden="true">
-            <svg class="interaction-boundary" viewBox="0 0 1200 64" preserveAspectRatio="none">
-                <defs>
-                    <linearGradient id="boundaryGradient" x1="0" y1="0" x2="1" y2="0">
-                        <stop offset="0%" stop-color="#00e5ff"/>
-                        <stop offset="35%" stop-color="#7cff00"/>
-                        <stop offset="65%" stop-color="#ffd000"/>
-                        <stop offset="100%" stop-color="#ff2bd6"/>
-                    </linearGradient>
-                </defs>
-                <path class="boundary-glow" d="M0 32 L120 32 L145 17 L170 47 L195 8 L220 55 L245 32 L360 32 L385 18 L410 46 L435 9 L460 54 L485 32 L600 32 L625 16 L650 48 L675 7 L700 56 L725 32 L840 32 L865 18 L890 46 L915 9 L940 54 L965 32 L1080 32 L1105 17 L1130 47 L1155 8 L1180 55 L1200 32"/>
-                <path class="boundary-flow" d="M0 32 L120 32 L145 17 L170 47 L195 8 L220 55 L245 32 L360 32 L385 18 L410 46 L435 9 L460 54 L485 32 L600 32 L625 16 L650 48 L675 7 L700 56 L725 32 L840 32 L865 18 L890 46 L915 9 L940 54 L965 32 L1080 32 L1105 17 L1130 47 L1155 8 L1180 55 L1200 32"/>
-            </svg>
-        </div>
+        <div class="audio-interaction-guide" aria-hidden="true"><svg class="interaction-boundary" viewBox="0 0 1200 64" preserveAspectRatio="none"><defs><linearGradient id="boundaryGradient" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#00e5ff"/><stop offset="35%" stop-color="#7cff00"/><stop offset="65%" stop-color="#ffd000"/><stop offset="100%" stop-color="#ff2bd6"/></linearGradient></defs><path class="boundary-glow" d="M0 32 L120 32 L145 17 L170 47 L195 8 L220 55 L245 32 L360 32 L385 18 L410 46 L435 9 L460 54 L485 32 L600 32 L625 16 L650 48 L675 7 L700 56 L725 32 L840 32 L865 18 L890 46 L915 9 L940 54 L965 32 L1080 32 L1105 17 L1130 47 L1155 8 L1180 55 L1200 32"/><path class="boundary-flow" d="M0 32 L120 32 L145 17 L170 47 L195 8 L220 55 L245 32 L360 32 L385 18 L410 46 L435 9 L460 54 L485 32 L600 32 L625 16 L650 48 L675 7 L700 56 L725 32 L840 32 L865 18 L890 46 L915 9 L940 54 L965 32 L1080 32 L1105 17 L1130 47 L1155 8 L1180 55 L1200 32"/></svg></div>
         <div id="gestureHud" class="gesture-hud"></div>
     </div>
-    <div class="sidebar" id="playerSidebar">
-        <div class="sidebar-header">
-            <span>四大发明</span>
-            <span class="header-actions"><a href="{{CATEGORY_LIST_URL}}" class="back-btn">← 返回分类</a></span>
-        </div>
-        <div class="player-controls">
-            <button id="karaokeLink" class="control-btn karaoke-link" type="button">K歌</button>
-            <button id="lyricsLink" class="control-btn lyrics-link unavailable" type="button" disabled>全屏歌词</button>
-        </div>
-        <ul id="mediaList" class="media-list"></ul>
-    </div>
-    <section id="fullscreenLyrics" class="fullscreen-lyrics hidden" aria-hidden="true" aria-label="全屏歌词，轻按任意位置返回播放器">
-        <div class="fullscreen-lyrics-columns" aria-live="off">
-            <div id="fullscreenLyricsColumn0" class="fullscreen-lyrics-column"></div>
-            <div id="fullscreenLyricsColumn1" class="fullscreen-lyrics-column"></div>
-            <div id="fullscreenLyricsColumn2" class="fullscreen-lyrics-column"></div>
-        </div>
-        <span class="fullscreen-lyrics-hint">轻按任意位置返回播放器</span>
-    </section>
-
-    <script>
-        let currentMediaList = {{MEDIA_JSON}};
-        const playbackSessionId = {{PLAYBACK_SESSION_ID}};
-        window.frontierCloudPlayerCatalogConfig = {{PLAYER_CATALOG_CONFIG_JSON}};
-        window.frontierCloudStunUrls = {{STUN_URLS_JSON}};
-        window.frontierCloudWebrtcIntervalMs = {{WEBRTC_INTERVAL_MS}};
-        const PAGE_TITLE = '{{PAGE_TITLE}}';
-        const PLAYER_KIND = 'audio';
-    </script>
+    <div class="sidebar" id="playerSidebar"><div class="sidebar-header"><span>四大发明</span><span class="header-actions"><a href="{{CATEGORY_LIST_URL}}" class="back-btn">← 返回分类</a></span></div><div class="player-controls"><button id="karaokeLink" class="control-btn karaoke-link" type="button">K歌</button><button id="lyricsLink" class="control-btn lyrics-link unavailable" type="button" disabled>全屏歌词</button></div><ul id="mediaList" class="media-list"></ul></div>
+    <section id="fullscreenLyrics" class="fullscreen-lyrics hidden" aria-hidden="true" aria-label="全屏歌词，轻按任意位置返回播放器"><div class="fullscreen-lyrics-columns" aria-live="off"><div id="fullscreenLyricsColumn0" class="fullscreen-lyrics-column"></div><div id="fullscreenLyricsColumn1" class="fullscreen-lyrics-column"></div><div id="fullscreenLyricsColumn2" class="fullscreen-lyrics-column"></div></div><span class="fullscreen-lyrics-hint">轻按任意位置返回播放器</span></section>
+    <script>let currentMediaList = {{MEDIA_JSON}}; const playbackSessionId = {{PLAYBACK_SESSION_ID}}; window.frontierCloudPlayerCatalogConfig = {{PLAYER_CATALOG_CONFIG_JSON}}; window.frontierCloudStunUrls = {{STUN_URLS_JSON}}; window.frontierCloudWebrtcIntervalMs = {{WEBRTC_INTERVAL_MS}}; const PAGE_TITLE = '{{PAGE_TITLE}}'; const PLAYER_KIND = 'audio';</script>
     <script src="{{NETWORK_OBSERVATION_JS_URL}}"></script>
     <script src="{{MEDIA_BROWSER_JS_URL}}"></script>
     <script src="{{PLAYER_JS_URL}}"></script>
@@ -166,115 +46,23 @@
             const sidebar = document.getElementById('playerSidebar');
             const toggle = document.getElementById('sidebarToggle');
             if (!body.classList.contains('audio-player-page') || !sidebar || !toggle) return;
-
-            let idleTimer = null;
-            let layoutFrame = null;
-            let wideLayout = false;
-            let collapsed = false;
-            let lastMetrics = null;
-
+            let idleTimer = null, layoutFrame = null, wideLayout = false, collapsed = false, lastMetrics = null;
             const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
-
-            const readViewport = () => {
-                const viewport = window.visualViewport;
-                const width = Math.max(1, Math.round(viewport?.width || window.innerWidth || document.documentElement.clientWidth || 1));
-                const height = Math.max(1, Math.round(viewport?.height || window.innerHeight || document.documentElement.clientHeight || 1));
-                return {width, height, ratio: width / height};
-            };
-
-            const preferredSidebarWidth = ({width, height, ratio}) => {
-                const fraction = ratio >= 2 ? 0.17 : (ratio >= 1.6 ? 0.19 : 0.22);
-                return Math.round(clamp(Math.min(width * fraction, height * 0.42), 260, 360));
-            };
-
-            const resizeLyrics = () => {
-                requestAnimationFrame(() => {
-                    if (typeof sizeSynchronizedLyrics === 'function') sizeSynchronizedLyrics();
-                    if (typeof sizeFullscreenLyrics === 'function') sizeFullscreenLyrics();
-                });
-            };
-
-            const clearIdleTimer = () => {
-                if (idleTimer !== null) window.clearTimeout(idleTimer);
-                idleTimer = null;
-            };
-
-            const scheduleCollapse = () => {
-                clearIdleTimer();
-                if (!wideLayout || collapsed) return;
-                idleTimer = window.setTimeout(() => setCollapsed(true, false), PLAYER_SIDEBAR_IDLE_MS);
-            };
-
-            const setCollapsed = (next, restartTimer = true) => {
-                collapsed = wideLayout ? Boolean(next) : false;
-                body.classList.toggle('sidebar-collapsed', collapsed);
-                sidebar.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
-                sidebar.toggleAttribute('inert', collapsed);
-                toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-                toggle.setAttribute('aria-label', collapsed ? '展开播放队列' : '收起播放队列');
-                toggle.textContent = collapsed ? '☰' : '›';
-                clearIdleTimer();
-                if (restartTimer && !collapsed) scheduleCollapse();
-                window.setTimeout(resizeLyrics, 240);
-            };
-
-            const syncLayout = () => {
-                layoutFrame = null;
-                const metrics = readViewport();
-                lastMetrics = metrics;
-                body.style.setProperty('--player-viewport-height', `${metrics.height}px`);
-                wideLayout = metrics.width > 700 && metrics.ratio >= 1.15;
-                body.classList.toggle('player-wide-layout', wideLayout);
-
-                if (wideLayout) {
-                    const sidebarWidth = preferredSidebarWidth(metrics);
-                    body.style.setProperty('--player-sidebar-width', `${sidebarWidth}px`);
-                    body.dataset.playerViewport = `${metrics.width}x${metrics.height}`;
-                    body.dataset.playerSidebarWidth = String(sidebarWidth);
-                    if (!collapsed) scheduleCollapse();
-                } else {
-                    body.style.removeProperty('--player-sidebar-width');
-                    delete body.dataset.playerSidebarWidth;
-                    if (collapsed) setCollapsed(false, false);
-                    else clearIdleTimer();
-                }
-                resizeLyrics();
-            };
-
-            const scheduleLayout = () => {
-                if (layoutFrame !== null) return;
-                layoutFrame = requestAnimationFrame(syncLayout);
-            };
-
-            const noteActivity = () => {
-                if (wideLayout && !collapsed) scheduleCollapse();
-            };
-
-            toggle.addEventListener('click', event => {
-                event.stopPropagation();
-                setCollapsed(!collapsed);
-            });
-
-            document.addEventListener('pointerdown', noteActivity, {capture: true, passive: true});
-            document.addEventListener('wheel', noteActivity, {capture: true, passive: true});
-            document.addEventListener('keydown', noteActivity, {capture: true});
-            window.addEventListener('resize', scheduleLayout, {passive: true});
-            window.addEventListener('orientationchange', scheduleLayout, {passive: true});
-            window.visualViewport?.addEventListener('resize', scheduleLayout, {passive: true});
-            window.visualViewport?.addEventListener('scroll', scheduleLayout, {passive: true});
-            sidebar.addEventListener('transitionend', resizeLyrics);
-
-            if ('ResizeObserver' in window) {
-                new ResizeObserver(scheduleLayout).observe(document.documentElement);
-            }
-
+            const readViewport = () => { const viewport = window.visualViewport; const width = Math.max(1, Math.round(viewport?.width || window.innerWidth || document.documentElement.clientWidth || 1)); const height = Math.max(1, Math.round(viewport?.height || window.innerHeight || document.documentElement.clientHeight || 1)); return {width, height, ratio: width / height}; };
+            const preferredSidebarWidth = ({width, height, ratio}) => { const fraction = ratio >= 2 ? 0.17 : (ratio >= 1.6 ? 0.19 : 0.22); return Math.round(clamp(Math.min(width * fraction, height * 0.42), 260, 360)); };
+            const resizeLyrics = () => requestAnimationFrame(() => { if (typeof sizeSynchronizedLyrics === 'function') sizeSynchronizedLyrics(); if (typeof sizeFullscreenLyrics === 'function') sizeFullscreenLyrics(); });
+            const clearIdleTimer = () => { if (idleTimer !== null) window.clearTimeout(idleTimer); idleTimer = null; };
+            const scheduleCollapse = () => { clearIdleTimer(); if (!wideLayout || collapsed) return; idleTimer = window.setTimeout(() => setCollapsed(true, false), PLAYER_SIDEBAR_IDLE_MS); };
+            const setCollapsed = (next, restartTimer = true) => { collapsed = wideLayout ? Boolean(next) : false; body.classList.toggle('sidebar-collapsed', collapsed); sidebar.setAttribute('aria-hidden', collapsed ? 'true' : 'false'); sidebar.toggleAttribute('inert', collapsed); toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true'); toggle.setAttribute('aria-label', collapsed ? '展开播放队列' : '收起播放队列'); toggle.textContent = collapsed ? '☰' : '›'; clearIdleTimer(); if (restartTimer && !collapsed) scheduleCollapse(); window.setTimeout(resizeLyrics, 240); };
+            const syncLayout = () => { layoutFrame = null; const metrics = readViewport(); lastMetrics = metrics; body.style.setProperty('--player-viewport-height', `${metrics.height}px`); wideLayout = metrics.width > 700 && metrics.ratio >= 1.15; body.classList.toggle('player-wide-layout', wideLayout); if (wideLayout) { const sidebarWidth = preferredSidebarWidth(metrics); body.style.setProperty('--player-sidebar-width', `${sidebarWidth}px`); body.dataset.playerViewport = `${metrics.width}x${metrics.height}`; body.dataset.playerSidebarWidth = String(sidebarWidth); if (!collapsed) scheduleCollapse(); } else { body.style.removeProperty('--player-sidebar-width'); delete body.dataset.playerSidebarWidth; if (collapsed) setCollapsed(false, false); else clearIdleTimer(); } resizeLyrics(); };
+            const scheduleLayout = () => { if (layoutFrame !== null) return; layoutFrame = requestAnimationFrame(syncLayout); };
+            const noteActivity = () => { if (wideLayout && !collapsed) scheduleCollapse(); };
+            toggle.addEventListener('click', event => { event.stopPropagation(); setCollapsed(!collapsed); });
+            document.addEventListener('pointerdown', noteActivity, {capture: true, passive: true}); document.addEventListener('wheel', noteActivity, {capture: true, passive: true}); document.addEventListener('keydown', noteActivity, {capture: true});
+            window.addEventListener('resize', scheduleLayout, {passive: true}); window.addEventListener('orientationchange', scheduleLayout, {passive: true}); window.visualViewport?.addEventListener('resize', scheduleLayout, {passive: true}); window.visualViewport?.addEventListener('scroll', scheduleLayout, {passive: true}); sidebar.addEventListener('transitionend', resizeLyrics);
+            if ('ResizeObserver' in window) new ResizeObserver(scheduleLayout).observe(document.documentElement);
             syncLayout();
-            window.FrontierPlayerLayout = {
-                collapse: () => setCollapsed(true, false),
-                expand: () => setCollapsed(false),
-                refresh: syncLayout,
-                metrics: () => ({...(lastMetrics || readViewport()), collapsed, wideLayout}),
-            };
+            window.FrontierPlayerLayout = {collapse: () => setCollapsed(true, false), expand: () => setCollapsed(false), refresh: syncLayout, metrics: () => ({...(lastMetrics || readViewport()), collapsed, wideLayout})};
         })();
     </script>
 </body>
