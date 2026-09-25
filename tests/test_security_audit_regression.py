@@ -55,9 +55,10 @@ class AdminTransportBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(admin_transport.secure_admin_transport(_request(client="::1")))
 
     def test_every_admin_route_has_the_secure_transport_dependency(self):
+        application = _admin_application()
         admin_routes = [
-            route for route in endpoints.router.routes
-            if getattr(route, "path", "").startswith("/media/admin")
+            route for route in application.routes
+            if getattr(route, "path", "").startswith("/api/v1/media/admin")
         ]
         self.assertTrue(admin_routes)
         for route in admin_routes:
