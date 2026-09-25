@@ -37,8 +37,8 @@
       <button id="refreshDevices" class="quiet" type="button">授权并刷新设备</button>
       <label>媒体播放音量 <output id="songValue">100%</output><input id="songGain" type="range" min="0" max="100" value="100"></label>
       <label class="switch"><input id="songMute" type="checkbox"> 静音媒体</label>
-      <label>录音人声增益（写入文件） <output id="voiceValue">100%</output><input id="voiceGain" type="range" min="0" max="200" value="100"></label>
-      <label>实时返听音量（仅本机） <output id="monitorValue">100%</output><input id="monitorGain" type="range" min="0" max="200" value="100"></label>
+      <label>录音人声增益（写入文件） <output id="voiceValue">30%</output><input id="voiceGain" type="range" min="0" max="200" value="100"></label>
+      <label>实时返听音量（仅本机） <output id="monitorValue">150%</output><input id="monitorGain" type="range" min="0" max="200" value="100"></label>
       <label class="switch"><input id="monitor" type="checkbox" checked> 开启实时返听</label>
       <label class="switch"><input id="aec" type="checkbox"> 扬声器模式回声消除（AEC）</label>
       <label>麦克风输入电平 <output id="inputMeterValue">待机</output><progress id="inputMeter" max="1" value="0"></progress></label>
@@ -81,5 +81,6 @@
 <script src="{{NETWORK_OBSERVATION_JS_URL}}" defer></script>
 <script src="{{KARAOKE_JS_URL}}" defer></script>
 <script src="/static/js/karaoke-audio-quality.js" defer></script>
+<script src="/static/js/karaoke-ui.js" defer></script>
 </body>
 </html>
