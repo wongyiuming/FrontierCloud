@@ -23,6 +23,10 @@ maintenance_ui = read("static/js/maintenance-admin.js")
 maintenance_gate = read("nginx/maintenance-gate.conf")
 maintenance_page = read("nginx/maintenance.html")
 workflow = read(".github/workflows/docker.yml")
+compose = read("docker-compose.yaml")
+web_dockerfile = read("Dockerfile")
+updater_dockerfile = read("updater/Dockerfile")
+nginx_dockerfile = read("nginx/Dockerfile")
 
 require('RELEASE_BRANCH = "main"' in release, "Web release control must target main")
 require('CI_BRANCH = "dev"' in release, "Production verification must reuse dev CI")
@@ -88,9 +92,39 @@ require('github.paginate' not in workflow,
 require("github.event_name != 'pull_request' || github.head_ref != 'dev'" not in workflow,
         "Full CI must not rerun automatically on main")
 
+# Keep release runtime foundations on explicit patch versions. Digest pinning can
+# be layered on later, but broad minor/major tags must not silently move beneath
+# an unchanged FrontierCloud commit.
+require('FROM python:3.14.7-slim' in web_dockerfile,
+        "Web Python base image must be patch-pinned")
+require('FROM python:3.14.7-alpine' in updater_dockerfile,
+        "Updater Python base image must be patch-pinned")
+require('FROM nginx:1.30.4-alpine' in nginx_dockerfile,
+        "Nginx base image must be patch-pinned")
+require('image: redis:7.4.11-alpine' in compose,
+        "Redis image must be patch-pinned")
+require('image: mysql:8.4.11' in compose,
+        "MySQL image must be patch-pinned")
+require('image: coturn/coturn:4.17.2-r0-alpine' in compose,
+        "Coturn image must remain patch-pinned")
+require('image: redis:7-alpine' not in compose,
+        "Broad Redis major tag must not return")
+
+# The updater must retain write access to its socket volume, while the Web
+# process only needs to connect to the existing Unix socket and must not mutate
+# the control-volume filesystem itself.
+updater_block = compose.split("  updater:\n", 1)[1].split("\n  web:\n", 1)[0]
+web_block = compose.split("  web:\n", 1)[1].split("\n  redis:\n", 1)[0]
+require('updater_control:/run/frontiercloud-updater\n' in updater_block,
+        "Updater must retain writable control-volume access")
+require('updater_control:/run/frontiercloud-updater:ro' not in updater_block,
+        "Updater control volume cannot be read-only")
+require('updater_control:/run/frontiercloud-updater:ro' in web_block,
+        "Web must mount the updater control volume read-only")
+
 for path in ("Dockerfile", "nginx/Dockerfile", "updater/Dockerfile"):
     source = read(path)
     require("COPY --chmod=" not in source, f"{path} requires BuildKit COPY --chmod")
     require("RUN --mount=" not in source, f"{path} requires BuildKit RUN --mount")
 
-print("Release policy contract passed: main promotes an already-tested reviewed dev PR tree")
+print("Release policy contract passed: reviewed dev provenance and P1 runtime hardening are enforced")
