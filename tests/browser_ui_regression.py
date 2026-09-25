@@ -70,18 +70,26 @@ def logo_cross_page_cache_check(browser) -> None:
     session = context.new_cdp_session(page)
     session.send("Network.enable")
     versioned = []
+    served_from_cache = set()
 
     def response_received(event):
         response = event.get("response") or {}
         url = str(response.get("url") or "")
         if "/api/v1/media/brand/logo/music?v=" in url:
             versioned.append({
+                "requestId": str(event.get("requestId") or ""),
                 "url": url,
                 "status": int(response.get("status") or 0),
                 "fromDiskCache": bool(response.get("fromDiskCache", False)),
             })
 
+    def request_served_from_cache(event):
+        request_id = str(event.get("requestId") or "")
+        if request_id:
+            served_from_cache.add(request_id)
+
     session.on("Network.responseReceived", response_received)
+    session.on("Network.requestServedFromCache", request_served_from_cache)
     page.goto(BASE_URL + "/api/v1/media/", wait_until="load")
     wait_image(page, 'img[src*="/brand/logo/music"]')
     page.wait_for_timeout(300)
@@ -97,7 +105,7 @@ def logo_cross_page_cache_check(browser) -> None:
     for item in repeated:
         require(item["url"] == first_url, "the same logo content changed URL between home and secondary page")
         require(
-            item["fromDiskCache"] or item["status"] == 304,
+            item["requestId"] in served_from_cache or item["fromDiskCache"] or item["status"] == 304,
             "secondary page transferred the already-loaded versioned logo from the network again",
         )
     context.close()
