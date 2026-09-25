@@ -32,6 +32,10 @@ def run(*args: str, cwd: pathlib.Path = ROOT, timeout: int = 600) -> subprocess.
     return subprocess.run(args, cwd=cwd, text=True, check=True, timeout=timeout)
 
 
+def git(*args: str, timeout: int = 600) -> subprocess.CompletedProcess[str]:
+    return run("git", "-c", f"safe.directory={ROOT}", *args, timeout=timeout)
+
+
 def write_status(state: str, version: str, *, detail: str = "", propagate: bool = False) -> None:
     CONTROL_DIR.mkdir(parents=True, exist_ok=True)
     temporary = STATUS_PATH.with_suffix(".tmp")
@@ -76,10 +80,10 @@ def perform_update(version: str, propagate: bool) -> None:
     MAINTENANCE_DIR.mkdir(parents=True, exist_ok=True)
     MAINTENANCE_FLAG.write_text(version + "\n", encoding="utf-8")
     try:
-        run("git", "fetch", "--no-tags", "origin", "dev", timeout=120)
-        run("git", "cat-file", "-e", f"{version}^{{commit}}", timeout=20)
-        run("git", "merge-base", "--is-ancestor", version, "origin/dev", timeout=20)
-        run("git", "reset", "--hard", version, timeout=60)
+        git("fetch", "--no-tags", "origin", "dev", timeout=120)
+        git("cat-file", "-e", f"{version}^{{commit}}", timeout=20)
+        git("merge-base", "--is-ancestor", version, "origin/dev", timeout=20)
+        git("reset", "--hard", version, timeout=60)
 
         project = host_project_dir()
         compose_runner(project, "config", "--quiet", timeout=60)
