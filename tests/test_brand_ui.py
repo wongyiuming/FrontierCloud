@@ -30,17 +30,20 @@ class BrandUIContractTests(unittest.TestCase):
         self.assertIn("/api/v1/media/brand/logo/${brandKind}", category)
         self.assertIn("/api/v1/media/brand/logo/entertainment", karaoke)
 
-    def test_home_brand_art_is_the_rounded_card_surface(self):
+    def test_home_keeps_small_main_brand_and_full_area_child_cards(self):
         index = (ROOT / "static" / "media" / "index.html").read_text(encoding="utf-8")
-        self.assertIn(".brand-surface{", index)
-        self.assertIn("overflow:hidden", index)
-        self.assertIn("border-radius:clamp(", index)
-        self.assertIn(".brand-backdrop", index)
-        self.assertIn(".brand-foreground", index)
-        self.assertIn("object-fit:cover", index)
-        self.assertGreaterEqual(index.count('class="brand-backdrop"'), 3)
-        self.assertGreaterEqual(index.count('class="brand-foreground"'), 3)
-        self.assertNotIn("card-title brand", index)
+        self.assertIn("grid-template-rows:auto minmax(0,1fr)", index)
+        self.assertIn(".brand-main{", index)
+        self.assertIn("width:clamp(220px,34vw,460px)", index)
+        self.assertIn("height:clamp(72px,10vw,132px)", index)
+        self.assertIn(".card-grid{display:grid;min-height:0;grid-template-columns:repeat(2,minmax(0,1fr))", index)
+        self.assertIn(".card{position:relative;display:grid;min-width:0;min-height:0;place-items:center", index)
+        self.assertEqual(index.count('class="card"'), 2)
+        self.assertEqual(index.count('class="card-logo"'), 2)
+        self.assertIn("pointer-events:none", index)
+        self.assertNotIn("aspect-ratio:", index)
+        self.assertNotIn("brand-backdrop", index)
+        self.assertNotIn("brand-foreground", index)
 
     def test_admin_logo_management_is_registered(self):
         endpoints = (ROOT / "app" / "api" / "v1" / "endpoints.py").read_text(encoding="utf-8")
