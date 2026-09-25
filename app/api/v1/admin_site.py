@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from app.api.internal_nodes import require_https
 from app.api.v1.admin import require_session
-from app.services import site_control
+from app.services import control_audit, site_control
 
 router = APIRouter(prefix="/site")
 
@@ -24,7 +24,12 @@ async def maintenance_status(actor: str = Depends(require_session)):
 async def maintenance_change(request: Request, payload: MaintenanceChange,
                              actor: str = Depends(require_session)):
     require_https(request)
+    source_summary = f"enabled={str(payload.enabled).lower()}"
     try:
-        return await site_control.set_maintenance(payload.enabled)
+        async with control_audit.action(
+            actor, "maintenance_change", request,
+            source_summary=source_summary,
+        ):
+            return await site_control.set_maintenance(payload.enabled)
     except Exception as exc:
         raise HTTPException(409, str(exc)) from exc
