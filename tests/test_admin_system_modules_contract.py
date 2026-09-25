@@ -1,6 +1,10 @@
 from pathlib import Path
 import unittest
 
+from fastapi import FastAPI
+
+from app.api.v1 import endpoints as api_endpoints
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,9 +36,15 @@ class AdminSystemModulesContractTests(unittest.TestCase):
         api = self.read("app/api/v1/admin_site.py")
         service = self.read("app/services/site_control.py")
         client = self.read("static/js/maintenance-admin.js")
-        endpoints = self.read("app/api/v1/endpoints.py")
+        application = FastAPI()
+        application.include_router(api_endpoints.router, prefix="/api/v1")
+        maintenance_methods = set()
+        for route in application.routes:
+            if getattr(route, "path", "") == "/api/v1/media/admin/site/maintenance":
+                maintenance_methods.update(getattr(route, "methods", set()) or set())
+
         self.assertIn('router = APIRouter(prefix="/site")', api)
-        self.assertIn('router.include_router(site_admin_router, prefix="/media/admin"', endpoints)
+        self.assertTrue({"GET", "POST"}.issubset(maintenance_methods))
         self.assertIn("FORCE_OPEN", service)
         self.assertIn("版本发布正在执行", service)
         self.assertIn("站点开放状态", client)
