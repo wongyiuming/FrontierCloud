@@ -29,10 +29,14 @@ require('CI_BRANCH = "dev"' in release, "Production verification must reuse dev 
 require('RELEASE_BRANCH = "main"' in updater, "Updater must target main")
 require('BRANCH_URL = f"{REPOSITORY_API}/branches/{RELEASE_BRANCH}"' in release,
         "Web release control must verify the current main HEAD")
-require('"branch": CI_BRANCH' in release and '"event": "push"' in release,
-        "Web release control must verify dev push CI")
-require('tree_id' in release and 'tree_sha' in release and '_matching_ci_run' in release,
-        "Production publishability must bind main tree to a tested dev tree")
+require('main_commit.get("parents")' in release and 'parents[1]' in release,
+        "Web release control must derive the exact dev commit merged into main")
+require('"head_sha": source_sha' in release and '_matching_ci_run(runs, source_sha)' in release,
+        "Web release control must query the exact merged dev SHA")
+require('source_tree != main_tree' in release,
+        "Web release control must reject a main tree that differs from the merged dev tree")
+require('item.get("head_sha")' in release and 'item.get("head_branch") == CI_BRANCH' in release,
+        "Web release control must require the exact dev push CI")
 require('origin/dev' not in updater, "Updater must not validate releases against dev")
 require('refs/remotes/origin/{RELEASE_BRANCH}' in updater,
         "Updater must maintain an explicit origin/main remote-tracking ref")
