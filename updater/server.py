@@ -10,7 +10,6 @@ import queue
 import re
 import socketserver
 import subprocess
-import sys
 import threading
 import time
 
@@ -227,17 +226,16 @@ def release_image_revision(image) -> str:
 def cleanup_release_images(engine, keep: set[str]) -> None:
     retained = {item for item in keep if SHA_RE.fullmatch(item)}
     for image in engine.images.list():
-        revision = release_image_revision(image)
-        if not revision or revision in retained:
-            continue
-        tags = [str(tag) for tag in (getattr(image, "tags", []) or [])]
-        if not any(RELEASE_IMAGE_TAG_RE.fullmatch(tag) for tag in tags):
-            continue
-        try:
-            engine.images.remove(image.id, force=False, noprune=False)
-            log(f"removed stale release image {revision}")
-        except Exception as exc:
-            log(f"release image cleanup skipped {revision}: {type(exc).__name__}: {exc}")
+        for raw_tag in getattr(image, "tags", []) or []:
+            tag = str(raw_tag)
+            matched = RELEASE_IMAGE_TAG_RE.fullmatch(tag)
+            if not matched or matched.group(1) in retained:
+                continue
+            try:
+                engine.images.remove(tag, force=False, noprune=False)
+                log(f"removed stale release image {tag}")
+            except Exception as exc:
+                log(f"release image cleanup skipped {tag}: {type(exc).__name__}: {exc}")
 
 
 def validate_target(target: str, mode: str) -> None:
@@ -286,6 +284,38 @@ def restore_local(engine, snapshots: dict[str, dict], old_sha: str) -> None:
             log(f"git restore failed: {type(exc).__name__}: {exc}")
 
 
+def request_runtime_restart(target: str, previous_sha: str) -> None:
+    write_status(
+        state="restarting", phase="updater-restart", current_sha=target,
+        previous_sha=previous_sha, updater_runtime_sha=RUNTIME_SHA,
+        detail="",
+    )
+    log(f"release services complete; restarting updater runtime at {target}")
+    os._exit(0)
+
+
+def complete_pending_restart() -> bool:
+    current = read_status()
+    if current.get("state") != "restarting":
+        return False
+    target = str(current.get("target_sha") or "")
+    if target and target == RUNTIME_SHA:
+        maintenance(False)
+        write_status(
+            state="success", phase="complete", current_sha=target,
+            updater_runtime_sha=RUNTIME_SHA, detail="", completed_at=int(time.time()),
+        )
+        log(f"updater runtime restarted at {RUNTIME_SHA}")
+    else:
+        maintenance(True, target)
+        write_status(
+            state="failed", phase="updater-restart-failed",
+            updater_runtime_sha=RUNTIME_SHA,
+            detail=f"runtime SHA {RUNTIME_SHA or 'unknown'} does not match target {target or 'unknown'}",
+        )
+    return True
+
+
 def perform(target: str, mode: str, hold_maintenance: bool) -> None:
     current = read_status()
     old_sha = str(current.get("current_sha") or initial_sha())
@@ -301,7 +331,7 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
     engine = None
     snapshots: dict[str, dict] = {}
     local_replaced = False
-    reload_target = ""
+    restart_runtime = False
     try:
         validate_target(target, mode)
         engine = client()
@@ -346,16 +376,10 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
                 raise RuntimeError("cluster convergence failed: " + detail[-2500:])
 
         cleanup_release_images(engine, {target, previous_sha})
-        maintenance(False)
         if SERVER_ACTIVE and RUNTIME_SHA and RUNTIME_SHA != target:
-            reload_target = target
-            write_status(
-                state="restarting", phase="updater-reexec", current_sha=target,
-                previous_sha=previous_sha, updater_runtime_sha=RUNTIME_SHA,
-                detail="",
-            )
-            log(f"release services complete; reloading updater runtime to {target}")
+            restart_runtime = True
         else:
+            maintenance(False)
             write_status(
                 state="success", phase="complete", current_sha=target,
                 previous_sha=previous_sha, updater_runtime_sha=RUNTIME_SHA or target,
@@ -374,17 +398,8 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
             except Exception:
                 pass
 
-    if reload_target:
-        try:
-            os.execv(sys.executable, [sys.executable, str(pathlib.Path(__file__).resolve())])
-        except OSError as exc:
-            maintenance(True, target)
-            write_status(
-                state="failed", phase="updater-reexec-failed",
-                updater_runtime_sha=RUNTIME_SHA,
-                detail=f"{type(exc).__name__}: {exc}",
-            )
-            log(f"updater runtime reload failed: {type(exc).__name__}: {exc}")
+    if restart_runtime:
+        request_runtime_restart(target, previous_sha)
 
 
 def worker() -> None:
@@ -438,23 +453,7 @@ def main() -> None:
             state="idle", phase="idle", current_sha=RUNTIME_SHA, previous_sha="",
             updater_runtime_sha=RUNTIME_SHA, detail="",
         )
-    elif current.get("state") == "restarting":
-        target = str(current.get("target_sha") or "")
-        if target and target == RUNTIME_SHA:
-            maintenance(False)
-            write_status(
-                state="success", phase="complete", current_sha=target,
-                updater_runtime_sha=RUNTIME_SHA, detail="", completed_at=int(time.time()),
-            )
-            log(f"updater runtime reloaded at {RUNTIME_SHA}")
-        else:
-            maintenance(True, target)
-            write_status(
-                state="failed", phase="updater-reexec-failed",
-                updater_runtime_sha=RUNTIME_SHA,
-                detail=f"runtime SHA {RUNTIME_SHA or 'unknown'} does not match target {target or 'unknown'}",
-            )
-    else:
+    elif not complete_pending_restart():
         write_status(updater_runtime_sha=RUNTIME_SHA)
     threading.Thread(target=worker, name="frontiercloud-release-worker", daemon=True).start()
     with socketserver.ThreadingUnixStreamServer(str(SOCKET_PATH), Handler) as server:
