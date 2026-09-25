@@ -61,12 +61,16 @@ require('promote-main:' in workflow and "github.ref == 'refs/heads/main'" in wor
         "Main push must use the lightweight promotion gate")
 require("github.ref == 'refs/heads/dev'" in workflow,
         "Full CI must run on dev pushes")
-require('actions/github-script@v7' in workflow and 'tree_id' in workflow,
-        "Main promotion must verify the already tested dev tree")
-require('github.paginate.iterator(' in workflow and 'item?.head_commit?.tree_id' in workflow,
-        "Main promotion pagination must tolerate empty or partial workflow-run pages")
-require('response => response.data.workflow_runs' not in workflow,
-        "Main promotion must not flatten paginated workflow runs into undefined entries")
+require('actions/github-script@v7' in workflow and 'mainCommit.data.parents' in workflow,
+        "Main promotion must derive the exact merged dev commit")
+require('parents[1]?.sha' in workflow and 'sourceTree !== mainTree' in workflow,
+        "Main promotion must verify that the merged dev tree equals the main tree")
+require('head_sha: sourceSha' in workflow and 'item?.head_sha === sourceSha' in workflow,
+        "Main promotion must query the exact merged dev SHA instead of scanning historical trees")
+require('verify-promotion-query:' in workflow and 'head_sha: context.sha' in workflow,
+        "Dev CI must verify that the exact-SHA promotion lookup works before merge")
+require('github.paginate' not in workflow,
+        "Main promotion must not rely on historical workflow pagination")
 require("github.event_name != 'pull_request' || github.head_ref != 'dev'" not in workflow,
         "Full CI must not rerun automatically on main")
 
@@ -75,4 +79,4 @@ for path in ("Dockerfile", "nginx/Dockerfile", "updater/Dockerfile"):
     require("COPY --chmod=" not in source, f"{path} requires BuildKit COPY --chmod")
     require("RUN --mount=" not in source, f"{path} requires BuildKit RUN --mount")
 
-print("Release policy contract passed: main promotes an already-tested dev tree")
+print("Release policy contract passed: main promotes an already-tested dev commit")
