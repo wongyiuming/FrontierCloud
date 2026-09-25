@@ -99,22 +99,33 @@ class FederationContractTests(unittest.TestCase):
             self.assertIn("refs/heads/dev", section, job)
             self.assertNotIn("refs/heads/main", section, job)
 
-    def test_main_promotion_requires_exact_merged_dev_sha_and_identical_tree(self):
+    def test_main_promotion_requires_reviewed_dev_pr_exact_ci_and_identical_tree(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         release = (ROOT / "app/services/release_control.py").read_text(encoding="utf-8")
-        for source in (workflow, release):
-            self.assertIn("parents[1]", source)
-            self.assertIn("head_sha", source)
+        self.assertIn("listPullRequestsAssociatedWithCommit", workflow)
+        self.assertIn("pr?.base?.ref === 'main'", workflow)
+        self.assertIn("pr?.head?.ref === 'dev'", workflow)
+        self.assertIn('pr?.head?.repo?.full_name === `${owner}/${repo}`', workflow)
+        self.assertIn("sourceShas.length !== 1", workflow)
         self.assertIn("sourceTree !== mainTree", workflow)
+        self.assertIn("head_sha: sourceSha", workflow)
         self.assertIn("item?.head_sha === sourceSha", workflow)
         self.assertIn("item?.head_branch === 'dev'", workflow)
         self.assertIn("run.status !== 'completed' || run.conclusion !== 'success'", workflow)
+        self.assertNotIn("parents[1]", workflow)
         self.assertIn('RELEASE_BRANCH = "main"', release)
         self.assertIn('CI_BRANCH = "dev"', release)
+        self.assertIn('REPOSITORY_FULL_NAME = "wongyiuming/FrontierCloud"', release)
+        self.assertIn('_promotion_source_sha(pulls)', release)
+        self.assertIn('base.get("ref") == RELEASE_BRANCH', release)
+        self.assertIn('head.get("ref") == CI_BRANCH', release)
+        self.assertIn('head_repo.get("full_name") == REPOSITORY_FULL_NAME', release)
+        self.assertIn('f"{REPOSITORY_API}/commits/{main_sha}/pulls"', release)
         self.assertIn("source_tree != main_tree", release)
         self.assertIn('item.get("head_branch") == CI_BRANCH', release)
         self.assertIn('item.get("event") == "push"', release)
         self.assertIn("completed and succeeded", release)
+        self.assertNotIn("parents[1]", release)
 
     def test_ci_permissions_are_read_only_and_have_no_deployment_authority(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
