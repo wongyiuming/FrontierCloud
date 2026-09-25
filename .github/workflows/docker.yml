@@ -28,16 +28,29 @@ jobs:
               ref: context.sha,
             });
             const mainTree = mainCommit.data.commit.tree.sha;
-            const parents = Array.isArray(mainCommit.data.parents) ? mainCommit.data.parents : [];
-            const sourceSha = parents[1]?.sha || '';
-            if (!/^[0-9a-f]{40}$/.test(sourceSha)) {
-              core.setFailed(`main ${context.sha} is not a reviewed dev merge commit`);
+            const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: context.sha,
+              per_page: 100,
+            });
+            const promotionPulls = (Array.isArray(associated.data) ? associated.data : []).filter(pr =>
+              pr?.merged_at &&
+              pr?.base?.ref === 'main' &&
+              pr?.head?.ref === 'dev' &&
+              pr?.head?.repo?.full_name === `${owner}/${repo}` &&
+              /^[0-9a-f]{40}$/.test(pr?.head?.sha || '')
+            );
+            const sourceShas = [...new Set(promotionPulls.map(pr => pr.head.sha))];
+            if (sourceShas.length !== 1) {
+              core.setFailed(`main ${context.sha} has no unique merged dev->main PR association`);
               return;
             }
+            const sourceSha = sourceShas[0];
             const sourceCommit = await github.rest.repos.getCommit({ owner, repo, ref: sourceSha });
             const sourceTree = sourceCommit.data.commit.tree.sha;
             if (sourceTree !== mainTree) {
-              core.setFailed(`main tree ${mainTree} differs from merged dev tree ${sourceTree}`);
+              core.setFailed(`main tree ${mainTree} differs from reviewed dev PR tree ${sourceTree}`);
               return;
             }
             const response = await github.rest.actions.listWorkflowRuns({
@@ -57,7 +70,7 @@ jobs:
               item?.event === 'push'
             ) || null;
             if (!run) {
-              core.setFailed(`merged dev ${sourceSha} has no dev push CI run`);
+              core.setFailed(`reviewed dev PR head ${sourceSha} has no dev push CI run`);
               return;
             }
             if (run.status !== 'completed' || run.conclusion !== 'success') {
