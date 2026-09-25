@@ -67,4 +67,4 @@ node tests/player_cache_smoke.mjs
 docker compose config --quiet
 ```
 
-Changes enter `main` through reviewed pull requests.
+Changes enter `main` through reviewed pull requests. Release promotion validates the merged PR provenance, exact successful `dev` push CI result, and identical reviewed `dev` / `main` trees, so release correctness does not depend on which GitHub merge method produced `main`.

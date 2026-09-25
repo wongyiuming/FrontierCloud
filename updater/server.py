@@ -24,8 +24,11 @@ MAINTENANCE_FLAG = MAINTENANCE_DIR / "enabled"
 FORCE_OPEN_FLAG = ROOT / "data" / ".frontiercloud-force-open"
 RELEASE_BRANCH = "main"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+RELEASE_IMAGE_TAG_RE = re.compile(r"^frontiercloud-(?:web|nginx):([0-9a-f]{40})$")
 TASKS: queue.Queue[tuple[str, str, bool]] = queue.Queue(maxsize=1)
 WRITE_LOCK = threading.Lock()
+SERVER_ACTIVE = False
+RUNTIME_SHA = ""
 SERVICE_NAMES = {
     "web": "office_automation_web",
     "nginx": "office_automation_nginx",
@@ -198,14 +201,41 @@ def build(engine, target: str) -> tuple[str, str]:
     log(f"building web image {target}")
     engine.images.build(
         path=str(ROOT), dockerfile="Dockerfile", tag=web_tag, rm=True, forcerm=True,
-        labels={"frontiercloud.revision": target},
+        labels={"frontiercloud.revision": target, "frontiercloud.component": "web"},
     )
     log(f"building nginx image {target}")
     engine.images.build(
         path=str(ROOT), dockerfile="nginx/Dockerfile", tag=nginx_tag, rm=True, forcerm=True,
-        labels={"frontiercloud.revision": target},
+        labels={"frontiercloud.revision": target, "frontiercloud.component": "nginx"},
     )
     return web_tag, nginx_tag
+
+
+def release_image_revision(image) -> str:
+    labels = (getattr(image, "attrs", {}) or {}).get("Config", {}).get("Labels") or {}
+    value = str(labels.get("frontiercloud.revision") or "")
+    if SHA_RE.fullmatch(value):
+        return value
+    for tag in getattr(image, "tags", []) or []:
+        matched = RELEASE_IMAGE_TAG_RE.fullmatch(str(tag))
+        if matched:
+            return matched.group(1)
+    return ""
+
+
+def cleanup_release_images(engine, keep: set[str]) -> None:
+    retained = {item for item in keep if SHA_RE.fullmatch(item)}
+    for image in engine.images.list():
+        for raw_tag in getattr(image, "tags", []) or []:
+            tag = str(raw_tag)
+            matched = RELEASE_IMAGE_TAG_RE.fullmatch(tag)
+            if not matched or matched.group(1) in retained:
+                continue
+            try:
+                engine.images.remove(tag, force=False, noprune=False)
+                log(f"removed stale release image {tag}")
+            except Exception as exc:
+                log(f"release image cleanup skipped {tag}: {type(exc).__name__}: {exc}")
 
 
 def validate_target(target: str, mode: str) -> None:
@@ -254,6 +284,38 @@ def restore_local(engine, snapshots: dict[str, dict], old_sha: str) -> None:
             log(f"git restore failed: {type(exc).__name__}: {exc}")
 
 
+def request_runtime_restart(target: str, previous_sha: str) -> None:
+    write_status(
+        state="restarting", phase="updater-restart", current_sha=target,
+        previous_sha=previous_sha, updater_runtime_sha=RUNTIME_SHA,
+        detail="",
+    )
+    log(f"release services complete; restarting updater runtime at {target}")
+    os._exit(0)
+
+
+def complete_pending_restart() -> bool:
+    current = read_status()
+    if current.get("state") != "restarting":
+        return False
+    target = str(current.get("target_sha") or "")
+    if target and target == RUNTIME_SHA:
+        maintenance(False)
+        write_status(
+            state="success", phase="complete", current_sha=target,
+            updater_runtime_sha=RUNTIME_SHA, detail="", completed_at=int(time.time()),
+        )
+        log(f"updater runtime restarted at {RUNTIME_SHA}")
+    else:
+        maintenance(True, target)
+        write_status(
+            state="failed", phase="updater-restart-failed",
+            updater_runtime_sha=RUNTIME_SHA,
+            detail=f"runtime SHA {RUNTIME_SHA or 'unknown'} does not match target {target or 'unknown'}",
+        )
+    return True
+
+
 def perform(target: str, mode: str, hold_maintenance: bool) -> None:
     current = read_status()
     old_sha = str(current.get("current_sha") or initial_sha())
@@ -262,12 +324,14 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
     write_status(
         state="running", phase="validating", mode=mode, target_sha=target,
         current_sha=old_sha, previous_sha=previous_sha, detail="", started_at=started,
+        updater_runtime_sha=RUNTIME_SHA,
     )
     FORCE_OPEN_FLAG.unlink(missing_ok=True)
     maintenance(True, target)
     engine = None
     snapshots: dict[str, dict] = {}
     local_replaced = False
+    restart_runtime = False
     try:
         validate_target(target, mode)
         engine = client()
@@ -311,10 +375,17 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
                 detail = ((stderr or b"") + b"\n" + (stdout or b"")).decode("utf-8", errors="replace")
                 raise RuntimeError("cluster convergence failed: " + detail[-2500:])
 
-        maintenance(False)
-        write_status(state="success", phase="complete", current_sha=target,
-                     previous_sha=previous_sha, detail="", completed_at=int(time.time()))
-        log(f"release complete: {target} ({mode})")
+        cleanup_release_images(engine, {target, previous_sha})
+        if SERVER_ACTIVE and RUNTIME_SHA and RUNTIME_SHA != target:
+            restart_runtime = True
+        else:
+            maintenance(False)
+            write_status(
+                state="success", phase="complete", current_sha=target,
+                previous_sha=previous_sha, updater_runtime_sha=RUNTIME_SHA or target,
+                detail="", completed_at=int(time.time()),
+            )
+            log(f"release complete: {target} ({mode})")
     except BaseException as exc:
         if engine is not None and not local_replaced and snapshots:
             restore_local(engine, snapshots, old_sha)
@@ -326,6 +397,9 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
                 engine.close()
             except Exception:
                 pass
+
+    if restart_runtime:
+        request_runtime_restart(target, previous_sha)
 
 
 def worker() -> None:
@@ -351,7 +425,7 @@ class Handler(socketserver.StreamRequestHandler):
                 if not SHA_RE.fullmatch(target) or mode not in {"upgrade", "rollback"}:
                     raise ValueError("invalid release request")
                 current = read_status()
-                if current.get("state") in {"queued", "running", "distributing"}:
+                if current.get("state") in {"queued", "running", "distributing", "restarting"}:
                     response = {"ok": False, "reason": "release already running", "status": current}
                 else:
                     TASKS.put_nowait((target, mode, hold))
@@ -367,14 +441,20 @@ class Handler(socketserver.StreamRequestHandler):
 
 
 def main() -> None:
+    global SERVER_ACTIVE, RUNTIME_SHA
     CONTROL_DIR.mkdir(parents=True, exist_ok=True)
     MAINTENANCE_DIR.mkdir(parents=True, exist_ok=True)
     SOCKET_PATH.unlink(missing_ok=True)
+    RUNTIME_SHA = initial_sha()
+    SERVER_ACTIVE = True
     current = read_status()
     if not current:
-        write_status(state="idle", phase="idle", current_sha=initial_sha(), previous_sha="", detail="")
-    else:
-        write_status()
+        write_status(
+            state="idle", phase="idle", current_sha=RUNTIME_SHA, previous_sha="",
+            updater_runtime_sha=RUNTIME_SHA, detail="",
+        )
+    elif not complete_pending_restart():
+        write_status(updater_runtime_sha=RUNTIME_SHA)
     threading.Thread(target=worker, name="frontiercloud-release-worker", daemon=True).start()
     with socketserver.ThreadingUnixStreamServer(str(SOCKET_PATH), Handler) as server:
         os.chmod(SOCKET_PATH, 0o666)
