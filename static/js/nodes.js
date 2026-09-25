@@ -33,20 +33,21 @@
         const upgradeButton = document.createElement('button'); upgradeButton.type = 'button'; upgradeButton.id = 'nodeReleaseUpgrade'; upgradeButton.textContent = '升级并分发';
         const rollbackButton = document.createElement('button'); rollbackButton.type = 'button'; rollbackButton.id = 'nodeReleaseRollback'; rollbackButton.textContent = '一键回滚';
         toolbar.append(title, refreshButton, upgradeButton, rollbackButton);
-        const ci = document.createElement('div'); ci.id = 'nodeReleaseCi'; ci.textContent = 'CI 尚未加载';
+        const ci = document.createElement('div'); ci.id = 'nodeReleaseCi'; ci.textContent = 'main CI 尚未加载';
+        const policy = document.createElement('div'); policy.id = 'nodeReleasePolicy'; policy.textContent = '发布策略尚未加载';
         const local = document.createElement('div'); local.id = 'nodeReleaseLocal'; local.textContent = '本机版本尚未加载';
         const followers = document.createElement('div'); followers.id = 'nodeReleaseFollowers'; followers.textContent = 'Follower 尚未加载'; followers.style.whiteSpace = 'pre-line';
-        box.append(toolbar, ci, local, followers);
+        box.append(toolbar, ci, policy, local, followers);
         element('storagePoolSummary').before(box);
         refreshButton.onclick = () => action(() => refreshRelease(true));
         upgradeButton.onclick = () => action(async () => {
             await post('/release/upgrade');
-            status('已进入维护，Master 正在升级并向 Follower 分发同一版本');
+            status('已进入维护，Master 正在升级到 main 已审核版本并向 Follower 分发');
             startReleasePolling();
         });
         rollbackButton.onclick = () => action(async () => {
             await post('/release/rollback');
-            status('已进入维护，正在回滚 Master 并向 Follower 收敛上一版本');
+            status('已进入维护，正在回滚 Master 并向 Follower 收敛上一 main 历史版本');
             startReleasePolling();
         });
     }
@@ -55,13 +56,17 @@
         ensureReleasePanel();
         const value = await api(`/api/v1/media/admin/nodes/release${force ? '?refresh_ci=true' : ''}`);
         const ci = value.ci || {}; const local = value.local || {};
+        const branch = value.release_branch || ci.branch || 'main';
         const ciState = ci.publishable ? '通过' : (ci.status === 'completed' ? `失败(${ci.conclusion || 'unknown'})` : (ci.status || '不可用'));
-        element('nodeReleaseCi').textContent = `dev CI: ${ciState} · #${ci.run_number || '-'} · ${shortSha(ci.sha)}${ci.updated_at ? ` · ${new Date(ci.updated_at).toLocaleString()}` : ''}`;
-        element('nodeReleaseLocal').textContent = `Master: ${shortSha(local.current_sha)} · ${local.state || 'unknown'} / ${local.phase || '-'}${local.target_sha ? ` · target ${shortSha(local.target_sha)}` : ''}${local.previous_sha ? ` · rollback ${shortSha(local.previous_sha)}` : ''}${local.detail ? ` · ${local.detail}` : ''}`;
+        element('nodeReleaseCi').textContent = `${branch} CI: ${ciState} · #${ci.run_number || '-'} · ${shortSha(ci.sha)}${ci.updated_at ? ` · ${new Date(ci.updated_at).toLocaleString()}` : ''}${ci.detail ? ` · ${ci.detail}` : ''}`;
+        element('nodeReleasePolicy').textContent = value.release_policy_ready
+            ? `发布策略: ready · 仅允许 ${branch} HEAD + ${branch} CI success`
+            : `发布策略: blocked${value.release_policy_detail ? ` · ${value.release_policy_detail}` : ''}`;
+        element('nodeReleaseLocal').textContent = `Master: ${shortSha(local.current_sha)} · ${local.state || 'unknown'} / ${local.phase || '-'} · track ${local.release_branch || 'legacy'}${local.target_sha ? ` · target ${shortSha(local.target_sha)}` : ''}${local.previous_sha ? ` · rollback ${shortSha(local.previous_sha)}` : ''}${local.detail ? ` · ${local.detail}` : ''}`;
         const followerLines = (value.followers || []).map(item => {
             const peer = item.peer_endpoint || item.peer_id; const release = item.status || {};
             if (!item.reachable) return `${peer} · unreachable${item.detail ? ` (${item.detail})` : ''}`;
-            return `${peer} · ${shortSha(release.current_sha)} · ${release.state || 'unknown'} / ${release.phase || '-'}${release.target_sha ? ` · target ${shortSha(release.target_sha)}` : ''}`;
+            return `${peer} · ${shortSha(release.current_sha)} · ${release.state || 'unknown'} / ${release.phase || '-'} · track ${release.release_branch || 'legacy'}${release.target_sha ? ` · target ${shortSha(release.target_sha)}` : ''}`;
         });
         element('nodeReleaseFollowers').textContent = followerLines.length ? followerLines.join('\n') : '无 Follower；仅更新 Master';
         element('nodeReleaseUpgrade').disabled = !value.can_upgrade;

@@ -21,6 +21,7 @@ SOCKET_PATH = CONTROL_DIR / "control.sock"
 STATUS_PATH = CONTROL_DIR / "status.json"
 MAINTENANCE_DIR = pathlib.Path("/run/frontiercloud-maintenance")
 MAINTENANCE_FLAG = MAINTENANCE_DIR / "enabled"
+RELEASE_BRANCH = "main"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 TASKS: queue.Queue[tuple[str, str, bool]] = queue.Queue(maxsize=1)
 WRITE_LOCK = threading.Lock()
@@ -66,6 +67,7 @@ def write_status(**changes) -> dict:
     with WRITE_LOCK:
         current = read_status()
         current.update(changes)
+        current["release_branch"] = RELEASE_BRANCH
         current["updated_at"] = int(time.time())
         CONTROL_DIR.mkdir(parents=True, exist_ok=True)
         temporary = STATUS_PATH.with_suffix(".tmp")
@@ -210,17 +212,17 @@ def validate_target(target: str, mode: str) -> None:
         raise RuntimeError("target must be a full commit SHA")
     if git("status", "--porcelain", "--untracked-files=no", timeout=20):
         raise RuntimeError("tracked working tree changes block release")
-    git("fetch", "--no-tags", "origin", "dev", timeout=120)
-    dev_head = git("rev-parse", "origin/dev", timeout=20)
+    git("fetch", "--no-tags", "origin", RELEASE_BRANCH, timeout=120)
+    main_head = git("rev-parse", f"origin/{RELEASE_BRANCH}", timeout=20)
     git("cat-file", "-e", f"{target}^{{commit}}", timeout=20)
-    if mode == "upgrade" and target != dev_head:
-        raise RuntimeError("upgrade target is not the current origin/dev head")
+    if mode == "upgrade" and target != main_head:
+        raise RuntimeError("upgrade target is not the current origin/main head")
     result = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", target, "origin/dev"],
+        ["git", "merge-base", "--is-ancestor", target, f"origin/{RELEASE_BRANCH}"],
         cwd=ROOT, check=False, timeout=20,
     )
     if result.returncode != 0:
-        raise RuntimeError("target is not part of origin/dev history")
+        raise RuntimeError("target is not part of origin/main history")
 
 
 def restore_local(engine, snapshots: dict[str, dict], old_sha: str) -> None:
@@ -364,6 +366,8 @@ def main() -> None:
     current = read_status()
     if not current:
         write_status(state="idle", phase="idle", current_sha=initial_sha(), previous_sha="", detail="")
+    else:
+        write_status()
     threading.Thread(target=worker, name="frontiercloud-release-worker", daemon=True).start()
     with socketserver.ThreadingUnixStreamServer(str(SOCKET_PATH), Handler) as server:
         os.chmod(SOCKET_PATH, 0o666)

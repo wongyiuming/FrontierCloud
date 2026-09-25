@@ -6,18 +6,21 @@ WORKDIR /app
 
 # Install locked dependencies before copying application sources. Code and test
 # changes must not invalidate the dependency layer on every deployment.
-COPY --chmod=0644 pyproject.toml .
-RUN --mount=type=cache,target=/root/.cache/pip \
+# Keep this Dockerfile compatible with the legacy Docker builder used by the
+# in-cluster updater: do not depend on BuildKit-only COPY/RUN flags here.
+COPY pyproject.toml .
+RUN chmod 0644 pyproject.toml && \
     python -c "import pathlib,tomllib; data=tomllib.loads(pathlib.Path('pyproject.toml').read_text()); pathlib.Path('/tmp/requirements.txt').write_text('\\n'.join(data['project']['dependencies'])+'\\n')" && \
-    python -m pip install -r /tmp/requirements.txt
+    python -m pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Git worktree permissions can be restrictive on the host. Copy mutable sources
 # after dependencies, then normalize them for the fixed unprivileged UID.
-COPY --chmod=0644 main.py .
+COPY main.py .
 COPY app ./app
 COPY static ./static
 COPY tests ./tests
-RUN chmod -R a+rX /app/app /app/static /app/tests
+RUN chmod 0644 /app/main.py && \
+    chmod -R a+rX /app/app /app/static /app/tests
 
 # The public service does not require root. A fixed UID simplifies host
 # permissions for the data directory.
