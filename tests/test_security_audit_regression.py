@@ -1,3 +1,4 @@
+import re
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -34,6 +35,10 @@ def _admin_application() -> FastAPI:
     return application
 
 
+def _concrete_path(path: str) -> str:
+    return re.sub(r"\{[^}/]+\}", "probe", path)
+
+
 class AdminTransportBoundaryTests(unittest.IsolatedAsyncioTestCase):
     def test_untrusted_peer_cannot_spoof_https_with_forwarded_header(self):
         request = _request(headers={"X-Forwarded-Proto": "https"})
@@ -54,17 +59,29 @@ class AdminTransportBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(admin_transport.secure_admin_transport(_request(client="127.0.0.1")))
         self.assertTrue(admin_transport.secure_admin_transport(_request(client="::1")))
 
-    def test_every_admin_route_has_the_secure_transport_dependency(self):
+    async def test_every_documented_admin_operation_rejects_untrusted_http(self):
         application = _admin_application()
-        admin_routes = [
-            route for route in application.routes
-            if getattr(route, "path", "").startswith("/api/v1/media/admin")
-        ]
-        self.assertTrue(admin_routes)
-        for route in admin_routes:
-            with self.subTest(path=route.path):
-                calls = {dependency.call for dependency in route.dependant.dependencies}
-                self.assertIn(admin_transport.require_secure_admin_transport, calls)
+        operations = []
+        for path, path_item in application.openapi().get("paths", {}).items():
+            if not path.startswith("/api/v1/media/admin"):
+                continue
+            for method in {"get", "post", "put", "patch", "delete"}.intersection(path_item):
+                operations.append((method.upper(), _concrete_path(path)))
+        self.assertTrue(operations)
+
+        transport = httpx.ASGITransport(
+            app=application,
+            client=("203.0.113.10", 43210),
+        )
+        with patch.object(admin_transport.settings, "TLS_ENABLED", True):
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://frontiercloud.test",
+            ) as client:
+                for method, path in operations:
+                    with self.subTest(method=method, path=path):
+                        response = await client.request(method, path, json={})
+                        self.assertEqual(response.status_code, 426)
 
     async def test_tls_admin_key_login_rejects_insecure_transport_before_secret_verification(self):
         redeem = AsyncMock()
