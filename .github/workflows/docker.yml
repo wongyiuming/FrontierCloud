@@ -33,6 +33,7 @@ jobs:
         run: |
           docker build -t frontiercloud-acceptance-web .
           docker build -t frontiercloud-acceptance-nginx -f nginx/Dockerfile .
+          docker build -t frontiercloud-updater -f updater/Dockerfile .
       - name: Run verified local HTTPS topology and browser acceptance
         env:
           PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
