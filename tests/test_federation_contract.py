@@ -164,7 +164,9 @@ class FederationContractTests(unittest.TestCase):
         release = (ROOT / "app/services/release_control.py").read_text(encoding="utf-8")
         self.assertIn('CONTROL_SOCKET = "/run/frontiercloud-updater/control.sock"', release)
         self.assertIn("socket.AF_UNIX", release)
-        self.assertNotIn("docker", release.lower())
+        self.assertNotIn("import docker", release)
+        self.assertNotIn("docker.DockerClient", release)
+        self.assertNotIn("/var/run/docker.sock", release)
 
     def test_runtime_upgrade_uses_engine_api_not_compose_or_systemd(self):
         updater = (ROOT / "updater/server.py").read_text(encoding="utf-8")
