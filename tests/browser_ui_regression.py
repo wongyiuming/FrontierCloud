@@ -24,7 +24,7 @@ def wait_image(page, selector: str) -> None:
     page.locator(selector).wait_for(state="visible", timeout=15000)
     page.wait_for_function(
         "selector => { const image = document.querySelector(selector); return image && image.complete && image.naturalWidth > 0; }",
-        selector,
+        arg=selector,
         timeout=15000,
     )
 
