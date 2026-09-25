@@ -63,6 +63,10 @@ require("github.ref == 'refs/heads/dev'" in workflow,
         "Full CI must run on dev pushes")
 require('actions/github-script@v7' in workflow and 'tree_id' in workflow,
         "Main promotion must verify the already tested dev tree")
+require('github.paginate.iterator(' in workflow and 'item?.head_commit?.tree_id' in workflow,
+        "Main promotion pagination must tolerate empty or partial workflow-run pages")
+require('response => response.data.workflow_runs' not in workflow,
+        "Main promotion must not flatten paginated workflow runs into undefined entries")
 require("github.event_name != 'pull_request' || github.head_ref != 'dev'" not in workflow,
         "Full CI must not rerun automatically on main")
 
