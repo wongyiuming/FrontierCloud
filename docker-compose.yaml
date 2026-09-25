@@ -30,6 +30,24 @@ services:
       - ./data:/app/data:z
     logging: *service_logging
 
+  updater:
+    build: {context: ., dockerfile: updater/Dockerfile}
+    image: frontiercloud-updater
+    restart: always
+    user: "0:0"
+    command: ["python", "/workspace/updater/server.py"]
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    volumes:
+      - .:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - updater_control:/run/frontiercloud-updater
+      - maintenance_state:/run/frontiercloud-maintenance
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    logging: *service_logging
+
   web:
     <<: *app-image
     container_name: office_automation_web
@@ -53,6 +71,7 @@ services:
       - ./data:/app/data:z
       - web_tmp:/tmp
       - runtime_secrets:/run/frontiercloud-secrets
+      - updater_control:/run/frontiercloud-updater
     healthcheck:
       test: ["CMD", "python", "-m", "app.services.health_probe"]
       interval: 30s
@@ -125,6 +144,7 @@ services:
       - ${SSL_CERT_PATH:-./certs/fullchain.pem}:/etc/nginx/certs/fullchain.pem:ro
       - ${SSL_KEY_PATH:-./certs/privkey.pem}:/etc/nginx/certs/privkey.pem:ro
       - ${ACME_WEBROOT:-./certs/acme}:/var/www/certbot:ro
+      - maintenance_state:/run/frontiercloud-maintenance:ro
     depends_on:
       web: {condition: service_healthy}
     stop_grace_period: 3s
@@ -164,3 +184,5 @@ volumes:
   redis_data:
   mysql_data:
   mysql_socket:
+  updater_control:
+  maintenance_state:
