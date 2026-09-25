@@ -11,8 +11,9 @@ COPY nginx/render-security.awk /etc/nginx/render-security.awk
 COPY nginx/security-headers.conf /etc/nginx/security-headers.conf
 COPY nginx/karaoke-security-headers.conf /etc/nginx/karaoke-security-headers.conf
 COPY nginx/transport /etc/nginx/transport
+COPY nginx/maintenance.html /usr/share/nginx/html/maintenance.html
 COPY static /app/static
-RUN chmod -R a+rX /app/static
+RUN chmod -R a+rX /app/static /usr/share/nginx/html/maintenance.html
 
 EXPOSE 80 443
 
