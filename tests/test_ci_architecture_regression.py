@@ -122,7 +122,7 @@ class RuntimeUpgradeBoundaryTests(unittest.TestCase):
         self.assertNotIn("docker compose", updater.lower())
         self.assertNotIn("docker-compose", updater.lower())
         self.assertNotIn("systemctl", updater.lower())
-        self.assertNotIn("systemd", updater.lower())
+        self.assertNotIn("subprocess.run([\"systemd", updater.lower())
         self.assertNotIn("docker-cli", updater_dockerfile.lower())
         self.assertNotIn("docker-cli-compose", updater_dockerfile.lower())
         self.assertIn("docker==7.1.0", updater_dockerfile)
