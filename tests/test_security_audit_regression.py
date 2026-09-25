@@ -1,11 +1,11 @@
 import unittest
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from fastapi import HTTPException, Response
+import httpx
+from fastapi import FastAPI, HTTPException
 from starlette.requests import Request
 
-from app.api.v1 import admin, admin_nodes, admin_site
+from app.api.v1 import admin, admin_nodes, admin_site, admin_transport, endpoints
 from app.services import admin_service
 
 
@@ -28,10 +28,16 @@ def _request(*, scheme="http", client="203.0.113.10", headers=None, path="/api/v
     })
 
 
+def _admin_application() -> FastAPI:
+    application = FastAPI()
+    application.include_router(endpoints.router, prefix="/api/v1")
+    return application
+
+
 class AdminTransportBoundaryTests(unittest.IsolatedAsyncioTestCase):
     def test_untrusted_peer_cannot_spoof_https_with_forwarded_header(self):
         request = _request(headers={"X-Forwarded-Proto": "https"})
-        self.assertFalse(admin.secure_admin_transport(request))
+        self.assertFalse(admin_transport.secure_admin_transport(request))
 
     def test_trusted_reverse_proxy_can_assert_https_for_verified_client(self):
         request = _request(
@@ -41,42 +47,68 @@ class AdminTransportBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 "X-Forwarded-Proto": "https",
             },
         )
-        self.assertTrue(admin.secure_admin_transport(request))
+        self.assertTrue(admin_transport.secure_admin_transport(request))
 
     def test_direct_https_and_documented_loopback_http_are_secure_admin_transports(self):
-        self.assertTrue(admin.secure_admin_transport(_request(scheme="https")))
-        self.assertTrue(admin.secure_admin_transport(_request(client="127.0.0.1")))
-        self.assertTrue(admin.secure_admin_transport(_request(client="::1")))
+        self.assertTrue(admin_transport.secure_admin_transport(_request(scheme="https")))
+        self.assertTrue(admin_transport.secure_admin_transport(_request(client="127.0.0.1")))
+        self.assertTrue(admin_transport.secure_admin_transport(_request(client="::1")))
+
+    def test_every_admin_route_has_the_secure_transport_dependency(self):
+        admin_routes = [
+            route for route in endpoints.router.routes
+            if getattr(route, "path", "").startswith("/media/admin")
+        ]
+        self.assertTrue(admin_routes)
+        for route in admin_routes:
+            with self.subTest(path=route.path):
+                calls = {dependency.call for dependency in route.dependant.dependencies}
+                self.assertIn(admin_transport.require_secure_admin_transport, calls)
 
     async def test_tls_admin_key_login_rejects_insecure_transport_before_secret_verification(self):
-        request = _request(path="/api/v1/media/admin/elevate")
-        redeem = AsyncMock(return_value=SimpleNamespace(
-            key_hash="hash", idle_ttl=3600, kind="persistent",
-        ))
+        redeem = AsyncMock()
         create_session = AsyncMock()
+        application = _admin_application()
+        transport = httpx.ASGITransport(
+            app=application,
+            client=("203.0.113.10", 43210),
+        )
         with (
-            patch.object(admin.settings, "TLS_ENABLED", True),
+            patch.object(admin_transport.settings, "TLS_ENABLED", True),
             patch.object(admin.admin_service, "redeem_admin_credential", new=redeem),
             patch.object(admin.admin_service, "create_session", new=create_session),
         ):
-            with self.assertRaises(HTTPException) as raised:
-                await admin.elevate(request, Response(), "top-secret-admin-key")
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://frontiercloud.test",
+            ) as client:
+                response = await client.post(
+                    "/api/v1/media/admin/elevate",
+                    data={"token": "top-secret-admin-key"},
+                )
 
-        self.assertEqual(raised.exception.status_code, 426)
+        self.assertEqual(response.status_code, 426)
         redeem.assert_not_awaited()
         create_session.assert_not_awaited()
 
     async def test_tls_admin_session_rejects_insecure_transport_before_session_lookup(self):
-        request = _request(path="/api/v1/media/admin/status")
         require_admin = AsyncMock(return_value="session-hash")
+        application = _admin_application()
+        transport = httpx.ASGITransport(
+            app=application,
+            client=("203.0.113.10", 43210),
+        )
         with (
-            patch.object(admin.settings, "TLS_ENABLED", True),
+            patch.object(admin_transport.settings, "TLS_ENABLED", True),
             patch.object(admin.admin_service, "require_admin", new=require_admin),
         ):
-            with self.assertRaises(HTTPException) as raised:
-                await admin.require_session(request)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://frontiercloud.test",
+            ) as client:
+                response = await client.get("/api/v1/media/admin/status")
 
-        self.assertEqual(raised.exception.status_code, 426)
+        self.assertEqual(response.status_code, 426)
         require_admin.assert_not_awaited()
 
 
@@ -96,8 +128,9 @@ class ControlPlaneAuditTests(unittest.IsolatedAsyncioTestCase):
 
         request = _request(scheme="https", path="/api/v1/media/admin/site/maintenance")
         with (
-            patch.object(admin_site.admin_service, "audit", new=self._audit(events), create=True),
+            patch.object(admin_service, "audit", new=self._audit(events)),
             patch.object(admin_site.site_control, "set_maintenance", new=set_maintenance),
+            patch.object(admin_site, "require_https", new=lambda _request: None),
         ):
             result = await admin_site.maintenance_change(
                 request, admin_site.MaintenanceChange(enabled=True), "session-hash",
@@ -117,8 +150,9 @@ class ControlPlaneAuditTests(unittest.IsolatedAsyncioTestCase):
 
         request = _request(scheme="https", path="/api/v1/media/admin/site/maintenance")
         with (
-            patch.object(admin_site.admin_service, "audit", new=self._audit(events), create=True),
+            patch.object(admin_service, "audit", new=self._audit(events)),
             patch.object(admin_site.site_control, "set_maintenance", new=set_maintenance),
+            patch.object(admin_site, "require_https", new=lambda _request: None),
         ):
             with self.assertRaises(HTTPException) as raised:
                 await admin_site.maintenance_change(
@@ -144,7 +178,7 @@ class ControlPlaneAuditTests(unittest.IsolatedAsyncioTestCase):
 
                 request = _request(scheme="https", path=f"/api/v1/media/admin/nodes/release/{mode}")
                 with (
-                    patch.object(admin_nodes.admin_service, "audit", new=self._audit(events), create=True),
+                    patch.object(admin_service, "audit", new=self._audit(events)),
                     patch.object(admin_nodes.release_control, method_name, new=start),
                     patch.object(admin_nodes.site_control, "prepare_release", new=lambda: None),
                     patch.object(admin_nodes, "require_https", new=lambda _request: None),
@@ -166,7 +200,7 @@ class ControlPlaneAuditTests(unittest.IsolatedAsyncioTestCase):
 
         request = _request(scheme="https", path="/api/v1/media/admin/nodes/release/upgrade")
         with (
-            patch.object(admin_nodes.admin_service, "audit", new=self._audit(events), create=True),
+            patch.object(admin_service, "audit", new=self._audit(events)),
             patch.object(admin_nodes.release_control, "start_upgrade", new=fail_upgrade),
             patch.object(admin_nodes.site_control, "prepare_release", new=lambda: None),
             patch.object(admin_nodes, "require_https", new=lambda _request: None),
