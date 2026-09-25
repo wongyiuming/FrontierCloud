@@ -19,6 +19,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.v1.endpoints import router as api_v1_router
+from app.api.internal_cluster_update import router as internal_cluster_update_router
 from app.core.admin_log import sanitize_log_value
 from app.core.config import settings
 from app.core.client_ip import client_ip, resolve_client_identity
@@ -89,6 +90,7 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(internal_nodes_router)
+app.include_router(internal_cluster_update_router)
 
 QUIET_REQUEST_PATHS = frozenset({
     "/health",
