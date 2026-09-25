@@ -18,6 +18,10 @@ def require(condition: bool, message: str) -> None:
 release = read("app/services/release_control.py")
 updater = read("updater/server.py")
 nodes = read("static/js/nodes.js")
+release_ui = read("static/js/release-admin.js")
+maintenance_ui = read("static/js/maintenance-admin.js")
+maintenance_gate = read("nginx/maintenance-gate.conf")
+maintenance_page = read("nginx/maintenance.html")
 workflow = read(".github/workflows/docker.yml")
 
 require('RELEASE_BRANCH = "main"' in release, "Web release control must target main")
@@ -34,7 +38,17 @@ require('refs/heads/{RELEASE_BRANCH}' in updater,
 require('followers_need_convergence' in release and 'cluster_convergence_needed' in release,
         "Web release control must allow retrying partial cluster convergence")
 require('dev CI:' not in nodes and '${branch} CI:' in nodes,
-        "Admin release UI must display the actual release branch")
+        "Legacy node release renderer must still display the actual release branch")
+require('systemVersionPanel' in release_ui and '系统版本管理' in release_ui,
+        "Production release controls must have a standalone Admin module")
+require('schedule(masterBusy ? 1500 : 5000)' in release_ui,
+        "Release Admin must poll rapidly while a release is active")
+require('siteAccessPanel' in maintenance_ui and '站点开放状态' in maintenance_ui,
+        "Site availability must have a standalone Admin module")
+require('.frontiercloud-maintenance' in maintenance_gate and '.frontiercloud-force-open' in maintenance_gate,
+        "Nginx must combine release and explicit Admin maintenance gates")
+require('前沿娱乐 · 系统维护' in maintenance_page and '立即重试' in maintenance_page,
+        "Public maintenance page must use the branded maintenance UI")
 require('branches: ["dev", "main"]' in workflow,
         "CI must run again after a PR is merged into main")
 
