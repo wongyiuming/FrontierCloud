@@ -27,7 +27,12 @@ require('BRANCH_URL = f"{REPOSITORY_API}/branches/{RELEASE_BRANCH}"' in release,
 require('"branch": RELEASE_BRANCH' in release and '"event": "push"' in release,
         "Web release control must verify a main push CI run")
 require('origin/dev' not in updater, "Updater must not validate releases against dev")
-require('origin/{RELEASE_BRANCH}' in updater, "Updater must validate against origin/main")
+require('refs/remotes/origin/{RELEASE_BRANCH}' in updater,
+        "Updater must maintain an explicit origin/main remote-tracking ref")
+require('refs/heads/{RELEASE_BRANCH}' in updater,
+        "Updater fetch must not depend on a pre-existing remote fetch refspec")
+require('followers_need_convergence' in release and 'cluster_convergence_needed' in release,
+        "Web release control must allow retrying partial cluster convergence")
 require('dev CI:' not in nodes and '${branch} CI:' in nodes,
         "Admin release UI must display the actual release branch")
 require('branches: ["dev", "main"]' in workflow,
