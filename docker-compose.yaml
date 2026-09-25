@@ -53,6 +53,7 @@ services:
       - ./data:/app/data:z
       - web_tmp:/tmp
       - runtime_secrets:/run/frontiercloud-secrets
+      - updater_control:/run/frontiercloud-updater:ro
     healthcheck:
       test: ["CMD", "python", "-m", "app.services.health_probe"]
       interval: 30s
@@ -125,6 +126,7 @@ services:
       - ${SSL_CERT_PATH:-./certs/fullchain.pem}:/etc/nginx/certs/fullchain.pem:ro
       - ${SSL_KEY_PATH:-./certs/privkey.pem}:/etc/nginx/certs/privkey.pem:ro
       - ${ACME_WEBROOT:-./certs/acme}:/var/www/certbot:ro
+      - maintenance_state:/run/frontiercloud-maintenance:ro
     depends_on:
       web: {condition: service_healthy}
     stop_grace_period: 3s
@@ -158,9 +160,31 @@ services:
       driver: json-file
       options: {max-size: "5m", max-file: "2"}
 
+  updater:
+    build: updater
+    image: frontiercloud-updater
+    container_name: frontiercloud_updater
+    restart: always
+    working_dir: /workspace
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - .:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - updater_control:/run/frontiercloud-updater
+      - maintenance_state:/run/frontiercloud-maintenance
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    pids_limit: 128
+    mem_limit: 96m
+    cpus: "0.50"
+    logging: *service_logging
+
 volumes:
   web_tmp:
   runtime_secrets:
   redis_data:
   mysql_data:
   mysql_socket:
+  updater_control:
+  maintenance_state:
