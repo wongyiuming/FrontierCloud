@@ -75,5 +75,5 @@ async def set_maintenance(enabled: bool) -> dict:
 
 
 def prepare_release() -> None:
-    """A new release must never inherit a previous manual-open override."""
-    _unlink(FORCE_OPEN)
+    """Compatibility hook; every updater clears its own open override atomically."""
+    return None
