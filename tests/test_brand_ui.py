@@ -30,6 +30,18 @@ class BrandUIContractTests(unittest.TestCase):
         self.assertIn("/api/v1/media/brand/logo/${brandKind}", category)
         self.assertIn("/api/v1/media/brand/logo/entertainment", karaoke)
 
+    def test_home_brand_art_is_the_rounded_card_surface(self):
+        index = (ROOT / "static" / "media" / "index.html").read_text(encoding="utf-8")
+        self.assertIn(".brand-surface{", index)
+        self.assertIn("overflow:hidden", index)
+        self.assertIn("border-radius:clamp(", index)
+        self.assertIn(".brand-backdrop", index)
+        self.assertIn(".brand-foreground", index)
+        self.assertIn("object-fit:cover", index)
+        self.assertGreaterEqual(index.count('class="brand-backdrop"'), 3)
+        self.assertGreaterEqual(index.count('class="brand-foreground"'), 3)
+        self.assertNotIn("card-title brand", index)
+
     def test_admin_logo_management_is_registered(self):
         endpoints = (ROOT / "app" / "api" / "v1" / "endpoints.py").read_text(encoding="utf-8")
         shell = (ROOT / "app" / "api" / "v1" / "admin_page_integrity.py").read_text(encoding="utf-8")
