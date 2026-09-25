@@ -13,7 +13,10 @@ from app.services.federation.runtime import runtime
 from app.services.federation.state import state
 
 CONTROL_SOCKET = "/run/frontiercloud-updater/control.sock"
-CI_URL = "https://api.github.com/repos/wongyiuming/FrontierCloud/actions/workflows/docker.yml/runs"
+RELEASE_BRANCH = "main"
+REPOSITORY_API = "https://api.github.com/repos/wongyiuming/FrontierCloud"
+CI_URL = f"{REPOSITORY_API}/actions/workflows/docker.yml/runs"
+BRANCH_URL = f"{REPOSITORY_API}/branches/{RELEASE_BRANCH}"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CI_CACHE_SECONDS = 90
 _ci_cache: tuple[float, dict] = (0.0, {})
@@ -64,27 +67,75 @@ async def ci_status(*, force: bool = False) -> dict:
                 timeout=httpx.Timeout(5, connect=3),
                 headers={"Accept": "application/vnd.github+json", "User-Agent": "FrontierCloud-release-control"},
             ) as client:
-                response = await client.get(CI_URL, params={"branch": "dev", "event": "push", "per_page": 5})
-                response.raise_for_status()
-                runs = response.json().get("workflow_runs") or []
-            run = next((item for item in runs if item.get("head_branch") == "dev"), None)
-            if not run:
-                value = {"available": False, "status": "unknown", "conclusion": None, "detail": "dev CI run not found"}
-            else:
-                sha = str(run.get("head_sha") or "")
+                runs_response, branch_response = await asyncio.gather(
+                    client.get(CI_URL, params={"branch": RELEASE_BRANCH, "event": "push", "per_page": 5}),
+                    client.get(BRANCH_URL),
+                )
+                runs_response.raise_for_status()
+                branch_response.raise_for_status()
+                runs = runs_response.json().get("workflow_runs") or []
+                branch_payload = branch_response.json()
+            main_sha = str((branch_payload.get("commit") or {}).get("sha") or "")
+            run = next(
+                (
+                    item for item in runs
+                    if item.get("head_branch") == RELEASE_BRANCH and item.get("event") == "push"
+                ),
+                None,
+            )
+            if not SHA_RE.fullmatch(main_sha):
                 value = {
-                    "available": bool(SHA_RE.fullmatch(sha)),
-                    "sha": sha,
+                    "available": False,
+                    "branch": RELEASE_BRANCH,
+                    "status": "unknown",
+                    "conclusion": None,
+                    "detail": "main HEAD is unavailable",
+                    "publishable": False,
+                }
+            elif not run:
+                value = {
+                    "available": True,
+                    "branch": RELEASE_BRANCH,
+                    "sha": main_sha,
+                    "status": "unknown",
+                    "conclusion": None,
+                    "detail": "main CI run not found",
+                    "publishable": False,
+                }
+            else:
+                ci_sha = str(run.get("head_sha") or "")
+                tested_head = ci_sha == main_sha
+                completed = run.get("status") == "completed"
+                succeeded = run.get("conclusion") == "success"
+                detail = ""
+                if not tested_head:
+                    detail = "main HEAD is waiting for its CI run"
+                elif not completed:
+                    detail = "main CI is still running"
+                elif not succeeded:
+                    detail = f"main CI failed ({run.get('conclusion') or 'unknown'})"
+                value = {
+                    "available": True,
+                    "branch": RELEASE_BRANCH,
+                    "sha": main_sha,
+                    "ci_sha": ci_sha,
                     "status": run.get("status"),
                     "conclusion": run.get("conclusion"),
                     "run_number": run.get("run_number"),
                     "html_url": run.get("html_url"),
                     "updated_at": run.get("updated_at"),
-                    "publishable": bool(SHA_RE.fullmatch(sha)) and run.get("status") == "completed" and run.get("conclusion") == "success",
+                    "detail": detail,
+                    "publishable": tested_head and completed and succeeded,
                 }
         except Exception as exc:
-            value = {"available": False, "status": "unavailable", "conclusion": None,
-                     "detail": f"GitHub Actions unavailable: {type(exc).__name__}", "publishable": False}
+            value = {
+                "available": False,
+                "branch": RELEASE_BRANCH,
+                "status": "unavailable",
+                "conclusion": None,
+                "detail": f"GitHub Actions unavailable: {type(exc).__name__}",
+                "publishable": False,
+            }
         _ci_cache = (time.monotonic(), value)
         return value
 
@@ -116,6 +167,7 @@ async def release_status(*, refresh_ci: bool = False) -> dict:
     busy = local.get("state") in {"queued", "running", "distributing"}
     return {
         "role": state.node.get("role"),
+        "release_branch": RELEASE_BRANCH,
         "ci": ci,
         "local": local,
         "followers": followers,
@@ -131,10 +183,10 @@ async def start_upgrade() -> dict:
     ci = await ci_status(force=True)
     target = str(ci.get("sha") or "")
     if not ci.get("publishable") or not SHA_RE.fullmatch(target):
-        raise RuntimeError("Latest dev CI is not publishable")
+        raise RuntimeError("Current main HEAD has not passed main CI")
     local = await agent_status()
     if target == local.get("current_sha"):
-        raise RuntimeError("Latest tested dev commit is already running")
+        raise RuntimeError("Latest tested main commit is already running")
     response = await agent_request({
         "action": "start", "target_sha": target, "mode": "upgrade", "hold_maintenance": True,
     })
