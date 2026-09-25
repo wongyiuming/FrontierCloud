@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
-      - name: Promote already-tested dev tree
+      - name: Promote already-tested dev commit
         uses: actions/github-script@v7
         with:
           script: |
@@ -28,36 +28,78 @@ jobs:
               ref: context.sha,
             });
             const mainTree = mainCommit.data.commit.tree.sha;
-            let run = null;
-            for await (const response of github.paginate.iterator(
-              github.rest.actions.listWorkflowRuns,
-              {
-                owner,
-                repo,
-                workflow_id: 'docker.yml',
-                branch: 'dev',
-                event: 'push',
-                per_page: 100,
-              },
-            )) {
-              const pageRuns = Array.isArray(response.data?.workflow_runs)
-                ? response.data.workflow_runs
-                : [];
-              run = pageRuns.find(item => item?.head_commit?.tree_id === mainTree) || null;
-              if (run) break;
+            const parents = Array.isArray(mainCommit.data.parents) ? mainCommit.data.parents : [];
+            const sourceSha = parents[1]?.sha || '';
+            if (!/^[0-9a-f]{40}$/.test(sourceSha)) {
+              core.setFailed(`main ${context.sha} is not a reviewed dev merge commit`);
+              return;
             }
+            const sourceCommit = await github.rest.repos.getCommit({ owner, repo, ref: sourceSha });
+            const sourceTree = sourceCommit.data.commit.tree.sha;
+            if (sourceTree !== mainTree) {
+              core.setFailed(`main tree ${mainTree} differs from merged dev tree ${sourceTree}`);
+              return;
+            }
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: 'docker.yml',
+              event: 'push',
+              head_sha: sourceSha,
+              per_page: 20,
+            });
+            const runs = Array.isArray(response.data?.workflow_runs)
+              ? response.data.workflow_runs
+              : [];
+            const run = runs.find(item =>
+              item?.head_sha === sourceSha &&
+              item?.head_branch === 'dev' &&
+              item?.event === 'push'
+            ) || null;
             if (!run) {
-              core.setFailed(`main tree ${mainTree} has no matching dev CI run`);
+              core.setFailed(`merged dev ${sourceSha} has no dev push CI run`);
               return;
             }
             if (run.status !== 'completed' || run.conclusion !== 'success') {
-              core.setFailed(`dev CI #${run.run_number} for tree ${mainTree} is ${run.status}/${run.conclusion || 'unknown'}`);
+              core.setFailed(`dev CI #${run.run_number} for ${sourceSha} is ${run.status}/${run.conclusion || 'unknown'}`);
               return;
             }
-            core.notice(`main ${context.sha} promotes dev ${run.head_sha} from CI #${run.run_number}; tree ${mainTree}`);
-            core.setOutput('source_sha', run.head_sha);
+            core.notice(`main ${context.sha} promotes dev ${sourceSha} from CI #${run.run_number}; tree ${mainTree}`);
+            core.setOutput('source_sha', sourceSha);
             core.setOutput('run_number', String(run.run_number));
             core.setOutput('tree_sha', mainTree);
+
+  verify-promotion-query:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Verify exact dev SHA lookup
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: 'docker.yml',
+              event: 'push',
+              head_sha: context.sha,
+              per_page: 20,
+            });
+            const runs = Array.isArray(response.data?.workflow_runs)
+              ? response.data.workflow_runs
+              : [];
+            const run = runs.find(item =>
+              item?.head_sha === context.sha &&
+              item?.head_branch === 'dev' &&
+              item?.event === 'push'
+            );
+            if (!run) {
+              core.setFailed(`dev ${context.sha} cannot be resolved by the promotion query`);
+              return;
+            }
+            core.notice(`promotion query resolves dev ${context.sha} as CI #${run.run_number}`);
 
   test-cluster:
     if: >-
