@@ -7,6 +7,7 @@ from app.api.v1.admin_karaoke_integrity import router as admin_karaoke_integrity
 from app.api.v1.admin_masterlocal_recovery import router as masterlocal_recovery_router
 from app.api.v1.admin_page_integrity import router as page_integrity_router
 from app.api.v1.admin_upload_guard import router as upload_guard_router
+from app.api.v1.admin_site import router as site_admin_router
 from app.api.v1.brand import (
     admin_router as brand_admin_router,
     public_router as brand_public_router,
@@ -68,6 +69,7 @@ router.include_router(karaoke_integrity_router, prefix="/karaoke", tags=["Karaok
 router.include_router(_without_paths(karaoke_users_router, _KARAOKE_OVERRIDE_PATHS), prefix="/karaoke", tags=["KaraokeUsers"])
 router.include_router(brand_upload_router, prefix="/media/admin/upload/brand", tags=["MediaAdmin"])
 router.include_router(brand_admin_router, prefix="/media/admin/brand", tags=["MediaAdmin"])
+router.include_router(site_admin_router, prefix="/media/admin", tags=["MediaAdmin"])
 router.include_router(upload_guard_router, prefix="/media/admin", tags=["MediaAdmin"])
 router.include_router(masterlocal_recovery_router, prefix="/media/admin", tags=["MediaAdmin"])
 router.include_router(delete_integrity_router, prefix="/media/admin", tags=["MediaAdmin"])
