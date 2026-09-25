@@ -53,16 +53,17 @@ async def agent_status() -> dict:
     }
 
 
-def _matching_ci_run(runs: list[dict], tree_sha: str) -> dict | None:
-    """Return the newest dev push CI run whose tested Git tree matches main."""
-    if not SHA_RE.fullmatch(tree_sha):
+def _matching_ci_run(runs: list[dict], source_sha: str) -> dict | None:
+    """Return the exact dev push CI run for the commit merged into main."""
+    if not SHA_RE.fullmatch(source_sha):
         return None
     for item in runs:
-        head_commit = item.get("head_commit") if isinstance(item.get("head_commit"), dict) else {}
+        if not isinstance(item, dict):
+            continue
         if (
             item.get("head_branch") == CI_BRANCH
             and item.get("event") == "push"
-            and str(head_commit.get("tree_id") or "") == tree_sha
+            and str(item.get("head_sha") or "") == source_sha
         ):
             return item
     return None
@@ -83,66 +84,103 @@ async def ci_status(*, force: bool = False) -> dict:
                 timeout=httpx.Timeout(5, connect=3),
                 headers={"Accept": "application/vnd.github+json", "User-Agent": "FrontierCloud-release-control"},
             ) as client:
-                runs_response, branch_response = await asyncio.gather(
-                    client.get(CI_URL, params={"branch": CI_BRANCH, "event": "push", "per_page": 100}),
-                    client.get(BRANCH_URL),
-                )
-                runs_response.raise_for_status()
+                branch_response = await client.get(BRANCH_URL)
                 branch_response.raise_for_status()
-                runs = runs_response.json().get("workflow_runs") or []
                 branch_payload = branch_response.json()
-            main_commit = branch_payload.get("commit") if isinstance(branch_payload.get("commit"), dict) else {}
-            main_sha = str(main_commit.get("sha") or "")
-            commit_payload = main_commit.get("commit") if isinstance(main_commit.get("commit"), dict) else {}
-            tree_payload = commit_payload.get("tree") if isinstance(commit_payload.get("tree"), dict) else {}
-            main_tree = str(tree_payload.get("sha") or "")
-            run = _matching_ci_run(runs, main_tree)
-            if not SHA_RE.fullmatch(main_sha) or not SHA_RE.fullmatch(main_tree):
-                value = {
-                    "available": False,
-                    "branch": RELEASE_BRANCH,
-                    "source_branch": CI_BRANCH,
-                    "status": "unknown",
-                    "conclusion": None,
-                    "detail": "main HEAD tree is unavailable",
-                    "publishable": False,
-                }
-            elif not run:
-                value = {
-                    "available": True,
-                    "branch": RELEASE_BRANCH,
-                    "source_branch": CI_BRANCH,
-                    "sha": main_sha,
-                    "tree_sha": main_tree,
-                    "status": "unknown",
-                    "conclusion": None,
-                    "detail": "main HEAD tree has no matching dev CI result",
-                    "publishable": False,
-                }
-            else:
-                ci_sha = str(run.get("head_sha") or "")
-                completed = run.get("status") == "completed"
-                succeeded = run.get("conclusion") == "success"
-                detail = ""
-                if not completed:
-                    detail = "dev CI for the main HEAD tree is still running"
-                elif not succeeded:
-                    detail = f"dev CI for the main HEAD tree failed ({run.get('conclusion') or 'unknown'})"
-                value = {
-                    "available": True,
-                    "branch": RELEASE_BRANCH,
-                    "source_branch": CI_BRANCH,
-                    "sha": main_sha,
-                    "tree_sha": main_tree,
-                    "ci_sha": ci_sha,
-                    "status": run.get("status"),
-                    "conclusion": run.get("conclusion"),
-                    "run_number": run.get("run_number"),
-                    "html_url": run.get("html_url"),
-                    "updated_at": run.get("updated_at"),
-                    "detail": detail,
-                    "publishable": completed and succeeded,
-                }
+                main_commit = branch_payload.get("commit") if isinstance(branch_payload.get("commit"), dict) else {}
+                main_sha = str(main_commit.get("sha") or "")
+                commit_payload = main_commit.get("commit") if isinstance(main_commit.get("commit"), dict) else {}
+                tree_payload = commit_payload.get("tree") if isinstance(commit_payload.get("tree"), dict) else {}
+                main_tree = str(tree_payload.get("sha") or "")
+                parents = main_commit.get("parents") if isinstance(main_commit.get("parents"), list) else []
+                source_parent = parents[1] if len(parents) > 1 and isinstance(parents[1], dict) else {}
+                source_sha = str(source_parent.get("sha") or "")
+
+                if not SHA_RE.fullmatch(main_sha) or not SHA_RE.fullmatch(main_tree):
+                    value = {
+                        "available": False,
+                        "branch": RELEASE_BRANCH,
+                        "source_branch": CI_BRANCH,
+                        "status": "unknown",
+                        "conclusion": None,
+                        "detail": "main HEAD tree is unavailable",
+                        "publishable": False,
+                    }
+                elif not SHA_RE.fullmatch(source_sha):
+                    value = {
+                        "available": True,
+                        "branch": RELEASE_BRANCH,
+                        "source_branch": CI_BRANCH,
+                        "sha": main_sha,
+                        "tree_sha": main_tree,
+                        "status": "unknown",
+                        "conclusion": None,
+                        "detail": "main HEAD is not a reviewed dev merge commit",
+                        "publishable": False,
+                    }
+                else:
+                    runs_response, source_response = await asyncio.gather(
+                        client.get(CI_URL, params={"event": "push", "head_sha": source_sha, "per_page": 20}),
+                        client.get(f"{REPOSITORY_API}/commits/{source_sha}"),
+                    )
+                    runs_response.raise_for_status()
+                    source_response.raise_for_status()
+                    runs = runs_response.json().get("workflow_runs") or []
+                    source_payload = source_response.json()
+                    source_commit = source_payload.get("commit") if isinstance(source_payload.get("commit"), dict) else {}
+                    source_tree_payload = source_commit.get("tree") if isinstance(source_commit.get("tree"), dict) else {}
+                    source_tree = str(source_tree_payload.get("sha") or "")
+                    run = _matching_ci_run(runs, source_sha)
+
+                    if source_tree != main_tree:
+                        value = {
+                            "available": True,
+                            "branch": RELEASE_BRANCH,
+                            "source_branch": CI_BRANCH,
+                            "sha": main_sha,
+                            "tree_sha": main_tree,
+                            "ci_sha": source_sha,
+                            "status": "unknown",
+                            "conclusion": None,
+                            "detail": "main HEAD tree differs from the merged dev tree",
+                            "publishable": False,
+                        }
+                    elif not run:
+                        value = {
+                            "available": True,
+                            "branch": RELEASE_BRANCH,
+                            "source_branch": CI_BRANCH,
+                            "sha": main_sha,
+                            "tree_sha": main_tree,
+                            "ci_sha": source_sha,
+                            "status": "unknown",
+                            "conclusion": None,
+                            "detail": "merged dev commit has no matching dev push CI result",
+                            "publishable": False,
+                        }
+                    else:
+                        completed = run.get("status") == "completed"
+                        succeeded = run.get("conclusion") == "success"
+                        detail = ""
+                        if not completed:
+                            detail = "dev CI for the merged commit is still running"
+                        elif not succeeded:
+                            detail = f"dev CI for the merged commit failed ({run.get('conclusion') or 'unknown'})"
+                        value = {
+                            "available": True,
+                            "branch": RELEASE_BRANCH,
+                            "source_branch": CI_BRANCH,
+                            "sha": main_sha,
+                            "tree_sha": main_tree,
+                            "ci_sha": source_sha,
+                            "status": run.get("status"),
+                            "conclusion": run.get("conclusion"),
+                            "run_number": run.get("run_number"),
+                            "html_url": run.get("html_url"),
+                            "updated_at": run.get("updated_at"),
+                            "detail": detail,
+                            "publishable": completed and succeeded,
+                        }
         except Exception as exc:
             value = {
                 "available": False,
