@@ -159,21 +159,38 @@ async def follower_release_statuses() -> list[dict]:
     return await asyncio.gather(*(one(row) for row in relations))
 
 
+def updater_policy_status(local: dict, followers: list[dict]) -> tuple[bool, str]:
+    if local.get("release_branch") != RELEASE_BRANCH:
+        return False, "Master updater has not been migrated to main release policy"
+    unready = []
+    for item in followers:
+        status = item.get("status") if isinstance(item.get("status"), dict) else {}
+        if not item.get("reachable") or status.get("release_branch") != RELEASE_BRANCH:
+            unready.append(str(item.get("peer_endpoint") or item.get("peer_id") or "Follower"))
+    if unready:
+        return False, "Follower updater has not been migrated to main release policy: " + ", ".join(unready)
+    return True, ""
+
+
 async def release_status(*, refresh_ci: bool = False) -> dict:
     local, ci = await asyncio.gather(agent_status(), ci_status(force=refresh_ci))
     followers = await follower_release_statuses()
     target = str(ci.get("sha") or "")
     current = str(local.get("current_sha") or "")
     busy = local.get("state") in {"queued", "running", "distributing"}
+    policy_ready, policy_detail = updater_policy_status(local, followers)
     return {
         "role": state.node.get("role"),
         "release_branch": RELEASE_BRANCH,
         "ci": ci,
         "local": local,
         "followers": followers,
-        "can_upgrade": state.node.get("role") == "Master" and bool(ci.get("publishable"))
+        "release_policy_ready": policy_ready,
+        "release_policy_detail": policy_detail,
+        "can_upgrade": state.node.get("role") == "Master" and policy_ready and bool(ci.get("publishable"))
                        and target != current and not busy,
-        "can_rollback": state.node.get("role") == "Master" and bool(local.get("previous_sha")) and not busy,
+        "can_rollback": state.node.get("role") == "Master" and policy_ready
+                        and bool(local.get("previous_sha")) and not busy,
     }
 
 
@@ -185,6 +202,10 @@ async def start_upgrade() -> dict:
     if not ci.get("publishable") or not SHA_RE.fullmatch(target):
         raise RuntimeError("Current main HEAD has not passed main CI")
     local = await agent_status()
+    followers = await follower_release_statuses()
+    policy_ready, policy_detail = updater_policy_status(local, followers)
+    if not policy_ready:
+        raise RuntimeError(policy_detail)
     if target == local.get("current_sha"):
         raise RuntimeError("Latest tested main commit is already running")
     response = await agent_request({
@@ -199,6 +220,10 @@ async def start_rollback() -> dict:
     if state.node.get("role") != "Master":
         raise RuntimeError("Only Master can roll back the cluster")
     local = await agent_status()
+    followers = await follower_release_statuses()
+    policy_ready, policy_detail = updater_policy_status(local, followers)
+    if not policy_ready:
+        raise RuntimeError(policy_detail)
     target = str(local.get("previous_sha") or "")
     if not SHA_RE.fullmatch(target):
         raise RuntimeError("No previous Web-managed release is available")
