@@ -118,6 +118,7 @@ class UploadRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_cancel_deletes_local_bytes_before_releasing_reservation(self):
         row = self._reserved_local()
         connection = _Connection()
+        database = _Database(connection)
         fail_upload = AsyncMock()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -126,7 +127,7 @@ class UploadRecoveryTests(unittest.IsolatedAsyncioTestCase):
             target.write_bytes(b"ID3")
             with (
                 patch.object(cluster, "MEDIA_ROOT", root),
-                patch.object(cluster.node_state, "database", _Database(connection)),
+                patch.object(cluster.node_state, "database", database),
                 patch.object(cluster.resource_pool, "upload_session", new=AsyncMock(return_value=row)),
                 patch.object(cluster.resource_pool, "fail_upload", new=fail_upload),
                 patch.object(cluster, "_local_object_exists", new=AsyncMock(return_value=False)),
@@ -138,7 +139,7 @@ class UploadRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(cleaned)
             self.assertFalse(target.exists())
             self.assertTrue(any("DELETE FROM media_objects" in sql for sql, _ in connection.executed))
-            fail_upload.assert_awaited_once_with(row["upload_id"], cluster.node_state.database)
+            fail_upload.assert_awaited_once_with(row["upload_id"], database)
 
     async def test_remote_404_releases_reservation_because_bytes_are_already_absent(self):
         row = {
