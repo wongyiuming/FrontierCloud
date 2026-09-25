@@ -73,17 +73,16 @@ class AdminTransportBoundaryTests(unittest.IsolatedAsyncioTestCase):
             app=application,
             client=("203.0.113.10", 43210),
         )
-        with patch.object(admin_transport.settings, "TLS_ENABLED", True):
-            async with httpx.AsyncClient(
-                transport=transport,
-                base_url="http://frontiercloud.test",
-            ) as client:
-                for method, path in operations:
-                    with self.subTest(method=method, path=path):
-                        response = await client.request(method, path, json={})
-                        self.assertEqual(response.status_code, 426)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://frontiercloud.test",
+        ) as client:
+            for method, path in operations:
+                with self.subTest(method=method, path=path):
+                    response = await client.request(method, path, json={})
+                    self.assertEqual(response.status_code, 426)
 
-    async def test_tls_admin_key_login_rejects_insecure_transport_before_secret_verification(self):
+    async def test_remote_admin_key_login_rejects_http_before_secret_verification(self):
         redeem = AsyncMock()
         create_session = AsyncMock()
         application = _admin_application()
@@ -92,7 +91,6 @@ class AdminTransportBoundaryTests(unittest.IsolatedAsyncioTestCase):
             client=("203.0.113.10", 43210),
         )
         with (
-            patch.object(admin_transport.settings, "TLS_ENABLED", True),
             patch.object(admin.admin_service, "redeem_admin_credential", new=redeem),
             patch.object(admin.admin_service, "create_session", new=create_session),
         ):
@@ -109,17 +107,14 @@ class AdminTransportBoundaryTests(unittest.IsolatedAsyncioTestCase):
         redeem.assert_not_awaited()
         create_session.assert_not_awaited()
 
-    async def test_tls_admin_session_rejects_insecure_transport_before_session_lookup(self):
+    async def test_remote_admin_session_rejects_http_before_session_lookup(self):
         require_admin = AsyncMock(return_value="session-hash")
         application = _admin_application()
         transport = httpx.ASGITransport(
             app=application,
             client=("203.0.113.10", 43210),
         )
-        with (
-            patch.object(admin_transport.settings, "TLS_ENABLED", True),
-            patch.object(admin.admin_service, "require_admin", new=require_admin),
-        ):
+        with patch.object(admin.admin_service, "require_admin", new=require_admin):
             async with httpx.AsyncClient(
                 transport=transport,
                 base_url="http://frontiercloud.test",
