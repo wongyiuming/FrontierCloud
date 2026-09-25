@@ -38,13 +38,13 @@ class AdminSystemModulesContractTests(unittest.TestCase):
         client = self.read("static/js/maintenance-admin.js")
         application = FastAPI()
         application.include_router(api_endpoints.router, prefix="/api/v1")
-        maintenance_methods = set()
-        for route in application.routes:
-            if getattr(route, "path", "") == "/api/v1/media/admin/site/maintenance":
-                maintenance_methods.update(getattr(route, "methods", set()) or set())
+        maintenance = application.openapi().get("paths", {}).get(
+            "/api/v1/media/admin/site/maintenance", {}
+        )
 
         self.assertIn('router = APIRouter(prefix="/site")', api)
-        self.assertTrue({"GET", "POST"}.issubset(maintenance_methods))
+        self.assertIn("get", maintenance)
+        self.assertIn("post", maintenance)
         self.assertIn("FORCE_OPEN", service)
         self.assertIn("版本发布正在执行", service)
         self.assertIn("站点开放状态", client)
