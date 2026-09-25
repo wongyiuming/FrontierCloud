@@ -7,6 +7,11 @@ from app.api.v1.admin_karaoke_integrity import router as admin_karaoke_integrity
 from app.api.v1.admin_masterlocal_recovery import router as masterlocal_recovery_router
 from app.api.v1.admin_page_integrity import router as page_integrity_router
 from app.api.v1.admin_upload_guard import router as upload_guard_router
+from app.api.v1.brand import (
+    admin_router as brand_admin_router,
+    public_router as brand_public_router,
+    upload_router as brand_upload_router,
+)
 from app.api.v1.media import router as media_router
 from app.api.v1.karaoke import router as karaoke_router
 from app.api.v1.karaoke_integrity import router as karaoke_integrity_router
@@ -56,10 +61,13 @@ def _without_paths(source: APIRouter, paths: set[str]) -> APIRouter:
 
 
 router = APIRouter()
+router.include_router(brand_public_router, prefix="/media/brand", tags=["Brand"])
 router.include_router(media_router, prefix="/media", tags=["MediaCenter"])
 router.include_router(karaoke_router, prefix="/karaoke", tags=["Karaoke"])
 router.include_router(karaoke_integrity_router, prefix="/karaoke", tags=["KaraokeUsers"])
 router.include_router(_without_paths(karaoke_users_router, _KARAOKE_OVERRIDE_PATHS), prefix="/karaoke", tags=["KaraokeUsers"])
+router.include_router(brand_upload_router, prefix="/media/admin/upload/brand", tags=["MediaAdmin"])
+router.include_router(brand_admin_router, prefix="/media/admin/brand", tags=["MediaAdmin"])
 router.include_router(upload_guard_router, prefix="/media/admin", tags=["MediaAdmin"])
 router.include_router(masterlocal_recovery_router, prefix="/media/admin", tags=["MediaAdmin"])
 router.include_router(delete_integrity_router, prefix="/media/admin", tags=["MediaAdmin"])

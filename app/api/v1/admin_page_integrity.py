@@ -26,5 +26,9 @@ async def admin_page(request: Request,
     }.items():
         content = content.replace(marker, static_asset_url(asset))
     integrity = static_asset_url("js/admin-upload-integrity.js")
-    content = content.replace("</body>", f'<script src="{integrity}"></script>\n</body>')
+    brand_admin = static_asset_url("js/brand-admin.js")
+    content = content.replace(
+        "</body>",
+        f'<script src="{brand_admin}"></script>\n<script src="{integrity}"></script>\n</body>',
+    )
     return HTMLResponse(content=content, headers={"Cache-Control": "no-store"})

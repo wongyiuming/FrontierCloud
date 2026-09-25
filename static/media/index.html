@@ -9,23 +9,29 @@
 :root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
 body{min-height:100vh;min-height:100dvh;color:#fff;background:radial-gradient(circle at 50% -20%,#27324a 0,transparent 38%),#0b0e14}
 .container{display:grid;width:100%;min-height:100vh;min-height:100dvh;grid-template-rows:auto minmax(0,1fr) auto;gap:clamp(14px,2.2vh,26px);padding:clamp(18px,3vw,44px)}
-.brand{display:inline-block;font-family:"STKaiti","KaiTi","华文楷体","Noto Serif SC",serif;font-style:italic;font-weight:800;letter-spacing:.13em;transform:skewX(-7deg);text-shadow:0 8px 28px rgba(83,178,255,.24)}
-h1{justify-self:center;font-size:clamp(2rem,4vw,4rem);line-height:1.1}
+.brand{display:inline-block;font-style:italic}
+.brand-main{position:relative;justify-self:center;width:min(900px,88vw);max-width:100%}
+.brand-logo{display:block;width:100%;height:auto;object-fit:contain}
 .card-grid{display:grid;min-height:0;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(14px,2vw,30px)}
 .card{display:grid;min-width:0;min-height:0;place-content:center;place-items:center;gap:clamp(12px,2.5vh,28px);overflow:hidden;color:#fff;text-decoration:none;background:linear-gradient(145deg,rgba(34,45,64,.96),rgba(18,24,35,.98));border:1px solid #33425b;border-radius:clamp(18px,2vw,30px);box-shadow:0 24px 60px rgba(0,0,0,.3);transition:transform .2s,border-color .2s,background .2s}
 .card:hover,.card:focus-visible{z-index:1;background:linear-gradient(145deg,#2b3b56,#182335);border-color:#5a86b4;outline:none;transform:translateY(-5px) scale(1.006)}
-.card-icon{font-size:clamp(4rem,10vw,9rem);line-height:1;filter:drop-shadow(0 14px 22px rgba(0,0,0,.3))}
-.card-title{font-size:clamp(1.9rem,4.5vw,4.8rem);line-height:1.15}
-.brand-hotspot{display:inline-block;user-select:none;-webkit-user-select:none}
-@media(max-width:560px){.container{gap:12px;padding:14px}.card-grid{gap:10px}.card{border-radius:16px}.card-title{font-size:clamp(1.45rem,8vw,2.2rem)}.card-icon{font-size:clamp(3.5rem,17vw,5.2rem)}h1{font-size:clamp(1.8rem,10vw,2.8rem)}}
+.card-title{width:min(86%,720px);line-height:1}
+.brand-hotspot{position:absolute;top:0;bottom:0;width:50%;display:block;user-select:none;-webkit-user-select:none}
+#refreshHotspot{left:0}
+#elevateHotspot{right:0}
+@media(max-width:560px){.container{gap:12px;padding:14px}.card-grid{gap:10px}.card{border-radius:16px}.card-title{width:96%}.brand-main{width:96vw}}
 </style>
 </head>
 <body>
 <main class="container">
-    <h1 class="brand" aria-label="前沿娱乐"><span id="refreshHotspot" class="brand-hotspot">前沿</span><span id="elevateHotspot" class="brand-hotspot">娱乐</span></h1>
+    <div class="brand brand-main" role="img" aria-label="前沿娱乐">
+        <img class="brand-logo" src="/api/v1/media/brand/logo/entertainment" alt="前沿娱乐">
+        <span id="refreshHotspot" class="brand-hotspot" aria-hidden="true"></span>
+        <span id="elevateHotspot" class="brand-hotspot" aria-hidden="true"></span>
+    </div>
     <nav class="card-grid" aria-label="媒体类型">
-        <a href="/api/v1/media/music" class="card" data-catalog-prefetch="/api/v1/media/catalog/categories?media_type=music" data-catalog-cache-key="categories:music"><div class="card-icon" aria-hidden="true">🎵</div><div class="card-title brand">前沿音乐</div></a>
-        <a href="/api/v1/media/video" class="card" data-catalog-prefetch="/api/v1/media/catalog/categories?media_type=video" data-catalog-cache-key="categories:video"><div class="card-icon" aria-hidden="true">🎬</div><div class="card-title brand">前沿媒体</div></a>
+        <a href="/api/v1/media/music" class="card" aria-label="前沿音乐" data-catalog-prefetch="/api/v1/media/catalog/categories?media_type=music" data-catalog-cache-key="categories:music"><div class="card-title brand"><img class="brand-logo" src="/api/v1/media/brand/logo/music" alt="前沿音乐"></div></a>
+        <a href="/api/v1/media/video" class="card" aria-label="前沿媒体" data-catalog-prefetch="/api/v1/media/catalog/categories?media_type=video" data-catalog-cache-key="categories:video"><div class="card-title brand"><img class="brand-logo" src="/api/v1/media/brand/logo/media" alt="前沿媒体"></div></a>
     </nav>
 </main>
 <script>
