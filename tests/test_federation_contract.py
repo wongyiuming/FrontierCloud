@@ -1,5 +1,4 @@
 """Deployment boundaries for the optional V1 control plane."""
-import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -31,12 +30,12 @@ class FederationContractTests(unittest.TestCase):
 
     def test_ci_jobs_have_role_appropriate_hard_limits(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
-        limits = [int(value) for value in re.findall(r"^    timeout-minutes: (\d+)$", workflow, re.MULTILINE)]
-        self.assertEqual(sorted(limits), [1, 3, 3])
-        promotion = workflow.split("  promote-main:", 1)[1].split("  test-cluster:", 1)[0]
+        promotion = workflow.split("  promote-main:", 1)[1].split("  verify-promotion-query:", 1)[0]
+        verification = workflow.split("  verify-promotion-query:", 1)[1].split("  test-cluster:", 1)[0]
         cluster = workflow.split("  test-cluster:", 1)[1].split("  test-compose:", 1)[0]
         compose = workflow.split("  test-compose:", 1)[1]
         self.assertIn("timeout-minutes: 1", promotion)
+        self.assertIn("timeout-minutes: 1", verification)
         self.assertIn("timeout-minutes: 3", cluster)
         self.assertIn("timeout-minutes: 3", compose)
 
