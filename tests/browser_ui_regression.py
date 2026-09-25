@@ -119,6 +119,10 @@ def tesla_player_layout_check(browser) -> None:
         wait_until="domcontentloaded",
     )
     page.wait_for_function("window.FrontierPlayerLayout && document.body.dataset.playerSidebarWidth", timeout=15000)
+    page.wait_for_function(
+        "() => Math.abs(document.querySelector('#playerSidebar').getBoundingClientRect().width - Number(document.body.dataset.playerSidebarWidth || 0)) <= 2",
+        timeout=3000,
+    )
     initial = page.evaluate("""
         () => ({
             viewport: window.FrontierPlayerLayout.metrics(),
@@ -129,7 +133,7 @@ def tesla_player_layout_check(browser) -> None:
     """)
     require(initial["viewport"]["wideLayout"], "Tesla-sized viewport must use the wide player layout")
     require(280 <= initial["sidebar"] <= 330, f"Tesla sidebar is too wide or too narrow: {initial['sidebar']}")
-    require(abs(initial["sidebar"] - initial["declared"]) <= 2, "runtime sidebar width and rendered width diverged")
+    require(abs(initial["sidebar"] - initial["declared"]) <= 2, f"runtime sidebar width and rendered width diverged: rendered={initial['sidebar']}, declared={initial['declared']}")
     require(initial["player"] > initial["sidebar"] * 4, "player did not receive the dominant horizontal area")
 
     page.wait_for_timeout(15750)
@@ -156,6 +160,7 @@ def tesla_player_layout_check(browser) -> None:
 
     page.set_viewport_size({"width": 1400, "height": 700})
     page.wait_for_function("document.body.dataset.playerViewport === '1400x700'", timeout=5000)
+    page.wait_for_timeout(300)
     resized = page.locator("#playerSidebar").bounding_box()["width"]
     require(250 <= resized <= 285, f"runtime viewport resize did not recompute a compact sidebar: {resized}")
 
