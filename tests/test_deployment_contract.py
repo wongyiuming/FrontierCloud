@@ -335,7 +335,7 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertNotIn(marker, workflow)
         self.assertFalse((ROOT / "scripts/deploy_rn.sh").exists())
         self.assertIn("  updater:", compose)
-        self.assertEqual(compose.count("/var/run/docker.sock"), 1)
+        self.assertEqual(compose.count("- /var/run/docker.sock:/var/run/docker.sock"), 1)
         self.assertIn("updater_control:/run/frontiercloud-updater", compose)
         self.assertIn("maintenance_state:/run/frontiercloud-maintenance:ro", compose)
         self.assertIn("docker.DockerClient", updater)
