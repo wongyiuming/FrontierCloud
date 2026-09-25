@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.api.internal_nodes import require_https
 from app.api.v1.admin import require_session
+from app.services import release_control
 from app.services.federation import protocol as p
 from app.services.federation.runtime import runtime
 from app.services.federation.state import state
@@ -56,6 +57,29 @@ async def status(actor: str = Depends(require_session)):
             "storage_pool": await resource_pool.pool_summary(state.database) if state.node["role"] == "Master" else None}
 
 
+@router.get("/release")
+async def release_status(refresh_ci: bool = False, actor: str = Depends(require_session)):
+    return await release_control.release_status(refresh_ci=refresh_ci)
+
+
+@router.post("/release/upgrade")
+async def release_upgrade(request: Request, actor: str = Depends(require_session)):
+    require_https(request)
+    try:
+        return await release_control.start_upgrade()
+    except Exception as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/release/rollback")
+async def release_rollback(request: Request, actor: str = Depends(require_session)):
+    require_https(request)
+    try:
+        return await release_control.start_rollback()
+    except Exception as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.post("/promote")
 async def promote(request: Request, payload: Promotion, actor: str = Depends(require_session)):
     require_https(request)
@@ -82,7 +106,7 @@ async def reinitialize(request: Request, payload: Reinitialization, actor: str =
             try:
                 await runtime.notify_revocation(relation)
             except Exception:
-                pass  # Local trust is already revoked; old capabilities have bounded expiry.
+                pass
         await runtime.stop()
         runtime.start(revocations=bool(relations))
         from app.services.media_catalog_cache import invalidate_media_catalog

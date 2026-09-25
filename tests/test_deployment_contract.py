@@ -257,13 +257,12 @@ class DeploymentContractTests(unittest.TestCase):
     def test_runtime_secret_initializer_has_no_legacy_environment_inputs(self):
         initializer = (ROOT / "app/services/runtime_secrets.py").read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
-        deploy = (ROOT / "scripts/deploy_rn.sh").read_text(encoding="utf-8")
         for obsolete in (
             "ADMIN_BOOTSTRAP_TOKEN", "MYSQL_PASSWORD=", "MYSQL_ROOT_PASSWORD=",
             "MYSQL_URL=", "WEBRTC_STUN_URLS=", "SECURITY_AUTO_BAN_TTL=",
             "METRICS_TOKEN=",
         ):
-            self.assertNotIn(obsolete, initializer + compose + deploy)
+            self.assertNotIn(obsolete, initializer + compose)
 
     def test_runtime_secret_initializer_never_logs_secret_values(self):
         initializer = (ROOT / "app/services/runtime_secrets.py").read_text(encoding="utf-8")
@@ -322,18 +321,31 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("persistent `runtime_secrets` volume", readme)
         self.assertIn("Rapidly click the second half of the home logo five times", readme)
 
-    def test_github_actions_has_no_node_deployment_path(self):
+    def test_web_release_control_is_isolated_and_never_uses_compose(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
-        deploy_script = (ROOT / "scripts/deploy_rn.sh").read_text(encoding="utf-8")
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        updater = (ROOT / "updater/server.py").read_text(encoding="utf-8")
+        release = (ROOT / "app/services/release_control.py").read_text(encoding="utf-8")
+        nodes = (ROOT / "static/js/nodes.js").read_text(encoding="utf-8")
+        gate = (ROOT / "nginx/maintenance-gate.conf").read_text(encoding="utf-8")
         for marker in (
             "  prepare-rn:", "  deploy-rn:", "  prepare-evoxt:", "  deploy-evoxt:",
             "self-hosted", "RN_DEPLOY_PATH", "EVOXT_DEPLOY_PATH", "deployments: write",
         ):
             self.assertNotIn(marker, workflow)
+        self.assertFalse((ROOT / "scripts/deploy_rn.sh").exists())
+        self.assertIn("  updater:", compose)
+        self.assertEqual(compose.count("- /var/run/docker.sock:/var/run/docker.sock"), 1)
+        self.assertIn("updater_control:/run/frontiercloud-updater", compose)
+        self.assertIn("maintenance_state:/run/frontiercloud-maintenance:ro", compose)
+        self.assertIn("docker.DockerClient", updater)
+        self.assertNotIn("docker compose", updater.lower())
+        self.assertNotIn("systemctl", updater.lower())
+        self.assertIn("actions/workflows/docker.yml/runs", release)
+        self.assertIn("升级并分发", nodes)
+        self.assertIn("一键回滚", nodes)
+        self.assertIn("/internal/v1/cluster-update", gate)
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertIn("python3 scripts/validate_env_contract.py", workflow)
-        self.assertIn("python3 scripts/validate_env_contract.py", deploy_script)
-        self.assertIn("--no-build", deploy_script)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ from app.services.media_manager import recover_interrupted_media_deletions
 from app.services.runtime_secrets import announce_initial_secrets_once
 from app.services.upload_cleanup import cleanup_stale_upload_parts, run_stale_upload_cleanup
 from app.api.internal_nodes import router as internal_nodes_router
+from app.api.internal_cluster_update import router as internal_cluster_update_router
 from app.services.federation.state import state as node_state
 from app.services.federation.runtime import runtime as node_runtime
 
@@ -89,6 +90,7 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(internal_nodes_router)
+app.include_router(internal_cluster_update_router)
 
 QUIET_REQUEST_PATHS = frozenset({
     "/health",
@@ -136,7 +138,6 @@ class RealIPLogMiddleware:
                 if audit_trace and not any(name.lower() == b"x-audit-trace-id" for name, _value in message["headers"]):
                     message["headers"].append((b"x-audit-trace-id", audit_trace.encode("ascii")))
                 if scope.get("admin_authenticated"):
-                    # Cookie expiry must slide with the authenticated Redis idle TTL.
                     session_ttl = int(scope.get("admin_session_ttl") or settings.ADMIN_SESSION_TTL)
                     cookie_response = Response()
                     cookie_response.set_cookie(
