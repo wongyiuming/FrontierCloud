@@ -256,8 +256,16 @@ async def configure_member(member_id: str, *, storage_enabled: bool, allocated_b
         await conn.execute(update(s.compute_members).where(s.compute_members.c.member_id == member_id).values(
             enabled=int(compute_enabled), worker_slots=worker_slots,
             available_slots=worker_slots if compute_enabled else 0, updated_at=now))
+        current_backup = (await conn.execute(select(s.backup_members).where(
+            s.backup_members.c.member_id == member_id).with_for_update())).mappings().first()
+        if not backup_enabled:
+            backup_state = "disabled"
+        elif not current_backup or not bool(current_backup["enabled"]):
+            backup_state = "pending"
+        else:
+            backup_state = str(current_backup["state"] or "pending")
         await conn.execute(update(s.backup_members).where(s.backup_members.c.member_id == member_id).values(
-            enabled=int(backup_enabled), state="pending" if backup_enabled else "disabled", updated_at=now))
+            enabled=int(backup_enabled), state=backup_state, updated_at=now))
         await store.log(conn, "resource-member-configured", actor, member.get("relationship_id"),
                         member_id=member_id, storage_enabled=storage_enabled,
                         allocated_bytes=allocated_bytes, compute_enabled=compute_enabled,
@@ -308,9 +316,20 @@ async def accept_follower_configuration(configuration: dict, node: dict, databas
             available_slots=slots if compute["enabled"] else 0, cpu_percent=0,
             memory_available_bytes=0, capabilities=["hash", "probe", "metadata"], updated_at=now),
             ("member_id",), ("enabled", "worker_slots", "available_slots", "capabilities", "updated_at"))
+        current_backup = (await conn.execute(select(s.backup_members).where(
+            s.backup_members.c.member_id == node["node_id"]))).mappings().first()
+        enabled = bool(backup["enabled"])
+        if not enabled:
+            backup_state = "disabled"
+        elif not current_backup or not bool(current_backup["enabled"]):
+            backup_state = "pending"
+        else:
+            # Applying the same desired configuration must not erase a durable
+            # ready/receiving state from the actual backup data plane.
+            backup_state = str(current_backup["state"] or "pending")
         await _upsert(conn, s.backup_members, dict(member_id=node["node_id"],
-            enabled=int(backup["enabled"]), generation=0, last_success=0, lag_seconds=0,
-            checksum="", state="pending" if backup["enabled"] else "disabled", updated_at=now),
+            enabled=int(enabled), generation=0, last_success=0, lag_seconds=0,
+            checksum="", state=backup_state, updated_at=now),
             ("member_id",), ("enabled", "state", "updated_at"))
 
 
@@ -326,7 +345,9 @@ async def follower_resource_summary(node: dict, database=engine) -> dict:
                     "compute": {"enabled": False, "worker_slots": 0, "available_slots": 0,
                                 "cpu_percent": 0, "memory_available_bytes": 0, "capabilities": []},
                     "backup": {"enabled": False, "generation": 0, "last_success": 0,
-                               "lag_seconds": 0, "checksum": "", "state": "disabled"}}
+                               "lag_seconds": 0, "checksum": "", "state": "disabled",
+                               "last_size_bytes": 0, "recovery_points": 0,
+                               "last_attempt": 0, "last_attempt_state": "disabled"}}
         free = physical_free(MEDIA_ROOT)
         await conn.execute(update(s.storage_members).where(s.storage_members.c.member_id == node["node_id"]).values(
             physical_free_bytes=free, updated_at=now))
@@ -344,6 +365,17 @@ async def follower_resource_summary(node: dict, database=engine) -> dict:
         if backup:
             backup = dict(backup)
             backup["lag_seconds"] = max(0, now - int(backup.get("last_success") or 0)) if backup.get("enabled") else 0
+            latest = (await conn.execute(select(s.business_backups).order_by(
+                s.business_backups.c.updated_at.desc()).limit(1))).mappings().first()
+            ready_points = int(await conn.scalar(select(func.count()).select_from(s.business_backups).where(
+                s.business_backups.c.state == "ready")) or 0)
+            latest_ready = (await conn.execute(select(s.business_backups).where(
+                s.business_backups.c.state == "ready").order_by(
+                s.business_backups.c.updated_at.desc()).limit(1))).mappings().first()
+            backup["last_size_bytes"] = int(latest_ready["size_bytes"] if latest_ready else 0)
+            backup["recovery_points"] = ready_points
+            backup["last_attempt"] = int(latest["updated_at"] if latest else 0)
+            backup["last_attempt_state"] = str(latest["state"] if latest else "pending")
     return {"storage": {"enabled": bool(member["storage_enabled"]),
                         "allocated_bytes": int(member["allocated_bytes"]),
                         "used_bytes": int(member["used_bytes"]),
@@ -420,6 +452,12 @@ async def backup_begin(master_id: str, generation: int, database=engine) -> None
         await _upsert(conn, s.business_backups, dict(master_id=master_id, generation=generation,
             checksum="", size_bytes=0, chunk_count=0, state="receiving",
             created_at=now, updated_at=now), ("master_id", "generation"))
+        local_member = await conn.scalar(select(s.identity.c.node_id).where(s.identity.c.singleton == 1))
+        if local_member:
+            await conn.execute(update(s.backup_members).where(
+                s.backup_members.c.member_id == local_member,
+                s.backup_members.c.enabled == 1,
+            ).values(state="receiving", updated_at=now))
 
 
 async def backup_append(master_id: str, generation: int, chunk_index: int, chunk: bytes,
@@ -521,9 +559,17 @@ async def lease_job(member_id: str, capabilities: list[str], database=engine) ->
           .limit(1).with_for_update(skip_locked=True))).mappings().first()
         if not row:
             return None
+        pinned = row["member_id"] == member_id
+        result = dict(row.get("result") or {})
+        result["_placement"] = {
+            "reason": "pinned" if pinned else "capability-fifo",
+            "leased_at": now,
+            "capability": row["job_type"],
+        }
         await conn.execute(update(s.worker_jobs).where(s.worker_jobs.c.job_id == row["job_id"]).values(
             member_id=member_id, state="leased", lease_token_hash=p.digest(lease),
-            lease_expires_at=now + 120, attempts=int(row["attempts"]) + 1, updated_at=now))
+            lease_expires_at=now + 120, attempts=int(row["attempts"]) + 1,
+            result=result, updated_at=now))
     return {"job_id": row["job_id"], "job_type": row["job_type"], "media_id": row["media_id"],
             "payload": row["payload"], "lease": lease, "expires_at": now + 120}
 
@@ -538,8 +584,10 @@ async def complete_job(member_id: str, job_id: str, lease: str, result: dict,
                 or row["lease_expires_at"] <= now
                 or not row["lease_token_hash"] or not secrets_compare(row["lease_token_hash"], p.digest(lease))):
             raise p.ProtocolError("Worker lease is stale or invalid")
+        merged = dict(row.get("result") or {})
+        merged.update(result)
         await conn.execute(update(s.worker_jobs).where(s.worker_jobs.c.job_id == job_id).values(
-            result=result, state="complete", lease_token_hash=None, lease_expires_at=0, updated_at=now))
+            result=merged, state="complete", lease_token_hash=None, lease_expires_at=0, updated_at=now))
 
 
 def secrets_compare(left: str, right: str) -> bool:
