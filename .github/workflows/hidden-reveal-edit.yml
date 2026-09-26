@@ -1,0 +1,611 @@
+name: Apply hidden catalog reveal
+
+on:
+  push:
+    branches: ["dev"]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]' && github.event.head_commit.message == 'chore: apply hidden catalog reveal'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Apply hidden catalog reveal changes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return text.replace(old, new, 1)
+
+          media_path = Path("app/api/v1/media.py")
+          media = media_path.read_text(encoding="utf-8")
+
+          media = replace_once(media, '''NO_STORE_HEADERS = {
+              "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+              "Pragma": "no-cache",
+              "Expires": "0",
+          }
+          ''', '''NO_STORE_HEADERS = {
+              "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+              "Pragma": "no-cache",
+              "Expires": "0",
+          }
+          HIDDEN_REVEAL_COOKIES = {
+              "music": "frontier_hidden_music",
+              "video": "frontier_hidden_video",
+          }
+          ''', "reveal cookie constants")
+
+          media = replace_once(media, '''async def _hidden_set() -> set[str]:
+              from app.services.media_manager import MediaManager
+              return await MediaManager.hidden_paths()
+          ''', '''async def _hidden_set() -> set[str]:
+              from app.services.media_manager import MediaManager
+              return await MediaManager.hidden_paths()
+
+
+          def _hidden_reveal_enabled(request: Request | None, media_type: str) -> bool:
+              cookie_name = HIDDEN_REVEAL_COOKIES.get(media_type)
+              return bool(request is not None and cookie_name and request.cookies.get(cookie_name) == "1")
+          ''', "reveal cookie helper")
+
+          media = replace_once(media, '''async def get_media_categories(media_type, valid_exts):
+              generation, cached = await load_media_catalog("categories", media_type)
+              if cached is not None:
+                  return cached
+              hidden = await _hidden_set()
+              if node_state.node["role"] == "Master":
+                  merged = {}
+                  for entry in await node_catalog.resources(root=_typed_media_root(media_type).name):
+                      if _is_publicly_hidden(entry["path"], hidden):
+                          continue
+                      name = entry["path"].split("/")[1]
+                      merged.setdefault(name, {"name": name, "url": _category_url(media_type, _typed_media_root(media_type).name + "/" + name)})
+                  categories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
+              else:
+                  categories = await asyncio.to_thread(_get_media_categories_sync, media_type, valid_exts, hidden)
+              await store_media_catalog(generation, "categories", media_type, categories)
+              return categories
+
+
+          @router.get("/catalog/categories")
+          async def get_media_categories_data(
+              media_type: str = Query(..., pattern=r"^(music|video)$"),
+          ):
+              valid_exts = AUDIO_EXTS if media_type == "music" else VIDEO_EXTS
+              entries = await get_media_categories(media_type, valid_exts)
+              return JSONResponse(
+                  {"entries": entries},
+                  headers={"Cache-Control": "private, max-age=30, stale-while-revalidate=300"},
+              )
+          ''', '''async def get_media_categories(media_type, valid_exts, *, include_hidden: bool = False):
+              identity = f"{media_type}:revealed" if include_hidden else media_type
+              generation, cached = await load_media_catalog("categories", identity)
+              if cached is not None:
+                  return cached
+              hidden = set() if include_hidden else await _hidden_set()
+              if node_state.node["role"] == "Master":
+                  merged = {}
+                  for entry in await node_catalog.resources(root=_typed_media_root(media_type).name):
+                      if _is_publicly_hidden(entry["path"], hidden):
+                          continue
+                      name = entry["path"].split("/")[1]
+                      merged.setdefault(name, {"name": name, "url": _category_url(media_type, _typed_media_root(media_type).name + "/" + name)})
+                  categories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
+              else:
+                  categories = await asyncio.to_thread(_get_media_categories_sync, media_type, valid_exts, hidden)
+              await store_media_catalog(generation, "categories", identity, categories)
+              return categories
+
+
+          @router.post("/catalog/reveal")
+          async def reveal_hidden_catalog(
+              request: Request,
+              media_type: str = Query(..., pattern=r"^(music|video)$"),
+          ):
+              if request.headers.get("x-frontier-hidden-reveal") != "1":
+                  raise HTTPException(status_code=400, detail="Invalid hidden catalog reveal request")
+              response = JSONResponse(
+                  {"status": "ok", "media_type": media_type},
+                  headers=NO_STORE_HEADERS,
+              )
+              response.set_cookie(
+                  key=HIDDEN_REVEAL_COOKIES[media_type],
+                  value="1",
+                  path="/api/v1/media",
+                  httponly=True,
+                  samesite="lax",
+              )
+              return response
+
+
+          @router.get("/catalog/categories")
+          async def get_media_categories_data(
+              request: Request,
+              media_type: str = Query(..., pattern=r"^(music|video)$"),
+          ):
+              valid_exts = AUDIO_EXTS if media_type == "music" else VIDEO_EXTS
+              include_hidden = _hidden_reveal_enabled(request, media_type)
+              entries = await get_media_categories(media_type, valid_exts, include_hidden=include_hidden)
+              headers = (
+                  {**NO_STORE_HEADERS, "X-Frontier-Hidden-Reveal": "1"}
+                  if include_hidden
+                  else {"Cache-Control": "private, max-age=30, stale-while-revalidate=300"}
+              )
+              return JSONResponse({"entries": entries}, headers=headers)
+          ''', "category reveal route")
+
+          media = replace_once(media, '''async def get_media_subcategories(media_type, category_subpath, valid_exts):
+              identity = f"{media_type}:{category_subpath}"
+              generation, cached = await load_media_catalog("subcategories", identity)
+              if cached is not None:
+                  return cached
+              hidden = await _hidden_set()
+              if node_state.node["role"] == "Master":
+                  merged = {}
+                  for entry in await node_catalog.resources(directory=category_subpath):
+                      if _is_publicly_hidden(entry["path"], hidden):
+                          continue
+                      parts = entry["path"].split("/")
+                      if len(parts) == 4:
+                          name = parts[2]
+                          merged.setdefault(name, {"name": name, "url": _category_url(media_type, category_subpath + "/" + name)})
+                  subcategories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
+              else:
+                  subcategories = await asyncio.to_thread(
+                      _get_media_subcategories_sync,
+                      media_type,
+                      category_subpath,
+                      valid_exts,
+                      hidden,
+                  )
+              await store_media_catalog(generation, "subcategories", identity, subcategories)
+              return subcategories
+          ''', '''async def get_media_subcategories(media_type, category_subpath, valid_exts, *, include_hidden: bool = False):
+              identity = f"{media_type}:{category_subpath}:{'revealed' if include_hidden else 'public'}"
+              generation, cached = await load_media_catalog("subcategories", identity)
+              if cached is not None:
+                  return cached
+              hidden = set() if include_hidden else await _hidden_set()
+              if node_state.node["role"] == "Master":
+                  merged = {}
+                  for entry in await node_catalog.resources(directory=category_subpath):
+                      if _is_publicly_hidden(entry["path"], hidden):
+                          continue
+                      parts = entry["path"].split("/")
+                      if len(parts) == 4:
+                          name = parts[2]
+                          merged.setdefault(name, {"name": name, "url": _category_url(media_type, category_subpath + "/" + name)})
+                  subcategories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
+              else:
+                  subcategories = await asyncio.to_thread(
+                      _get_media_subcategories_sync,
+                      media_type,
+                      category_subpath,
+                      valid_exts,
+                      hidden,
+                  )
+              await store_media_catalog(generation, "subcategories", identity, subcategories)
+              return subcategories
+          ''', "subcategory reveal")
+
+          media = replace_once(media, '''async def scan_media_files_by_category(category_subpath, valid_exts, media_type):
+              identity = f"{media_type}:{category_subpath}"
+              generation, cached = await load_media_catalog("tracks-v2", identity)
+              if cached is not None:
+                  return cached
+              if node_state.node["role"] == "Master":
+                  hidden = await _hidden_set()
+                  media_list = [item for item in await node_routing.directory_items(category_subpath)
+                                if not _is_publicly_hidden(item["media_path"], hidden)]
+              else:
+                  async with media_mutation_lock.shared():
+                      ensure_media_mutations_ready()
+                      hidden = await _hidden_set()
+                      media_list = await asyncio.to_thread(
+                          _scan_media_files_by_category_sync,
+                          category_subpath,
+                          valid_exts,
+                          media_type,
+                          hidden,
+                      )
+                      media_list = await media_objects.bind_items(media_list, media_type)
+              await store_media_catalog(generation, "tracks-v2", identity, media_list)
+              return media_list
+          ''', '''async def scan_media_files_by_category(
+              category_subpath,
+              valid_exts,
+              media_type,
+              *,
+              include_hidden: bool = False,
+          ):
+              identity = f"{media_type}:{category_subpath}:{'revealed' if include_hidden else 'public'}"
+              generation, cached = await load_media_catalog("tracks-v2", identity)
+              if cached is not None:
+                  return cached
+              hidden = set() if include_hidden else await _hidden_set()
+              if node_state.node["role"] == "Master":
+                  media_list = [item for item in await node_routing.directory_items(category_subpath)
+                                if not _is_publicly_hidden(item["media_path"], hidden)]
+              else:
+                  async with media_mutation_lock.shared():
+                      ensure_media_mutations_ready()
+                      media_list = await asyncio.to_thread(
+                          _scan_media_files_by_category_sync,
+                          category_subpath,
+                          valid_exts,
+                          media_type,
+                          hidden,
+                      )
+                      media_list = await media_objects.bind_items(media_list, media_type)
+              await store_media_catalog(generation, "tracks-v2", identity, media_list)
+              return media_list
+          ''', "media list reveal")
+
+          media = replace_once(media, '''async def _player_entries(
+              path: str,
+              media_type: str,
+              playback_session_id: str,
+          ) -> list[dict]:
+              playback_type = "audio" if media_type == "music" else "video"
+              valid_exts = AUDIO_EXTS if media_type == "music" else VIDEO_EXTS
+              items = await scan_media_files_by_category(path, valid_exts, playback_type)
+          ''', '''async def _player_entries(
+              path: str,
+              media_type: str,
+              playback_session_id: str,
+              *,
+              include_hidden: bool = False,
+          ) -> list[dict]:
+              playback_type = "audio" if media_type == "music" else "video"
+              valid_exts = AUDIO_EXTS if media_type == "music" else VIDEO_EXTS
+              items = await scan_media_files_by_category(
+                  path,
+                  valid_exts,
+                  playback_type,
+                  include_hidden=include_hidden,
+              )
+          ''', "player entries reveal")
+
+          media = replace_once(media, '''@router.get("/catalog/media")
+          async def get_media_catalog_data(
+              media_type: str = Query(..., pattern=r"^(music|video)$"),
+              path: str = Query(..., min_length=1, max_length=1024),
+              playback_session_id: str = Query(..., min_length=1, max_length=64),
+          ):
+              await _public_category_parts(path, media_type)
+              entries = await _player_entries(path, media_type, playback_session_id)
+              return JSONResponse(
+                  {"entries": entries},
+                  headers={"Cache-Control": "private, max-age=15, stale-while-revalidate=120"},
+              )
+          ''', '''@router.get("/catalog/media")
+          async def get_media_catalog_data(
+              request: Request,
+              media_type: str = Query(..., pattern=r"^(music|video)$"),
+              path: str = Query(..., min_length=1, max_length=1024),
+              playback_session_id: str = Query(..., min_length=1, max_length=64),
+          ):
+              await _public_category_parts(path, media_type)
+              include_hidden = _hidden_reveal_enabled(request, media_type)
+              entries = await _player_entries(
+                  path,
+                  media_type,
+                  playback_session_id,
+                  include_hidden=include_hidden,
+              )
+              headers = (
+                  {**NO_STORE_HEADERS, "X-Frontier-Hidden-Reveal": "1"}
+                  if include_hidden
+                  else {"Cache-Control": "private, max-age=15, stale-while-revalidate=120"}
+              )
+              return JSONResponse({"entries": entries}, headers=headers)
+          ''', "player catalog reveal")
+
+          media = replace_once(media, '''async def _local_stream_metadata(relative_path: str, object_kind: str) -> dict[str, str]:
+          ''', '''async def _local_stream_metadata(
+              relative_path: str,
+              object_kind: str,
+              *,
+              allow_hidden: bool = False,
+          ) -> dict[str, str]:
+          ''', "stream metadata signature")
+          media = replace_once(media, '''        if hidden:
+                      raise HTTPException(status_code=404, detail="Media file not found")
+                  media_id = await media_objects.ensure_object(conn, relative_path, object_kind)
+          ''', '''        if hidden and not allow_hidden:
+                      raise HTTPException(status_code=404, detail="Media file not found")
+                  media_id = await media_objects.ensure_object(conn, relative_path, object_kind)
+          ''', "stream hidden guard")
+          media = replace_once(media, '''    metadata = await _local_stream_metadata(rel, "audio" if rel_parts[0] == "music" else "video")
+          ''', '''    reveal_type = "music" if rel_parts[0] == "music" else "video"
+              metadata = await _local_stream_metadata(
+                  rel,
+                  "audio" if rel_parts[0] == "music" else "video",
+                  allow_hidden=_hidden_reveal_enabled(request, reveal_type),
+              )
+          ''', "stream hidden reveal")
+
+          media = replace_once(media, '''async def _get_player_or_subcategories(
+              path: str,
+              media_type: str,
+              playback_type: str,
+              valid_exts,
+              player_template: str,
+              title_prefix: str,
+              direct: bool = False,
+          ) -> HTMLResponse:
+              parts = await _public_category_parts(path, media_type)
+          ''', '''async def _get_player_or_subcategories(
+              path: str,
+              media_type: str,
+              playback_type: str,
+              valid_exts,
+              player_template: str,
+              title_prefix: str,
+              request: Request,
+              direct: bool = False,
+          ) -> HTMLResponse:
+              include_hidden = _hidden_reveal_enabled(request, media_type)
+              parts = await _public_category_parts(path, media_type)
+          ''', "player page reveal signature")
+          media = replace_once(media, '''        subcategories = await get_media_subcategories(media_type, path, valid_exts)
+          ''', '''        subcategories = await get_media_subcategories(
+                  media_type,
+                  path,
+                  valid_exts,
+                  include_hidden=include_hidden,
+              )
+          ''', "player page subcategories")
+          media = replace_once(media, '''            if node_state.node["role"] == "Master" and await scan_media_files_by_category(path, valid_exts, playback_type):
+          ''', '''            if node_state.node["role"] == "Master" and await scan_media_files_by_category(
+                      path,
+                      valid_exts,
+                      playback_type,
+                      include_hidden=include_hidden,
+                  ):
+          ''', "player page direct media")
+          media = replace_once(media, '''        "cacheKey": f"media:{media_type}:{path}",
+          ''', '''        "cacheKey": f"media:{media_type}:{path}:{'revealed' if include_hidden else 'public'}",
+          ''', "player cache variant")
+
+          media = replace_once(media, '''async def get_music_player_page(
+              path: str = Query(...),
+              direct: bool = False,
+          ):
+              return await _get_player_or_subcategories(
+                  path,
+                  "music",
+                  "audio",
+                  AUDIO_EXTS,
+                  "audio-player.html",
+                  "前沿音乐",
+                  direct,
+              )
+          ''', '''async def get_music_player_page(
+              request: Request,
+              path: str = Query(...),
+              direct: bool = False,
+          ):
+              return await _get_player_or_subcategories(
+                  path,
+                  "music",
+                  "audio",
+                  AUDIO_EXTS,
+                  "audio-player.html",
+                  "前沿音乐",
+                  request,
+                  direct,
+              )
+          ''', "music page request")
+          media = replace_once(media, '''async def get_video_player_page(
+              path: str = Query(...),
+              direct: bool = False,
+          ):
+              return await _get_player_or_subcategories(
+                  path,
+                  "video",
+                  "video",
+                  VIDEO_EXTS,
+                  "video-player.html",
+                  "前沿视讯",
+                  direct,
+              )
+          ''', '''async def get_video_player_page(
+              request: Request,
+              path: str = Query(...),
+              direct: bool = False,
+          ):
+              return await _get_player_or_subcategories(
+                  path,
+                  "video",
+                  "video",
+                  VIDEO_EXTS,
+                  "video-player.html",
+                  "前沿视讯",
+                  request,
+                  direct,
+              )
+          ''', "video page request")
+
+          hidden_lyric_guard = '''            if _is_publicly_hidden(normalized_track, await _hidden_set()):
+                          raise FileNotFoundError
+          '''
+          revealed_lyric_guard = '''            if (
+                          _is_publicly_hidden(normalized_track, await _hidden_set())
+                          and not _hidden_reveal_enabled(request, "music")
+                      ):
+                          raise FileNotFoundError
+          '''
+          if media.count(hidden_lyric_guard) != 2:
+              raise SystemExit(f"lyric hidden guard: expected 2 matches, found {media.count(hidden_lyric_guard)}")
+          media = media.replace(hidden_lyric_guard, revealed_lyric_guard)
+
+          media_path.write_text(media, encoding="utf-8")
+
+          browser_path = Path("static/js/media-browser.js")
+          browser = browser_path.read_text(encoding="utf-8")
+          browser = replace_once(browser, '''    const CACHE_PREFIX = 'frontier:catalog:v1:';
+              const MAX_CACHE_BYTES = 256 * 1024;
+          ''', '''    const CACHE_PREFIX = 'frontier:catalog:v1:';
+              const MAX_CACHE_BYTES = 256 * 1024;
+              const HIDDEN_REVEAL_CLICK_LIMIT = 15;
+              const HIDDEN_REVEAL_WINDOW_MS = 60 * 1000;
+          ''', "browser reveal constants")
+          browser = replace_once(browser, '''        cacheWrite(key, value);
+              if (render) render(value.entries);
+          ''', '''        if (response.headers.get('X-Frontier-Hidden-Reveal') !== '1') cacheWrite(key, value);
+              if (render) render(value.entries);
+          ''', "revealed cache bypass")
+          browser = replace_once(browser, '''    window.FrontierCatalogCache = {
+              read: cacheRead,
+              write: cacheWrite,
+              fetch: (url, key = '') => fetchCatalog(url, key, null),
+          };
+
+              function bindPrefetch() {
+          ''', '''    window.FrontierCatalogCache = {
+              read: cacheRead,
+              write: cacheWrite,
+              fetch: (url, key = '') => fetchCatalog(url, key, null),
+          };
+
+              function clearCatalogSessionCache() {
+                  try {
+                      for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+                          const key = sessionStorage.key(index);
+                          if (key?.startsWith(CACHE_PREFIX)) sessionStorage.removeItem(key);
+                      }
+                  } catch (_) {
+                      // Reload still fetches authoritative catalog data when storage is unavailable.
+                  }
+              }
+
+              function bindHiddenRevealGesture() {
+                  const logo = document.getElementById('pageBrandLogo');
+                  const mediaType = window.frontierCloudCatalogRevealKind;
+                  if (!logo || !['music', 'video'].includes(mediaType)) return;
+
+                  let clickCount = 0;
+                  let windowStartedAt = 0;
+                  let revealing = false;
+
+                  logo.addEventListener('click', async () => {
+                      if (revealing) return;
+                      const now = Date.now();
+                      if (!windowStartedAt || now - windowStartedAt > HIDDEN_REVEAL_WINDOW_MS) {
+                          clickCount = 0;
+                          windowStartedAt = now;
+                      }
+                      clickCount += 1;
+                      if (clickCount < HIDDEN_REVEAL_CLICK_LIMIT) return;
+
+                      clickCount = 0;
+                      windowStartedAt = 0;
+                      revealing = true;
+                      try {
+                          const response = await fetch(
+                              `/api/v1/media/catalog/reveal?media_type=${encodeURIComponent(mediaType)}`,
+                              {
+                                  method: 'POST',
+                                  credentials: 'same-origin',
+                                  cache: 'no-store',
+                                  headers: {
+                                      'Accept': 'application/json',
+                                      'X-Frontier-Hidden-Reveal': '1',
+                                  },
+                              },
+                          );
+                          if (!response.ok) throw new Error(`隐藏资源解锁失败：${response.status}`);
+                          clearCatalogSessionCache();
+                          window.location.reload();
+                      } catch (error) {
+                          revealing = false;
+                          console.error(error);
+                      }
+                  });
+              }
+
+              function bindPrefetch() {
+          ''', "hidden reveal gesture")
+          browser = replace_once(browser, '''    window.addEventListener('DOMContentLoaded', () => {
+              startCatalogPage();
+              bindPrefetch();
+          });
+          ''', '''    window.addEventListener('DOMContentLoaded', () => {
+              startCatalogPage();
+              bindHiddenRevealGesture();
+              bindPrefetch();
+          });
+          ''', "bind hidden reveal")
+          browser_path.write_text(browser, encoding="utf-8")
+
+          category_path = Path("static/media/category.html")
+          category = category_path.read_text(encoding="utf-8")
+          category = replace_once(category, '''        window.frontierCloudStunUrls = {{STUN_URLS_JSON}};
+                  window.frontierCloudWebrtcIntervalMs = {{WEBRTC_INTERVAL_MS}};
+                  window.frontierCloudCatalogConfig = {{CATALOG_CONFIG_JSON}};
+          ''', '''        window.frontierCloudCatalogRevealKind =
+                      brandKind === 'music' ? 'music' : (brandKind === 'media' ? 'video' : '');
+                  window.frontierCloudStunUrls = {{STUN_URLS_JSON}};
+                  window.frontierCloudWebrtcIntervalMs = {{WEBRTC_INTERVAL_MS}};
+                  window.frontierCloudCatalogConfig = {{CATALOG_CONFIG_JSON}};
+          ''', "category reveal kind")
+          category_path.write_text(category, encoding="utf-8")
+
+          tests_path = Path("tests/test_player_ui.py")
+          tests = tests_path.read_text(encoding="utf-8")
+          marker = '''    def test_android_portrait_layout_stacks_player_above_sidebar(self):
+          '''
+          test_method = '''    def test_secondary_catalog_logo_reveals_hidden_media_after_fifteen_clicks(self):
+                  browser = (ROOT / "static" / "js" / "media-browser.js").read_text(encoding="utf-8")
+                  category = (ROOT / "static" / "media" / "category.html").read_text(encoding="utf-8")
+                  home = (ROOT / "static" / "media" / "index.html").read_text(encoding="utf-8")
+                  api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")
+
+                  self.assertIn("HIDDEN_REVEAL_CLICK_LIMIT = 15", browser)
+                  self.assertIn("HIDDEN_REVEAL_WINDOW_MS = 60 * 1000", browser)
+                  self.assertIn("pageBrandLogo", browser)
+                  self.assertIn("/api/v1/media/catalog/reveal?media_type=", browser)
+                  self.assertIn("X-Frontier-Hidden-Reveal", browser)
+                  self.assertIn("window.location.reload()", browser)
+                  self.assertIn("frontierCloudCatalogRevealKind", category)
+                  self.assertIn("brandKind === 'music' ? 'music'", category)
+                  self.assertIn("brandKind === 'media' ? 'video'", category)
+                  self.assertNotIn("frontierCloudCatalogRevealKind", home)
+                  self.assertIn('@router.post("/catalog/reveal")', api)
+                  self.assertIn("frontier_hidden_music", api)
+                  self.assertIn("frontier_hidden_video", api)
+                  self.assertIn("include_hidden=include_hidden", api)
+                  self.assertIn("allow_hidden=_hidden_reveal_enabled(request, reveal_type)", api)
+
+          '''
+          tests = replace_once(tests, marker, test_method + marker, "hidden reveal UI contract")
+          tests_path.write_text(tests, encoding="utf-8")
+
+          runtime_test = Path("tests/test_hidden_media_reveal.py")
+          runtime_test.write_text('''import unittest\n\nfrom starlette.requests import Request\n\nfrom app.api.v1 import media\n\n\nclass HiddenMediaRevealTests(unittest.IsolatedAsyncioTestCase):\n    @staticmethod\n    def _request(cookie: str = "", reveal_header: bool = False) -> Request:\n        headers = []\n        if cookie:\n            headers.append((b"cookie", cookie.encode("ascii")))\n        if reveal_header:\n            headers.append((b"x-frontier-hidden-reveal", b"1"))\n        return Request({\n            "type": "http",\n            "method": "POST",\n            "scheme": "https",\n            "path": "/api/v1/media/catalog/reveal",\n            "raw_path": b"/api/v1/media/catalog/reveal",\n            "query_string": b"",\n            "headers": headers,\n            "client": ("127.0.0.1", 12345),\n            "server": ("example.test", 443),\n        })\n\n    def test_reveal_cookie_is_scoped_by_media_type(self):\n        request = self._request("frontier_hidden_music=1")\n        self.assertTrue(media._hidden_reveal_enabled(request, "music"))\n        self.assertFalse(media._hidden_reveal_enabled(request, "video"))\n\n    async def test_reveal_endpoint_sets_httponly_session_cookie(self):\n        response = await media.reveal_hidden_catalog(\n            self._request(reveal_header=True),\n            media_type="music",\n        )\n        cookie = response.headers.get("set-cookie", "")\n        self.assertIn("frontier_hidden_music=1", cookie)\n        self.assertIn("HttpOnly", cookie)\n        self.assertIn("SameSite=lax", cookie)\n        self.assertNotIn("Max-Age", cookie)\n\n    async def test_reveal_endpoint_rejects_non_gesture_request(self):\n        with self.assertRaises(media.HTTPException) as context:\n            await media.reveal_hidden_catalog(self._request(), media_type="video")\n        self.assertEqual(context.exception.status_code, 400)\n\n\nif __name__ == "__main__":\n    unittest.main()\n''', encoding="utf-8")
+          PY
+
+          python3 -m py_compile app/api/v1/media.py tests/test_hidden_media_reveal.py
+          node --check static/js/media-browser.js
+          python3 -m unittest -v tests/test_player_ui.py
+
+      - name: Commit and push
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app/api/v1/media.py static/js/media-browser.js static/media/category.html tests/test_player_ui.py tests/test_hidden_media_reveal.py
+          git commit -m "feat: reveal hidden media by logo gesture"
+          git push origin HEAD:dev
