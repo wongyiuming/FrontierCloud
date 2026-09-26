@@ -4,6 +4,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from app.core.config import settings
+from app.core.schema_migrations import (
+    CURRENT_SCHEMA_GENERATION,
+    MIGRATION_HISTORY_DDL,
+    MIGRATION_HISTORY_TABLE,
+    migrate_schema,
+)
 
 
 engine: AsyncEngine = create_async_engine(
@@ -14,7 +20,7 @@ engine: AsyncEngine = create_async_engine(
     max_overflow=10,
 )
 
-SCHEMA_GENERATION = 1
+SCHEMA_GENERATION = CURRENT_SCHEMA_GENERATION
 SCHEMA_MARKER_TABLE = "frontiercloud_schema"
 LOCAL_TABLES = {
     "media_visibility",
@@ -32,6 +38,7 @@ LOCAL_TABLES = {
     "media_playback_stats",
     "media_playback_events",
     "media_lyric_links",
+    MIGRATION_HISTORY_TABLE,
 }
 
 
@@ -63,36 +70,62 @@ def _required_tables() -> set[str]:
     )
 
 
-async def _validate_initialized_schema(conn: AsyncConnection, tables: set[str]) -> None:
-    if SCHEMA_MARKER_TABLE not in tables:
-        raise RuntimeError(
-            "检测到已有数据库，但它不是由当前版本的新节点初始化流程创建；"
-            "FrontierCloud 不支持数据库迁移，请按新节点流程重新初始化数据库"
-        )
+async def _read_schema_generation(conn: AsyncConnection) -> int:
     generation = await conn.scalar(text(
         "SELECT generation FROM frontiercloud_schema WHERE singleton=1"
     ))
+    if generation is None:
+        raise RuntimeError("数据库 schema marker 缺少 singleton=1 记录")
+    try:
+        return int(generation)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"数据库 schema generation 非法：{generation!r}") from exc
+
+
+async def _validate_initialized_schema(conn: AsyncConnection, tables: set[str]) -> None:
+    if SCHEMA_MARKER_TABLE not in tables:
+        raise RuntimeError(
+            "检测到已有数据库但缺少 FrontierCloud schema marker；"
+            "无法安全推断历史 schema 版本，不支持对无代际标记数据库自动迁移"
+        )
+    generation = await _read_schema_generation(conn)
     if generation != SCHEMA_GENERATION:
         raise RuntimeError(
-            f"数据库初始化代际不兼容：expected={SCHEMA_GENERATION}, actual={generation!r}；"
-            "FrontierCloud 不支持数据库迁移，请按新节点流程重新初始化数据库"
+            f"数据库 schema 迁移未完成或版本不兼容："
+            f"expected={SCHEMA_GENERATION}, actual={generation}"
         )
     missing = sorted(_required_tables() - tables)
     if missing:
         raise RuntimeError(
-            "当前节点数据库不完整，禁止自动补表或迁移；缺少表：" + ", ".join(missing)
+            "当前代际数据库结构不完整，禁止带病启动；缺少表：" + ", ".join(missing)
         )
 
 
 async def init_db() -> None:
-    """Initialize one empty database, or validate an already initialized node.
+    """Bootstrap an empty database or migrate an initialized database in place.
 
-    Existing databases are never altered, backfilled, normalized, or upgraded.
-    Schema changes require a new-node initialization with an empty database.
+    Databases created by FrontierCloud carry a schema-generation marker. Older marked
+    generations are upgraded sequentially through the migration registry under a MySQL
+    advisory lock. An unmarked non-empty database is deliberately rejected because its
+    historical schema cannot be inferred safely.
     """
     async with engine.connect() as conn:
         existing_tables = await _table_names(conn)
         if existing_tables:
+            if SCHEMA_MARKER_TABLE not in existing_tables:
+                await _validate_initialized_schema(conn, existing_tables)
+                return
+
+            generation = await _read_schema_generation(conn)
+            if generation > SCHEMA_GENERATION:
+                raise RuntimeError(
+                    "数据库 schema 来自更新版本，禁止旧版本应用启动或降级："
+                    f"app={SCHEMA_GENERATION}, database={generation}"
+                )
+            if generation < SCHEMA_GENERATION:
+                await migrate_schema(conn, generation, marker_table=SCHEMA_MARKER_TABLE)
+                existing_tables = await _table_names(conn)
+
             await _validate_initialized_schema(conn, existing_tables)
             return
 
@@ -292,6 +325,7 @@ async def init_db() -> None:
         for statement in karaoke_schema_statements():
             await _commit_ddl(conn, statement)
 
+        await _commit_ddl(conn, MIGRATION_HISTORY_DDL)
         await _commit_ddl(conn, """
             CREATE TABLE frontiercloud_schema (
                 singleton TINYINT NOT NULL PRIMARY KEY,
