@@ -28,6 +28,7 @@ class KaraokeUiContractTests(unittest.TestCase):
         self.assertIn("lyricUi.renderFullscreenColumns", ui)
         self.assertIn("lyricUi.syncFullscreenLyrics", ui)
         self.assertIn("container === overlayLines", ui)
+        self.assertIn("/static/css/lyrics-window.css", template)
         self.assertIn('class="fullscreen-lyrics hidden"', template)
         self.assertEqual(template.count('class="fullscreen-lyrics-column"'), 3)
         self.assertNotIn('class="overlay"', template)
