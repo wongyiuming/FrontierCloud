@@ -22,6 +22,17 @@ class AudioPlayerResponsiveLayoutTests(unittest.TestCase):
         self.assertIn("sidebar.toggleAttribute('inert', collapsed)", template)
         self.assertIn("window.setTimeout(() => setCollapsed(true, false), PLAYER_SIDEBAR_IDLE_MS)", template)
 
+    def test_desktop_navigation_rail_is_on_the_left(self):
+        template = (ROOT / "static" / "media" / "audio-player.html").read_text(encoding="utf-8")
+
+        self.assertIn("flex-direction: row-reverse", template)
+        self.assertIn("border-right: 1px solid #282828", template)
+        self.assertIn("border-right-color: transparent", template)
+        self.assertIn("left: 12px", template)
+        self.assertIn("right: auto", template)
+        self.assertIn("toggle.textContent = collapsed ? '☰' : '‹'", template)
+        self.assertIn("border-right: 4px solid #3498db", template)
+
     def test_collapsed_sidebar_gives_layout_width_back_to_player(self):
         template = (ROOT / "static" / "media" / "audio-player.html").read_text(encoding="utf-8")
 
@@ -51,6 +62,7 @@ class AudioPlayerResponsiveLayoutTests(unittest.TestCase):
         self.assertIn("@media (max-width: 700px) and (orientation: portrait)", template)
         self.assertIn(".sidebar-toggle {\n                display: none;", template)
         self.assertIn("width: 100%", template)
+        self.assertIn("border-right: 0", template)
         self.assertIn("pointer-events: auto", template)
 
 

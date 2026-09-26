@@ -11,6 +11,7 @@
             --player-viewport-height: 100dvh;
             height: var(--player-viewport-height);
             min-height: 0;
+            flex-direction: row-reverse;
         }
         .audio-player-page .player-section {
             flex: 1 1 auto;
@@ -23,6 +24,8 @@
             max-width: min(38vw, 360px);
             overflow: hidden;
             opacity: 1;
+            border-left: 0;
+            border-right: 1px solid #282828;
             transition: flex-basis .22s ease, width .22s ease, max-width .22s ease, opacity .18s ease, border-color .18s ease;
             will-change: width, flex-basis, opacity;
         }
@@ -30,7 +33,7 @@
             flex-basis: 0;
             width: 0;
             max-width: 0;
-            border-left-color: transparent;
+            border-right-color: transparent;
             opacity: 0;
             pointer-events: none;
         }
@@ -48,10 +51,15 @@
             height: clamp(38px, 3vw, 48px);
             margin-right: clamp(9px, .8vw, 13px);
         }
+        .audio-player-page .media-item.active {
+            border-left: none;
+            border-right: 4px solid #3498db;
+        }
         .sidebar-toggle {
             position: absolute;
             top: 12px;
-            right: 12px;
+            left: 12px;
+            right: auto;
             z-index: 12;
             width: 44px;
             height: 44px;
@@ -92,6 +100,7 @@
                 max-width: none;
                 min-width: 0;
                 border-left: 0;
+                border-right: 0;
                 border-top: 1px solid #282828;
                 opacity: 1;
                 pointer-events: auto;
@@ -104,7 +113,7 @@
 </head>
 <body class="audio-player-page">
     <div class="player-section" id="playerSection">
-        <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-controls="playerSidebar" aria-expanded="true" aria-label="收起播放队列">›</button>
+        <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-controls="playerSidebar" aria-expanded="true" aria-label="收起播放队列">‹</button>
         <section id="inlineLyrics" class="inline-lyrics hidden" aria-live="polite" aria-label="当前曲目歌词">
             <div id="inlineLyricsLines" class="sync-lyrics-lines">
                 <div id="inlineLyricsTrack" class="sync-lyrics-track"></div>
@@ -212,7 +221,7 @@
                 sidebar.toggleAttribute('inert', collapsed);
                 toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
                 toggle.setAttribute('aria-label', collapsed ? '展开播放队列' : '收起播放队列');
-                toggle.textContent = collapsed ? '☰' : '›';
+                toggle.textContent = collapsed ? '☰' : '‹';
                 clearIdleTimer();
                 if (restartTimer && !collapsed) scheduleCollapse();
                 window.setTimeout(resizeLyrics, 240);

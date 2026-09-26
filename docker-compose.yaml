@@ -71,7 +71,7 @@ services:
       - ./data:/app/data:z
       - web_tmp:/tmp
       - runtime_secrets:/run/frontiercloud-secrets
-      - updater_control:/run/frontiercloud-updater
+      - updater_control:/run/frontiercloud-updater:ro
     healthcheck:
       test: ["CMD", "python", "-m", "app.services.health_probe"]
       interval: 30s
@@ -83,7 +83,7 @@ services:
     logging: *service_logging
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.11-alpine
     container_name: office_automation_redis
     restart: always
     command: redis-server --appendonly yes
@@ -96,7 +96,7 @@ services:
     logging: *service_logging
 
   mysql:
-    image: mysql:8.4
+    image: mysql:8.4.11
     container_name: office_automation_mysql
     restart: always
     environment:

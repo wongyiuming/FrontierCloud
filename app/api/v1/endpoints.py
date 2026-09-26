@@ -5,6 +5,7 @@ from app.api.v1.admin_cluster_integrity import router as cluster_admin_router
 from app.api.v1.admin_delete_integrity import router as delete_integrity_router
 from app.api.v1.admin_karaoke_integrity import router as admin_karaoke_integrity_router
 from app.api.v1.admin_masterlocal_recovery import router as masterlocal_recovery_router
+from app.api.v1.admin_node_observability import router as node_observability_router
 from app.api.v1.admin_page_integrity import router as page_integrity_router
 from app.api.v1.admin_transport import require_secure_admin_transport
 from app.api.v1.admin_upload_guard import router as upload_guard_router
@@ -88,6 +89,7 @@ _include_admin(page_integrity_router)
 _include_admin(_without_paths(cluster_admin_router, _CLUSTER_OVERRIDE_PATHS))
 _include_admin(_without_paths(admin_router, _ADMIN_OVERRIDE_PATHS))
 _include_admin(_without_paths(nodes_router, _NODE_OVERRIDE_PATHS))
+_include_admin(node_observability_router)
 _include_admin(admin_karaoke_integrity_router)
 _include_admin(_without_paths(admin_karaoke_users_router, _ADMIN_KARAOKE_OVERRIDE_PATHS))
 

@@ -1,4 +1,4 @@
-FROM python:3.14-alpine
+FROM python:3.14.7-alpine
 
 RUN apk add --no-cache ca-certificates git \
     && python -m pip install --no-cache-dir docker==7.1.0
