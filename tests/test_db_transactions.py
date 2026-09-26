@@ -2,7 +2,7 @@ import re
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.core import db
+from app.core import db, schema_migrations
 
 
 class _Rows:
@@ -14,11 +14,14 @@ class _Rows:
 
 
 class _BootstrapConnection:
-    def __init__(self, *, tables=(), generation=None):
+    def __init__(self, *, tables=(), generation=None, lock_acquired=1):
         self.tables = set(tables)
         self.generation = generation
+        self.lock_acquired = lock_acquired
         self.executed = []
+        self.scalar_queries = []
         self.commits = 0
+        self.rollbacks = 0
 
     async def execute(self, statement, params=None):
         sql = str(statement)
@@ -34,18 +37,31 @@ class _BootstrapConnection:
         )
         if created:
             self.tables.add(created.group(1))
-        if "INSERT INTO frontiercloud_schema" in sql:
+        if "INSERT INTO frontiercloud_schema(" in sql:
             self.generation = parameters["generation"]
+        if "UPDATE `frontiercloud_schema`" in sql:
+            if self.generation == parameters["current"]:
+                self.generation = parameters["target"]
         return _Rows()
 
     async def scalar(self, statement, _params=None):
         sql = str(statement)
+        self.scalar_queries.append(sql)
         if "SELECT generation FROM frontiercloud_schema" in sql:
             return self.generation
+        if "SELECT generation FROM `frontiercloud_schema`" in sql:
+            return self.generation
+        if "GET_LOCK(" in sql:
+            return self.lock_acquired
+        if "RELEASE_LOCK(" in sql:
+            return 1
         raise AssertionError(f"Unexpected scalar query: {sql}")
 
     async def commit(self):
         self.commits += 1
+
+    async def rollback(self):
+        self.rollbacks += 1
 
 
 class _ConnectContext:
@@ -77,6 +93,7 @@ class SchemaBootstrapTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.generation, db.SCHEMA_GENERATION)
         self.assertEqual(db._required_tables() - connection.tables, set())
         self.assertIn("CREATE TABLE frontiercloud_schema", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS frontiercloud_schema_migrations", schema)
         self.assertIn("storage_member_id", schema)
         self.assertIn("CHECK (preference BETWEEN -7 AND 500)", schema)
         self.assertIn("UNIQUE INDEX uq_ip_ban_active_ip", schema)
@@ -86,7 +103,7 @@ class SchemaBootstrapTransactionTests(unittest.IsolatedAsyncioTestCase):
     async def test_existing_unmarked_database_is_rejected_without_mutation(self):
         connection = _BootstrapConnection(tables={"karaoke_recordings"})
         with patch.object(db, "engine", _BootstrapEngine(connection)):
-            with self.assertRaisesRegex(RuntimeError, "不支持数据库迁移"):
+            with self.assertRaisesRegex(RuntimeError, "无代际标记数据库自动迁移"):
                 await db.init_db()
         self.assertEqual(connection.executed, [])
 
@@ -99,14 +116,31 @@ class SchemaBootstrapTransactionTests(unittest.IsolatedAsyncioTestCase):
             await db.init_db()
         self.assertEqual(connection.executed, [])
         self.assertEqual(connection.commits, 0)
+        self.assertFalse(any("GET_LOCK(" in sql for sql in connection.scalar_queries))
 
-    async def test_generation_mismatch_is_rejected_without_mutation(self):
+    async def test_generation_one_database_migrates_in_place_to_current(self):
+        generation_one_tables = db._required_tables() - {schema_migrations.MIGRATION_HISTORY_TABLE}
+        connection = _BootstrapConnection(tables=generation_one_tables, generation=1)
+        with patch.object(db, "engine", _BootstrapEngine(connection)):
+            await db.init_db()
+
+        schema = "\n".join(sql for sql, _params in connection.executed)
+        self.assertEqual(connection.generation, db.SCHEMA_GENERATION)
+        self.assertIn(schema_migrations.MIGRATION_HISTORY_TABLE, connection.tables)
+        self.assertIn("CREATE TABLE IF NOT EXISTS frontiercloud_schema_migrations", schema)
+        self.assertIn("UPDATE `frontiercloud_schema`", schema)
+        self.assertIn("INSERT INTO `frontiercloud_schema_migrations`", schema)
+        self.assertTrue(any("GET_LOCK(" in sql for sql in connection.scalar_queries))
+        self.assertTrue(any("RELEASE_LOCK(" in sql for sql in connection.scalar_queries))
+        self.assertEqual(db._required_tables() - connection.tables, set())
+
+    async def test_future_generation_is_rejected_without_mutation(self):
         connection = _BootstrapConnection(
             tables=db._required_tables(),
             generation=db.SCHEMA_GENERATION + 1,
         )
         with patch.object(db, "engine", _BootstrapEngine(connection)):
-            with self.assertRaisesRegex(RuntimeError, "初始化代际不兼容"):
+            with self.assertRaisesRegex(RuntimeError, "禁止旧版本应用启动或降级"):
                 await db.init_db()
         self.assertEqual(connection.executed, [])
 
@@ -120,6 +154,42 @@ class SchemaBootstrapTransactionTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "karaoke_recordings"):
                 await db.init_db()
         self.assertEqual(connection.executed, [])
+
+    async def test_migration_lock_timeout_keeps_old_generation(self):
+        generation_one_tables = db._required_tables() - {schema_migrations.MIGRATION_HISTORY_TABLE}
+        connection = _BootstrapConnection(
+            tables=generation_one_tables,
+            generation=1,
+            lock_acquired=0,
+        )
+        with patch.object(db, "engine", _BootstrapEngine(connection)):
+            with self.assertRaisesRegex(RuntimeError, "等待数据库迁移锁超时"):
+                await db.init_db()
+        self.assertEqual(connection.generation, 1)
+        self.assertNotIn(schema_migrations.MIGRATION_HISTORY_TABLE, connection.tables)
+
+    async def test_failed_migration_does_not_advance_generation(self):
+        async def fail(_conn):
+            raise RuntimeError("simulated migration failure")
+
+        migration = schema_migrations.SchemaMigration(
+            target_generation=2,
+            name="simulated-failure",
+            signature="simulated-failure-v1",
+            apply=fail,
+        )
+        generation_one_tables = db._required_tables() - {schema_migrations.MIGRATION_HISTORY_TABLE}
+        connection = _BootstrapConnection(tables=generation_one_tables, generation=1)
+        with (
+            patch.object(schema_migrations, "MIGRATIONS", {2: migration}),
+            patch.object(db, "engine", _BootstrapEngine(connection)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "generation marker 未推进"):
+                await db.init_db()
+
+        self.assertEqual(connection.generation, 1)
+        self.assertEqual(connection.rollbacks, 1)
+        self.assertTrue(any("RELEASE_LOCK(" in sql for sql in connection.scalar_queries))
 
     async def test_close_db_disposes_the_connection_pool(self):
         fake_engine = MagicMock()
