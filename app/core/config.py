@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field("INFO", validation_alias="LOG_LEVEL")
     LOG_FORMAT: str = Field("json", validation_alias="LOG_FORMAT")
     INSTANCE_NAME: str = Field("frontiercloud", validation_alias="INSTANCE_NAME")
+    GITHUB_API_TOKEN: str = Field("", validation_alias="GITHUB_API_TOKEN", repr=False)
     PUBLIC_BIND_ADDRESS: str = Field("0.0.0.0", validation_alias="PUBLIC_BIND_ADDRESS")
     TRUSTED_PROXY_NETWORKS: str = Field("172.16.0.0/12", validation_alias="TRUSTED_PROXY_NETWORKS")
     SECURITY_EXEMPT_NETWORKS: str = Field("127.0.0.0/8,::1/128", validation_alias="SECURITY_EXEMPT_NETWORKS")
