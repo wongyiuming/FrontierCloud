@@ -13,15 +13,14 @@ jobs:
   publish-wiki:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout main documentation source
+      - name: Checkout historical Wiki source
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: 675224d882fd196569426c8291e57674b0a7e7c9
           fetch-depth: 1
 
       - name: Publish docs/wiki into GitHub Wiki
         env:
-          GH_TOKEN: ${{ github.token }}
           WIKI_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.wiki.git
         run: |
           set -euo pipefail
