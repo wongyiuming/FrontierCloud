@@ -65,31 +65,39 @@ class StorageCapacityRegressionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HeartbeatIsolationRegressionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_backup_failure_cannot_turn_successful_heartbeat_into_failure(self):
-        from app.services.federation import protocol as p
-        from app.services.federation import runtime as runtime_module
-
-        fake_state = SimpleNamespace(
-            database=object(),
-            unseal=lambda value: value,
-            heartbeat=AsyncMock(),
-        )
-        controller = runtime_module.Runtime()
-        controller.call = AsyncMock(return_value={"protocol": p.PROTOCOL_VERSION})
-        controller.maybe_backup = AsyncMock(side_effect=RuntimeError("backup failed"))
-        relation = {
+    @staticmethod
+    def relation(direction: str) -> dict:
+        return {
             "relationship_id": "a" * 32,
             "peer_id": "b" * 32,
-            "peer_endpoint": "https://follower.example",
+            "peer_endpoint": "https://peer.example",
             "peer_key": "c" * 64,
             "credential": "credential",
-            "direction": "downstream",
+            "direction": direction,
             "mode": "Relay",
             "state": "active",
             "status": "online",
             "summary": {},
             "created_at": 0,
         }
+
+    @staticmethod
+    def fake_state() -> SimpleNamespace:
+        return SimpleNamespace(
+            database=object(),
+            unseal=lambda value: value,
+            heartbeat=AsyncMock(),
+        )
+
+    async def test_backup_failure_cannot_turn_successful_heartbeat_into_failure(self):
+        from app.services.federation import protocol as p
+        from app.services.federation import runtime as runtime_module
+
+        fake_state = self.fake_state()
+        controller = runtime_module.Runtime()
+        controller.call = AsyncMock(return_value={"protocol": p.PROTOCOL_VERSION})
+        controller.maybe_backup = AsyncMock(side_effect=RuntimeError("backup failed"))
+        relation = self.relation("downstream")
 
         with (
             patch.object(runtime_module, "state", fake_state),
@@ -105,6 +113,25 @@ class HeartbeatIsolationRegressionTests(unittest.IsolatedAsyncioTestCase):
         heartbeat_args = fake_state.heartbeat.await_args.args
         self.assertEqual(heartbeat_args[0], relation["relationship_id"])
         self.assertIs(heartbeat_args[1], True)
+
+    async def test_compute_failure_cannot_turn_successful_heartbeat_into_failure(self):
+        from app.services.federation import protocol as p
+        from app.services.federation import runtime as runtime_module
+
+        fake_state = self.fake_state()
+        controller = runtime_module.Runtime()
+        controller.call = AsyncMock(return_value={"protocol": p.PROTOCOL_VERSION})
+        controller.fill_worker_slots = AsyncMock(side_effect=RuntimeError("worker lease failed"))
+        relation = self.relation("upstream")
+
+        with patch.object(runtime_module, "state", fake_state):
+            await controller.tick(relation)
+
+        self.assertEqual(fake_state.heartbeat.await_count, 1)
+        heartbeat_args = fake_state.heartbeat.await_args.args
+        self.assertEqual(heartbeat_args[0], relation["relationship_id"])
+        self.assertIs(heartbeat_args[1], True)
+        controller.fill_worker_slots.assert_awaited_once_with(relation)
 
 
 if __name__ == "__main__":
