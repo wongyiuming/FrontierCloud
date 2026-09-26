@@ -10,17 +10,45 @@ def patch(path: str, old: str, new: str, label: str) -> None:
     file.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
+# Complete the local-node category path after the backend patch: hidden remains a
+# presentation filter, and revealed links simply carry the public query flag.
+patch(
+    "app/api/v1/media.py",
+    "def _get_media_categories_sync(media_type, valid_exts, hidden: set[str]):\n",
+    "def _get_media_categories_sync(media_type, valid_exts, hidden: set[str], include_hidden=False):\n",
+    "category sync signature",
+)
+patch(
+    "app/api/v1/media.py",
+    '            categories.append({"name": entry.name, "url": _category_url(media_type, rel_entry)})\n',
+    '            categories.append({"name": entry.name, "url": _category_url(media_type, rel_entry, include_hidden=include_hidden)})\n',
+    "category sync URL",
+)
+patch(
+    "app/api/v1/media.py",
+    '''    else:
+        categories = await asyncio.to_thread(_get_media_categories_sync, media_type, valid_exts, hidden)
+        if include_hidden:
+            for entry in categories:
+                entry["url"] = _category_url(media_type, entry["url"].split("path=", 1)[1], include_hidden=True)
+''',
+    '''    else:
+        categories = await asyncio.to_thread(
+            _get_media_categories_sync,
+            media_type,
+            valid_exts,
+            hidden,
+            include_hidden,
+        )
+''',
+    "category sync call",
+)
+
 patch(
     "static/js/media-browser.js",
     "    const MAX_CACHE_BYTES = 256 * 1024;\n",
     "    const MAX_CACHE_BYTES = 256 * 1024;\n    const HIDDEN_REVEAL_CLICK_LIMIT = 15;\n    const HIDDEN_REVEAL_WINDOW_MS = 60 * 1000;\n",
     "reveal constants",
-)
-patch(
-    "static/js/media-browser.js",
-    "        cacheWrite(key, value);\n        if (render) render(value.entries);\n",
-    "        if (response.headers.get('X-Frontier-Hidden-Reveal') !== '1') cacheWrite(key, value);\n        if (render) render(value.entries);\n",
-    "revealed cache bypass",
 )
 patch(
     "static/js/media-browser.js",
@@ -37,15 +65,34 @@ patch(
         fetch: (url, key = '') => fetchCatalog(url, key, null),
     };
 
-    function clearCatalogSessionCache() {
+    function hiddenRevealStorageKey(mediaType) {
+        return `frontier:hidden-reveal:${mediaType}`;
+    }
+
+    function includeHiddenRequested(url = new URL(window.location.href)) {
+        const value = String(url.searchParams.get('include_hidden') || '').toLowerCase();
+        return value === '1' || value === 'true';
+    }
+
+    function syncHiddenRevealState() {
+        const mediaType = window.frontierCloudCatalogRevealKind;
+        if (!['music', 'video'].includes(mediaType)) return true;
+        const key = hiddenRevealStorageKey(mediaType);
+        const url = new URL(window.location.href);
+        if (includeHiddenRequested(url)) {
+            try { sessionStorage.setItem(key, '1'); } catch (_) {}
+            return true;
+        }
         try {
-            for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
-                const key = sessionStorage.key(index);
-                if (key?.startsWith(CACHE_PREFIX)) sessionStorage.removeItem(key);
+            if (sessionStorage.getItem(key) === '1') {
+                url.searchParams.set('include_hidden', 'true');
+                window.location.replace(url.toString());
+                return false;
             }
         } catch (_) {
-            // Reload still fetches authoritative catalog data when storage is unavailable.
+            // Hidden reveal is a convenience state only; normal catalog browsing still works.
         }
+        return true;
     }
 
     function bindHiddenRevealGesture() {
@@ -55,9 +102,7 @@ patch(
 
         let count = 0;
         let startedAt = 0;
-        let revealing = false;
-        logo.addEventListener('click', async () => {
-            if (revealing) return;
+        logo.addEventListener('click', () => {
             const now = Date.now();
             if (!startedAt || now - startedAt > HIDDEN_REVEAL_WINDOW_MS) {
                 count = 0;
@@ -65,31 +110,18 @@ patch(
             }
             count += 1;
             if (count < HIDDEN_REVEAL_CLICK_LIMIT) return;
+
             count = 0;
             startedAt = 0;
-            revealing = true;
-            try {
-                const response = await fetch(
-                    `/api/v1/media/catalog/reveal?media_type=${encodeURIComponent(mediaType)}`,
-                    {
-                        method: 'POST',
-                        credentials: 'same-origin',
-                        cache: 'no-store',
-                        headers: {'Accept': 'application/json', 'X-Frontier-Hidden-Reveal': '1'},
-                    },
-                );
-                if (!response.ok) throw new Error(`隐藏资源解锁失败：${response.status}`);
-                clearCatalogSessionCache();
-                window.location.reload();
-            } catch (error) {
-                revealing = false;
-                console.error(error);
-            }
+            try { sessionStorage.setItem(hiddenRevealStorageKey(mediaType), '1'); } catch (_) {}
+            const url = new URL(window.location.href);
+            url.searchParams.set('include_hidden', 'true');
+            window.location.replace(url.toString());
         });
     }
 
 ''',
-    "reveal gesture",
+    "hidden reveal helpers",
 )
 patch(
     "static/js/media-browser.js",
@@ -99,6 +131,7 @@ patch(
     });
 ''',
     '''    window.addEventListener('DOMContentLoaded', () => {
+        if (!syncHiddenRevealState()) return;
         startCatalogPage();
         bindHiddenRevealGesture();
         bindPrefetch();
