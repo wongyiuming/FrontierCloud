@@ -12,7 +12,7 @@ from sqlalchemy import select, text, update
 
 from app.api.v1 import admin as legacy_admin
 from app.api.v1 import admin_cluster_integrity as cluster
-from app.services import admin_service, resource_pool
+from app.services import admin_service, lyrics, resource_pool
 from app.services.federation import protocol as p
 from app.services.federation import schema as s
 from app.services.federation.state import state as node_state
@@ -155,11 +155,17 @@ async def delete_objects(request: Request, payload: dict,
     if (not isinstance(paths, list) or not paths
             or len(paths) > legacy_admin.settings.ADMIN_MAX_BATCH_FILES):
         raise HTTPException(400, "请选择合法对象")
+    normalized = [MediaManager.normalize_relative(str(path)) for path in paths]
+    if any(
+        path == lyrics.DEFAULT_LYRIC_PATH
+        or lyrics.DEFAULT_LYRIC_PATH.startswith(path.rstrip("/") + "/")
+        for path in normalized
+    ):
+        raise HTTPException(409, "系统默认歌词为保留对象，不能删除")
     if node_state.node["role"] != "Master" or not all(
             str(path).split("/", 1)[0] in {"music", "vido"} for path in paths):
         return await legacy_admin.delete_objects(request, payload, session_hash)
 
-    normalized = [MediaManager.normalize_relative(str(path)) for path in paths]
     rows = await resource_pool.list_media(node_state.database)
     selected = [row for row in rows if any(
         row["media_path"] == path or row["media_path"].startswith(path.rstrip("/") + "/")
