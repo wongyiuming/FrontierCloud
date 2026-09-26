@@ -2,32 +2,34 @@ name: Apply hidden reveal patch
 
 on:
   push:
-    branches: ["dev"]
+    branches:
+      - dev
+    paths:
+      - .github/workflows/hidden-reveal-edit.yml
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]' && github.event.head_commit.message == 'chore: run hidden reveal patch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: dev
           fetch-depth: 0
-      - name: Apply patches
+      - name: Apply public hidden-reveal changes
         run: |
           python3 scripts/_patch_hidden_reveal_backend.py
           python3 scripts/_patch_hidden_reveal_frontend.py
           python3 scripts/_patch_hidden_reveal_tests.py
           python3 -m py_compile app/api/v1/media.py tests/test_hidden_media_reveal.py
           node --check static/js/media-browser.js
-          python3 -m unittest -v tests/test_player_ui.py
+          python3 -m unittest -v tests/test_player_ui.py tests/test_hidden_media_reveal.py
       - name: Commit and push
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add app/api/v1/media.py static/js/media-browser.js static/media/category.html tests/test_player_ui.py tests/test_hidden_media_reveal.py
-          git commit -m "feat: reveal hidden media by logo gesture"
+          git commit -m "feat: reveal hidden media from secondary logos"
           git push origin HEAD:dev
