@@ -79,14 +79,14 @@
         user-select: none;
       }
       .fullscreen-lyrics.hidden { display: none; }
-      .fullscreen-lyrics .fullscreen-lyrics-columns {
+      .fullscreen-lyrics-columns {
         display: grid;
         min-width: 0;
         min-height: 0;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: clamp(12px, 2vw, 36px);
       }
-      .fullscreen-lyrics .fullscreen-lyrics-column {
+      .fullscreen-lyrics-column {
         display: flex;
         min-width: 0;
         min-height: 0;
@@ -95,7 +95,7 @@
         gap: .2em;
         overflow: hidden;
       }
-      .fullscreen-lyrics .fullscreen-lyric-line {
+      .fullscreen-lyric-line {
         margin: 0;
         overflow: hidden;
         color: #aebfca;
@@ -107,18 +107,18 @@
         white-space: nowrap;
         transition: color .25s ease, opacity .25s ease, transform .25s ease;
       }
-      .fullscreen-lyrics .fullscreen-lyric-line:nth-child(6n+2) { color: #b9c4a6; }
-      .fullscreen-lyrics .fullscreen-lyric-line:nth-child(6n+3) { color: #c5b49f; }
-      .fullscreen-lyrics .fullscreen-lyric-line:nth-child(6n+4) { color: #b8adc4; }
-      .fullscreen-lyrics .fullscreen-lyric-line:nth-child(6n+5) { color: #9fbeb9; }
-      .fullscreen-lyrics .fullscreen-lyric-line:nth-child(6n) { color: #c4bda4; }
-      .fullscreen-lyrics .fullscreen-lyric-line.current {
+      .fullscreen-lyric-line:nth-child(6n+2) { color: #b9c4a6; }
+      .fullscreen-lyric-line:nth-child(6n+3) { color: #c5b49f; }
+      .fullscreen-lyric-line:nth-child(6n+4) { color: #b8adc4; }
+      .fullscreen-lyric-line:nth-child(6n+5) { color: #9fbeb9; }
+      .fullscreen-lyric-line:nth-child(6n) { color: #c4bda4; }
+      .fullscreen-lyric-line.current {
         color: #fff;
         opacity: 1;
         transform: scale(1.04);
         text-shadow: 0 0 14px rgba(94, 214, 255, .7);
       }
-      .fullscreen-lyrics .fullscreen-lyrics-hint {
+      .fullscreen-lyrics-hint {
         position: absolute;
         right: 18px;
         bottom: 12px;
@@ -145,6 +145,21 @@
     if (active >= 0) container.querySelector(`[data-lyric-index="${active}"]`)?.classList.add('current');
   }
 
+  function renderFullscreenColumns(columns, entries, active, overlay) {
+    if (!Array.isArray(columns) || columns.length !== 3 || columns.some(column => !column)) return;
+    columns.forEach(column => column.replaceChildren());
+    const rowsPerColumn = Math.max(1, Math.ceil(entries.length / columns.length));
+    entries.forEach((entry, index) => {
+      const row = document.createElement('p');
+      row.className = 'fullscreen-lyric-line';
+      row.dataset.lyricIndex = String(index);
+      row.textContent = entry.text || '\u00a0';
+      columns[Math.min(columns.length - 1, Math.floor(index / rowsPerColumn))].appendChild(row);
+    });
+    syncFullscreenLyrics(overlay || columns[0]?.parentElement, active);
+    requestAnimationFrame(() => sizeFullscreenLyrics(overlay, entries));
+  }
+
   function renderFullscreenLyrics(container, entries, active, overlay) {
     if (!container) return;
     container.replaceChildren();
@@ -155,16 +170,7 @@
       container.append(column);
       return column;
     });
-    const rowsPerColumn = Math.max(1, Math.ceil(entries.length / columns.length));
-    entries.forEach((entry, index) => {
-      const row = document.createElement('p');
-      row.className = 'fullscreen-lyric-line';
-      row.dataset.lyricIndex = String(index);
-      row.textContent = entry.text || '\u00a0';
-      if (index === active) row.classList.add('current');
-      columns[Math.min(columns.length - 1, Math.floor(index / rowsPerColumn))].append(row);
-    });
-    requestAnimationFrame(() => sizeFullscreenLyrics(overlay, entries));
+    renderFullscreenColumns(columns, entries, active, overlay);
   }
 
   function installAudioPlayerOverrides() {
@@ -215,6 +221,26 @@
       lyricSlideTimer = setTimeout(() => window.renderLyricWindow(nextIndex), LYRIC_SLIDE_MS + 30);
     };
 
+    window.sizeFullscreenLyrics = function sizeSharedPlayerFullscreenLyrics() {
+      sizeFullscreenLyrics(document.getElementById('fullscreenLyrics'), activeLyricEntries);
+    };
+
+    window.syncFullscreenLyrics = function syncSharedPlayerFullscreenLyrics(index) {
+      const overlay = document.getElementById('fullscreenLyrics');
+      if (!overlay || overlay.classList.contains('hidden') || index === fullscreenLyricIndex) return;
+      syncFullscreenLyrics(overlay, index);
+      fullscreenLyricIndex = index;
+    };
+
+    window.renderFullscreenLyrics = function renderSharedPlayerFullscreenLyrics() {
+      const overlay = document.getElementById('fullscreenLyrics');
+      const columns = [0, 1, 2].map(index => document.getElementById(`fullscreenLyricsColumn${index}`));
+      if (!overlay || columns.some(column => !column)) return;
+      renderFullscreenColumns(columns, activeLyricEntries, activeLyricIndex ?? -1, overlay);
+      fullscreenLyricIndex = activeLyricIndex ?? -1;
+      sizeFullscreenLyrics(overlay, activeLyricEntries);
+    };
+
     const originalLoadInlineLyrics = window.loadInlineLyrics;
     if (typeof originalLoadInlineLyrics === 'function') {
       window.loadInlineLyrics = async function loadLyricsWithDefault(media) {
@@ -236,6 +262,7 @@
     rowClass,
     renderWindow,
     renderFullscreenLyrics,
+    renderFullscreenColumns,
     syncFullscreenLyrics,
     sizeFullscreenLyrics,
   };
