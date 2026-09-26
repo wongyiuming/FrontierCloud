@@ -9,6 +9,7 @@ class KaraokeUiContractTests(unittest.TestCase):
         template = (ROOT / "static/media/karaoke.html").read_text(encoding="utf-8")
         ui = (ROOT / "static/js/karaoke-ui.js").read_text(encoding="utf-8")
         shared = (ROOT / "static/js/lyrics-window.js").read_text(encoding="utf-8")
+        shared_css = (ROOT / "static/css/lyrics-window.css").read_text(encoding="utf-8")
 
         self.assertIn('id="voiceValue">30%</output>', template)
         self.assertIn('id="monitorValue">150%</output>', template)
@@ -19,7 +20,9 @@ class KaraokeUiContractTests(unittest.TestCase):
         self.assertIn('/static/js/karaoke-ui.js', template)
 
         self.assertIn("const OFFSETS = Object.freeze([-3, -2, -1, 0, 1, 2, 3])", shared)
-        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", shared)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", shared_css)
+        self.assertIn(".fullscreen-lyrics.hidden { display: none; }", shared_css)
+        self.assertNotIn("document.createElement('style')", shared)
         self.assertIn("renderFullscreenColumns", shared)
         self.assertIn("syncFullscreenLyrics", shared)
         self.assertIn("window.renderFullscreenLyrics = function renderSharedPlayerFullscreenLyrics", shared)
