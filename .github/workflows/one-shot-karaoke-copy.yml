@@ -1,0 +1,90 @@
+name: One-shot karaoke copy cleanup
+
+on:
+  push:
+    branches: ["dev"]
+    paths:
+      - ".github/workflows/one-shot-karaoke-copy.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+      - name: Apply branding and fullscreen cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          root = Path('.')
+          karaoke = root / 'static/js/karaoke.js'
+          text = karaoke.read_text(encoding='utf-8')
+          old = """elements.fullLyrics.addEventListener('click', () => {\n  elements.lyricsOverlay.classList.add('open');\n  elements.lyricsOverlay.setAttribute('aria-hidden', 'false');\n});\nelements.lyricsOverlay.addEventListener('click', () => {\n  elements.lyricsOverlay.classList.remove('open');\n  elements.lyricsOverlay.setAttribute('aria-hidden', 'true');\n});\n"""
+          if old not in text:
+              raise SystemExit('legacy fullscreen listener block was not found')
+          karaoke.write_text(text.replace(old, ''), encoding='utf-8')
+
+          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          for raw in paths:
+              if not raw:
+                  continue
+              path = root / raw
+              if not path.is_file():
+                  continue
+              try:
+                  value = path.read_text(encoding='utf-8')
+              except (UnicodeDecodeError, OSError):
+                  continue
+              updated = value.replace('K 歌', '卡拉OK').replace('K歌', '卡拉OK')
+              updated = updated.replace(
+                  'page.locator("h1").inner_text() == "站点正在维护"',
+                  'page.locator("h1").inner_text() == "网站维护中"',
+              )
+              if updated != value:
+                  path.write_text(updated, encoding='utf-8')
+
+          workflow = root / '.github/workflows/docker.yml'
+          value = workflow.read_text(encoding='utf-8')
+          anchor = '          node --check static/js/karaoke.js\n'
+          additions = (
+              '          node --check static/js/karaoke.js\n'
+              '          node --check static/js/lyrics-window.js\n'
+              '          node --check static/js/karaoke-ui.js\n'
+          )
+          if 'node --check static/js/lyrics-window.js' not in value:
+              if anchor not in value:
+                  raise SystemExit('frontend syntax-check anchor not found')
+              value = value.replace(anchor, additions, 1)
+              workflow.write_text(value, encoding='utf-8')
+          PY
+
+          if git grep -n -E 'K ?歌' -- ':!*.png' ':!*.jpg' ':!*.jpeg' ':!*.gif' ':!*.ico'; then
+            echo 'legacy K歌 copy remains' >&2
+            exit 1
+          fi
+          if git grep -n "classList.add('open')" -- static/js/karaoke.js; then
+            echo 'legacy karaoke fullscreen open listener remains' >&2
+            exit 1
+          fi
+          grep -F 'page.locator("h1").inner_text() == "网站维护中"' tests/browser_ui_regression.py
+          git diff --check
+      - name: Commit cleanup to dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git add .github/workflows/docker.yml
+          git commit -m "ui: rename K歌 to 卡拉OK and unify fullscreen lyrics"
+          git push origin HEAD:dev
