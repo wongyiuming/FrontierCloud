@@ -1156,7 +1156,7 @@ function initKaraokeGesture() {
         timer = setTimeout(() => {
             timer = null;
             recognized = true;
-            showGestureHud('进入 K歌', 650);
+            showGestureHud('进入 卡拉OK', 650);
             openKaraoke();
         }, 1500);
     }, {passive: true});

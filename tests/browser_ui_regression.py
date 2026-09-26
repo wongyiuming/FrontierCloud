@@ -216,7 +216,7 @@ def maintenance_page_check(browser) -> None:
         page = context.new_page()
         response = page.goto(BASE_URL + "/api/v1/media/", wait_until="domcontentloaded")
         require(response is not None and response.status == 503, "public page did not enter the Nginx maintenance gate")
-        require(page.locator("h1").inner_text() == "站点正在维护", "maintenance page headline is missing")
+        require(page.locator("h1").inner_text() == "网站维护中", "maintenance page headline is missing")
         require("前沿娱乐" in page.locator(".brand").inner_text(), "maintenance page lost the product brand")
         require(page.locator("#retry").is_visible(), "maintenance page retry control is not visible")
         require("Admin → 站点开放状态" in page.locator(".hint").inner_text(), "maintenance page does not point administrators to the control module")

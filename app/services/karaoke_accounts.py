@@ -122,18 +122,18 @@ async def current_user(request: Request, *, mutation: bool = False, optional: bo
     if not raw:
         if optional:
             return None
-        raise HTTPException(401, "请先登录 K歌账号")
+        raise HTTPException(401, "请先登录 卡拉OK账号")
     key = SESSION_PREFIX + hashlib.sha256(raw.encode()).hexdigest()
     values = await redis_client.hgetall(key)
     if not values:
         if optional:
             return None
-        raise HTTPException(401, "K歌登录已失效")
+        raise HTTPException(401, "卡拉OK登录已失效")
     if mutation:
         supplied = request.headers.get("x-karaoke-csrf", "")
         cookie = request.cookies.get(csrf_name, "")
         if not cookie or not supplied or not secrets.compare_digest(cookie, supplied) or not secrets.compare_digest(cookie, values.get("csrf", "")):
-            raise HTTPException(403, "K歌请求校验失败")
+            raise HTTPException(403, "卡拉OK请求校验失败")
     async with state.database.connect() as conn:
         row = (await conn.execute(select(ks.users).where(ks.users.c.user_id == values["user_id"]))).mappings().first()
     if not row or row["status"] != "active":

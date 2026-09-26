@@ -181,7 +181,7 @@ function resetFailedStart(message) {
 
 async function addRecordingMetadata(blob) {
   const encoded = new TextEncoder().encode(JSON.stringify({
-    version: 1, title: state.context?.title || 'K歌录音', lyrics: state.lyrics,
+    version: 1, title: state.context?.title || '卡拉OK录音', lyrics: state.lyrics,
   }));
   const length = new Uint8Array(8);
   new DataView(length.buffer).setBigUint64(0, BigInt(encoded.byteLength));
@@ -393,7 +393,7 @@ async function initialize() {
   state.activeLyric = -2;
   renderLyricContainer(elements.lyrics, -1);
   renderLyricContainer(elements.overlayLines, -1);
-  setStatus('浏览器能力检查通过。授权设备后即可开始 K 歌。');
+  setStatus('浏览器能力检查通过。授权设备后即可开始 卡拉OK。');
 }
 
 elements.back.addEventListener('click', () => {
@@ -427,14 +427,6 @@ for (const [input, output] of [['songGain', 'songValue'], ['voiceGain', 'voiceVa
 }
 elements.songMute.addEventListener('change', applyLevels);
 elements.monitor.addEventListener('change', applyLevels);
-elements.fullLyrics.addEventListener('click', () => {
-  elements.lyricsOverlay.classList.add('open');
-  elements.lyricsOverlay.setAttribute('aria-hidden', 'false');
-});
-elements.lyricsOverlay.addEventListener('click', () => {
-  elements.lyricsOverlay.classList.remove('open');
-  elements.lyricsOverlay.setAttribute('aria-hidden', 'true');
-});
 navigator.mediaDevices?.addEventListener?.('devicechange', () => {
   if (state.phase === 'recording') stopRecording();
   setStatus('音频设备已变化，录音已安全停止；请刷新设备后继续。', true);
@@ -560,7 +552,7 @@ async function loadRecordings() {
 }
 
 async function uploadBlob(blob, title, media = null) {
-  if (!state.account) throw new Error('请先登录 K歌账号');
+  if (!state.account) throw new Error('请先登录 卡拉OK账号');
   setStatus('正在预留个人空间…');
   const ticket = await accountApi('/recordings/ticket', {method: 'POST', headers: karaokeHeaders(), body: JSON.stringify({
     size_bytes: blob.size, content_type: blob.type || 'application/octet-stream', media, title,
@@ -605,7 +597,7 @@ accountElements.authForm.onsubmit = async event => {
   };
   try {
     await accountApi(`/${state.authMode}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
-    await refreshAccount(); accountElements.authMessage.textContent = ''; setStatus('K歌账号已登录。');
+    await refreshAccount(); accountElements.authMessage.textContent = ''; setStatus('卡拉OK账号已登录。');
   } catch (error) {
     accountElements.authMessage.textContent = errorText(error);
     if (state.authMode === 'register' || error.captchaRequired) showCaptcha(true);
@@ -640,7 +632,7 @@ window.addEventListener('pagehide', () => {
 
 requestAnimationFrame(lyricClock);
 Promise.all([initialize(), refreshAccount()]).catch(error => {
-  setStatus(`K歌页面初始化失败：${errorText(error)}`, true);
+  setStatus(`卡拉OK页面初始化失败：${errorText(error)}`, true);
   elements.record.disabled = true;
 });
 setAuthMode('login');
