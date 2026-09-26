@@ -192,6 +192,26 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("/api/v1/media/refresh", template)
         self.assertIn("/api/v1/media/admin/elevate", template)
 
+    def test_secondary_catalog_logo_reveals_hidden_items_after_fifteen_clicks(self):
+        browser = (ROOT / "static" / "js" / "media-browser.js").read_text(encoding="utf-8")
+        category = (ROOT / "static" / "media" / "category.html").read_text(encoding="utf-8")
+        home = (ROOT / "static" / "media" / "index.html").read_text(encoding="utf-8")
+        api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")
+
+        self.assertIn("HIDDEN_REVEAL_CLICK_LIMIT = 15", browser)
+        self.assertIn("HIDDEN_REVEAL_WINDOW_MS = 60 * 1000", browser)
+        self.assertIn("pageBrandLogo", browser)
+        self.assertIn("frontier:hidden-reveal:", browser)
+        self.assertIn("include_hidden", browser)
+        self.assertIn("window.location.replace", browser)
+        self.assertIn("frontierCloudCatalogRevealKind", category)
+        self.assertIn("brandKind === 'music' ? 'music'", category)
+        self.assertIn("brandKind === 'media' ? 'video'", category)
+        self.assertNotIn("frontierCloudCatalogRevealKind", home)
+        self.assertIn("include_hidden: bool = False", api)
+        self.assertNotIn("SELECT EXISTS(SELECT 1 FROM media_visibility", api)
+        self.assertNotIn("_is_publicly_hidden(normalized_track, await _hidden_set())", api)
+
     def test_android_portrait_layout_stacks_player_above_sidebar(self):
         style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
         media_query = "@media (max-width: 700px) and (orientation: portrait)"

@@ -10,7 +10,6 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import bindparam, text
 
 from app.services.media_catalog_cache import load_media_catalog, store_media_catalog
 from app.services import karaoke_identity, playback
@@ -124,9 +123,11 @@ def _direct_media_files(directory: Path, valid_exts) -> list[Path]:
     ]
 
 
-def _category_url(media_type: str, relative_path: str) -> str:
-    query = urllib.parse.urlencode({"path": relative_path})
-    return f"/api/v1/media/{media_type}/category?{query}"
+def _category_url(media_type: str, relative_path: str, *, include_hidden: bool = False) -> str:
+    query = {"path": relative_path}
+    if include_hidden:
+        query["include_hidden"] = "true"
+    return f"/api/v1/media/{media_type}/category?{urllib.parse.urlencode(query)}"
 
 
 def _has_visible_direct_media(directory: Path, valid_exts, hidden: set[str]) -> bool:
@@ -136,7 +137,7 @@ def _has_visible_direct_media(directory: Path, valid_exts, hidden: set[str]) -> 
     )
 
 
-def _get_media_categories_sync(media_type, valid_exts, hidden: set[str]):
+def _get_media_categories_sync(media_type, valid_exts, hidden: set[str], include_hidden=False):
     categories = []
     type_root = _typed_media_root(media_type)
     if not type_root.exists():
@@ -155,42 +156,57 @@ def _get_media_categories_sync(media_type, valid_exts, hidden: set[str]):
             if child.is_dir() and not child.is_symlink()
         )
         if has_direct_media or has_child_media:
-            categories.append({"name": entry.name, "url": _category_url(media_type, rel_entry)})
+            categories.append({"name": entry.name, "url": _category_url(media_type, rel_entry, include_hidden=include_hidden)})
     return categories
 
 
-async def get_media_categories(media_type, valid_exts):
-    generation, cached = await load_media_catalog("categories", media_type)
+async def get_media_categories(media_type, valid_exts, *, include_hidden: bool = False):
+    identity = f"{media_type}:all" if include_hidden else media_type
+    generation, cached = await load_media_catalog("categories", identity)
     if cached is not None:
         return cached
-    hidden = await _hidden_set()
+    hidden = set() if include_hidden else await _hidden_set()
     if node_state.node["role"] == "Master":
         merged = {}
         for entry in await node_catalog.resources(root=_typed_media_root(media_type).name):
             if _is_publicly_hidden(entry["path"], hidden):
                 continue
             name = entry["path"].split("/")[1]
-            merged.setdefault(name, {"name": name, "url": _category_url(media_type, _typed_media_root(media_type).name + "/" + name)})
+            merged.setdefault(name, {
+                "name": name,
+                "url": _category_url(
+                    media_type,
+                    _typed_media_root(media_type).name + "/" + name,
+                    include_hidden=include_hidden,
+                ),
+            })
         categories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
     else:
-        categories = await asyncio.to_thread(_get_media_categories_sync, media_type, valid_exts, hidden)
-    await store_media_catalog(generation, "categories", media_type, categories)
+        categories = await asyncio.to_thread(
+            _get_media_categories_sync,
+            media_type,
+            valid_exts,
+            hidden,
+            include_hidden,
+        )
+    await store_media_catalog(generation, "categories", identity, categories)
     return categories
 
 
 @router.get("/catalog/categories")
 async def get_media_categories_data(
     media_type: str = Query(..., pattern=r"^(music|video)$"),
+    include_hidden: bool = False,
 ):
     valid_exts = AUDIO_EXTS if media_type == "music" else VIDEO_EXTS
-    entries = await get_media_categories(media_type, valid_exts)
+    entries = await get_media_categories(media_type, valid_exts, include_hidden=include_hidden)
     return JSONResponse(
         {"entries": entries},
-        headers={"Cache-Control": "private, max-age=30, stale-while-revalidate=300"},
+        headers={"Cache-Control": "private, max-age=15" if include_hidden else "private, max-age=30, stale-while-revalidate=300"},
     )
 
 
-def _get_media_subcategories_sync(media_type, category_subpath, valid_exts, hidden):
+def _get_media_subcategories_sync(media_type, category_subpath, valid_exts, hidden, include_hidden=False):
     try:
         category_dir = resolve_safe_path(MEDIA_ROOT, category_subpath)
     except ValueError:
@@ -214,17 +230,17 @@ def _get_media_subcategories_sync(media_type, category_subpath, valid_exts, hidd
         if _has_visible_direct_media(child, valid_exts, hidden):
             subcategories.append({
                 "name": child.name,
-                "url": _category_url(media_type, rel_child),
+                "url": _category_url(media_type, rel_child, include_hidden=include_hidden),
             })
     return subcategories
 
 
-async def get_media_subcategories(media_type, category_subpath, valid_exts):
-    identity = f"{media_type}:{category_subpath}"
+async def get_media_subcategories(media_type, category_subpath, valid_exts, *, include_hidden: bool = False):
+    identity = f"{media_type}:{category_subpath}:{'all' if include_hidden else 'public'}"
     generation, cached = await load_media_catalog("subcategories", identity)
     if cached is not None:
         return cached
-    hidden = await _hidden_set()
+    hidden = set() if include_hidden else await _hidden_set()
     if node_state.node["role"] == "Master":
         merged = {}
         for entry in await node_catalog.resources(directory=category_subpath):
@@ -233,7 +249,10 @@ async def get_media_subcategories(media_type, category_subpath, valid_exts):
             parts = entry["path"].split("/")
             if len(parts) == 4:
                 name = parts[2]
-                merged.setdefault(name, {"name": name, "url": _category_url(media_type, category_subpath + "/" + name)})
+                merged.setdefault(name, {
+                    "name": name,
+                    "url": _category_url(media_type, category_subpath + "/" + name, include_hidden=include_hidden),
+                })
         subcategories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
     else:
         subcategories = await asyncio.to_thread(
@@ -242,6 +261,7 @@ async def get_media_subcategories(media_type, category_subpath, valid_exts):
             category_subpath,
             valid_exts,
             hidden,
+            include_hidden,
         )
     await store_media_catalog(generation, "subcategories", identity, subcategories)
     return subcategories
@@ -278,19 +298,18 @@ def _scan_media_files_by_category_sync(category_subpath, valid_exts, media_type,
     return result
 
 
-async def scan_media_files_by_category(category_subpath, valid_exts, media_type):
-    identity = f"{media_type}:{category_subpath}"
+async def scan_media_files_by_category(category_subpath, valid_exts, media_type, *, include_hidden: bool = False):
+    identity = f"{media_type}:{category_subpath}:{'all' if include_hidden else 'public'}"
     generation, cached = await load_media_catalog("tracks-v2", identity)
     if cached is not None:
         return cached
+    hidden = set() if include_hidden else await _hidden_set()
     if node_state.node["role"] == "Master":
-        hidden = await _hidden_set()
         media_list = [item for item in await node_routing.directory_items(category_subpath)
                       if not _is_publicly_hidden(item["media_path"], hidden)]
     else:
         async with media_mutation_lock.shared():
             ensure_media_mutations_ready()
-            hidden = await _hidden_set()
             media_list = await asyncio.to_thread(
                 _scan_media_files_by_category_sync,
                 category_subpath,
@@ -325,10 +344,12 @@ async def _player_entries(
     path: str,
     media_type: str,
     playback_session_id: str,
+    *,
+    include_hidden: bool = False,
 ) -> list[dict]:
     playback_type = "audio" if media_type == "music" else "video"
     valid_exts = AUDIO_EXTS if media_type == "music" else VIDEO_EXTS
-    items = await scan_media_files_by_category(path, valid_exts, playback_type)
+    items = await scan_media_files_by_category(path, valid_exts, playback_type, include_hidden=include_hidden)
     remote = [item for item in items if item.get("resource_id")]
     media_list = await playback.attach_stats_and_sort(
         [item for item in items if not item.get("resource_id")],
@@ -350,9 +371,10 @@ async def get_media_catalog_data(
     media_type: str = Query(..., pattern=r"^(music|video)$"),
     path: str = Query(..., min_length=1, max_length=1024),
     playback_session_id: str = Query(..., min_length=1, max_length=64),
+    include_hidden: bool = False,
 ):
     await _public_category_parts(path, media_type)
-    entries = await _player_entries(path, media_type, playback_session_id)
+    entries = await _player_entries(path, media_type, playback_session_id, include_hidden=include_hidden)
     return JSONResponse(
         {"entries": entries},
         headers={"Cache-Control": "private, max-age=15, stale-while-revalidate=120"},
@@ -392,17 +414,7 @@ def _bind_response_media_audit(request: Request | None, response: Response) -> N
 
 
 async def _local_stream_metadata(relative_path: str, object_kind: str) -> dict[str, str]:
-    # Range requests inspect only the exact file and its supported ancestors.
-    # The caller's shared mutation guard excludes deletion while binding an ID.
-    parts = relative_path.split("/")
-    ancestors = ["/".join(parts[:index]) for index in range(1, len(parts) + 1)]
     async with engine.begin() as conn:
-        hidden = await conn.scalar(text("""
-            SELECT EXISTS(SELECT 1 FROM media_visibility
-                          WHERE hidden=1 AND relative_path IN :ancestors)
-        """).bindparams(bindparam("ancestors", expanding=True)), {"ancestors": ancestors})
-        if hidden:
-            raise HTTPException(status_code=404, detail="Media file not found")
         media_id = await media_objects.ensure_object(conn, relative_path, object_kind)
     owner_id = node_state.node["node_id"]
     return {"resource_id": node_protocol.resource_id(owner_id, media_id), "owner_id": owner_id, "media_id": media_id}
@@ -467,26 +479,28 @@ async def refresh_media_interface():
 
 
 @router.get("/music", response_class=HTMLResponse)
-async def get_music_categories_page():
+async def get_music_categories_page(include_hidden: bool = False):
+    suffix = "&include_hidden=true" if include_hidden else ""
     return _render_category_page(
         "前沿音乐",
         "/api/v1/media",
         {
-            "url": "/api/v1/media/catalog/categories?media_type=music",
-            "cacheKey": "categories:music",
+            "url": f"/api/v1/media/catalog/categories?media_type=music{suffix}",
+            "cacheKey": f"categories:music:{'all' if include_hidden else 'public'}",
             "emptyText": "暂无音乐分类目录，请在 data/media/music 下创建分类文件夹",
         },
     )
 
 
 @router.get("/video", response_class=HTMLResponse)
-async def get_video_categories_page():
+async def get_video_categories_page(include_hidden: bool = False):
+    suffix = "&include_hidden=true" if include_hidden else ""
     return _render_category_page(
         "前沿视讯",
         "/api/v1/media",
         {
-            "url": "/api/v1/media/catalog/categories?media_type=video",
-            "cacheKey": "categories:video",
+            "url": f"/api/v1/media/catalog/categories?media_type=video{suffix}",
+            "cacheKey": f"categories:video:{'all' if include_hidden else 'public'}",
             "emptyText": "暂无视频分类目录，请在 data/media/vido 下创建分类文件夹",
         },
     )
@@ -533,16 +547,17 @@ async def _get_player_or_subcategories(
     valid_exts,
     player_template: str,
     title_prefix: str,
+    include_hidden: bool = False,
     direct: bool = False,
 ) -> HTMLResponse:
     parts = await _public_category_parts(path, media_type)
-    type_list_url = f"/api/v1/media/{media_type}"
+    type_list_url = f"/api/v1/media/{media_type}" + ("?include_hidden=true" if include_hidden else "")
     display_path = "/".join(parts[1:])
     if len(parts) == 2:
-        subcategories = await get_media_subcategories(media_type, path, valid_exts)
+        subcategories = await get_media_subcategories(media_type, path, valid_exts, include_hidden=include_hidden)
         if subcategories and not direct:
-            if node_state.node["role"] == "Master" and await scan_media_files_by_category(path, valid_exts, playback_type):
-                subcategories = [{"name": "当前目录曲目", "url": _category_url(media_type, path) + "&direct=true"}] + subcategories
+            if node_state.node["role"] == "Master" and await scan_media_files_by_category(path, valid_exts, playback_type, include_hidden=include_hidden):
+                subcategories = [{"name": "当前目录曲目", "url": _category_url(media_type, path, include_hidden=include_hidden) + "&direct=true"}] + subcategories
             return _render_subcategory_page(
                 f"{title_prefix} - {display_path}",
                 type_list_url,
@@ -551,19 +566,20 @@ async def _get_player_or_subcategories(
         back_url = type_list_url
     else:
         parent_path = "/".join(parts[:2])
-        back_url = _category_url(media_type, parent_path)
+        back_url = _category_url(media_type, parent_path, include_hidden=include_hidden)
 
     session_id = str(uuid.uuid4())
-    catalog_query = urllib.parse.urlencode(
-        {
-            "media_type": media_type,
-            "path": path,
-            "playback_session_id": session_id,
-        }
-    )
+    catalog_params = {
+        "media_type": media_type,
+        "path": path,
+        "playback_session_id": session_id,
+    }
+    if include_hidden:
+        catalog_params["include_hidden"] = "true"
+    catalog_query = urllib.parse.urlencode(catalog_params)
     catalog_config = {
         "url": f"/api/v1/media/catalog/media?{catalog_query}",
-        "cacheKey": f"media:{media_type}:{path}",
+        "cacheKey": f"media:{media_type}:{path}:{'all' if include_hidden else 'public'}",
     }
     html = load_html_template(player_template)
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(f"{title_prefix} - {display_path}"))
@@ -578,6 +594,7 @@ async def _get_player_or_subcategories(
 @router.get("/music/category", response_class=HTMLResponse)
 async def get_music_player_page(
     path: str = Query(...),
+    include_hidden: bool = False,
     direct: bool = False,
 ):
     return await _get_player_or_subcategories(
@@ -587,6 +604,7 @@ async def get_music_player_page(
         AUDIO_EXTS,
         "audio-player.html",
         "前沿音乐",
+        include_hidden,
         direct,
     )
 
@@ -594,6 +612,7 @@ async def get_music_player_page(
 @router.get("/video/category", response_class=HTMLResponse)
 async def get_video_player_page(
     path: str = Query(...),
+    include_hidden: bool = False,
     direct: bool = False,
 ):
     return await _get_player_or_subcategories(
@@ -603,6 +622,7 @@ async def get_video_player_page(
         VIDEO_EXTS,
         "video-player.html",
         "前沿视讯",
+        include_hidden,
         direct,
     )
 
@@ -615,8 +635,6 @@ async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024)
             entries = await node_routing.lyric_entries(resource_id, track)
         else:
             normalized_track, _track_path = lyrics.validate_track(track)
-            if _is_publicly_hidden(normalized_track, await _hidden_set()):
-                raise FileNotFoundError
             _lyric_path, entries = await lyrics.load_for_track(normalized_track)
     except (ValueError, FileNotFoundError):
         raise HTTPException(status_code=404, detail="Lyrics not found")
@@ -635,8 +653,6 @@ async def get_lyrics_content(track: str = Query(..., min_length=1, max_length=10
             entries = await node_routing.lyric_entries(resource_id, track)
         else:
             normalized_track, _track_path = lyrics.validate_track(track)
-            if _is_publicly_hidden(normalized_track, await _hidden_set()):
-                raise FileNotFoundError
             _lyric_path, entries = await lyrics.load_for_track(normalized_track)
     except (ValueError, FileNotFoundError):
         raise HTTPException(status_code=404, detail="Lyrics not found")

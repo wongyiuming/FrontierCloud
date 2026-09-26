@@ -57,6 +57,8 @@
         brandLogo.alt = brandLabel;
         document.getElementById('pageBrandSuffix').textContent =
             pageTitle.slice(sourcePrefix.length).replace(/^\s*-\s*/, '');
+        window.frontierCloudCatalogRevealKind =
+            brandKind === 'music' ? 'music' : (brandKind === 'media' ? 'video' : '');
         window.frontierCloudStunUrls = {{STUN_URLS_JSON}};
         window.frontierCloudWebrtcIntervalMs = {{WEBRTC_INTERVAL_MS}};
         window.frontierCloudCatalogConfig = {{CATALOG_CONFIG_JSON}};

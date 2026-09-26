@@ -3,6 +3,8 @@
 
     const CACHE_PREFIX = 'frontier:catalog:v1:';
     const MAX_CACHE_BYTES = 256 * 1024;
+    const HIDDEN_REVEAL_CLICK_LIMIT = 15;
+    const HIDDEN_REVEAL_WINDOW_MS = 60 * 1000;
 
     function cacheRead(key) {
         if (!key) return null;
@@ -97,6 +99,61 @@
         fetch: (url, key = '') => fetchCatalog(url, key, null),
     };
 
+    function hiddenRevealStorageKey(mediaType) {
+        return `frontier:hidden-reveal:${mediaType}`;
+    }
+
+    function includeHiddenRequested(url = new URL(window.location.href)) {
+        const value = String(url.searchParams.get('include_hidden') || '').toLowerCase();
+        return value === '1' || value === 'true';
+    }
+
+    function syncHiddenRevealState() {
+        const mediaType = window.frontierCloudCatalogRevealKind;
+        if (!['music', 'video'].includes(mediaType)) return true;
+        const key = hiddenRevealStorageKey(mediaType);
+        const url = new URL(window.location.href);
+        if (includeHiddenRequested(url)) {
+            try { sessionStorage.setItem(key, '1'); } catch (_) {}
+            return true;
+        }
+        try {
+            if (sessionStorage.getItem(key) === '1') {
+                url.searchParams.set('include_hidden', 'true');
+                window.location.replace(url.toString());
+                return false;
+            }
+        } catch (_) {
+            // Hidden reveal is a convenience state only; normal catalog browsing still works.
+        }
+        return true;
+    }
+
+    function bindHiddenRevealGesture() {
+        const logo = document.getElementById('pageBrandLogo');
+        const mediaType = window.frontierCloudCatalogRevealKind;
+        if (!logo || !['music', 'video'].includes(mediaType)) return;
+
+        let count = 0;
+        let startedAt = 0;
+        logo.addEventListener('click', () => {
+            const now = Date.now();
+            if (!startedAt || now - startedAt > HIDDEN_REVEAL_WINDOW_MS) {
+                count = 0;
+                startedAt = now;
+            }
+            count += 1;
+            if (count < HIDDEN_REVEAL_CLICK_LIMIT) return;
+
+            count = 0;
+            startedAt = 0;
+            try { sessionStorage.setItem(hiddenRevealStorageKey(mediaType), '1'); } catch (_) {}
+            const url = new URL(window.location.href);
+            url.searchParams.set('include_hidden', 'true');
+            window.location.replace(url.toString());
+        });
+    }
+
     function bindPrefetch() {
         const links = Array.from(document.querySelectorAll('[data-catalog-prefetch]'));
         for (const link of links) {
@@ -145,7 +202,9 @@
     }
 
     window.addEventListener('DOMContentLoaded', () => {
+        if (!syncHiddenRevealState()) return;
         startCatalogPage();
+        bindHiddenRevealGesture();
         bindPrefetch();
     });
 })();
