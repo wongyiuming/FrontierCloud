@@ -163,7 +163,7 @@ async def backup_begin(request: Request):
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(400, "Invalid backup generation") from exc
     await resource_pool.backup_begin(relation["peer_id"], generation, state.database)
-    return {"status": "receiving", "protocol": p.PROTOCOL_VERSION}
+    return {"status": "receiving"}
 
 
 @router.post("/backup/chunk")
