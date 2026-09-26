@@ -5,7 +5,7 @@ FrontierCloud is a self-hosted media browsing, playback, karaoke, resource-node,
 This Wiki is written for two audiences:
 
 - **Operators**: deployment, node onboarding, storage distribution, Compute, Backup, releases, rollback, and troubleshooting.
-- **Developers**: data models, cluster boundaries, schema migrations, release rules, CI, and code-level constraints.
+- **Engineers**: data models, cluster boundaries, schema migrations, release rules, CI, and code-level constraints.
 
 ## Documentation map
 
@@ -15,7 +15,7 @@ This Wiki is written for two audiences:
 - [Media Catalog and Storage Placement](Media-and-Storage.md)
 - [Operations and Troubleshooting](Operations-and-Troubleshooting.md)
 - [Release, Rollback, and Database Migrations](Release-and-Database-Migrations.md)
-- [Development and CI](Development-and-CI.md)
+- [Engineering and CI](Engineering-and-CI.md)
 - [Bash / SQL Command Reference](Command-Reference.md)
 
 ## Core principles
@@ -54,9 +54,9 @@ A resource toggle saved on the Master is only desired state. It is considered ef
 
 ### Releases fail closed
 
-A new production version must pass release verification. If GitHub or CI verification is temporarily unavailable, the running service continues, but a new upgrade is not authorized.
+A new release must pass release verification. If GitHub or CI verification is temporarily unavailable, the running service continues, but a new upgrade is not authorized.
 
-### Production databases upgrade in place
+### Existing databases upgrade in place
 
 FrontierCloud uses versioned Schema Generations. Existing initialized databases advance through explicit migrations instead of requiring an empty database whenever a table or column changes.
 
@@ -105,6 +105,6 @@ To answer "which node actually stores this file?", read [Media Catalog and Stora
 
 For node health, Compute, and Backup, read [Cluster and Resource Model](Cluster-and-Resource-Model.md).
 
-Before a production upgrade, read [Release, Rollback, and Database Migrations](Release-and-Database-Migrations.md).
+Before a release, read [Release, Rollback, and Database Migrations](Release-and-Database-Migrations.md).
 
 For incidents, start with [Operations and Troubleshooting](Operations-and-Troubleshooting.md) and [Bash / SQL Command Reference](Command-Reference.md).

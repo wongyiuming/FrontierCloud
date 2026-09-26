@@ -1,4 +1,4 @@
-# Development and CI
+# Engineering and CI
 
 ## 1. Branch policy
 
@@ -22,7 +22,7 @@ main
 
 Do not create additional feature/fix branches by default. If a new branch is genuinely required, obtain explicit maintainer approval first.
 
-Do not push ordinary development changes directly to `main`.
+Do not push ordinary engineering changes directly to `main`.
 
 ## 2. Technology stack
 
@@ -147,7 +147,7 @@ B runs its own full CI
 merge decision uses B's result
 ```
 
-The production release verifier follows the same principle.
+The release verifier follows the same principle.
 
 ## 7. Source contracts vs runtime tests
 
@@ -176,7 +176,7 @@ Every schema change must:
 Never return to the old policy:
 
 ```text
-schema changed -> production database must be recreated empty
+schema changed -> existing database must be recreated empty
 ```
 
 ## 9. Cluster model changes
@@ -239,7 +239,7 @@ Release control is high risk. Changes in this area require regression coverage f
 
 External verification data may be cached for observability, but stale data must not authorize a new dangerous operation.
 
-## 12. Never break production design to satisfy a test
+## 12. Never break the runtime design to satisfy a test
 
 Examples of bad fixes:
 
@@ -263,11 +263,11 @@ A useful PR description should identify:
 - final exact head SHA;
 - CI run number/result.
 
-Avoid descriptions that only say "fix bug".
+Avoid descriptions that only say `fix bug`.
 
 ## 14. Merge is not deployment
 
-A PR merged to `main` still has to pass production release verification and be explicitly deployed.
+A PR merged to `main` still has to pass release verification and be explicitly deployed.
 
 ```text
 PR merged to main
@@ -288,4 +288,4 @@ cluster convergence
 complete
 ```
 
-Development complete, code merged, and production upgraded are three different states.
+Engineering complete, code merged, and the running cluster upgraded are three different states.
