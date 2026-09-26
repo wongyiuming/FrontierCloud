@@ -9,6 +9,7 @@ import time
 
 import httpx
 
+from app.core.config import settings
 from app.services.federation.runtime import runtime
 from app.services.federation.state import state
 
@@ -20,8 +21,11 @@ REPOSITORY_API = f"https://api.github.com/repos/{REPOSITORY_FULL_NAME}"
 CI_URL = f"{REPOSITORY_API}/actions/workflows/docker.yml/runs"
 BRANCH_URL = f"{REPOSITORY_API}/branches/{RELEASE_BRANCH}"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-CI_CACHE_SECONDS = 90
+CI_CACHE_SECONDS = 300
+GITHUB_FAILURE_BACKOFF_SECONDS = 30
 _ci_cache: tuple[float, dict] = (0.0, {})
+_ci_last_verified: dict = {}
+_github_backoff_until = 0.0
 _ci_lock = asyncio.Lock()
 
 
@@ -90,20 +94,154 @@ def _promotion_source_sha(pulls: list[dict]) -> str:
     return next(iter(matches)) if len(matches) == 1 else ""
 
 
+def _int_header(response: httpx.Response | object, name: str) -> int | None:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    raw = headers.get(name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _rate_limit_info(response: httpx.Response | object) -> dict:
+    return {
+        "limit": _int_header(response, "x-ratelimit-limit"),
+        "remaining": _int_header(response, "x-ratelimit-remaining"),
+        "used": _int_header(response, "x-ratelimit-used"),
+        "reset_at": _int_header(response, "x-ratelimit-reset"),
+    }
+
+
+def _github_headers() -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "FrontierCloud-release-control",
+    }
+    token = settings.GITHUB_API_TOKEN.strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _verification_metadata(response: httpx.Response | object | None = None) -> dict:
+    value = {
+        "authenticated": bool(settings.GITHUB_API_TOKEN.strip()),
+        "checked_at": int(time.time()),
+    }
+    if response is not None:
+        rate_limit = _rate_limit_info(response)
+        if any(item is not None for item in rate_limit.values()):
+            value["rate_limit"] = rate_limit
+    return value
+
+
+def _last_verified_snapshot(value: dict) -> dict:
+    keys = (
+        "branch", "source_branch", "sha", "tree_sha", "ci_sha", "status", "conclusion",
+        "run_number", "html_url", "updated_at", "publishable", "checked_at", "authenticated",
+    )
+    return {key: value[key] for key in keys if key in value}
+
+
+def _remember_verified(value: dict) -> None:
+    global _ci_last_verified
+    if value.get("available"):
+        _ci_last_verified = _last_verified_snapshot(value)
+
+
+def _retry_after_seconds(response: httpx.Response | object, now_epoch: int) -> int:
+    retry_after = _int_header(response, "retry-after")
+    reset_at = _int_header(response, "x-ratelimit-reset")
+    candidates = [GITHUB_FAILURE_BACKOFF_SECONDS]
+    if retry_after is not None and retry_after > 0:
+        candidates.append(retry_after)
+    if reset_at is not None and reset_at > now_epoch:
+        candidates.append(reset_at - now_epoch)
+    return max(candidates)
+
+
+def _failure_value(
+    *,
+    error_kind: str,
+    detail: str,
+    http_status: int | None = None,
+    response: httpx.Response | object | None = None,
+    retry_after_seconds: int | None = None,
+) -> dict:
+    value = {
+        "available": False,
+        "branch": RELEASE_BRANCH,
+        "source_branch": CI_BRANCH,
+        "status": "unavailable",
+        "conclusion": None,
+        "detail": detail,
+        "error_kind": error_kind,
+        "publishable": False,
+        **_verification_metadata(response),
+    }
+    if http_status is not None:
+        value["http_status"] = http_status
+    if retry_after_seconds is not None:
+        value["retry_after_seconds"] = max(0, retry_after_seconds)
+    if _ci_last_verified:
+        value["last_verified"] = dict(_ci_last_verified)
+    return value
+
+
+def _backoff_value(now_epoch: int) -> dict:
+    retry_after = max(0, int(_github_backoff_until - now_epoch))
+    cached = _ci_cache[1]
+    detail = cached.get("detail") if isinstance(cached, dict) else None
+    value = _failure_value(
+        error_kind="rate_limited",
+        detail=str(detail or "GitHub API rate limit backoff is active"),
+        http_status=cached.get("http_status") if isinstance(cached, dict) else None,
+        retry_after_seconds=retry_after,
+    )
+    if isinstance(cached, dict) and isinstance(cached.get("rate_limit"), dict):
+        value["rate_limit"] = dict(cached["rate_limit"])
+    return value
+
+
+def _github_message(response: httpx.Response | object) -> str:
+    try:
+        payload = response.json()
+    except Exception:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    message = str(payload.get("message") or "").strip().replace("\n", " ")
+    return message[:240]
+
+
 async def ci_status(*, force: bool = False) -> dict:
-    global _ci_cache
+    global _ci_cache, _github_backoff_until
     now = time.monotonic()
+    now_epoch = int(time.time())
+    if _github_backoff_until > now_epoch:
+        value = _backoff_value(now_epoch)
+        _ci_cache = (now, value)
+        return value
     if not force and _ci_cache[1] and now - _ci_cache[0] < CI_CACHE_SECONDS:
         return _ci_cache[1]
     async with _ci_lock:
         now = time.monotonic()
+        now_epoch = int(time.time())
+        if _github_backoff_until > now_epoch:
+            value = _backoff_value(now_epoch)
+            _ci_cache = (now, value)
+            return value
         if not force and _ci_cache[1] and now - _ci_cache[0] < CI_CACHE_SECONDS:
             return _ci_cache[1]
         try:
             async with httpx.AsyncClient(
                 trust_env=False,
                 timeout=httpx.Timeout(5, connect=3),
-                headers={"Accept": "application/vnd.github+json", "User-Agent": "FrontierCloud-release-control"},
+                headers=_github_headers(),
             ) as client:
                 branch_response = await client.get(BRANCH_URL)
                 branch_response.raise_for_status()
@@ -130,6 +268,7 @@ async def ci_status(*, force: bool = False) -> dict:
                         "conclusion": None,
                         "detail": "main HEAD tree is unavailable",
                         "publishable": False,
+                        **_verification_metadata(branch_response),
                     }
                 elif not SHA_RE.fullmatch(source_sha):
                     value = {
@@ -142,6 +281,7 @@ async def ci_status(*, force: bool = False) -> dict:
                         "conclusion": None,
                         "detail": "main HEAD has no unique merged dev->main PR association",
                         "publishable": False,
+                        **_verification_metadata(branch_response),
                     }
                 else:
                     runs_response, source_response = await asyncio.gather(
@@ -156,6 +296,7 @@ async def ci_status(*, force: bool = False) -> dict:
                     source_tree_payload = source_commit.get("tree") if isinstance(source_commit.get("tree"), dict) else {}
                     source_tree = str(source_tree_payload.get("sha") or "")
                     run = _matching_ci_run(runs, source_sha)
+                    metadata = _verification_metadata(runs_response)
 
                     if source_tree != main_tree:
                         value = {
@@ -169,6 +310,7 @@ async def ci_status(*, force: bool = False) -> dict:
                             "conclusion": None,
                             "detail": "main HEAD tree differs from the reviewed dev PR tree",
                             "publishable": False,
+                            **metadata,
                         }
                     elif not run:
                         value = {
@@ -182,6 +324,7 @@ async def ci_status(*, force: bool = False) -> dict:
                             "conclusion": None,
                             "detail": "reviewed dev PR head has no matching dev push CI result",
                             "publishable": False,
+                            **metadata,
                         }
                     else:
                         completed = run.get("status") == "completed"
@@ -205,17 +348,51 @@ async def ci_status(*, force: bool = False) -> dict:
                             "updated_at": run.get("updated_at"),
                             "detail": detail,
                             "publishable": completed and succeeded,
+                            **metadata,
                         }
+                _github_backoff_until = 0.0
+                _remember_verified(value)
+        except httpx.HTTPStatusError as exc:
+            response = exc.response
+            status_code = int(response.status_code)
+            rate_limit = _rate_limit_info(response)
+            rate_limited = status_code == 429 or (status_code == 403 and rate_limit.get("remaining") == 0)
+            message = _github_message(response)
+            if rate_limited:
+                retry_after = _retry_after_seconds(response, now_epoch)
+                _github_backoff_until = float(now_epoch + retry_after)
+                limit = rate_limit.get("limit")
+                remaining = rate_limit.get("remaining")
+                quota = ""
+                if limit is not None or remaining is not None:
+                    quota = f" ({remaining if remaining is not None else '?'} / {limit if limit is not None else '?' } remaining)"
+                value = _failure_value(
+                    error_kind="rate_limited",
+                    detail=f"GitHub API rate limited: HTTP {status_code}{quota}",
+                    http_status=status_code,
+                    response=response,
+                    retry_after_seconds=retry_after,
+                )
+            else:
+                detail = f"GitHub API HTTP {status_code}"
+                if message:
+                    detail += f": {message}"
+                value = _failure_value(
+                    error_kind="http_status",
+                    detail=detail,
+                    http_status=status_code,
+                    response=response,
+                )
+        except httpx.RequestError as exc:
+            value = _failure_value(
+                error_kind="network",
+                detail=f"GitHub API network error: {type(exc).__name__}",
+            )
         except Exception as exc:
-            value = {
-                "available": False,
-                "branch": RELEASE_BRANCH,
-                "source_branch": CI_BRANCH,
-                "status": "unavailable",
-                "conclusion": None,
-                "detail": f"GitHub Actions unavailable: {type(exc).__name__}",
-                "publishable": False,
-            }
+            value = _failure_value(
+                error_kind="unexpected",
+                detail=f"GitHub API verification failed: {type(exc).__name__}",
+            )
         _ci_cache = (time.monotonic(), value)
         return value
 
