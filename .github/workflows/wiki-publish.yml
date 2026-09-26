@@ -1,0 +1,57 @@
+name: Publish GitHub Wiki
+
+on:
+  push:
+    branches: ["dev"]
+    paths:
+      - ".github/workflows/wiki-publish.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-wiki:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout main documentation source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: source
+          fetch-depth: 1
+
+      - name: Checkout GitHub Wiki
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}.wiki
+          path: wiki
+          token: ${{ github.token }}
+
+      - name: Publish FrontierCloud Wiki pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d source/docs/wiki
+          cp source/docs/wiki/*.md wiki/
+          cat > wiki/_Sidebar.md <<'EOF'
+          - [Home](Home)
+          - [Architecture](Architecture)
+          - [Deployment and Configuration](Deployment-and-Configuration)
+          - [Cluster and Resource Model](Cluster-and-Resource-Model)
+          - [Media and Storage Placement](Media-and-Storage)
+          - [Operations and Troubleshooting](Operations-and-Troubleshooting)
+          - [Release and Database Migrations](Release-and-Database-Migrations)
+          - [Engineering and CI](Engineering-and-CI)
+          - [Command Reference](Command-Reference)
+          EOF
+          cd wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- '*.md'
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date"
+            exit 0
+          fi
+          git commit -m "docs: publish FrontierCloud wiki"
+          git push origin HEAD
