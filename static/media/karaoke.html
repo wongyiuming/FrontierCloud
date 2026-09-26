@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-  <title>前沿娱乐 · K歌</title>
+  <title>前沿娱乐 · 卡拉OK</title>
   <link rel="stylesheet" href="{{KARAOKE_CSS_URL}}">
 </head>
 <body>
 <main class="shell">
   <header>
     <button id="back" class="quiet" type="button">← 返回播放器</button>
-    <div class="karaoke-brand"><img class="karaoke-brand-logo" src="/api/v1/media/brand/logo/entertainment" alt="前沿娱乐"><h1>K歌</h1></div>
+    <div class="karaoke-brand"><img class="karaoke-brand-logo" src="/api/v1/media/brand/logo/entertainment" alt="前沿娱乐"><h1>卡拉OK</h1></div>
     <div class="account-actions"><span id="accountName" class="stateless">游客</span><button id="account" type="button">登录 / 注册</button></div>
   </header>
   <section class="song card">
@@ -22,7 +22,7 @@
       <video id="media" playsinline crossorigin="anonymous"></video>
       <div id="lyrics" class="lyrics" aria-live="polite"><p>正在载入歌词…</p></div>
       <div class="transport">
-        <button id="record" class="primary" type="button">开始 K 歌</button>
+        <button id="record" class="primary" type="button">开始卡拉OK</button>
         <button id="pauseResume" type="button" disabled>暂停</button>
         <button id="stop" type="button" disabled>停止录音</button>
         <button id="upload" type="button" disabled>上传</button>
@@ -53,10 +53,17 @@
     <audio id="preview" controls></audio>
   </section>
 </main>
-<div id="lyricsOverlay" class="overlay" aria-hidden="true"><div id="overlayLines"></div><span>轻按任意位置返回 K 歌</span></div>
+<section id="lyricsOverlay" class="fullscreen-lyrics hidden" aria-hidden="true" aria-label="全屏歌词，轻按任意位置返回卡拉OK">
+  <div id="overlayLines" class="fullscreen-lyrics-columns" aria-live="off">
+    <div id="overlayLyricsColumn0" class="fullscreen-lyrics-column"></div>
+    <div id="overlayLyricsColumn1" class="fullscreen-lyrics-column"></div>
+    <div id="overlayLyricsColumn2" class="fullscreen-lyrics-column"></div>
+  </div>
+  <span class="fullscreen-lyrics-hint">轻按任意位置返回卡拉OK</span>
+</section>
 <div id="accountModal" class="dialog-backdrop" hidden>
   <section class="dialog card" role="dialog" aria-modal="true" aria-labelledby="accountTitle">
-    <header><h2 id="accountTitle">K歌账号</h2><button id="accountClose" type="button">关闭</button></header>
+    <header><h2 id="accountTitle">卡拉OK账号</h2><button id="accountClose" type="button">关闭</button></header>
     <div id="guestAccount">
       <div class="account-tabs"><button id="showLogin" class="selected" type="button">登录</button><button id="showRegister" type="button">注册</button></div>
       <form id="authForm">
@@ -76,7 +83,7 @@
     </div>
   </section>
 </div>
-<noscript>当前浏览器必须启用脚本才能使用 K歌。</noscript>
+<noscript>当前浏览器必须启用脚本才能使用卡拉OK。</noscript>
 <script>window.frontierCloudStunUrls={{STUN_URLS}};window.frontierCloudWebrtcIntervalMs={{WEBRTC_INTERVAL_MS}};</script>
 <script src="{{NETWORK_OBSERVATION_JS_URL}}" defer></script>
 <script src="{{KARAOKE_JS_URL}}" defer></script>
