@@ -186,14 +186,17 @@ class PlayerUIContractTests(unittest.TestCase):
 
         self.assertNotIn("管理员入口", template)
         self.assertNotIn("刷新界面", template)
-        self.assertIn("logo-hotspot", template)
+        self.assertIn("brand-hotspot", template)
+        self.assertIn('id="refreshHotspot"', template)
+        self.assertIn('id="elevateHotspot"', template)
         self.assertIn("elevate", script)
         self.assertIn("refresh", script)
 
     def test_android_portrait_layout_stacks_player_above_sidebar(self):
         style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
-        self.assertIn("@media (orientation: portrait)", style)
-        portrait = style.split("@media (orientation: portrait)", 1)[1]
+        media_query = "@media (max-width: 700px) and (orientation: portrait)"
+        self.assertIn(media_query, style)
+        portrait = style.split(media_query, 1)[1]
         self.assertIn("flex-direction: column", portrait)
 
 
