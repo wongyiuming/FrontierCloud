@@ -1,112 +1,110 @@
 # FrontierCloud Wiki
 
-FrontierCloud 是一个自托管的媒体浏览、播放、卡拉 OK、资源节点与运维管理系统。项目以 FastAPI 为业务与控制平面，浏览器端使用原生 JavaScript，Docker Compose 负责 Web/API、Nginx、MySQL、Redis、Updater 与 STUN 等运行组件。
+FrontierCloud is a self-hosted media browsing, playback, karaoke, resource-node, and administration system. FastAPI provides the business and control plane, the browser UI uses native JavaScript, and Docker Compose runs the Web/API, Nginx, MySQL, Redis, Updater, and STUN services.
 
-本 Wiki 面向两类读者：
+This Wiki is written for two audiences:
 
-- **运维人员**：部署、节点接入、存储分布、Compute、Backup、升级、回滚、排障。
-- **开发人员**：数据模型、集群边界、数据库迁移、发布规则、CI 与代码约束。
+- **Operators**: deployment, node onboarding, storage distribution, Compute, Backup, releases, rollback, and troubleshooting.
+- **Developers**: data models, cluster boundaries, schema migrations, release rules, CI, and code-level constraints.
 
-## 文档导航
+## Documentation map
 
-- [总体架构](Architecture.md)
-- [部署与配置](Deployment-and-Configuration.md)
-- [节点、集群与资源池](Cluster-and-Resource-Model.md)
-- [媒体目录与存储 Placement](Media-and-Storage.md)
-- [运维与排障](Operations-and-Troubleshooting.md)
-- [发布、升级、回滚与数据库迁移](Release-and-Database-Migrations.md)
-- [开发与 CI](Development-and-CI.md)
-- [常用 Bash / SQL](Command-Reference.md)
+- [Architecture](Architecture.md)
+- [Deployment and Configuration](Deployment-and-Configuration.md)
+- [Cluster and Resource Model](Cluster-and-Resource-Model.md)
+- [Media Catalog and Storage Placement](Media-and-Storage.md)
+- [Operations and Troubleshooting](Operations-and-Troubleshooting.md)
+- [Release, Rollback, and Database Migrations](Release-and-Database-Migrations.md)
+- [Development and CI](Development-and-CI.md)
+- [Bash / SQL Command Reference](Command-Reference.md)
 
-## 核心原则
+## Core principles
 
-### Master 是唯一业务主节点
+### The Master is the only business authority
 
-FrontierCloud 集群只有一个业务 Master。Master 持有全局媒体目录、业务数据库、歌词关系、播放统计、用户、审计等业务事实。
+A FrontierCloud cluster has one business Master. The Master owns the global media catalog, business database, lyric relationships, playback facts, users, audits, and cluster-control state.
 
-Follower 不拥有独立业务目录。Follower 是资源节点，可独立提供 Storage、Compute、Backup 中任意一种或多种能力。
+Followers do not own an independent business catalog. A Follower is a resource node and may independently provide Storage, Compute, Backup, or any combination of them.
 
-### 全局媒体目录是权威来源
+### The global media catalog is authoritative
 
-媒体文件的“文件路径”和“实际存在哪个节点”不是靠扫描目录临时推断，而是由 Master 的全局目录记录。
-
-核心关系：
+The relation between a media path and its physical storage node is stored by the Master rather than inferred by scanning file systems.
 
 ```text
 global_media_objects.storage_member_id
-                │
-                ▼
+                |
+                v
 cluster_storage_members.member_id
-                │
-                └── relationship_id ──► node_relationships
+                |
+                +-- relationship_id --> node_relationships
 ```
 
-因此一个媒体对象可以明确回答：
+For every managed media object, the system can answer:
 
-- media_id 是什么；
-- path 是什么；
-- 实际位于哪个 Storage Member；
-- 对应哪个 Follower；
-- 当前节点健康状态；
-- 访问走 Local / Direct / Relay 中的哪一种路径。
+- its stable `media_id`;
+- its logical path;
+- which Storage Member owns the placement;
+- which Follower that member represents;
+- the current storage-node health;
+- whether access is Local, Direct, or Relay.
 
-### 配置状态与实际状态必须分开
+### Desired state and observed state are different
 
-节点配置采用 Desired / Observed 思路：Master 保存的配置只是“期望”，Follower 心跳确认后才是“已生效”。Storage、Compute、Backup 的 UI 与 API 都应区分配置是否已经真正下发并应用。
+A resource toggle saved on the Master is only desired state. It is considered effective only after the Follower receives and reports the applied state through the control heartbeat. Storage, Compute, and Backup UI/API semantics must preserve this distinction.
 
-### 发布系统必须 Fail Closed
+### Releases fail closed
 
-新版本进入生产必须满足发布验证。GitHub 或 CI 验证数据暂时不可用时，当前业务继续运行，但新的升级不会被授权。
+A new production version must pass release verification. If GitHub or CI verification is temporarily unavailable, the running service continues, but a new upgrade is not authorized.
 
-### 数据库禁止靠重建空库升级
+### Production databases upgrade in place
 
-FrontierCloud 使用版本化 Schema Generation。已有正式数据库通过逐代 migration 升级，不再因字段或表结构变化要求清空重建。
+FrontierCloud uses versioned Schema Generations. Existing initialized databases advance through explicit migrations instead of requiring an empty database whenever a table or column changes.
 
-## 主要运行组件
+## Main runtime components
 
-| 组件 | 作用 |
+| Component | Purpose |
 | --- | --- |
-| Nginx | HTTPS/HTTP 入口、静态资源、反向代理、维护模式与边缘安全 |
-| Web | FastAPI 业务 API、Admin、集群控制、目录与媒体逻辑 |
-| MySQL | 业务事实、全局目录、节点关系、任务、审计、迁移历史 |
-| Redis | 运行期缓存与部分协调数据 |
-| Updater | 本机版本构建、替换、升级、回滚与集群发布协调入口 |
-| STUN / Coturn | WebRTC 网络观测所需 STUN 服务 |
+| Nginx | HTTP/HTTPS entry point, static resources, proxying, maintenance mode, and edge enforcement |
+| Web | FastAPI business API, Admin, cluster control, catalog, and media logic |
+| MySQL | Business facts, global catalog, node relationships, jobs, audits, migration history |
+| Redis | Runtime cache and coordination data |
+| Updater | Local build/replace, upgrade, rollback, and cluster release coordination |
+| STUN / Coturn | STUN service required by WebRTC observation |
 
-## 重要术语
+## Important terms
 
 **Standalone**  
-尚未固定为 Master/Follower 的独立节点。
+A node that has not been fixed as a Master or Follower.
 
 **Master**  
-唯一业务节点，拥有业务目录与集群控制权。
+The single business node and cluster-control authority.
 
 **Follower**  
-资源节点。对公网业务页面不作为独立业务站点运行。
+A resource node. It is not a second public business site.
 
 **Storage Member**  
-可承载媒体对象的存储成员，包括 Master Local 和已启用 Storage 的 Follower。
+A member that may hold media objects, including Master Local and enabled Storage Followers.
 
 **Compute Slot**  
-Follower 可并行执行的 Worker 任务槽位上限。
+The maximum number of Worker tasks that a Follower may execute concurrently.
 
 **Backup Member**  
-用于接收 Master 业务恢复包的 Follower。Backup 是恢复能力，不是在线数据库副本，也不是自动主备切换。
+A Follower that stores Master business recovery artifacts. Backup is not an online database replica or automatic failover mechanism.
 
 **Generation**  
-数据库 Schema 的正式版本代际。
+The formal version of the database schema.
 
 **Placement**  
-某个媒体对象实际放置在哪个 Storage Member 上的关系。
+The relation between a media object and the Storage Member that physically owns it.
 
-## 先读哪几页
+## Where to start
 
-如果你负责部署：先看 [部署与配置](Deployment-and-Configuration.md)。
+For deployment, read [Deployment and Configuration](Deployment-and-Configuration.md).
 
-如果你在查“一个文件到底在哪台机器”：看 [媒体目录与存储 Placement](Media-and-Storage.md)。
+To answer "which node actually stores this file?", read [Media Catalog and Storage Placement](Media-and-Storage.md).
 
-如果你在查节点状态、Compute、Backup：看 [节点、集群与资源池](Cluster-and-Resource-Model.md)。
+For node health, Compute, and Backup, read [Cluster and Resource Model](Cluster-and-Resource-Model.md).
 
-如果你准备升级生产：看 [发布、升级、回滚与数据库迁移](Release-and-Database-Migrations.md)。
+Before a production upgrade, read [Release, Rollback, and Database Migrations](Release-and-Database-Migrations.md).
 
-如果你遇到故障：直接看 [运维与排障](Operations-and-Troubleshooting.md) 与 [常用 Bash / SQL](Command-Reference.md)。
+For incidents, start with [Operations and Troubleshooting](Operations-and-Troubleshooting.md) and [Bash / SQL Command Reference](Command-Reference.md).

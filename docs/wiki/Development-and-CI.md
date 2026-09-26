@@ -1,62 +1,66 @@
-# 开发与 CI
+# Development and CI
 
-## 1. 分支规则
+## 1. Branch policy
 
-默认开发流程：
+The normal repository workflow is:
 
 ```text
 dev
- ↓
+ |
+ v
 push CI
- ↓
-dev → main PR
- ↓
-人工合并
- ↓
+ |
+ v
+dev -> main PR
+ |
+ v
+manual merge
+ |
+ v
 main
 ```
 
-不要默认创建额外 feature/fix 分支。确实需要新分支时，先得到仓库维护者明确同意。
+Do not create additional feature/fix branches by default. If a new branch is genuinely required, obtain explicit maintainer approval first.
 
-不要直接向 `main` 推送普通开发提交。
+Do not push ordinary development changes directly to `main`.
 
-## 2. 技术栈
+## 2. Technology stack
 
-主要技术：
+Major technologies:
 
-- Python / FastAPI；
-- SQLAlchemy async；
-- MySQL；
-- Redis；
-- Nginx；
-- Docker Compose；
-- 原生 HTML/CSS/JavaScript；
-- Rust/WASM 卡拉 OK 模块；
-- GitHub Actions。
+- Python / FastAPI;
+- SQLAlchemy async;
+- MySQL;
+- Redis;
+- Nginx;
+- Docker Compose;
+- native HTML/CSS/JavaScript;
+- Rust/WASM karaoke module;
+- GitHub Actions.
 
-## 3. 代码目录概览
+## 3. Repository layout
 
 ```text
 app/
-  api/                 API 与 Admin endpoints
-  core/                配置、数据库、Schema migration 等核心模块
-  services/            业务服务、集群、发布、节点观测等
+  api/                 API and Admin endpoints
+  core/                configuration, database, schema migrations
+  services/            business services, federation, release, observability
 
 static/
-  js/                  Admin、媒体浏览器、播放器等浏览器逻辑
+  js/                  Admin, media browser, player, and browser logic
 
-nginx/                  Nginx 镜像与配置
-updater/                Updater 控制组件
-scripts/                CI/source policy 等脚本
-tests/                  单元、运行期、浏览器、集群与回归测试
+nginx/                  Nginx image/configuration
+updater/                Updater control component
+scripts/                CI and source-policy scripts
+tests/                  unit, runtime, browser, cluster, regression tests
 
-docker-compose.yaml     默认部署拓扑
-Dockerfile              Web 镜像
-README.md               快速入口
-docs/wiki/              详细 Wiki
+docker-compose.yaml     default deployment topology
+Dockerfile              Web image
+README.md               quick entry point
+docs/wiki/              detailed project Wiki
 ```
 
-## 4. 本地基础检查
+## 4. Local baseline checks
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py' -v
@@ -71,226 +75,217 @@ node tests/player_cache_smoke.mjs
 docker compose config --quiet
 ```
 
-实际提交前还需要以 GitHub Actions 的最终结果为准。
+GitHub Actions remains the authoritative final validation for a pushed head.
 
-## 5. CI 总体结构
+## 5. CI topology
 
-核心 workflow：
+Main workflow:
 
 ```text
 .github/workflows/docker.yml
 ```
 
-主要 Gate：
+Primary gates:
 
 ```text
 verify-promotion-query
 browser-ui
 test-cluster
-        │
-        └──────┐
-               ▼
+        |
+        +------+
+               v
           test-compose
 ```
 
-`test-compose` 是聚合 Gate，在执行自身测试前检查上游 Gate 结果。
+`test-compose` is the aggregate gate and verifies its upstream gates before running the rest of the stack tests.
 
 ### verify-promotion-query
 
-验证 dev push 的 exact SHA 查询逻辑，确保发布控制查询不会匹配错误的 CI run。
+Validates exact dev SHA workflow lookup semantics used by release verification.
 
 ### browser-ui
 
-启动真实应用栈并使用 Chromium 做浏览器回归。
-
-目的不是检查 HTML 字符串，而是验证真实页面可以被浏览器加载和交互。
+Starts a real application stack and runs Chromium UI regression tests. This validates browser behavior rather than merely checking HTML strings.
 
 ### test-cluster
 
-构建真实多节点/双节点 HTTPS 拓扑，验证：
-
-- 固定角色；
-- 配对；
-- 心跳；
-- 资源配置；
-- Direct / Relay；
-- 集群控制；
-- Follower 行为。
+Builds a real multi-node HTTPS topology and validates role fixing, pairing, heartbeats, resource configuration, Direct/Relay behavior, cluster control, and Follower behavior.
 
 ### test-compose
 
-聚合并运行：
+Runs/aggregates:
 
-- source configuration tests；
-- frontend syntax；
-- Compose build/start；
-- unit/runtime；
-- security / edge；
-- public/admin flows；
-- 最终 cleanup。
+- source configuration tests;
+- frontend syntax;
+- Compose build/start;
+- unit/runtime tests;
+- edge/security tests;
+- public/admin flows;
+- cleanup.
 
-## 6. Exact-SHA 原则
+## 6. Exact-SHA rule
 
-任何最终结论必须对应当前最终 head SHA。
+A green result for an older commit never proves a newer head is valid.
 
-错误做法：
-
-```text
-SHA A CI 绿
-↓
-又提交 SHA B
-↓
-因为改得少，所以拿 A 的绿灯证明 B
-```
-
-正确做法：
+Incorrect:
 
 ```text
-最终 SHA B
-↓
-B 自己跑完整 CI
-↓
-根据 B 的结果决定是否可合并
+SHA A is green
+new commit creates SHA B
+reuse A's green result because the diff is small
 ```
 
-这是发布系统本身也遵循的规则。
-
-## 7. Source Contract 与 Runtime Test
-
-有些约束属于源码/部署契约，例如：
-
-- 镜像版本必须 patch-pin；
-- 某个 volume 必须只读；
-- 发布 UI 必须位于正确模块；
-- 某些安全配置不能退化。
-
-这类检查应放在 source policy/configuration test，而不是为了让测试读取 Dockerfile 就把部署文件复制进业务镜像。
-
-测试必须检查正确责任模块，不能因为历史代码移动了就强迫新模块保留无关文案。
-
-## 8. 数据库改动规则
-
-任何 Schema 改动必须：
-
-1. 更新最新空库 Schema；
-2. 增加明确 Generation migration；
-3. migration 可重复执行；
-4. generation 只在成功后推进；
-5. 增加 migration test；
-6. 尽可能增加真实 MySQL upgrade smoke。
-
-禁止恢复旧做法：
+Correct:
 
 ```text
-Schema 一变 → 要求生产清空数据库
+final SHA B
+   |
+   v
+B runs its own full CI
+   |
+   v
+merge decision uses B's result
 ```
 
-## 9. 集群数据模型改动
+The production release verifier follows the same principle.
 
-修改 Storage/Compute/Backup 时先确认：
+## 7. Source contracts vs runtime tests
 
-- Desired 与 Observed 是否仍可区分；
-- Follower 离线时是否会错误显示“已生效”；
-- 心跳同步是否会覆盖 durable state；
-- UI 展示的是配置还是实际值；
-- 是否破坏现有节点升级兼容。
+Some requirements are source/deployment contracts, for example:
 
-例如 Backup 的 `last_success` 属于 durable result，不应被重复配置心跳覆盖为“从未成功”。
+- runtime image tags remain patch-pinned;
+- a sensitive mount remains read-only;
+- release UI stays in its owning module;
+- security configuration does not regress.
 
-## 10. UI 开发规则
+These belong in source-policy/configuration checks. Do not copy Dockerfiles or Compose files into the business image merely so a runtime test can read them.
 
-Admin UI 的目标不是简单展示数据库字段。
+Tests must follow module ownership. If UI responsibility moved from one JavaScript file to another, update the test contract instead of re-inserting unrelated text into the old module.
 
-每个运维状态至少要回答：
+## 8. Database change rules
+
+Every schema change must:
+
+1. update the latest empty-database bootstrap schema;
+2. add an explicit new Generation migration;
+3. make that migration resumable/idempotent;
+4. advance the generation only after success;
+5. add migration regression coverage;
+6. add a real MySQL upgrade smoke when practical.
+
+Never return to the old policy:
 
 ```text
-现在是什么状态？
-期望是什么？
-实际生效了吗？
-最近一次成功/失败是什么时候？
-为什么做出这个调度或决定？
-下一步该看哪里？
+schema changed -> production database must be recreated empty
 ```
 
-例如 Compute 不应该只显示：
+## 9. Cluster model changes
+
+When changing Storage/Compute/Backup behavior, verify:
+
+- Desired and Observed remain distinct;
+- an offline Follower cannot be shown as effective;
+- heartbeats do not overwrite durable execution facts;
+- the UI clearly distinguishes configuration from runtime state;
+- upgrade compatibility for existing nodes is preserved.
+
+For example, Backup `last_success` is a durable result and must not be erased by repeated configuration synchronization.
+
+## 10. Admin UI standards
+
+The Admin UI should not be a raw database-field dump.
+
+For an operational state it should answer:
+
+```text
+What is happening now?
+What is desired?
+Did the change actually become effective?
+When was the most recent success/failure?
+Why was this scheduling/placement decision made?
+Where should the operator look next?
+```
+
+For example, Compute should not stop at:
 
 ```text
 Slots 4
 ```
 
-而应展示：
+It should expose values such as:
 
 ```text
-运行中 2 / 4
-排队 7
-24h 完成 126
-失败/重试
-CPU / 内存
-任务为什么分到本节点
+running 2 / 4
+queued 7
+24h completed count
+failures/retries
+CPU / memory
+placement reason for recent jobs
 ```
 
-## 11. 发布代码改动规则
+## 11. Release-control changes
 
-发布控制属于高风险区域。
+Release control is high risk. Changes in this area require regression coverage for relevant behavior including:
 
-修改以下内容必须补回归：
+- GitHub PR provenance;
+- exact dev CI lookup;
+- tree equality;
+- rate limiting/backoff;
+- last-known-good display semantics;
+- `can_upgrade` authorization;
+- rollback target;
+- Follower convergence;
+- maintenance behavior.
 
-- GitHub provenance；
-- exact dev CI；
-- tree equality；
-- rate limit；
-- last-known-good；
-- can_upgrade；
-- rollback target；
-- follower convergence；
-- maintenance。
+External verification data may be cached for observability, but stale data must not authorize a new dangerous operation.
 
-外部依赖不可用时可以继续展示旧可信事实，但不能用旧缓存授权新的危险操作。
+## 12. Never break production design to satisfy a test
 
-## 12. 不要为了测试破坏生产设计
+Examples of bad fixes:
 
-典型错误：
+- copying deployment source files into the business image because a test cannot see them;
+- putting obsolete UI text back into the wrong module because a source test expects it;
+- removing real MySQL migration smoke coverage because it reveals an event-loop/pool problem;
+- weakening fail-closed release rules to make a regression test pass.
 
-- 测试读取不到源文件，就把 Dockerfile/Compose 复制进业务镜像；
-- 测试期待旧 UI 文案，就把无关文案重新塞回错误模块；
-- 为了让 migration 测试绿，关闭真实 MySQL smoke；
-- 为了通过发布测试，放宽 fail-closed 条件。
+Fix the responsibility boundary or the real implementation instead.
 
-正确做法是修测试责任边界或真实实现。
+## 13. Pull request content
 
-## 13. Pull Request 内容
+A useful PR description should identify:
 
-PR 建议明确写：
+- the problem;
+- root cause;
+- affected modules/files;
+- safety boundary;
+- database/upgrade impact;
+- regression coverage;
+- final exact head SHA;
+- CI run number/result.
 
-- 问题是什么；
-- 为什么发生；
-- 改了哪些文件/模块；
-- 安全边界；
-- 数据库/升级影响；
-- 回归覆盖；
-- 最终 exact SHA；
-- CI run number。
+Avoid descriptions that only say "fix bug".
 
-不要只写“fix bug”。
+## 14. Merge is not deployment
 
-## 14. 合并以后
-
-PR 合并并不等于生产已经升级。
-
-流程仍然是：
+A PR merged to `main` still has to pass production release verification and be explicitly deployed.
 
 ```text
 PR merged to main
-       ↓
-release verifier 确认 provenance + dev CI + tree
-       ↓
-Admin 发起升级
-       ↓
-Master/Followers 构建替换
-       ↓
-集群收敛
-       ↓
-完成
+       |
+       v
+release verifier checks provenance + dev CI + tree
+       |
+       v
+Admin starts upgrade
+       |
+       v
+Master/Followers build and replace
+       |
+       v
+cluster convergence
+       |
+       v
+complete
 ```
 
-开发完成、代码合并和生产发布是三个不同状态。
+Development complete, code merged, and production upgraded are three different states.

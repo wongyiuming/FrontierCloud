@@ -1,10 +1,10 @@
-# 媒体目录与存储 Placement
+# Media Catalog and Storage Placement
 
-## 1. 权威关系在哪里
+## 1. Authoritative placement data
 
-FrontierCloud 的媒体与存储节点关系由 Master MySQL 的全局目录维护。
+The relation between media resources and storage nodes is maintained in the Master MySQL global catalog.
 
-核心表：
+Core tables:
 
 ```text
 global_media_objects
@@ -13,32 +13,25 @@ node_relationships
 node_identity
 ```
 
-核心关联：
+Core relation:
 
 ```text
 global_media_objects.storage_member_id
-                │
-                ▼
+                |
+                v
 cluster_storage_members.member_id
-                │
-                ├── member_kind
-                ├── transport
-                ├── health
-                ├── writable
-                └── relationship_id
-                         │
-                         ▼
+                |
+                +-- relationship_id
+                         |
+                         v
                   node_relationships
-                         │
-                         ├── peer_id
-                         └── peer_endpoint
 ```
 
-因此“一个媒体资源实际在哪个节点”可以直接从数据库确定，不需要扫描所有 Follower 文件系统。
+This means FrontierCloud can determine which node owns a media object without scanning every Follower filesystem.
 
 ## 2. global_media_objects
 
-关键字段：
+Important fields:
 
 ```text
 media_id
@@ -56,19 +49,19 @@ updated_at
 
 ### media_id
 
-业务稳定标识。播放统计、歌词绑定等业务关系应尽量依赖稳定 ID，而不是仅依赖文件名。
+Stable business identity. Playback facts, lyric links, and other relationships should bind to stable identity rather than filename alone.
 
 ### storage_member_id
 
-媒体当前实际 placement。
+The current physical placement owner.
 
 ### object_id
 
-存储成员内部对象标识。
+The storage-member-local object identity.
 
 ### media_path
 
-业务逻辑路径，例如：
+Logical media path, for example:
 
 ```text
 music/artist/album/song.flac
@@ -77,120 +70,106 @@ vido/movie/example.mkv
 
 ### path_locator
 
-用于路径唯一定位和冲突检查。
+A stable locator used for path uniqueness and conflict checks.
 
 ### state
 
-常见业务查询应优先关注：
+Normal playback/catalog queries should primarily operate on:
 
 ```text
 active
 ```
 
-删除/恢复流程可能出现其他中间状态，不要把非 active 行当作正常可播放媒体。
+Deletion and recovery workflows may use additional intermediate states.
 
-## 3. 一条路径只有一个 Placement
+## 3. One logical path has one placement
 
-当前模型不是对象多副本系统，也不是分布式分片文件系统。
+FrontierCloud is not a multi-replica object store and does not split one media file into chunks across storage nodes.
 
-一个逻辑媒体路径对应一个完整对象，并放在一个 Storage Member。
-
-因此：
+A normal object looks like:
 
 ```text
 song.flac
-   │
-   └── Follower A
+   |
+   +-- Follower A
 ```
 
-而不是：
+not:
 
 ```text
 song.flac
-   ├── chunk 1 → A
-   ├── chunk 2 → B
-   └── chunk 3 → C
+   +-- chunk 1 -> A
+   +-- chunk 2 -> B
+   +-- chunk 3 -> C
 ```
 
-这对删除、播放、恢复和容量统计都很重要。
+This affects playback, deletion, recovery, and capacity accounting.
 
-## 4. Master Local 与 Follower Storage
+## 4. Master Local and Follower Storage
 
-Storage Pool 可以同时包含：
+The Storage Pool can contain:
 
-- Master Local；
-- Follower A；
-- Follower B；
-- Follower C；
+- Master Local;
+- Follower A;
+- Follower B;
+- Follower C;
 
-Master Local 没有下游 `node_relationships`，所以查询 endpoint 时通常需要：
+Master Local does not need a downstream `node_relationships` row. A query that wants one display endpoint for both local and remote members can use:
 
 ```sql
 COALESCE(r.peer_endpoint, i.endpoint)
 ```
 
-Follower 则通过 `cluster_storage_members.relationship_id` 关联到 `node_relationships.peer_endpoint`。
+A Follower member uses `cluster_storage_members.relationship_id` to reach `node_relationships.peer_endpoint`.
 
-## 5. 上传 Placement
+## 5. Upload placement
 
-上传不是简单“找第一个节点”。在选择 Storage Member 时需要关注：
+A target member must satisfy more than one capacity field. Relevant inputs include:
 
-- Storage 是否 enabled；
-- health；
-- writable；
-- allocated bytes；
-- used bytes；
-- reserved bytes；
-- physical free bytes；
-- 上传文件大小。
+- Storage enabled;
+- health;
+- writable;
+- allocated bytes;
+- used bytes;
+- reserved bytes;
+- physical free bytes;
+- incoming object size.
 
-逻辑容量与真实磁盘容量都必须满足要求。
+Both logical allocation and real filesystem availability must remain valid.
 
 ## 6. reserved_bytes
 
-`reserved_bytes` 用于表达已经为进行中的上传/流程预留的空间。
+`reserved_bytes` represents space reserved by in-progress workflows that may not yet appear as active catalog objects.
 
-这可以避免两个并发上传同时看到“还有 10 GiB”，各自都尝试写 8 GiB，最终把节点打满。
+This prevents multiple concurrent uploads from each observing the same free space and collectively overcommitting a node.
 
-在分析容量时不要只看：
+Capacity analysis should not use only:
 
 ```text
 allocated - used
 ```
 
-还要考虑 reserved 和 physical free。
+without accounting for reservations and physical free space.
 
-## 7. Catalog 与文件系统不一致
+## 7. Catalog/filesystem mismatch
 
-正常情况下，数据库目录与节点文件应一致。
+Normal operation expects catalog and managed files to agree.
 
-如果出现：
+If the catalog references a missing file, or a file exists without a catalog object, do not immediately edit tables or delete files by hand.
 
-```text
-Catalog 有对象，但文件不存在
-```
+First check for:
 
-或者：
+- pending delete;
+- recovery state;
+- failed upload residue;
+- manual file move/delete outside FrontierCloud;
+- a database restore to an older point in time.
 
-```text
-文件存在，但 Catalog 无对象
-```
+Manual filesystem changes can break deletion journal and recovery semantics.
 
-不要直接手工修表或删除文件。
+## 8. Query every media placement
 
-应先判断：
-
-- 是否存在 pending delete；
-- 是否处于 recovery；
-- 是否是失败上传残留；
-- 是否是人工绕过系统移动/删除造成；
-- 数据库是否曾恢复到旧时间点。
-
-手工改文件系统可能破坏删除 journal 和 recovery 语义。
-
-## 8. 查询媒体与节点明细
-
-在 Master 上：
+Run on the Master:
 
 ```bash
 docker compose exec -T mysql sh -lc '
@@ -221,17 +200,17 @@ ORDER BY g.storage_member_id, g.media_path;
 SQL
 ```
 
-## 9. 只看 active 媒体
+## 9. Active media only
 
-增加：
+Add:
 
 ```sql
 WHERE g.state = 'active'
 ```
 
-Catalog 对正常播放资源的主要查询也以 active 为准。
+The normal catalog also treats active rows as the primary playable resource set.
 
-## 10. 每个节点的媒体汇总
+## 10. Per-node media summary
 
 ```sql
 SELECT
@@ -260,11 +239,11 @@ GROUP BY
 ORDER BY catalog_GiB DESC;
 ```
 
-`catalog_GiB` 和 `reported_used_GiB` 不要求完全相等。底层文件系统还可能包含临时数据、目录结构、恢复数据或其他运行开销。
+`catalog_GiB` and `reported_used_GiB` are not expected to be byte-identical because the filesystem can also contain temporary/recovery data and other overhead.
 
-## 11. 查某个 Follower
+## 11. Query one Follower
 
-例如：
+Replace the hostname with the real Follower endpoint:
 
 ```sql
 SELECT
@@ -284,24 +263,22 @@ WHERE r.peer_endpoint LIKE '%example.com%'
 ORDER BY g.media_path;
 ```
 
-## 12. 删除语义
+## 12. Delete semantics
 
-受管媒体删除不是简单 `rm`。
+Managed deletion is not equivalent to `rm`.
 
-删除流程需要维护数据库状态、临时隔离和恢复边界。出现 pending recovery 时不要手工删除目录来“解锁”。
+The delete path maintains database state, quarantine/recovery boundaries, and consistency. Do not remove pending-recovery data manually just to clear a state.
 
-如果数据库与文件系统发生灾难性不一致，应先恢复数据库/备份并检查 recovery 逻辑，而不是先清理文件。
+If database and filesystem are seriously inconsistent, restore a consistent data/database recovery point before manually cleaning files.
 
-## 13. 移动文件
+## 13. Moving managed files
 
-当前没有通用的“直接在文件系统移动媒体然后自动认领新路径”的设计。
+There is no general supported workflow where an operator moves a managed file directly on disk and expects the catalog to infer a rename.
 
-不要：
+Do not treat this as a supported rename:
 
 ```bash
 mv data/media/music/A.flac data/media/music/B.flac
 ```
 
-然后期待数据库自动把它当作合法 rename。
-
-业务路径与稳定 ID、歌词、播放统计、placement 等存在关联，直接绕过 API 会制造目录漂移。
+Paths interact with stable IDs, lyric relations, playback facts, placement, and delete/recovery state. Bypassing the application can create catalog drift.

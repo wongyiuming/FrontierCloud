@@ -1,8 +1,8 @@
-# 节点、集群与资源池
+# Cluster and Resource Model
 
-## 1. 节点角色
+## 1. Node roles
 
-FrontierCloud 节点有三种角色：
+FrontierCloud nodes may be:
 
 - `Standalone`
 - `Master`
@@ -10,34 +10,34 @@ FrontierCloud 节点有三种角色：
 
 ### Standalone
 
-默认状态。节点尚未固定加入正式集群。
+The default state before a node is fixed into a production cluster role.
 
 ### Master
 
-唯一业务主节点，拥有：
+The single business authority. It owns:
 
-- 业务 API；
-- 全局媒体目录；
-- 节点配置权；
-- Storage/Compute/Backup 调度事实；
-- 发布协调；
-- 业务数据库与审计。
+- business APIs;
+- the global media catalog;
+- node configuration authority;
+- Storage/Compute/Backup scheduling facts;
+- release coordination;
+- business database and audit state.
 
 ### Follower
 
-资源节点。可开启：
+A resource node that may independently enable:
 
-- Storage；
-- Compute；
-- Backup。
+- Storage;
+- Compute;
+- Backup.
 
-三个能力互相独立，不要求同时开启。
+The capabilities are independent and do not have to be enabled together.
 
-## 2. 节点关系
+## 2. Relationships
 
-节点关系保存在 `node_relationships`。
+Node relationships are stored in `node_relationships`.
 
-主要字段包括：
+Important fields include:
 
 ```text
 relationship_id
@@ -56,80 +56,63 @@ protocol
 summary
 ```
 
-Master 视角下，Follower 关系通常是 downstream；Follower 对 Master 为 upstream。
+From the Master perspective, a Follower relation is normally downstream. From the Follower perspective, the Master relation is upstream.
 
-## 3. 心跳
+## 3. Heartbeats
 
-节点通过周期心跳同步：
+Heartbeats synchronize and report:
 
-- 在线状态；
-- RTT；
-- 连续失败；
-- 恢复次数；
-- Storage 实际状态；
-- Compute 实际状态；
-- Backup 实际状态；
-- 本机资源指标；
-- 部分运行摘要。
+- online state;
+- RTT;
+- consecutive failures;
+- recovery count;
+- observed Storage state;
+- observed Compute state;
+- observed Backup state;
+- host resource metrics;
+- runtime summaries.
 
-Admin UI 中的：
+Admin UI values such as current/average/minimum/maximum RTT are meant to distinguish one recent measurement from a time-window view.
 
-```text
-Current RTT
-Avg RTT
-Min RTT
-Max RTT
-Last heartbeat
-Failure count
-Recovery count
-```
+## 4. Desired vs observed state
 
-是为了判断真实链路状态，不应把单次 RTT 误认为长期平均值。
+A setting stored by the Master is desired state.
 
-## 4. Desired / Observed
-
-Master 上的资源开关是 Desired State。
-
-例如：
+For example:
 
 ```text
 Compute = enabled
 worker_slots = 4
 ```
 
-只代表 Master 已保存配置。
+means only that the Master accepted and stored the configuration.
 
-Follower 在下一轮控制心跳收到并实际应用后，才会把 Observed State 回报给 Master。
-
-UI 状态应该理解为：
+The configuration becomes effective after the Follower receives it and reports the observed state through control heartbeats.
 
 ```text
-配置已保存
-    ↓
-等待 Follower 确认
-    ↓
+configuration saved
+       |
+       v
+waiting for Follower confirmation
+       |
+       v
 Desired == Observed
-    ↓
-已生效
+       |
+       v
+effective
 ```
 
-如果节点离线：
-
-```text
-配置已保存，但尚未生效
-```
-
-不能把 HTTP POST 成功当成 Follower 已应用成功。
+If the Follower is offline, the correct state is "saved but not yet confirmed/effective". HTTP success from the configuration endpoint is not proof that the remote node applied it.
 
 ## 5. Storage
 
-Storage Member 表：
+Storage member table:
 
 ```text
 cluster_storage_members
 ```
 
-关键字段：
+Important fields:
 
 ```text
 member_id
@@ -148,35 +131,35 @@ updated_at
 
 ### allocated_bytes
 
-管理员允许 FrontierCloud 使用的逻辑容量。
+Logical capacity that FrontierCloud is allowed to use.
 
 ### used_bytes
 
-程序报告的当前已使用容量。
+Reported capacity already consumed.
 
 ### reserved_bytes
 
-已被上传/任务等流程预留，但可能尚未完全转化为 active 媒体的容量。
+Capacity reserved by in-progress operations but not necessarily represented by active catalog objects yet.
 
 ### physical_free_bytes
 
-底层文件系统真实可用空间。
+Actual free capacity from the underlying filesystem.
 
 ### writable
 
-是否允许继续放置新对象。
+Whether new placements are currently allowed.
 
-上传 placement 不只看一个容量数字，还需要同时满足节点健康、可写以及逻辑/物理空间条件。
+Placement decisions must respect health, writable state, logical availability, reservations, and physical free space.
 
 ## 6. Compute
 
-Compute Member 表：
+Compute member table:
 
 ```text
 cluster_compute_members
 ```
 
-关键字段：
+Important fields:
 
 ```text
 member_id
@@ -191,26 +174,26 @@ updated_at
 
 ### worker_slots
 
-该 Follower 允许同时执行的最大 Worker 任务数。
+Maximum concurrent Worker tasks allowed on the Follower.
 
-例如：
+Example:
 
 ```text
 worker_slots = 4
 running = 2
 ```
 
-表示理论上还有 2 个并发槽位可以执行任务。
+means two slots are still available in principle.
 
-### Worker Jobs
+### Worker jobs
 
-任务表：
+Jobs are stored in:
 
 ```text
 cluster_worker_jobs
 ```
 
-记录：
+with fields such as:
 
 ```text
 job_id
@@ -227,49 +210,45 @@ created_at
 updated_at
 ```
 
-当前任务类型可包括媒体 hash、probe、metadata 等工作。
+Current job types include work such as media hashing, probing, and metadata-related tasks.
 
-### 为什么任务会分给某个 Follower
+### Why a job was assigned to a Follower
 
-主要两种原因：
+Two primary reasons are recorded:
 
-**Pinned**
+**Pinned**  
+The job explicitly identifies a member and is only eligible for that Follower.
 
-任务明确指定 `member_id`，只由指定 Follower 领取。
+**Capability + FIFO**  
+The job is shared. Capable Followers compete for the lease, and queue order determines which job is offered first.
 
-**Capability + FIFO**
+This is not currently a Kubernetes/Nomad-style CPU/memory scoring scheduler. CPU and memory are observable, but ordinary placement is not described as a weighted scorer.
 
-任务没有指定节点；满足 capability 的 Follower 竞争领取，遵循任务创建顺序，成功 lease 的节点执行。
+## 7. Worker lease semantics
 
-因此当前系统不是复杂的 CPU/内存打分调度器。CPU 和内存已经用于可观察性，但不能把它描述成 Kubernetes/Nomad 式综合 placement scorer。
-
-## 7. Worker Lease
-
-Worker 任务不是简单“取出来就算完成”。
-
-任务通过 lease 控制：
+Jobs are leased rather than simply popped from a queue.
 
 ```text
 queued
-  ↓
-leased/running
-  ↓
+  |
+  v
+leased / running
+  |
+  v
 completed
 ```
 
-异常情况下 lease 可过期并重试。`attempts` 用于观察重试次数。
-
-这使任务具备一定的失败恢复能力，避免节点领取后崩溃导致任务永久消失。
+If a worker disappears, a lease may expire and the job can be retried. `attempts` helps expose repeated execution attempts.
 
 ## 8. Backup
 
-Backup Member 表：
+Backup member table:
 
 ```text
 cluster_backup_members
 ```
 
-关键字段：
+Important fields:
 
 ```text
 member_id
@@ -282,83 +261,61 @@ state
 updated_at
 ```
 
-Follower 保存的具体恢复包元数据位于：
+Concrete recovery-point metadata and chunks are stored in:
 
 ```text
 cluster_business_backups
 cluster_business_backup_chunks
 ```
 
-Backup 状态重点看：
+Operator-facing Backup state should emphasize:
 
-- 是否 Enabled；
-- Desired 是否已生效；
-- 最近一次成功时间；
-- 最近一次尝试结果；
-- 最近恢复点大小；
-- checksum；
-- 恢复点数量；
-- 下次计划时间。
+- enabled and effective status;
+- last successful backup time;
+- most recent attempt/result;
+- latest recovery-point size;
+- checksum;
+- recovery-point count;
+- next planned attempt.
 
 ### generation
 
-Backup generation 是恢复点唯一代际 ID，主要服务机器判断，不是管理员日常最需要看的字段。UI 主视图应优先显示最近成功时间和状态。
+The generation is primarily a machine identity for a recovery point. It belongs in technical detail, while operators usually need last-success time and result first.
 
-### Backup 不是什么
+### What Backup is not
 
-Backup 不是：
+Backup is not:
 
-- MySQL Group Replication；
-- 主从数据库在线复制；
-- 自动 Master 选举；
-- 自动 failover。
+- MySQL Group Replication;
+- live primary/replica SQL replication;
+- automatic Master election;
+- automatic failover.
 
-它是可校验的业务恢复包。
+It is a verifiable business recovery artifact.
 
-## 9. 节点状态判断
+## 9. Evaluating node health
 
-建议按以下顺序判断节点：
-
-```text
-1. Relationship 是否 active
-2. 最近心跳是否新鲜
-3. RTT 与失败次数是否异常
-4. Desired 是否等于 Observed
-5. Storage/Compute/Backup 各自运行结果是否正常
-6. 节点版本是否与集群目标一致
-```
-
-不能只看一个“绿色开关”。
-
-## 10. 节点撤销和重新初始化
-
-这是危险操作。
-
-如果节点仍然承载：
-
-- active media；
-- pending delete；
-- 用户录音；
-- 其他受保护资源；
-
-系统应拒绝直接撤销或重置，避免目录仍引用某个已经不存在的节点。
-
-在做关系撤销之前应先确认媒体 placement 已迁移或删除完成。
-
-## 11. 版本状态
-
-节点发布状态与资源状态独立。
-
-一个 Follower 可能：
+Use this order rather than looking at a single green toggle:
 
 ```text
-Storage healthy
-Compute healthy
-Backup healthy
+1. Relationship is active
+2. Heartbeat is recent
+3. RTT/failure counters are reasonable
+4. Desired equals Observed
+5. Storage/Compute/Backup execution results are healthy
+6. Node release version matches the intended cluster target
 ```
 
-但版本还落后于 Master。
+## 10. Revoke and reinitialize
 
-反过来也可能所有节点版本一致，但 Backup 最近一次执行失败。
+These are destructive control operations.
 
-Admin UI 将这两个维度分开显示是有意设计，不应合并为一个模糊的“节点正常”。
+If a node still owns active media, pending-delete data, recordings, or other protected resources, FrontierCloud should reject revoke/reinitialize rather than leave catalog references pointing to a missing node.
+
+Move or remove protected placements through supported workflows before revoking a relationship.
+
+## 11. Release state is a separate dimension
+
+A Follower may have healthy Storage, Compute, and Backup but still run an older release. Conversely, every node may be on the same SHA while Backup is currently failing.
+
+The Admin UI intentionally keeps resource health and release convergence separate.

@@ -1,80 +1,85 @@
-# 发布、升级、回滚与数据库迁移
+# Release, Rollback, and Database Migrations
 
-## 1. 分支与发布规则
+## 1. Branch and release workflow
 
-项目当前正式流程：
+The repository's normal workflow is:
 
 ```text
 dev
- ↓
-完整 CI
- ↓
-dev → main PR
- ↓
-人工审核 / 合并
- ↓
+ |
+ v
+full CI
+ |
+ v
+dev -> main PR
+ |
+ v
+manual review / merge
+ |
+ v
 main
- ↓
-生产发布验证
+ |
+ v
+production release verification
 ```
 
-未经明确确认，不额外创建 feature/fix 分支。
+Do not create additional feature/fix branches without explicit maintainer approval.
 
-`main` 是生产发布权威分支，`dev` 是持续开发与验收分支。
+`main` is the production release authority. `dev` is the continuous development and validation branch.
 
-## 2. 为什么不能只看 main HEAD
+## 2. Why main HEAD alone is not enough
 
-一个 SHA 出现在 `main` 并不足以证明它经过了正式开发验收。
+A commit appearing on `main` is not sufficient proof that it passed the accepted development path.
 
-FrontierCloud 发布验证要求：
+FrontierCloud release verification requires:
 
-1. 当前 `main` HEAD 能关联到且只能关联到一个已合并、同仓库的 `dev → main` PR；
-2. 该 PR 的 head SHA 有 exact `dev` push CI；
-3. 对应 CI 完成且成功；
-4. PR head tree 与当前 main HEAD tree 完全一致；
-5. 任一信息缺失、歧义或不一致都 fail closed。
+1. the exact current `main` HEAD is associated with exactly one merged same-repository `dev -> main` PR;
+2. the source PR head SHA has an exact `dev` push CI run;
+3. that CI run completed successfully;
+4. the PR head tree equals the current `main` HEAD tree;
+5. ambiguity, missing evidence, or mismatch fails closed.
 
-这样发布安全不依赖 GitHub 使用 merge/squash/rebase 中哪一种合并方式。
+This makes release provenance independent of whether GitHub used merge, squash, or rebase as the merge method.
 
-## 3. GitHub 发布验证
+## 3. GitHub release verification
 
-发布系统会访问 GitHub REST API 读取：
+The release verifier reads GitHub REST data for:
 
-- main branch HEAD；
-- 与 main commit 关联的 PR；
-- dev push workflow run；
-- dev source commit/tree。
+- the `main` branch HEAD;
+- PR association for the main commit;
+- exact dev push workflow runs;
+- the source dev commit/tree.
 
-### 匿名 API 限流
+### Anonymous API rate limits
 
-GitHub 匿名 REST 请求存在较低的请求额度。
+Anonymous GitHub REST requests have a small primary quota.
 
-FrontierCloud 已实现：
+FrontierCloud implements:
 
-- 发布校验缓存；
-- `GITHUB_API_TOKEN` 可选认证；
-- 403/429 rate-limit 识别；
-- `x-ratelimit-*` / `retry-after` 解析；
-- 服务端 backoff；
-- backoff 期间手工刷新也不会继续撞 API；
-- last-known-good 验证信息只用于展示。
+- verification caching;
+- optional authenticated `GITHUB_API_TOKEN`;
+- structured 403/429 rate-limit detection;
+- parsing of `x-ratelimit-*` and `retry-after`;
+- server-side backoff;
+- forced Admin refresh that still respects backoff;
+- last-known-good verification metadata for display only.
 
-### Fail Closed
+### Fail-closed behavior
 
-GitHub 当前不可验证时：
+When GitHub cannot currently verify the release target:
 
 ```text
-当前业务继续运行
-当前集群状态继续展示
-允许依据本地状态判断 rollback
-禁止授权新的 upgrade
+running business service continues
+current cluster status remains observable
+rollback may still rely on local updater history
+new upgrade authorization is disabled
 ```
 
-last-known-good 不能代替当前发布授权。
+Last-known-good evidence must never authorize a new release while current verification is unavailable.
 
-## 4. Updater
+## 4. Updater release state
 
-Updater 控制当前节点的发布状态，典型字段：
+The Updater reports fields such as:
 
 ```text
 release_branch
@@ -86,68 +91,68 @@ phase
 detail
 ```
 
-发布主要阶段可抽象为：
+A release can be summarized as:
 
 ```text
-校验
- ↓
-构建
- ↓
-替换
- ↓
-分发
- ↓
-完成
+verify
+  |
+  v
+build
+  |
+  v
+replace
+  |
+  v
+distribute
+  |
+  v
+complete
 ```
 
-Master 负责本地替换以及集群分发协调。
+The Master coordinates local replacement and downstream Follower distribution.
 
-## 5. Maintenance
+## 5. Maintenance mode
 
-升级过程中进入 maintenance 是为了防止在版本不一致或替换过程中继续接受不安全业务流量。
+Maintenance mode protects the service while code is being replaced or the cluster is on mixed versions.
 
-发布失败后，系统可能保持 maintenance，而不是自动假装恢复成功。
+A failed release may intentionally leave maintenance enabled rather than pretending the cluster returned to a safe state.
 
-遇到这种情况首先查：
+When this happens, inspect:
 
-- updater state；
-- target/current/previous SHA；
-- 哪个 Follower 失败；
-- 失败发生在 build / replace / distribute 哪一步。
+- updater `state` and `phase`;
+- target/current/previous SHAs;
+- which Follower failed;
+- whether failure occurred during build, replace, or distribution.
 
-不要先强制关 maintenance 再查原因。
+Do not force maintenance off before understanding cluster convergence.
 
 ## 6. Rollback
 
-Rollback 目标来自 Updater 保存的 previous web-managed SHA。
+Rollback uses the previous Web-managed SHA stored by the Updater.
 
-rollback 和 upgrade 一样需要检查集群发布边界，但它不是依赖 GitHub 当前最新 main 来决定本地 previous SHA。
+Rollback does not mean automatic database schema downgrade. Before rolling code back across a schema-changing release, verify that the older code remains compatible with the current database schema.
 
-在回滚前仍应确认数据库兼容性：代码回滚不意味着 Schema 自动 downgrade。
+## 7. Schema Generation
 
-## 7. 数据库 Schema Generation
-
-正式数据库由：
+The current database generation is stored in:
 
 ```text
 frontiercloud_schema
 ```
 
-保存当前 generation。
-
-当前版本化迁移框架位于：
+The versioned migration implementation lives in:
 
 ```text
 app/core/schema_migrations.py
 ```
 
-迁移历史表：
+Migration history is stored in:
 
 ```text
 frontiercloud_schema_migrations
 ```
 
-记录：
+with fields:
 
 ```text
 generation
@@ -156,37 +161,38 @@ checksum
 applied_at
 ```
 
-## 8. 新数据库与旧数据库
+## 8. New databases vs existing databases
 
-### 新空库
+### New empty database
 
-直接创建当前最新 Schema，并写入当前 Generation。
+A new database is bootstrapped directly at the current schema and current Generation.
 
-不会为了历史兼容从 Generation 1 一路执行所有旧 migration。
+It does not replay every historical migration from Generation 1.
 
-### 已初始化旧库
+### Existing initialized database
 
-读取 generation，然后逐代升级：
+An existing database reads its current marker and advances one generation at a time:
 
 ```text
 Generation 1
-   ↓ migration
+    |
+    v
 Generation 2
-   ↓ migration
+    |
+    v
 Generation 3
-   ↓ ...
+    |
+    v
 Current Generation
 ```
 
-迁移链必须连续。
+The migration registry must form a continuous chain.
 
-## 9. 为什么不用“一个大 SQL 自动 ALTER”
+## 9. Why there is no universal automatic ALTER
 
-未来 Schema 改动是未知的，不可能提前写一个万能迁移器。
+Future schema changes are not knowable in advance. The safe model is to add one explicit migration whenever the actual schema changes.
 
-正确方法是每一次实际 Schema 变化都增加一代明确 migration。
-
-例如未来需要给 `cluster_worker_jobs` 增加 `priority`：
+For example, if a future release adds `priority` to `cluster_worker_jobs`:
 
 ```python
 async def _migration_2_to_3(conn):
@@ -198,66 +204,54 @@ async def _migration_2_to_3(conn):
     )
 ```
 
-然后注册为 Generation 3。
+Register it as Generation 3, and update the latest empty-database bootstrap schema to include the field directly.
 
-同时最新空库的 bootstrap schema 直接包含新字段。
+## 10. MySQL DDL safety model
 
-## 10. MySQL DDL 的安全模型
+MySQL DDL can cause implicit commits. FrontierCloud therefore does not claim that an arbitrary sequence of `ALTER TABLE` statements can always be transactionally rolled back.
 
-MySQL DDL 会出现 implicit commit，所以不能声称：
-
-```text
-ALTER 1 成功
-ALTER 2 失败
-ROLLBACK
-=> 所有 Schema 变化全部消失
-```
-
-这并不可靠。
-
-FrontierCloud 采用：
+The actual safety model is:
 
 ```text
 MySQL advisory lock
 +
-逐代 migration
+one-generation-at-a-time migration
 +
-幂等 DDL
+idempotent DDL
 +
-成功后才推进 generation marker
+generation marker advances only after success
 +
-失败保持旧 generation
-+
-下次启动安全重试
+failed generation remains retryable
 ```
 
-## 11. Migration Lock
+## 11. Migration lock
 
-迁移使用数据库级 advisory lock，避免多个 Web 实例同时修改 Schema。
-
-流程：
+Migration uses a database-scoped MySQL advisory lock so multiple Web instances cannot concurrently modify the schema.
 
 ```text
-Web A / B / C 同时启动
-         ↓
-竞争 schema migration lock
-         ↓
-A 获得
-         ↓
-A 完成 migration
-         ↓
-A 推进 generation
-         ↓
-B 获得 lock 后重新读取 generation
-         ↓
-发现已是最新 → no-op
+Web A / B / C start
+       |
+       v
+compete for migration lock
+       |
+       v
+A acquires lock
+       |
+       v
+A completes migration and advances marker
+       |
+       v
+B later acquires lock and re-reads generation
+       |
+       v
+already current -> no-op
 ```
 
-注意：获得 lock 后必须重新读取 generation，不能相信等待之前的版本值。
+Re-reading the generation after acquiring the lock is required because another instance may have migrated while this instance was waiting.
 
-## 12. 幂等 Migration
+## 12. Idempotent migrations
 
-迁移辅助函数包括：
+Migration helpers include:
 
 ```text
 table_exists
@@ -267,83 +261,69 @@ add_column_if_missing
 add_index_if_missing
 ```
 
-假设迁移执行一半进程崩溃：
+If a process dies after one DDL statement succeeds but before the generation completes, the next startup can skip already-applied pieces and continue the same generation safely.
 
-```text
-column A 已成功
-column B 尚未执行
-```
+The marker remains on the previous generation until the full migration generation succeeds.
 
-下一次启动：
+## 13. Migration failure
 
-```text
-A 已存在 → 跳过
-B 不存在 → 执行
-```
+When a generation fails:
 
-而 generation marker 仍停留在旧版本，直到整代成功。
+- the current transaction is rolled back where applicable;
+- the generation marker does not advance;
+- application startup fails closed;
+- the operator fixes the underlying cause;
+- the same idempotent generation runs again on the next startup.
 
-## 13. Migration 失败
+This is safer than marking a partially-applied schema as upgraded.
 
-如果某一代失败：
+## 14. Database is newer than the application
 
-- rollback 当前未提交事务；
-- 不推进 generation；
-- 应用拒绝继续启动；
-- 运维修复根因；
-- 下次启动重新执行同一代幂等 migration。
-
-这比把数据库错误标记为“已升级”安全得多。
-
-## 14. 未来版本数据库
-
-如果：
+If:
 
 ```text
 Database Generation = 6
-App Generation = 4
+Application Generation = 4
 ```
 
-应用拒绝启动。
+startup is rejected.
 
-旧应用不会尝试：
+FrontierCloud does not automatically perform:
 
 ```text
-6 → 4
+6 -> 4
 ```
 
-Schema downgrade 不自动执行。
+Schema downgrade is not automatic. Destructive or backward-incompatible migrations require an explicit release strategy.
 
-因此生产 rollback 必须考虑“代码能否继续读取升级后的 Schema”。新增 migration 应尽量保持向后兼容，破坏性 migration 需要单独设计 release strategy。
+## 15. Non-empty databases without a marker
 
-## 15. 无 Marker 的历史数据库
+A non-empty database without `frontiercloud_schema` is not automatically guessed to be an old FrontierCloud generation.
 
-非空数据库如果没有 `frontiercloud_schema` marker，程序不会根据“看起来像这些表”自动猜版本。
+It may be:
 
-原因：它可能来自：
+- an unknown historical commit;
+- a manually-created database;
+- a partial restore;
+- a development/test database;
+- unrelated data.
 
-- 未知历史 commit；
-- 手工建库；
-- 残缺恢复；
-- 开发测试数据；
-- 非 FrontierCloud 数据。
+Blind automatic `ALTER` statements would be riskier than refusing startup.
 
-自动 ALTER 这种数据库风险高于拒绝启动。
+## 16. Adding the next schema generation
 
-## 16. 如何增加下一代 Migration
-
-标准步骤：
+Recommended process:
 
 ```text
-1. 更新最新 bootstrap Schema
-2. 新增 migration_N_to_N+1
-3. migration 必须可重复执行
-4. 注册 SchemaMigration
-5. 更新/新增测试
-6. 做真实 MySQL upgrade smoke
-7. dev CI 全绿
-8. PR → main
-9. 再执行生产升级
+1. Update the latest bootstrap schema
+2. Add migration N -> N+1
+3. Make the migration idempotent
+4. Register SchemaMigration
+5. Add/update migration tests
+6. Add a real MySQL upgrade smoke when practical
+7. Run exact dev CI
+8. dev -> main PR
+9. Release through production controls
 ```
 
-Migration 的目标不是“让测试通过”，而是让已经运行数月/数年的正式数据库能无损继续升级。
+The purpose of migrations is to keep long-running production databases upgradeable without data destruction.

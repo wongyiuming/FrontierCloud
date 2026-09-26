@@ -1,216 +1,216 @@
-# 总体架构
+# Architecture
 
-## 1. 架构概览
+## 1. System overview
 
-FrontierCloud 采用“一个业务 Master + 多个资源 Follower”的集群模型。
+FrontierCloud uses a single business Master with multiple resource Followers.
 
 ```text
-                    ┌──────────────────────┐
-                    │      Browser         │
-                    └──────────┬───────────┘
-                               │ HTTPS/HTTP
-                               ▼
-                    ┌──────────────────────┐
-                    │        Nginx         │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │   FastAPI / Web      │
-                    │      Master          │
-                    └──────┬───────┬───────┘
-                           │       │
-                   MySQL / Redis   │ signed cluster control
-                           │       │
-                           ▼       ▼
-                    ┌─────────┐  ┌─────────────────┐
-                    │Business │  │ Follower nodes  │
-                    │ facts   │  │ Storage/Compute │
-                    │Catalog  │  │ Backup          │
-                    └─────────┘  └─────────────────┘
+                    +----------------------+
+                    |       Browser        |
+                    +----------+-----------+
+                               | HTTP/HTTPS
+                               v
+                    +----------------------+
+                    |        Nginx         |
+                    +----------+-----------+
+                               |
+                               v
+                    +----------------------+
+                    |   FastAPI / Web      |
+                    |       Master         |
+                    +------+-------+-------+
+                           |       |
+                   MySQL / Redis   | signed cluster control
+                           |       |
+                           v       v
+                    +---------+  +------------------+
+                    |Business |  | Follower nodes   |
+                    |facts    |  | Storage/Compute  |
+                    |catalog  |  | Backup           |
+                    +---------+  +------------------+
 ```
 
-前端不依赖 React/Vue 等 SPA 框架，主要使用原生 HTML/CSS/JavaScript。媒体播放器由原生浏览器媒体 API 驱动，卡拉 OK 使用现有 Rust/WASM 模块与浏览器音频能力协同。
+The frontend is native HTML/CSS/JavaScript rather than a React/Vue SPA. Media playback uses browser media APIs, and karaoke integrates the existing Rust/WASM module with browser audio capabilities.
 
-## 2. 控制平面与数据平面
+## 2. Control plane and data plane
 
-### 控制平面
+### Control plane
 
-负责：
+The control plane owns:
 
-- 节点身份与角色；
-- Master/Follower 配对；
-- 心跳与状态同步；
-- Storage/Compute/Backup 配置；
-- 发布升级与回滚；
-- Admin 操作与审计；
-- 数据库 Schema Generation。
+- node identity and role;
+- Master/Follower pairing;
+- heartbeat and state synchronization;
+- Storage/Compute/Backup configuration;
+- release upgrade and rollback;
+- Admin operations and audit;
+- database Schema Generation.
 
-关键数据表包括：
+Important tables include:
 
-- `node_identity`
-- `node_relationships`
-- `node_audit`
-- `cluster_storage_members`
-- `cluster_compute_members`
-- `cluster_backup_members`
-- `cluster_worker_jobs`
+```text
+node_identity
+node_relationships
+node_audit
+cluster_storage_members
+cluster_compute_members
+cluster_backup_members
+cluster_worker_jobs
+```
 
-### 数据平面
+### Data plane
 
-负责：
+The data plane handles:
 
-- 媒体上传；
-- 媒体读取与播放；
-- Direct / Relay 传输；
-- Follower 本地媒体对象访问；
-- Compute Worker 任务；
-- Master 业务恢复包向 Backup Follower 传输。
+- media upload;
+- playback and download;
+- Direct / Relay transfer;
+- Follower-local media-object access;
+- Compute Worker tasks;
+- transfer of Master business recovery artifacts to Backup Followers.
 
-控制平面状态和数据平面结果不能混为一谈。例如“Backup 开关已打开”只是 Desired 配置，“最近一次备份成功”才是实际运行结果。
+Control-plane configuration and data-plane results must not be conflated. For example, `Backup enabled` is configuration; `last successful backup` is an execution result.
 
-## 3. 业务数据归属
+## 3. Data ownership
 
-### Master 拥有的业务事实
+### Master-owned facts
 
-Master 是唯一权威业务节点，主要拥有：
+The Master is authoritative for:
 
-- 全局媒体目录；
-- 媒体路径与稳定 media_id；
-- 歌词文件与歌词关联；
-- 播放统计与偏好；
-- 用户与 Admin 业务状态；
-- 节点关系和审计；
-- Compute 任务事实；
-- Backup 元数据；
-- Schema Generation 与 migration journal。
+- the global media catalog;
+- media paths and stable media IDs;
+- lyrics and lyric links;
+- playback scores and preferences;
+- users and Admin business state;
+- relationships and audits;
+- Compute job facts;
+- Backup metadata;
+- Schema Generation and migration history.
 
-### Follower 拥有的本地资源
+### Follower-local resources
 
-Follower 可以保存：
+A Follower may store:
 
-- 被 Master 分配到本节点的媒体对象；
-- 本节点执行 Compute 所需或产生的临时运行状态；
-- Master 业务备份恢复包；
-- 心跳上报所需本机资源指标。
+- media objects placed on that node by the Master;
+- local Compute runtime state;
+- Master business recovery artifacts;
+- machine metrics reported in heartbeats.
 
-Follower 不应该自行形成第二套业务目录。
+A Follower must not create a second independent business catalog.
 
-## 4. 媒体对象身份
+## 4. Media identity
 
-一个媒体对象至少涉及以下几个概念：
+A managed media object includes these concepts:
 
-- `media_id`：Master 全局目录中的稳定媒体标识；
-- `media_path`：逻辑业务路径；
-- `storage_member_id`：实际存储位置；
-- `object_id`：存储节点本地对象标识；
-- `path_locator`：用于路径唯一性校验的定位值；
-- `state`：如 active / pending_delete 等对象状态。
+- `media_id`: stable global business identity;
+- `media_path`: logical business path;
+- `storage_member_id`: current physical placement;
+- `object_id`: object identity within the storage member;
+- `path_locator`: path uniqueness locator;
+- `state`: object lifecycle state such as `active` or `pending_delete`.
 
-`global_media_objects` 是媒体 placement 的权威表。
+`global_media_objects` is the authoritative placement table.
 
 ## 5. Storage Pool
 
-存储池由：
+The Storage Pool consists of:
 
-- Master Local；
-- 所有启用 Storage 的 Follower；
+- Master Local;
+- all Followers with Storage enabled.
 
-共同组成。
+`cluster_storage_members` records:
 
-`cluster_storage_members` 保存每个存储成员的：
+- allocated capacity;
+- used capacity;
+- reserved capacity;
+- physical free space;
+- health;
+- writable state;
+- transport;
+- relationship ID.
 
-- 分配容量；
-- 已使用容量；
-- 保留容量；
-- 物理可用空间；
-- health；
-- writable；
-- transport；
-- relationship_id。
-
-上传时需要选择满足条件的 writable Storage Member。一个逻辑路径只对应一个完整媒体对象 placement，不做文件分片式跨节点存储。
+An upload may only target a writable member that satisfies health, logical-capacity, reservation, and physical-space requirements. One logical path maps to one complete object on one member; FrontierCloud is not a cross-node chunking filesystem.
 
 ## 6. Compute Pool
 
-Compute Follower 通过 `cluster_compute_members` 声明：
+`cluster_compute_members` records:
 
-- enabled；
-- worker_slots；
-- available_slots；
-- CPU 使用率；
-- 可用内存；
-- capabilities。
+- enabled state;
+- `worker_slots`;
+- `available_slots`;
+- CPU percentage;
+- available memory;
+- capabilities.
 
-Worker 任务记录在 `cluster_worker_jobs`。
+Worker jobs are stored in `cluster_worker_jobs`.
 
-当前任务分配语义主要有两类：
+Current placement reasons are primarily:
 
-1. **Pinned**：任务明确指定某个 Follower；
-2. **Capability + FIFO**：任务未指定节点，只要能力匹配，最先成功 lease 到任务的可用节点执行。
+1. **Pinned**: the job explicitly specifies a member;
+2. **Capability + FIFO**: an unpinned job is leased by the first available capable Follower according to queue order.
 
-节点 UI 中的 slot 代表真实并发任务上限，而不是单纯配置展示值。
+Slots represent real concurrent Worker capacity, not a decorative configuration number.
 
 ## 7. Backup
 
-Backup Follower 接收的是 Master 生成的业务恢复包，而不是 MySQL 在线物理副本。
+A Backup Follower receives a Master-generated business recovery artifact, not a live MySQL physical replica.
 
-主要特性：
+The flow provides:
 
-- 分块传输；
-- SHA-256 完整性校验；
-- generation 标识恢复点；
-- 最近成功时间；
-- 恢复点数量；
-- 最近尝试状态；
-- 失败后较短周期重试。
+- chunked transfer;
+- SHA-256 integrity verification;
+- generation-based recovery-point identity;
+- last-success tracking;
+- recovery-point count;
+- last-attempt status;
+- shorter retry after failure than the normal backup interval.
 
-Backup 的目标是灾难恢复，不是自动 failover。
+Backup is disaster-recovery storage, not automatic failover.
 
-## 8. 网络与传输
+## 8. Network and transport
 
-节点之间固定角色要求证书验证的 HTTPS。
+Fixed Master/Follower roles require certificate-verified HTTPS.
 
-媒体访问根据资源位置与网络能力决定 Local / Direct / Relay：
+Media access may resolve to:
 
-- **Local**：资源在当前 Master 本地；
-- **Direct**：浏览器或请求方直接访问资源 Follower；
-- **Relay**：由 Master/受控路径中继数据。
+- **Local**: the resource is on Master Local;
+- **Direct**: the client/request path accesses the resource Follower directly;
+- **Relay**: data moves through the controlled relay path.
 
-公网业务页面以 Master 为入口。Follower 的业务 API 不是独立业务站点。
+Public business pages terminate at the Master. A Follower is not an independent public business application.
 
-## 9. 数据库
+## 9. Database
 
-MySQL 是业务与集群事实的主要持久化数据库。
+MySQL is the primary durable store for business and cluster facts.
 
-Redis 用于运行时缓存或协调，但不能作为需要恢复的唯一业务事实来源。
+Redis is runtime cache/coordination and must not be the sole store for facts that need durable recovery.
 
-正式数据库使用 `frontiercloud_schema` 保存 Schema Generation，并使用 `frontiercloud_schema_migrations` 记录迁移历史。
+Production databases store their schema version in `frontiercloud_schema` and migration history in `frontiercloud_schema_migrations`.
 
-## 10. Updater 与发布架构
+## 10. Updater and release architecture
 
-Updater 是独立控制组件，负责：
+The Updater is a separate control component responsible for:
 
-- checkout/验证目标 SHA；
-- 构建 Web/Nginx 等镜像；
-- 替换本地容器；
-- 驱动 Follower 升级；
-- 集群发布状态；
-- rollback；
-- maintenance 状态。
+- validating/checking out target SHAs;
+- building Web/Nginx release images;
+- replacing local containers;
+- driving Follower upgrades;
+- reporting release state;
+- rollback;
+- maintenance state.
 
-生产发布只认 `main`，但 `main` 的目标必须能证明来自被审核的 `dev → main` PR，并且 PR 的 dev head 有 exact dev push CI 成功且代码树与 main 一致。
+Production follows `main`, but the current `main` target is publishable only when it can be proven to come from an accepted `dev -> main` PR, the exact PR head has successful dev push CI, and the reviewed dev tree equals the main tree.
 
-## 11. Fail-Closed 边界
+## 11. Fail-closed boundaries
 
-以下情况应拒绝继续危险操作，而不是“猜测没事”：
+FrontierCloud rejects unsafe progress rather than guessing when:
 
-- 固定节点角色但 TLS/证书条件不满足；
-- GitHub/CI 无法确认新的发布目标；
-- 数据库来自比当前程序更高的 Generation；
-- 数据库迁移失败；
-- Follower 配置尚未确认生效；
-- 节点包含受保护媒体/录音但请求撤销或重置；
-- 集群发布无法确认所有节点达到目标。
+- a fixed node role lacks required TLS/certificate conditions;
+- GitHub/CI cannot verify a new release target;
+- the database belongs to a newer Schema Generation than the application;
+- a schema migration fails;
+- a Follower has not confirmed desired resource configuration;
+- a node still owns protected media/recordings during revoke or reinitialize;
+- cluster release convergence cannot be established.
 
-FrontierCloud 的目标是：业务可以在外部依赖短暂失败时继续运行，但新增危险变更必须保守拒绝。
+The operational goal is to keep existing service available through temporary external failures while refusing unverified new changes.

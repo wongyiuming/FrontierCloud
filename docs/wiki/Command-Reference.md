@@ -1,21 +1,21 @@
-# 常用 Bash / SQL
+# Bash / SQL Command Reference
 
-> 默认假设项目位于 `/root/FrontierCloud`。如果实际路径不同，请先进入项目目录或修改 `-f` 路径。
+> Examples assume the repository is available at `/root/FrontierCloud`. Adjust the path if the deployment lives elsewhere.
 
-## 1. Compose 状态
+## 1. Compose status
 
 ```bash
 cd /root/FrontierCloud
 docker compose ps
 ```
 
-完整配置校验：
+Validate Compose configuration:
 
 ```bash
 docker compose config --quiet
 ```
 
-## 2. 日志
+## 2. Logs
 
 ```bash
 docker compose logs -f --tail=200 web
@@ -33,28 +33,28 @@ docker compose logs -f --tail=200 nginx
 docker compose logs -f --tail=200 mysql
 ```
 
-## 3. 健康检查
+## 3. Health
 
 ```bash
 curl -fsS http://127.0.0.1/health/live && echo
 curl -fsS http://127.0.0.1/health/ready && echo
 ```
 
-HTTPS 生产环境请改为真实域名。
+Use the real HTTPS hostname in production.
 
-## 4. 读取 Admin Key
+## 4. Admin Key
 
 ```bash
 docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'
 ```
 
-## 5. 读取 metrics token
+## 5. Metrics token
 
 ```bash
 docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token'
 ```
 
-## 6. 进入 MySQL
+## 6. Open MySQL
 
 ```bash
 docker compose exec mysql sh -lc '
@@ -64,7 +64,7 @@ exec mysql --default-character-set=utf8mb4 -u "$MYSQL_USER" "$MYSQL_DATABASE"
 '
 ```
 
-非交互执行 SQL：
+Run non-interactive SQL:
 
 ```bash
 docker compose exec -T mysql sh -lc '
@@ -76,13 +76,13 @@ SELECT NOW();
 SQL
 ```
 
-## 7. 查看节点身份
+## 7. Node identity
 
 ```sql
 SELECT * FROM node_identity;
 ```
 
-## 8. 查看节点关系
+## 8. Relationships
 
 ```sql
 SELECT
@@ -103,7 +103,7 @@ FROM node_relationships
 ORDER BY peer_endpoint;
 ```
 
-## 9. Storage Member 汇总
+## 9. Storage members
 
 ```sql
 SELECT
@@ -122,7 +122,7 @@ FROM cluster_storage_members
 ORDER BY member_kind, member_id;
 ```
 
-## 10. 媒体 ↔ Storage Node 明细
+## 10. Media-to-storage placement detail
 
 ```sql
 SELECT
@@ -147,7 +147,7 @@ CROSS JOIN node_identity AS i
 ORDER BY g.storage_member_id, g.media_path;
 ```
 
-只看 active：
+Active objects only:
 
 ```sql
 SELECT
@@ -166,7 +166,7 @@ WHERE g.state='active'
 ORDER BY endpoint, g.media_path;
 ```
 
-## 11. 每个 Storage Node 的 active 媒体量
+## 11. Active media totals per Storage Member
 
 ```sql
 SELECT
@@ -185,9 +185,9 @@ GROUP BY s.member_id, r.peer_endpoint, i.endpoint
 ORDER BY catalog_GiB DESC;
 ```
 
-## 12. 查指定 Follower 的媒体
+## 12. Media on one Follower
 
-把域名替换成实际 Follower：
+Replace `example.com` with the actual endpoint:
 
 ```sql
 SELECT
@@ -206,7 +206,7 @@ WHERE r.peer_endpoint LIKE '%example.com%'
 ORDER BY g.media_path;
 ```
 
-## 13. Compute Member
+## 13. Compute members
 
 ```sql
 SELECT
@@ -222,7 +222,7 @@ FROM cluster_compute_members
 ORDER BY member_id;
 ```
 
-## 14. 最近 Worker Jobs
+## 14. Recent Worker jobs
 
 ```sql
 SELECT
@@ -241,7 +241,7 @@ ORDER BY updated_at DESC
 LIMIT 100;
 ```
 
-只看未完成：
+Non-completed jobs:
 
 ```sql
 SELECT
@@ -258,7 +258,7 @@ WHERE state NOT IN ('completed', 'success')
 ORDER BY created_at;
 ```
 
-## 15. Backup Member
+## 15. Backup members
 
 ```sql
 SELECT
@@ -274,7 +274,7 @@ FROM cluster_backup_members
 ORDER BY member_id;
 ```
 
-## 16. Backup 恢复点
+## 16. Backup recovery points
 
 ```sql
 SELECT
@@ -297,7 +297,7 @@ LIMIT 50;
 SELECT * FROM frontiercloud_schema;
 ```
 
-迁移历史：
+Migration history:
 
 ```sql
 SELECT
@@ -309,7 +309,7 @@ FROM frontiercloud_schema_migrations
 ORDER BY generation;
 ```
 
-## 18. GitHub API 限流诊断
+## 18. GitHub API rate-limit diagnostics
 
 ```bash
 docker compose exec -T web python - <<'PY'
@@ -324,24 +324,22 @@ with httpx.Client(
         "Accept": "application/vnd.github+json",
         "User-Agent": "FrontierCloud-release-control",
     },
-) as c:
-    r = c.get(url)
+) as client:
+    response = client.get(url)
 
-print("HTTP:", r.status_code)
-print("x-ratelimit-limit:", r.headers.get("x-ratelimit-limit"))
-print("x-ratelimit-remaining:", r.headers.get("x-ratelimit-remaining"))
-print("x-ratelimit-used:", r.headers.get("x-ratelimit-used"))
-print("x-ratelimit-reset:", r.headers.get("x-ratelimit-reset"))
-reset = r.headers.get("x-ratelimit-reset")
+print("HTTP:", response.status_code)
+print("x-ratelimit-limit:", response.headers.get("x-ratelimit-limit"))
+print("x-ratelimit-remaining:", response.headers.get("x-ratelimit-remaining"))
+print("x-ratelimit-used:", response.headers.get("x-ratelimit-used"))
+print("x-ratelimit-reset:", response.headers.get("x-ratelimit-reset"))
+reset = response.headers.get("x-ratelimit-reset")
 if reset:
     print("reset in:", max(0, int(reset) - int(time.time())), "seconds")
-print(r.text[:1000])
+print(response.text[:1000])
 PY
 ```
 
-## 19. 当前 Git Commit
-
-宿主机仓库：
+## 19. Repository commit/branch
 
 ```bash
 git rev-parse HEAD
@@ -349,7 +347,7 @@ git branch --show-current
 git status --short
 ```
 
-## 20. 当前容器与镜像
+## 20. Containers and images
 
 ```bash
 docker compose ps
@@ -359,21 +357,21 @@ docker compose ps
 docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedSince}}' | grep -E 'frontiercloud|REPOSITORY'
 ```
 
-## 21. 磁盘空间
+## 21. Disk usage
 
 ```bash
 df -h
 ```
 
-Docker 占用：
+Docker usage:
 
 ```bash
 docker system df
 ```
 
-## 22. 不建议直接执行的命令
+## 22. Commands that are not normal troubleshooting tools
 
-除非明确做灾难恢复，不要把以下命令当作日常排障：
+Do not use these as routine fixes unless you are deliberately performing disaster recovery:
 
 ```bash
 docker compose down --volumes
@@ -381,4 +379,4 @@ rm -rf data/*
 docker system prune -a --volumes
 ```
 
-也不要直接对受管媒体文件执行 `mv/rm` 来绕过 Catalog。
+Do not directly `mv`/`rm` managed media to bypass the catalog.

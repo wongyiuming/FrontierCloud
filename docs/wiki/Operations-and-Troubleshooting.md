@@ -1,22 +1,22 @@
-# 运维与排障
+# Operations and Troubleshooting
 
-## 1. 排障顺序
+## 1. Troubleshooting order
 
-不要一上来就重启全部容器。推荐按层判断：
+Do not start an incident by restarting every container. Diagnose by layer:
 
 ```text
-1. 业务是否真的不可用
+1. Is business traffic actually unavailable?
 2. Nginx / Web readiness
 3. MySQL / Redis
-4. 节点关系和心跳
-5. Storage / Compute / Backup 各自状态
-6. Updater / 发布状态
-7. GitHub 等外部依赖
+4. Node relationships and heartbeats
+5. Storage / Compute / Backup state
+6. Updater / release state
+7. External dependencies such as GitHub
 ```
 
-FrontierCloud 的很多状态彼此独立。例如 GitHub 发布验证失败不代表媒体业务失败；Backup 失败也不代表播放失败。
+These dimensions are intentionally independent. A GitHub release-verification failure does not imply playback failure, and a Backup failure does not imply that Storage is unavailable.
 
-## 2. 快速健康检查
+## 2. Fast health check
 
 ```bash
 docker compose ps
@@ -27,9 +27,9 @@ curl -fsS http://127.0.0.1/health/live
 curl -fsS http://127.0.0.1/health/ready
 ```
 
-HTTPS 部署按实际域名访问。
+Use the real HTTPS hostname in production.
 
-查看最近日志：
+Recent logs:
 
 ```bash
 docker compose logs --tail=200 web
@@ -39,29 +39,19 @@ docker compose logs --tail=200 mysql
 docker compose logs --tail=200 redis
 ```
 
-## 3. 业务正常但发布页报错
+## 3. Business works but the release page reports an error
 
-先区分：
+Separate business/data-plane health from external release-verification health.
 
-```text
-业务数据平面故障
-```
+When GitHub REST is rate limited:
 
-和：
+- the current Master/Follower business service can continue;
+- already-running versions are unaffected;
+- new upgrades fail closed;
+- Admin reports GitHub verification as unavailable/rate limited;
+- the Updater itself may still be healthy.
 
-```text
-发布验证外部依赖故障
-```
-
-例如 GitHub REST API 受到限流时：
-
-- 当前 Master/Follower 可以继续提供业务；
-- 已运行版本不受影响；
-- 新升级必须 fail closed；
-- UI 会显示 GitHub 验证受限；
-- Updater 本身可能仍然 ready。
-
-### GitHub API 限流检查
+### Check GitHub API rate limit from the Web container
 
 ```bash
 docker compose exec -T web python - <<'PY'
@@ -76,70 +66,70 @@ with httpx.Client(
         "Accept": "application/vnd.github+json",
         "User-Agent": "FrontierCloud-release-control",
     },
-) as c:
-    r = c.get(url)
+) as client:
+    response = client.get(url)
 
-print("HTTP:", r.status_code)
+print("HTTP:", response.status_code)
 for name in (
     "x-ratelimit-limit",
     "x-ratelimit-remaining",
     "x-ratelimit-used",
     "x-ratelimit-reset",
 ):
-    print(name + ":", r.headers.get(name))
-reset = r.headers.get("x-ratelimit-reset")
+    print(name + ":", response.headers.get(name))
+reset = response.headers.get("x-ratelimit-reset")
 if reset:
     print("reset in:", max(0, int(reset) - int(time.time())), "seconds")
-print(r.text[:1000])
+print(response.text[:1000])
 PY
 ```
 
-如果：
+If the result is:
 
 ```text
-HTTP 403
+HTTP: 403
 x-ratelimit-remaining: 0
 ```
 
-就是 GitHub API quota 耗尽，不是 github.com 网页网络不通。
+then the GitHub API quota is exhausted; this is not equivalent to general connectivity to `github.com` being down.
 
-生产 Master 建议配置只读：
+For production, configure a least-privilege read-only token on the Master:
 
 ```dotenv
 GITHUB_API_TOKEN=...
 ```
 
-## 4. 节点 Offline
+## 4. Follower is Offline
 
-检查：
+Check:
 
-1. `last_heartbeat`；
-2. RTT；
-3. failures；
-4. HTTPS 证书；
-5. peer endpoint；
-6. Follower Web 是否 healthy；
-7. 节点间 DNS/路由/防火墙。
+1. `last_heartbeat` freshness;
+2. RTT;
+3. consecutive failures;
+4. HTTPS certificate validity;
+5. configured peer endpoint;
+6. Follower Web health;
+7. DNS, routing, and firewall between nodes.
 
-不要因为一次 RTT 变高就判断节点离线。更重要的是心跳新鲜度和连续失败。
+One high RTT sample is not enough to classify a node as offline. Heartbeat freshness and repeated failures matter more.
 
-## 5. 配置开关已打开但没有生效
+## 5. A toggle is enabled but not effective
 
-看 Desired / Observed。
+Inspect Desired and Observed state.
 
-可能原因：
+Common causes:
 
-- Follower 离线；
-- 下一轮心跳尚未到达；
-- Follower 拒绝配置；
-- 版本不一致；
-- TLS/关系状态异常。
+- Follower is offline;
+- the next control heartbeat has not completed yet;
+- the Follower rejected the configuration;
+- version/protocol mismatch;
+- TLS or relationship state is invalid.
 
-UI 中“配置已保存”不等于“Follower 已生效”。
+"Configuration saved" must not be interpreted as "Follower applied it".
 
-## 6. Storage 排障
+## 6. Storage troubleshooting
 
-重点看：
+Important fields:
 
 ```text
 storage_enabled
@@ -151,104 +141,96 @@ reserved_bytes
 physical_free_bytes
 ```
 
-### 显示有逻辑空间但无法上传
+### Logical space exists but upload is rejected
 
-可能是：
+Possible causes:
 
-- physical free 不足；
-- reserved bytes 已占用；
-- 节点 health 异常；
-- writable=false；
-- 上传过程中节点状态改变。
+- insufficient physical free space;
+- reservations already consume the remaining allowance;
+- unhealthy node;
+- `writable=false`;
+- member state changed after the placement decision was prepared.
 
-### Catalog 与磁盘占用差异
+### Catalog size differs from filesystem usage
 
-`SUM(global_media_objects.size_bytes)` 与 Storage Member 的 `used_bytes` 不要求严格相等。
+`SUM(global_media_objects.size_bytes)` and a member's reported `used_bytes` do not need to be identical.
 
-如果差异异常大，再检查：
+If the gap is unexpectedly large, inspect:
 
-- 临时上传；
-- pending delete；
-- recovery 数据；
-- 人工放入文件；
-- 未清理残留。
+- in-progress uploads;
+- pending delete;
+- recovery/quarantine data;
+- manually-added files;
+- stale temporary data.
 
-## 7. Compute 排障
+## 7. Compute troubleshooting
 
-重点看：
+Inspect:
 
-- `worker_slots`；
-- running；
-- queued；
-- available slots；
-- CPU；
-- available memory；
-- capability；
-- `attempts`；
-- lease expiration。
+- `worker_slots`;
+- running count;
+- queued count;
+- available slots;
+- CPU;
+- available memory;
+- capabilities;
+- `attempts`;
+- lease expiration.
 
-### 为什么任务没分给节点
+### Why did this node not receive a job?
 
-检查：
+Check:
 
-1. Compute 是否 enabled 且已生效；
-2. capability 是否匹配；
-3. 是否还有 slot；
-4. 任务是否 pinned 给其他 member；
-5. 是否有其他节点先 lease；
-6. task 是否已失败/完成。
+1. Compute is enabled and effective;
+2. capability matches the job;
+3. a slot is available;
+4. the job is not pinned to another member;
+5. another capable Follower did not lease it first;
+6. the job is not already completed/failed.
 
-当前普通任务主要是 capability + FIFO，不是按 CPU 最低自动择优。
+Ordinary shared jobs currently use capability + FIFO semantics, not "lowest CPU wins" scoring.
 
-## 8. Backup 排障
+## 8. Backup troubleshooting
 
-重点看：
+Inspect:
 
-- Enabled / Effective；
-- `last_success`；
-- 最近尝试状态；
-- generation；
-- checksum；
-- 恢复点数量；
-- 下次计划时间。
+- Enabled / Effective;
+- `last_success`;
+- most recent attempt/result;
+- generation;
+- checksum;
+- recovery-point count;
+- next planned attempt.
 
-### `pending` 不代表永远没有成功备份
+A transient `pending`-like state must not override the durable meaning of a known successful recovery point. Use `last_success` and concrete recovery-point metadata as the primary evidence.
 
-主判断应看 durable `last_success` 和最近恢复点，而不是只看一个瞬时 state。
+After a failed attempt, current logic retries on a shorter failure interval rather than waiting for the full normal backup period.
 
-### 备份失败后
+## 9. MySQL startup / schema problems
 
-新版逻辑会采用较短失败重试，不需要等完整正常备份周期后才再次尝试。
+### Database Generation is behind the application
 
-## 9. MySQL 启动失败 / Schema 问题
+The application should migrate the initialized database generation-by-generation.
 
-常见情况：
+### Migration fails
 
-### 数据库 Generation 低于应用
+Startup fails closed and the generation marker does not advance. Fix the underlying problem and restart; idempotent migration logic allows the same generation to be retried safely.
 
-应用应自动逐代 migration。
+### Database Generation is newer than the application
 
-### migration 失败
+An older application is reading a database upgraded by newer code. FrontierCloud rejects startup and does not attempt automatic schema downgrade.
 
-应用拒绝继续启动，generation marker 不推进。检查异常原因，修复后重新启动允许幂等重试。
+### Non-empty database has no FrontierCloud schema marker
 
-### 数据库 Generation 高于应用
+FrontierCloud does not guess an unknown historical schema and run blind `ALTER` statements. Determine the database origin before attempting recovery/adoption.
 
-说明运行了旧版本应用读取新版本数据库。系统应拒绝启动，禁止自动 downgrade。
-
-### 非空数据库没有 schema marker
-
-不会自动猜版本进行 ALTER。需要人工确认来源，而不是绕过保护。
-
-## 10. Updater 卡住
-
-检查：
+## 10. Updater is stuck
 
 ```bash
 docker compose logs --tail=300 updater
 ```
 
-再看发布页：
+Inspect release fields such as:
 
 ```text
 state
@@ -259,53 +241,34 @@ previous_sha
 detail
 ```
 
-如果处于 maintenance，先确认发布流程是否仍在运行，不要直接删除 maintenance volume。
+If maintenance mode is active, first determine whether a release is still running or has failed. Do not delete the maintenance-state volume to hide the symptom.
 
-## 11. 集群版本不一致
+## 11. Cluster versions differ
 
-例如：
+A successful Master replacement does not prove full cluster convergence.
 
-```text
-Master A
-Follower B
-Follower C
-```
-
-不能简单把“Master success”理解为全体升级完成。
-
-需要确认每个 Follower：
+For every Follower confirm:
 
 ```text
-current_sha == target_sha
-state == success/idle compatible state
 reachable == true
 release_branch == main
+current_sha == target_sha
+state is compatible with successful/idle completion
 ```
 
-发生部分节点升级失败时，维护模式是安全边界。不要为了恢复页面访问而先强制关闭维护，再慢慢查版本。
+If only part of the cluster upgrades, maintenance mode is a safety boundary. Do not restore public traffic first and investigate version drift later.
 
-## 12. 删除/恢复异常
+## 12. Delete/recovery problems
 
-FrontierCloud 的删除有数据库 journal 和恢复语义。
+Managed deletion has database-journal and recovery semantics.
 
-不要：
+Do not use direct `rm -rf` to clear pending delete/recovery state.
 
-```bash
-rm -rf data/...
-```
+If recovery blocks mutations, inspect Web logs and database state, and verify that MySQL and `./data` belong to the same recovery point. When necessary, restore a consistent set of database, file data, and secrets.
 
-来“解决” pending delete/recovery。
+## 13. Backup strategy
 
-如果 recovery 阻塞业务变更，先：
-
-- 查看 Web 日志；
-- 查看相关数据库状态；
-- 确认 MySQL 与 data 是否来自同一个恢复点；
-- 必要时恢复成一致的数据库+文件+secrets 备份组合。
-
-## 13. 备份策略
-
-生产至少备份：
+At minimum, production recovery must cover:
 
 ```text
 MySQL
@@ -313,13 +276,11 @@ MySQL
 runtime_secrets
 ```
 
-它们应被视为一组恢复资产。
+Treat them as one recovery asset set. Restoring only the database or only files can create catalog/filesystem drift.
 
-只恢复数据库但不恢复对应文件，或只恢复文件不恢复数据库，都可能制造 Catalog/文件系统漂移。
+## 14. Incident evidence collection
 
-## 14. 推荐事故信息采集
-
-在真正改配置前先保存：
+Capture evidence before changing configuration:
 
 ```bash
 date -Is
@@ -329,7 +290,7 @@ docker compose logs --tail=300 updater > /tmp/frontier-updater.log
 docker compose logs --tail=300 nginx > /tmp/frontier-nginx.log
 ```
 
-数据库问题再附加：
+For schema/database incidents:
 
 ```bash
 docker compose exec -T mysql sh -lc '
@@ -339,4 +300,4 @@ mysql -u "$MYSQL_USER" "$MYSQL_DATABASE" -e "SELECT * FROM frontiercloud_schema;
 '
 ```
 
-先保留现场，再执行修复。
+Preserve the incident state before applying a fix.
