@@ -36,7 +36,7 @@ jobs:
 
           paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
           for raw in paths:
-              if not raw:
+              if not raw or raw.startswith('.github/workflows/'):
                   continue
               path = root / raw
               if not path.is_file():
@@ -52,24 +52,10 @@ jobs:
               )
               if updated != value:
                   path.write_text(updated, encoding='utf-8')
-
-          workflow = root / '.github/workflows/docker.yml'
-          value = workflow.read_text(encoding='utf-8')
-          anchor = '          node --check static/js/karaoke.js\n'
-          additions = (
-              '          node --check static/js/karaoke.js\n'
-              '          node --check static/js/lyrics-window.js\n'
-              '          node --check static/js/karaoke-ui.js\n'
-          )
-          if 'node --check static/js/lyrics-window.js' not in value:
-              if anchor not in value:
-                  raise SystemExit('frontend syntax-check anchor not found')
-              value = value.replace(anchor, additions, 1)
-              workflow.write_text(value, encoding='utf-8')
           PY
 
-          if git grep -n -E 'K ?歌' -- ':!*.png' ':!*.jpg' ':!*.jpeg' ':!*.gif' ':!*.ico'; then
-            echo 'legacy K歌 copy remains' >&2
+          if git grep -n -E 'K ?歌' -- ':!*.png' ':!*.jpg' ':!*.jpeg' ':!*.gif' ':!*.ico' ':!.github/workflows/*'; then
+            echo 'legacy karaoke copy remains outside workflow files' >&2
             exit 1
           fi
           if git grep -n "classList.add('open')" -- static/js/karaoke.js; then
@@ -84,7 +70,6 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -u
-          git add .github/workflows/docker.yml
-          git commit -m "ui: rename K歌 to 卡拉OK and unify fullscreen lyrics"
+          git add -u ':!.github/workflows/*'
+          git commit -m "ui: rename karaoke copy and unify fullscreen lyrics"
           git push origin HEAD:dev
