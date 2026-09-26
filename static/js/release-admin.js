@@ -33,6 +33,13 @@
         }
         return PHASE_PROGRESS[release.phase] ?? (release.state === 'running' ? 10 : 0);
     };
+    const displayTarget = value => value?.ci?.sha || value?.ci?.last_verified?.sha || value?.local?.current_sha || '';
+    const durationText = seconds => {
+        const value = Math.max(0, Number(seconds) || 0);
+        if (value < 60) return `${Math.ceil(value)} 秒`;
+        if (value < 3600) return `${Math.ceil(value / 60)} 分钟`;
+        return `${Math.ceil(value / 3600)} 小时`;
+    };
 
     function setExpanded(panel) {
         const open = !panel.classList.contains('expanded');
@@ -50,7 +57,24 @@
 
     function ciText(value) {
         const ci = value.ci || {};
-        if (!ci.available) return ci.detail || '发布验证不可用';
+        if (!ci.available) {
+            if (ci.error_kind === 'rate_limited') {
+                const rate = ci.rate_limit || {};
+                const quota = rate.limit != null || rate.remaining != null
+                    ? `${rate.remaining ?? '?'} / ${rate.limit ?? '?'}`
+                    : '额度未知';
+                const mode = ci.authenticated ? '认证请求' : '匿名请求';
+                const retry = ci.retry_after_seconds != null ? ` · 约 ${durationText(ci.retry_after_seconds)}后恢复` : '';
+                const last = ci.last_verified || {};
+                const previous = last.sha
+                    ? ` · 上次可信验证 ${shortSha(last.sha)}${last.run_number ? ` / dev CI #${last.run_number}` : ''}${last.publishable ? ' 通过' : ''}`
+                    : '';
+                return `GitHub API 限流 · ${mode} ${quota}${retry}${previous}`;
+            }
+            const last = ci.last_verified || {};
+            const previous = last.sha ? ` · 上次可信验证 ${shortSha(last.sha)}` : '';
+            return `${ci.detail || 'GitHub 发布验证不可用'}${previous}`;
+        }
         const state = ci.publishable
             ? '通过'
             : ci.status === 'completed'
@@ -58,24 +82,25 @@
                 : ci.status || 'unknown';
         const releaseBranch = value.release_branch || ci.branch || 'main';
         const sourceBranch = ci.source_branch || 'dev';
-        return `${releaseBranch} ${shortSha(ci.sha)} · ${sourceBranch} CI #${ci.run_number || '-'} ${state} · ${shortSha(ci.ci_sha)}`;
+        const auth = ci.authenticated ? ' · GitHub 已认证' : ' · GitHub 匿名';
+        return `${releaseBranch} ${shortSha(ci.sha)} · ${sourceBranch} CI #${ci.run_number || '-'} ${state} · ${shortSha(ci.ci_sha)}${auth}`;
     }
 
     function convergence(value) {
-        const target = value.ci?.sha || '';
+        const target = displayTarget(value);
         const nodes = [{reachable: true, status: value.local || {}, master: true}, ...(value.followers || [])];
         const total = nodes.length;
         const done = nodes.filter(item => {
             if (item.reachable === false) return false;
             const status = item.status || {};
-            return status.current_sha === target && status.state === 'success';
+            return target && status.current_sha === target && status.state === 'success';
         }).length;
         return {done, total};
     }
 
     function overallProgress(value) {
         const local = value.local || {};
-        const target = value.ci?.sha || '';
+        const target = displayTarget(value);
         const cluster = convergence(value);
         if (target && cluster.total && cluster.done === cluster.total) return 100;
         const base = phaseProgress(local);
@@ -141,12 +166,19 @@
         const local = value.local || {};
         const cluster = convergence(value);
         const percent = overallProgress(value);
+        const target = displayTarget(value);
 
         element('systemReleaseCi').textContent = ciText(value);
-        element('systemReleasePolicy').textContent = value.release_policy_ready
-            ? `ready · ${value.release_branch || 'main'} HEAD 代码树已通过 ${ci.source_branch || 'dev'} CI`
-            : `blocked · ${value.release_policy_detail || '发布策略未就绪'}`;
-        element('systemReleaseTarget').textContent = shortSha(ci.sha);
+        element('systemReleasePolicy').textContent = !value.release_policy_ready
+            ? `blocked · ${value.release_policy_detail || '发布策略未就绪'}`
+            : ci.publishable
+                ? `ready · ${value.release_branch || 'main'} HEAD 代码树已通过 ${ci.source_branch || 'dev'} CI`
+                : !ci.available
+                    ? 'updater ready · GitHub 发布验证暂不可用，新升级已安全禁用'
+                    : `updater ready · ${value.release_branch || 'main'} HEAD 尚未通过发布验证`;
+        const targetHost = element('systemReleaseTarget');
+        targetHost.textContent = target ? shortSha(target) : '-';
+        targetHost.title = ci.sha ? '当前 GitHub 验证目标' : ci.last_verified?.sha ? '上次可信 GitHub 验证目标' : '';
         element('systemReleaseCurrent').textContent = shortSha(local.current_sha);
         element('systemReleaseConvergence').textContent = `${cluster.done} / ${cluster.total}`;
         element('systemReleaseProgressBar').style.width = `${percent}%`;
@@ -155,14 +187,19 @@
             `${percent}% · Master ${local.state || 'unknown'} / ${PHASE_LABEL[local.phase] || local.phase || '-'}${value.cluster_convergence_needed ? ' · 等待集群收敛' : ''}`;
         renderSteps(local);
 
-        const nodes = [nodeCard('Master', local, true, ci.sha)];
+        const nodes = [nodeCard('Master', local, true, target)];
         for (const item of value.followers || []) {
-            nodes.push(nodeCard(item.peer_endpoint || item.peer_id || 'Follower', item.status || {}, item.reachable !== false, ci.sha));
+            nodes.push(nodeCard(item.peer_endpoint || item.peer_id || 'Follower', item.status || {}, item.reachable !== false, target));
         }
         element('systemReleaseNodes').replaceChildren(...nodes);
 
         const details = [];
-        if (ci.detail) details.push(ci.detail);
+        if (ci.detail && ci.error_kind !== 'rate_limited') details.push(ci.detail);
+        if (ci.error_kind === 'rate_limited') {
+            const reset = ci.rate_limit?.reset_at;
+            const resetText = reset ? new Date(reset * 1000).toLocaleString() : '等待 GitHub reset';
+            details.push(`GitHub API 已限流；当前不会继续重试。预计恢复：${resetText}。新升级保持禁用。`);
+        }
         if (local.detail) details.push(local.detail);
         for (const item of value.followers || []) {
             if (item.detail) details.push(`${item.peer_endpoint || item.peer_id}: ${item.detail}`);
