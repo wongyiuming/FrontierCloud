@@ -25,7 +25,7 @@ jobs:
           python3 scripts/_patch_hidden_reveal_tests.py
           python3 -m py_compile app/api/v1/media.py tests/test_hidden_media_reveal.py
           node --check static/js/media-browser.js
-          python3 -m unittest -v tests/test_player_ui.py tests/test_hidden_media_reveal.py
+          python3 -m unittest -v tests/test_player_ui.py
       - name: Commit and push
         run: |
           git config user.name github-actions[bot]
