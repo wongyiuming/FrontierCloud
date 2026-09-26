@@ -73,11 +73,11 @@ async def ensure_follower_business_empty() -> None:
 @router.get("")
 async def status(actor: str = Depends(require_session)):
     relations = await state.list_relationships()
-    from app.services import resource_pool
+    from app.services import storage_capacity
     return {"node_id": state.node["node_id"], "role": state.node["role"], "endpoint": state.node["endpoint"],
             "app_version": p.APP_VERSION, "protocol": p.PROTOCOL_VERSION,
             "relationships": [{key: value for key, value in row.items() if key not in ("credential", "peer_key")} for row in relations],
-            "storage_pool": await resource_pool.pool_summary(state.database) if state.node["role"] == "Master" else None}
+            "storage_pool": await storage_capacity.observed_pool(state) if state.node["role"] == "Master" else None}
 
 
 @router.get("/release")
