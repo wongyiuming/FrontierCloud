@@ -18,7 +18,17 @@
             const pool = await response.json();
             const writable = (pool.members || []).filter(member =>
                 member.storage_enabled && member.health === 'online' && member.writable);
-            if (!writable.length) return;
+            if (!writable.length) {
+                target.replaceChildren();
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = '暂无可写存储节点';
+                option.disabled = true;
+                option.selected = true;
+                target.append(option);
+                target.classList.remove('hidden');
+                return;
+            }
 
             const previous = target.value;
             target.replaceChildren();
