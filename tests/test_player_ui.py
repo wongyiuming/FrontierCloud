@@ -90,6 +90,7 @@ class PlayerUIContractTests(unittest.TestCase):
     def test_audio_player_offers_seven_line_lrc_and_three_column_fullscreen_lyrics(self):
         player_script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
         shared_lyrics = (ROOT / "static" / "js" / "lyrics-window.js").read_text(encoding="utf-8")
+        shared_style = (ROOT / "static" / "css" / "lyrics-window.css").read_text(encoding="utf-8")
         lyric_script = (ROOT / "static" / "js" / "lyrics.js").read_text(encoding="utf-8")
         lyric_style = (ROOT / "static" / "css" / "lyrics.css").read_text(encoding="utf-8")
         player_style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
@@ -130,7 +131,7 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn(".audio-player-page { flex-direction: row; }", player_style)
         self.assertIn("body {", player_style)
         self.assertIn("flex-direction: row-reverse", player_style)
-        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", shared_lyrics)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", shared_style)
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", lyric_style)
         self.assertEqual(lyric_template.count('class="lyrics-column"'), 3)
         self.assertIn("lyricPalette[index % lyricPalette.length]", lyric_script)
