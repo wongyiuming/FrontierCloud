@@ -17,7 +17,6 @@ def require(condition: bool, message: str) -> None:
 
 release = read("app/services/release_control.py")
 updater = read("updater/server.py")
-nodes = read("static/js/nodes.js")
 release_ui = read("static/js/release-admin.js")
 maintenance_ui = read("static/js/maintenance-admin.js")
 maintenance_gate = read("nginx/maintenance-gate.conf")
@@ -56,8 +55,9 @@ require('FORCE_OPEN_FLAG = ROOT / "data" / ".frontiercloud-force-open"' in updat
         "Every updater must clear stale open overrides before entering release maintenance")
 require('followers_need_convergence' in release and 'cluster_convergence_needed' in release,
         "Web release control must allow retrying partial cluster convergence")
-require('dev CI:' not in nodes and '${branch} CI:' in nodes,
-        "Legacy node release renderer must still display the actual release branch")
+require("const sourceBranch = ci.source_branch || 'dev'" in release_ui
+        and '${sourceBranch} CI #' in release_ui,
+        "Release Admin must display the actual verified CI source branch")
 require('systemVersionPanel' in release_ui and '系统版本管理' in release_ui,
         "Production release controls must have a standalone Admin module")
 require('schedule(masterBusy ? 1500 : 5000)' in release_ui,
