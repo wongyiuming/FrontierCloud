@@ -5,10 +5,11 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 
 from app.api.internal_nodes import require_https
 from app.api.v1.admin import require_session
-from app.services import control_audit, release_control, site_control
+from app.services import control_audit, lyrics, release_control, site_control
 from app.services.federation import protocol as p
 from app.services.federation.runtime import runtime
 from app.services.federation.state import state
@@ -45,6 +46,28 @@ class ResourceSettings(BaseModel):
 
 def checked(exc):
     return HTTPException(409, str(exc) if isinstance(exc, p.ProtocolError) else "节点 HTTPS 验证或通信失败；请检查证书、网络及节点身份")
+
+
+async def ensure_follower_business_empty() -> None:
+    """Ignore only the immutable system fallback lyric when checking business emptiness."""
+    from app.api.v1.media import MEDIA_ROOT
+
+    for root_name in ("music", "vido", "lyrics"):
+        root = MEDIA_ROOT / root_name
+        if not root.exists():
+            continue
+        for item in root.rglob("*"):
+            if not item.is_file():
+                continue
+            relative = item.relative_to(MEDIA_ROOT).as_posix()
+            if relative == lyrics.DEFAULT_LYRIC_PATH and not item.is_symlink():
+                continue
+            raise p.ProtocolError("Standalone 仍有媒体或歌词；请先执行显式纳管迁移，不能直接固定为 Follower")
+
+    async with state.database.connect() as conn:
+        for table in ("karaoke_users", "karaoke_recordings"):
+            if int(await conn.scalar(text(f"SELECT COUNT(*) FROM {table}")) or 0):
+                raise p.ProtocolError("Standalone 仍有 K歌业务数据；请先迁移，不能直接固定为 Follower")
 
 
 @router.get("")
@@ -95,9 +118,8 @@ async def promote(request: Request, payload: Promotion, actor: str = Depends(req
     require_https(request)
     try:
         await transport.identity(payload.endpoint, expected_id=state.node["node_id"], role="Standalone")
-        from app.services import resource_pool
         if payload.role == "Follower":
-            await resource_pool.ensure_follower_business_empty(state.database)
+            await ensure_follower_business_empty()
         await state.promote(payload.role, payload.endpoint, actor,
                             payload.local_capacity_gib * 1024 ** 3 if payload.local_capacity_gib else None)
         runtime.start()
