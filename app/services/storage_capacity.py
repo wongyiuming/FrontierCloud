@@ -30,6 +30,8 @@ def enrich_local_resource_summary(summary: dict) -> dict:
 
 async def enrich_pool_summary(summary: dict, store) -> dict:
     """Replace stale display facts with the freshest physical observations available."""
+    from app.services import resource_pool
+
     result = dict(summary)
     members = [dict(member) for member in summary.get("members", [])]
     relations = {
@@ -38,6 +40,7 @@ async def enrich_pool_summary(summary: dict, store) -> dict:
         if relation.get("state") == "active"
     }
     local_total = local_free = None
+    reserve = int(resource_pool.PHYSICAL_RESERVE_BYTES)
 
     for member in members:
         kind = member.get("member_kind")
@@ -60,13 +63,35 @@ async def enrich_pool_summary(summary: dict, store) -> dict:
         member["current_allocated_bytes"] = int(member.get("allocated_bytes") or 0)
         member["project_used_bytes"] = int(member.get("used_bytes") or 0)
 
+        # The media Admin's Auto member is created before these live physical
+        # observations are applied. Recalculate display-side writable capacity
+        # from the refreshed facts so Auto cannot keep showing a stale value.
+        if kind != "Auto":
+            logical = max(0, int(member.get("allocated_bytes") or 0)
+                          - int(member.get("used_bytes") or 0)
+                          - int(member.get("reserved_bytes") or 0))
+            physical = max(0, int(member.get("physical_free_bytes") or 0) - reserve)
+            available = min(logical, physical) if (
+                member.get("health") == "online" and member.get("writable")
+            ) else 0
+            member["available_bytes"] = available
+            member["online_writable_bytes"] = available
+
     real_members = [member for member in members if member.get("member_kind") != "Auto"]
+    auto_available = max((int(member.get("available_bytes") or 0) for member in real_members), default=0)
+    for member in members:
+        if member.get("member_kind") == "Auto":
+            member["available_bytes"] = auto_available
+            member["online_writable_bytes"] = auto_available
+
     result["members"] = members
     result["physical_total_bytes"] = sum(int(member.get("physical_total_bytes") or 0) for member in real_members)
     result["physical_free_bytes"] = sum(int(member.get("physical_free_bytes") or 0) for member in real_members)
     result["current_allocated_bytes"] = sum(int(member.get("allocated_bytes") or 0)
                                             for member in real_members if member.get("storage_enabled"))
     result["project_used_bytes"] = sum(int(member.get("used_bytes") or 0) for member in real_members)
+    result["available_bytes"] = sum(int(member.get("available_bytes") or 0) for member in real_members)
+    result["online_writable_bytes"] = result["available_bytes"]
     return result
 
 
