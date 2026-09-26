@@ -326,7 +326,7 @@ class DeploymentContractTests(unittest.TestCase):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         updater = (ROOT / "updater/server.py").read_text(encoding="utf-8")
         release = (ROOT / "app/services/release_control.py").read_text(encoding="utf-8")
-        nodes = (ROOT / "static/js/nodes.js").read_text(encoding="utf-8")
+        release_ui = (ROOT / "static/js/release-admin.js").read_text(encoding="utf-8")
         gate = (ROOT / "nginx/maintenance-gate.conf").read_text(encoding="utf-8")
         for marker in (
             "  prepare-rn:", "  deploy-rn:", "  prepare-evoxt:", "  deploy-evoxt:",
@@ -342,8 +342,8 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertNotIn("docker compose", updater.lower())
         self.assertNotIn("systemctl", updater.lower())
         self.assertIn("actions/workflows/docker.yml/runs", release)
-        self.assertIn("升级并分发", nodes)
-        self.assertIn("一键回滚", nodes)
+        self.assertIn("升级并分发", release_ui)
+        self.assertIn("一键回滚", release_ui)
         self.assertIn("/internal/v1/cluster-update", gate)
         self.assertIn("workflow_dispatch:", workflow)
 
