@@ -219,7 +219,10 @@ def maintenance_page_check(browser) -> None:
         require(page.locator("h1").inner_text() == "网站维护中", "maintenance page headline is missing")
         require("前沿娱乐" in page.locator(".brand").inner_text(), "maintenance page lost the product brand")
         require(page.locator("#retry").is_visible(), "maintenance page retry control is not visible")
-        require("Admin → 站点开放状态" in page.locator(".hint").inner_text(), "maintenance page does not point administrators to the control module")
+        body_text = page.locator("body").inner_text()
+        require(page.locator(".hint").count() == 0, "maintenance page unexpectedly restored the removed administrator hint")
+        require("当前公共服务已暂时关闭" not in body_text, "maintenance page restored the removed public-service explanation")
+        require("Admin → 站点开放状态" not in body_text, "maintenance page restored the removed administrator instruction")
 
         subprocess.run(["sudo", "rm", "-f", str(MAINTENANCE_FLAG)], check=True)
         with page.expect_navigation(wait_until="domcontentloaded", timeout=10000) as navigation:
