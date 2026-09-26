@@ -182,15 +182,14 @@ class PlayerUIContractTests(unittest.TestCase):
 
     def test_public_home_hides_elevation_and_refresh_behind_logo_hotspots(self):
         template = (ROOT / "static" / "media" / "index.html").read_text(encoding="utf-8")
-        script = (ROOT / "static" / "js" / "media-browser.js").read_text(encoding="utf-8")
 
         self.assertNotIn("管理员入口", template)
         self.assertNotIn("刷新界面", template)
         self.assertIn("brand-hotspot", template)
         self.assertIn('id="refreshHotspot"', template)
         self.assertIn('id="elevateHotspot"', template)
-        self.assertIn("elevate", script)
-        self.assertIn("refresh", script)
+        self.assertIn("/api/v1/media/refresh", template)
+        self.assertIn("/api/v1/media/admin/elevate", template)
 
     def test_android_portrait_layout_stacks_player_above_sidebar(self):
         style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
