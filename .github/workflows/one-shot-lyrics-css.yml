@@ -1,0 +1,95 @@
+name: One-shot shared lyric CSS migration
+
+on:
+  push:
+    branches: ["dev"]
+    paths:
+      - ".github/workflows/one-shot-lyrics-css.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+      - name: Move lyric presentation out of inline CSP styles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          audio = Path('static/media/audio-player.html')
+          text = audio.read_text(encoding='utf-8')
+          anchor = '    <link rel="stylesheet" href="{{PLAYER_CSS_URL}}">\n'
+          shared = '    <link rel="stylesheet" href="/static/css/lyrics-window.css">\n'
+          if shared not in text:
+              if anchor not in text:
+                  raise SystemExit('audio stylesheet anchor missing')
+              text = text.replace(anchor, anchor + shared, 1)
+              audio.write_text(text, encoding='utf-8')
+
+          karaoke = Path('static/media/karaoke.html')
+          text = karaoke.read_text(encoding='utf-8')
+          anchor = '  <link rel="stylesheet" href="{{KARAOKE_CSS_URL}}">\n'
+          shared = '  <link rel="stylesheet" href="/static/css/lyrics-window.css">\n'
+          if shared not in text:
+              if anchor not in text:
+                  raise SystemExit('karaoke stylesheet anchor missing')
+              text = text.replace(anchor, anchor + shared, 1)
+              karaoke.write_text(text, encoding='utf-8')
+
+          helper = Path('static/js/lyrics-window.js')
+          text = helper.read_text(encoding='utf-8')
+          start = text.find('  function installStyles() {')
+          end = text.find('  function sizeFullscreenLyrics(', start)
+          if start < 0 or end < 0:
+              raise SystemExit('inline style installer markers missing')
+          text = text[:start] + text[end:]
+          old = "    overlay.style.setProperty('--fullscreen-lyric-font-size', `${Math.max(10, Math.min(48, heightSize, widthSize))}px`);"
+          new = """    const fontSize = Math.round(Math.max(10, Math.min(48, heightSize, widthSize)));
+    Array.from(overlay.classList)
+      .filter(name => /^fs-\\d+$/.test(name))
+      .forEach(name => overlay.classList.remove(name));
+    overlay.classList.add(`fs-${fontSize}`);"""
+          if old not in text:
+              raise SystemExit('fullscreen inline font sizing statement missing')
+          text = text.replace(old, new, 1)
+          text = text.replace('  installStyles();\n', '', 1)
+          helper.write_text(text, encoding='utf-8')
+
+          for test_name in ('tests/test_karaoke_ui_contract.py', 'tests/test_lyrics_ui_contract.py'):
+              path = Path(test_name)
+              value = path.read_text(encoding='utf-8')
+              marker = '        self.assertIn(\'class="fullscreen-lyrics hidden"\', '
+              if '/static/css/lyrics-window.css' not in value:
+                  line_start = value.find(marker)
+                  if line_start < 0:
+                      raise SystemExit(f'fullscreen assertion marker missing in {test_name}')
+                  insertion = '        self.assertIn("/static/css/lyrics-window.css", template if "template" in locals() else karaoke)\n'
+                  value = value[:line_start] + insertion + value[line_start:]
+              path.write_text(value, encoding='utf-8')
+          PY
+
+          node --check static/js/lyrics-window.js
+          grep -F '/static/css/lyrics-window.css' static/media/audio-player.html
+          grep -F '/static/css/lyrics-window.css' static/media/karaoke.html
+          ! grep -F "document.createElement('style')" static/js/lyrics-window.js
+          ! grep -F "overlay.style.setProperty('--fullscreen-lyric-font-size'" static/js/lyrics-window.js
+          grep -F '.fullscreen-lyrics.hidden { display: none; }' static/css/lyrics-window.css
+          git diff --check
+      - name: Commit migration to dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add static/media/audio-player.html static/media/karaoke.html static/js/lyrics-window.js tests/test_karaoke_ui_contract.py tests/test_lyrics_ui_contract.py
+          git commit -m "ui: serve shared lyric styles under strict CSP"
+          git push origin HEAD:dev
