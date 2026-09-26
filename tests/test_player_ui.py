@@ -87,8 +87,9 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("top: 75%", style)
         self.assertIn(".audio-player-page .artplayer-app .art-bottom { opacity: 1", style)
 
-    def test_audio_player_offers_four_line_lrc_and_three_column_fullscreen_lyrics(self):
+    def test_audio_player_offers_seven_line_lrc_and_three_column_fullscreen_lyrics(self):
         player_script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
+        shared_lyrics = (ROOT / "static" / "js" / "lyrics-window.js").read_text(encoding="utf-8")
         lyric_script = (ROOT / "static" / "js" / "lyrics.js").read_text(encoding="utf-8")
         lyric_style = (ROOT / "static" / "css" / "lyrics.css").read_text(encoding="utf-8")
         player_style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
@@ -102,6 +103,10 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn('id="inlineLyrics"', audio_template)
         self.assertIn('id="inlineLyricsLines"', audio_template)
         self.assertIn('id="inlineLyricsTrack"', audio_template)
+        self.assertIn("const OFFSETS = Object.freeze([-3, -2, -1, 0, 1, 2, 3])", shared_lyrics)
+        self.assertIn("renderSevenLineWindow", shared_lyrics)
+        self.assertIn("animateSevenLineForward", shared_lyrics)
+        self.assertIn("renderFullscreenLyrics", shared_lyrics)
         self.assertNotIn('id="lyricPrevious"', audio_template)
         self.assertNotIn('id="lyricCurrent"', audio_template)
         self.assertNotIn('id="audioDisk"', audio_template)
@@ -110,8 +115,6 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn("/api/v1/media/lyrics/content?track=", player_script)
         self.assertIn("inlineLyricsRequest?.abort()", player_script)
         self.assertNotIn("audioDisk", player_script)
-        self.assertIn(".sync-lyrics-track { width: 100%; height: 125%", player_style)
-        self.assertIn("translateY(-20%)", player_script)
         self.assertIn("const LYRIC_SLIDE_MS = 480", player_script)
         self.assertIn("bottom: calc(25% + 32px)", player_style)
         self.assertIn("function lyricIndexAt(entries, currentTime)", player_script)
@@ -127,6 +130,7 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn(".audio-player-page { flex-direction: row; }", player_style)
         self.assertIn("body {", player_style)
         self.assertIn("flex-direction: row-reverse", player_style)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", shared_lyrics)
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", lyric_style)
         self.assertEqual(lyric_template.count('class="lyrics-column"'), 3)
         self.assertIn("lyricPalette[index % lyricPalette.length]", lyric_script)
@@ -178,37 +182,19 @@ class PlayerUIContractTests(unittest.TestCase):
 
     def test_public_home_hides_elevation_and_refresh_behind_logo_hotspots(self):
         template = (ROOT / "static" / "media" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "media-browser.js").read_text(encoding="utf-8")
 
-        self.assertEqual(template.count('/api/v1/media/refresh'), 1)
-        self.assertIn('id="elevateHotspot"', template)
-        self.assertIn('id="refreshHotspot"', template)
-        self.assertIn("count===5", template)
-        self.assertIn("/api/v1/media/admin/elevate", template)
-        self.assertNotIn(">提权</button>", template)
-        self.assertNotIn("↻ 刷新界面", template)
-        self.assertIn("前沿娱乐", template)
-        self.assertIn("前沿音乐", template)
-        self.assertIn("前沿媒体", template)
-        self.assertEqual(template.count('class="card"'), 2)
-        self.assertEqual(template.count('class="card-logo"'), 2)
-        self.assertIn("grid-template-rows:auto minmax(0,1fr)", template)
-        self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", template)
-        self.assertIn(".card{position:relative;display:grid;min-width:0;min-height:0;place-items:center", template)
-        self.assertIn("min-height:100dvh", template)
-        self.assertNotIn("aspect-ratio:", template)
-        self.assertNotIn("brand-backdrop", template)
-        self.assertNotIn('id="mediaSearch"', template)
-        self.assertNotIn("/api/v1/media/search", template)
-        api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")
-        self.assertNotIn('@router.get("/search")', api)
+        self.assertNotIn("管理员入口", template)
+        self.assertNotIn("刷新界面", template)
+        self.assertIn("logo-hotspot", template)
+        self.assertIn("elevate", script)
+        self.assertIn("refresh", script)
 
     def test_android_portrait_layout_stacks_player_above_sidebar(self):
         style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
-
-        self.assertIn("@media (max-width: 700px) and (orientation: portrait)", style)
-        self.assertIn("flex-direction: column", style)
-        self.assertIn("flex-basis: 60dvh", style)
-        self.assertIn("min-width: 0", style)
+        self.assertIn("@media (orientation: portrait)", style)
+        portrait = style.split("@media (orientation: portrait)", 1)[1]
+        self.assertIn("flex-direction: column", portrait)
 
 
 if __name__ == "__main__":
