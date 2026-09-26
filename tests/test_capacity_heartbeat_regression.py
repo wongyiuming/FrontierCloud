@@ -7,11 +7,13 @@ from unittest.mock import AsyncMock, patch
 
 class StorageCapacityRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def test_pool_exposes_live_physical_and_project_capacity_facts(self):
-        from app.services import storage_capacity
+        from app.services import resource_pool, storage_capacity
 
         summary = {
             "allocated_bytes": 900,
             "used_bytes": 300,
+            "available_bytes": 1,
+            "online_writable_bytes": 1,
             "members": [
                 {
                     "member_id": "master",
@@ -19,7 +21,11 @@ class StorageCapacityRegressionTests(unittest.IsolatedAsyncioTestCase):
                     "storage_enabled": 1,
                     "allocated_bytes": 300,
                     "used_bytes": 100,
+                    "reserved_bytes": 0,
                     "physical_free_bytes": 1,
+                    "health": "online",
+                    "writable": 1,
+                    "available_bytes": 1,
                 },
                 {
                     "member_id": "follower",
@@ -27,7 +33,11 @@ class StorageCapacityRegressionTests(unittest.IsolatedAsyncioTestCase):
                     "storage_enabled": 1,
                     "allocated_bytes": 600,
                     "used_bytes": 200,
+                    "reserved_bytes": 0,
                     "physical_free_bytes": 2,
+                    "health": "online",
+                    "writable": 1,
+                    "available_bytes": 2,
                 },
                 {
                     "member_id": "auto",
@@ -35,7 +45,11 @@ class StorageCapacityRegressionTests(unittest.IsolatedAsyncioTestCase):
                     "storage_enabled": 1,
                     "allocated_bytes": 0,
                     "used_bytes": 0,
+                    "reserved_bytes": 0,
                     "physical_free_bytes": 0,
+                    "health": "online",
+                    "writable": 1,
+                    "available_bytes": 2,
                 },
             ],
         }
@@ -48,7 +62,10 @@ class StorageCapacityRegressionTests(unittest.IsolatedAsyncioTestCase):
             }},
         }]))
 
-        with patch.object(storage_capacity, "local_physical_capacity", return_value=(5000, 2000)):
+        with (
+            patch.object(storage_capacity, "local_physical_capacity", return_value=(5000, 2000)),
+            patch.object(resource_pool, "PHYSICAL_RESERVE_BYTES", 100),
+        ):
             result = await storage_capacity.enrich_pool_summary(summary, store)
 
         members = {row["member_id"]: row for row in result["members"]}
@@ -56,12 +73,17 @@ class StorageCapacityRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(members["master"]["physical_free_bytes"], 2000)
         self.assertEqual(members["master"]["current_allocated_bytes"], 300)
         self.assertEqual(members["master"]["project_used_bytes"], 100)
+        self.assertEqual(members["master"]["available_bytes"], 200)
         self.assertEqual(members["follower"]["physical_total_bytes"], 1000)
         self.assertEqual(members["follower"]["physical_free_bytes"], 700)
+        self.assertEqual(members["follower"]["available_bytes"], 400)
+        self.assertEqual(members["auto"]["available_bytes"], 400)
         self.assertEqual(result["physical_total_bytes"], 6000)
         self.assertEqual(result["physical_free_bytes"], 2700)
         self.assertEqual(result["current_allocated_bytes"], 900)
         self.assertEqual(result["project_used_bytes"], 300)
+        self.assertEqual(result["available_bytes"], 600)
+        self.assertEqual(result["online_writable_bytes"], 600)
 
 
 class HeartbeatIsolationRegressionTests(unittest.IsolatedAsyncioTestCase):
