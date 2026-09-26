@@ -54,6 +54,7 @@ class Runtime:
         self.task = None
         self.wakeup = asyncio.Event()
         self.backup_attempts: dict[str, int] = {}
+        self.backup_tasks: dict[str, asyncio.Task] = {}
         self.worker_tasks: set[asyncio.Task] = set()
 
     def start(self, *, revocations=False):
@@ -70,11 +71,12 @@ class Runtime:
             with suppress(asyncio.CancelledError):
                 await self.task
             self.task = None
-        tasks = list(self.worker_tasks)
+        tasks = [*self.backup_tasks.values(), *self.worker_tasks]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self.backup_tasks.clear()
         self.worker_tasks.clear()
         await transport.close()
 
@@ -164,13 +166,43 @@ class Runtime:
             rtt_ms = int((time.monotonic() - start) * 1000)
             summary["heartbeat"] = heartbeat_summary(relation.get("summary") or {}, rtt_ms)
             await state.heartbeat(identifier, True, rtt_ms, summary)
-            if relation["direction"] == "downstream":
-                await self.maybe_backup(relation)
-            elif relation["direction"] == "upstream":
-                await self.fill_worker_slots(relation)
         except Exception:
             await state.heartbeat(identifier, False)
             raise
+
+        # Heartbeat reachability is decided above. Backup/worker control-plane work
+        # must never retroactively turn a successful heartbeat into a failure.
+        if relation["direction"] == "downstream":
+            self.schedule_backup(relation)
+        elif relation["direction"] == "upstream":
+            try:
+                await self.fill_worker_slots(relation)
+            except Exception as exc:
+                logger.warning("Compute scheduling deferred: %s", type(exc).__name__,
+                               extra={"context": {"relationship_id": identifier}})
+
+    def schedule_backup(self, relation: dict) -> None:
+        """Run backup transport outside the heartbeat loop, one task per relation."""
+        identifier = relation["relationship_id"]
+        current = self.backup_tasks.get(identifier)
+        if current and not current.done():
+            return
+        task = asyncio.create_task(self.maybe_backup(relation), name=f"node-backup-{identifier[:8]}")
+        self.backup_tasks[identifier] = task
+        task.add_done_callback(lambda completed, rel=identifier: self._backup_done(rel, completed))
+
+    def _backup_done(self, identifier: str, task: asyncio.Task) -> None:
+        if self.backup_tasks.get(identifier) is task:
+            self.backup_tasks.pop(identifier, None)
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except Exception:
+            error = None
+        if error is not None:
+            logger.warning("Backup task deferred: %s", type(error).__name__,
+                           extra={"context": {"relationship_id": identifier}})
 
     async def maybe_backup(self, relation: dict):
         from app.services import resource_pool
@@ -236,7 +268,8 @@ class Runtime:
                 error = None
             if error is not None:
                 logger.warning("Compute worker task failed: %s", type(error).__name__)
-        self.wakeup.set()
+        # Do not wake the heartbeat loop for worker churn. The next scheduled
+        # heartbeat refills slots without turning job completion into heartbeat jitter.
 
     async def fill_worker_slots(self, relation: dict) -> None:
         """Fill the configured worker concurrency instead of treating slots as display-only."""

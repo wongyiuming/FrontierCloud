@@ -158,8 +158,8 @@
         overview.append(
             overviewCard('Follower', `${online} / ${followers.length}`,
                 online === followers.length ? '全部在线' : '存在离线或降级节点', 'good'),
-            overviewCard('Storage', `${gib(pool.used_bytes)} / ${gib(pool.allocated_bytes)}`,
-                `在线可写 ${gib(pool.online_writable_bytes)}`, 'storage'),
+            overviewCard('Storage', gib(pool.physical_total_bytes),
+                `当前物理 ${gib(pool.physical_free_bytes)} · 当前分配 ${gib(pool.current_allocated_bytes ?? pool.allocated_bytes)} · 当前项目占用 ${gib(pool.project_used_bytes ?? pool.used_bytes)}`, 'storage'),
             overviewCard('Compute', `${running} / ${slots}`,
                 `运行中 / 并发上限 · 24h 完成 ${observability.cluster?.completed_24h || 0}`, 'compute'),
             overviewCard('Backup', `${backupHealthy} / ${backupEnabled}`,
@@ -199,17 +199,19 @@
         const heading = make('div', 'node-resource-heading');
         heading.append(make('strong', '', 'Storage'));
         heading.append(pill(member.storage_enabled ? 'Enabled' : 'Disabled', member.storage_enabled ? 'info' : 'muted'));
-        const used = Number(member.used_bytes || 0), allocated = Number(member.allocated_bytes || 0);
-        section.append(heading, make('div', 'node-metric-primary', `${gib(used)} / ${gib(allocated)}`), progress(used, allocated));
+        const total = Number(member.physical_total_bytes || 0);
+        const physical = Number(member.physical_free_bytes || 0);
+        const allocated = Number(member.current_allocated_bytes ?? member.allocated_bytes ?? 0);
+        const used = Number(member.project_used_bytes ?? member.used_bytes ?? 0);
+        section.append(heading, make('div', 'node-metric-primary', gib(physical)));
         section.append(kv([
-            ['使用率', `${pct(used, allocated)}%`],
-            ['当前可写', gib(member.online_writable_bytes)],
-            ['已预留', gib(member.reserved_bytes)],
-            ['物理剩余', gib(member.physical_free_bytes)],
-            ['传输', member.transport || 'Local'],
+            ['物理总容量', gib(total)],
+            ['当前物理', gib(physical)],
+            ['当前分配', gib(allocated)],
+            ['当前项目资源占用', gib(used)],
         ]));
         section.append(syncLine(observed?.sync?.storage || (member.member_kind === 'MasterLocal' ? 'effective' : 'awaiting')));
-        section.append(make('div', 'node-note', '配额是 Master 允许该成员承载的业务容量；实际写入还受物理剩余空间约束。'));
+        section.append(make('div', 'node-note', '当前物理为该媒体文件系统当前可用空间；分配是 FrontierCloud 配额；项目占用只统计本项目托管资源。'));
         return section;
     }
 
@@ -454,7 +456,7 @@
     function renderPoolSummary(node) {
         const pool = node.storage_pool;
         $('storagePoolSummary').textContent = pool
-            ? `Storage Pool · 已分配 ${gib(pool.allocated_bytes)} · 已使用 ${gib(pool.used_bytes)} · 已预留 ${gib(pool.reserved_bytes)} · 在线可写 ${gib(pool.online_writable_bytes)} · 离线持有 ${gib(pool.offline_stored_bytes)}`
+            ? `Storage Pool · 物理总容量 ${gib(pool.physical_total_bytes)} · 当前物理 ${gib(pool.physical_free_bytes)} · 当前分配 ${gib(pool.current_allocated_bytes ?? pool.allocated_bytes)} · 当前项目资源占用 ${gib(pool.project_used_bytes ?? pool.used_bytes)}`
             : (node.role === 'Follower'
                 ? 'Follower · Desired 资源配置由 Master 管理；本页展示本节点和上游关系的实际状态。'
                 : 'Standalone · 当前仅使用本地资源。');
