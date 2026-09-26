@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core import db, schema_migrations
 
@@ -208,44 +209,52 @@ class SchemaBootstrapTransactionTests(unittest.IsolatedAsyncioTestCase):
 )
 class MysqlSchemaMigrationSmokeTests(unittest.IsolatedAsyncioTestCase):
     async def test_generation_one_upgrades_against_real_mysql(self):
-        async with db.engine.connect() as conn:
-            generation = await conn.scalar(text(
-                "SELECT generation FROM frontiercloud_schema WHERE singleton=1"
-            ))
-            self.assertEqual(int(generation), db.SCHEMA_GENERATION)
-            await conn.execute(text(
-                "DROP TABLE IF EXISTS frontiercloud_schema_migrations"
-            ))
-            await conn.execute(text(
-                "UPDATE frontiercloud_schema SET generation=1 WHERE singleton=1"
-            ))
-            await conn.commit()
+        # The application process has already used db.engine on its own event loop.
+        # IsolatedAsyncioTestCase owns a different loop, so this smoke test must use
+        # a fresh pool created and disposed entirely inside this test loop.
+        test_engine = create_async_engine(db.settings.MYSQL_URL, pool_pre_ping=True)
+        try:
+            with patch.object(db, "engine", test_engine):
+                async with test_engine.connect() as conn:
+                    generation = await conn.scalar(text(
+                        "SELECT generation FROM frontiercloud_schema WHERE singleton=1"
+                    ))
+                    self.assertEqual(int(generation), db.SCHEMA_GENERATION)
+                    await conn.execute(text(
+                        "DROP TABLE IF EXISTS frontiercloud_schema_migrations"
+                    ))
+                    await conn.execute(text(
+                        "UPDATE frontiercloud_schema SET generation=1 WHERE singleton=1"
+                    ))
+                    await conn.commit()
 
-        await db.init_db()
+                await db.init_db()
 
-        async with db.engine.connect() as conn:
-            generation = await conn.scalar(text(
-                "SELECT generation FROM frontiercloud_schema WHERE singleton=1"
-            ))
-            self.assertEqual(int(generation), db.SCHEMA_GENERATION)
-            history_exists = await conn.scalar(text("""
-                SELECT COUNT(*)
-                FROM information_schema.tables
-                WHERE table_schema=DATABASE()
-                  AND table_name='frontiercloud_schema_migrations'
-            """))
-            self.assertEqual(int(history_exists), 1)
-            row = (await conn.execute(text("""
-                SELECT generation, migration_name, checksum
-                FROM frontiercloud_schema_migrations
-                WHERE generation=2
-            """))).one()
-            self.assertEqual(int(row[0]), 2)
-            self.assertEqual(row[1], "create-schema-migration-journal")
-            self.assertEqual(len(row[2]), 64)
+                async with test_engine.connect() as conn:
+                    generation = await conn.scalar(text(
+                        "SELECT generation FROM frontiercloud_schema WHERE singleton=1"
+                    ))
+                    self.assertEqual(int(generation), db.SCHEMA_GENERATION)
+                    history_exists = await conn.scalar(text("""
+                        SELECT COUNT(*)
+                        FROM information_schema.tables
+                        WHERE table_schema=DATABASE()
+                          AND table_name='frontiercloud_schema_migrations'
+                    """))
+                    self.assertEqual(int(history_exists), 1)
+                    row = (await conn.execute(text("""
+                        SELECT generation, migration_name, checksum
+                        FROM frontiercloud_schema_migrations
+                        WHERE generation=2
+                    """))).one()
+                    self.assertEqual(int(row[0]), 2)
+                    self.assertEqual(row[1], "create-schema-migration-journal")
+                    self.assertEqual(len(row[2]), 64)
 
-        # A second startup at the current generation must be a clean no-op.
-        await db.init_db()
+                # A second startup at the current generation must be a clean no-op.
+                await db.init_db()
+        finally:
+            await test_engine.dispose()
 
 
 class LifespanCleanupTests(unittest.IsolatedAsyncioTestCase):
