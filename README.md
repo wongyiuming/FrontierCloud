@@ -2,6 +2,20 @@
 
 Self-hosted media browsing, playback, karaoke, and administration. FastAPI provides the business API and native browser JavaScript provides the media UI and real-time karaoke session. Docker Compose bundles Web/API, Nginx, MySQL, Redis, and the required WebRTC STUN service.
 
+## Documentation
+
+The versioned project Wiki lives in [`docs/wiki/`](docs/wiki/Home.md). It covers architecture, deployment, cluster resources, media placement, operations, releases, schema migrations, CI, and common Bash/SQL commands.
+
+- [Wiki Home](docs/wiki/Home.md)
+- [Architecture](docs/wiki/Architecture.md)
+- [Deployment and Configuration](docs/wiki/Deployment-and-Configuration.md)
+- [Cluster and Resource Model](docs/wiki/Cluster-and-Resource-Model.md)
+- [Media and Storage Placement](docs/wiki/Media-and-Storage.md)
+- [Operations and Troubleshooting](docs/wiki/Operations-and-Troubleshooting.md)
+- [Release and Database Migrations](docs/wiki/Release-and-Database-Migrations.md)
+- [Engineering and CI](docs/wiki/Engineering-and-CI.md)
+- [Command Reference](docs/wiki/Command-Reference.md)
+
 ## Start
 
 HTTP needs no configuration or `.env` file:
