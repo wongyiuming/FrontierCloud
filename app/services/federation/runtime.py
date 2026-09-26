@@ -268,8 +268,7 @@ class Runtime:
                 error = None
             if error is not None:
                 logger.warning("Compute worker task failed: %s", type(error).__name__)
-        # Do not wake the heartbeat loop for worker churn. The next scheduled
-        # heartbeat refills slots without turning job completion into heartbeat jitter.
+        self.wakeup.set()
 
     async def fill_worker_slots(self, relation: dict) -> None:
         """Fill the configured worker concurrency instead of treating slots as display-only."""
