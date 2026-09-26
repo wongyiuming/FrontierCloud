@@ -121,7 +121,7 @@ async def change_password(request: Request, payload: PasswordPayload):
 
 
 def _safe_filename(title: str, username: str, recording_id: str, content_type: str) -> str:
-    clean = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", title).strip(" ._")[:80] or "K歌录音"
+    clean = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", title).strip(" ._")[:80] or "卡拉OK录音"
     clean_user = re.sub(r"[^\w\u3400-\u9fff-]+", "_", username)[:32]
     suffix = {"audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".m4a",
               "audio/mpeg": ".mp3", "audio/wav": ".wav"}.get(content_type, ".bin")

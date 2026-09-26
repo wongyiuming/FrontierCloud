@@ -89,7 +89,7 @@ class MediaCatalogCacheTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, bound)
         to_thread.assert_awaited_once()
-        store.assert_awaited_once_with(4, "tracks-v2", "audio:test", bound)
+        store.assert_awaited_once_with(4, "tracks-v2", "audio:test:public", bound)
 
 
 if __name__ == "__main__":

@@ -97,7 +97,7 @@ async def ensure_follower_business_empty(database=engine) -> None:
     async with database.connect() as conn:
         for table in ("karaoke_users", "karaoke_recordings"):
             if int(await conn.scalar(text(f"SELECT COUNT(*) FROM {table}")) or 0):
-                raise p.ProtocolError("Standalone 仍有 K歌业务数据；请先迁移，不能直接固定为 Follower")
+                raise p.ProtocolError("Standalone 仍有 卡拉OK业务数据；请先迁移，不能直接固定为 Follower")
 
 
 def physical_free(root: Path) -> int:

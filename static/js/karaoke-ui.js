@@ -3,6 +3,7 @@
 (() => {
   const overlay = document.getElementById('lyricsOverlay');
   const overlayLines = document.getElementById('overlayLines');
+  const overlayColumns = [0, 1, 2].map(index => document.getElementById(`overlayLyricsColumn${index}`));
   const inlineLyrics = document.getElementById('lyrics');
   const fullLyrics = document.getElementById('fullLyrics');
   const preview = document.getElementById('preview');
@@ -34,11 +35,9 @@
 
   if (inlineLyrics) inlineLyrics.classList.add('frontier-karaoke-lyrics');
   if (overlay) {
-    overlay.classList.add('fullscreen-lyrics', 'hidden');
-    overlay.classList.remove('open');
+    overlay.classList.add('hidden');
+    overlay.setAttribute('aria-hidden', 'true');
   }
-  if (overlayLines) overlayLines.classList.add('fullscreen-lyrics-columns');
-  overlay?.querySelector(':scope > span')?.classList.add('fullscreen-lyrics-hint');
 
   if (lyricUi && typeof window.renderLyricContainer === 'function') {
     const originalRenderLyricContainer = window.renderLyricContainer;
@@ -48,7 +47,7 @@
         return;
       }
       if (container === overlayLines) {
-        lyricUi.syncFullscreenLyrics(container, visibleActive(active));
+        lyricUi.syncFullscreenLyrics(overlayLines, visibleActive(active));
         return;
       }
       return originalRenderLyricContainer(container, active);
@@ -56,9 +55,9 @@
   }
 
   function renderFullscreen() {
-    if (!lyricUi || !overlay || !overlayLines) return;
-    lyricUi.renderFullscreenLyrics(
-      overlayLines,
+    if (!lyricUi || !overlay || !overlayLines || overlayColumns.some(column => !column)) return;
+    lyricUi.renderFullscreenColumns(
+      overlayColumns,
       visibleLyrics(),
       visibleActive(state.activeLyric),
       overlay,
@@ -78,20 +77,17 @@
       attributeFilter: ['disabled'],
     });
     fullLyrics.addEventListener('click', () => {
-      if (overlay) overlay.style.display = 'grid';
       overlay?.classList.remove('hidden');
-      overlay?.classList.add('open');
       overlay?.setAttribute('aria-hidden', 'false');
       renderFullscreen();
     });
   }
 
   overlay?.addEventListener('click', () => {
-    overlay.style.display = '';
     overlay.classList.add('hidden');
-    overlay.classList.remove('open');
     overlay.setAttribute('aria-hidden', 'true');
   });
+
   window.addEventListener('resize', () => {
     if (!overlay?.classList.contains('hidden')) {
       lyricUi?.sizeFullscreenLyrics(overlay, visibleLyrics());

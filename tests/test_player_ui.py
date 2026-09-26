@@ -90,6 +90,7 @@ class PlayerUIContractTests(unittest.TestCase):
     def test_audio_player_offers_seven_line_lrc_and_three_column_fullscreen_lyrics(self):
         player_script = (ROOT / "static" / "js" / "player.js").read_text(encoding="utf-8")
         shared_lyrics = (ROOT / "static" / "js" / "lyrics-window.js").read_text(encoding="utf-8")
+        shared_style = (ROOT / "static" / "css" / "lyrics-window.css").read_text(encoding="utf-8")
         lyric_script = (ROOT / "static" / "js" / "lyrics.js").read_text(encoding="utf-8")
         lyric_style = (ROOT / "static" / "css" / "lyrics.css").read_text(encoding="utf-8")
         player_style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
@@ -130,7 +131,7 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn(".audio-player-page { flex-direction: row; }", player_style)
         self.assertIn("body {", player_style)
         self.assertIn("flex-direction: row-reverse", player_style)
-        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", shared_lyrics)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", shared_style)
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", lyric_style)
         self.assertEqual(lyric_template.count('class="lyrics-column"'), 3)
         self.assertIn("lyricPalette[index % lyricPalette.length]", lyric_script)
@@ -190,6 +191,26 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn('id="elevateHotspot"', template)
         self.assertIn("/api/v1/media/refresh", template)
         self.assertIn("/api/v1/media/admin/elevate", template)
+
+    def test_secondary_catalog_logo_reveals_hidden_items_after_fifteen_clicks(self):
+        browser = (ROOT / "static" / "js" / "media-browser.js").read_text(encoding="utf-8")
+        category = (ROOT / "static" / "media" / "category.html").read_text(encoding="utf-8")
+        home = (ROOT / "static" / "media" / "index.html").read_text(encoding="utf-8")
+        api = (ROOT / "app" / "api" / "v1" / "media.py").read_text(encoding="utf-8")
+
+        self.assertIn("HIDDEN_REVEAL_CLICK_LIMIT = 15", browser)
+        self.assertIn("HIDDEN_REVEAL_WINDOW_MS = 60 * 1000", browser)
+        self.assertIn("pageBrandLogo", browser)
+        self.assertIn("frontier:hidden-reveal:", browser)
+        self.assertIn("include_hidden", browser)
+        self.assertIn("window.location.replace", browser)
+        self.assertIn("frontierCloudCatalogRevealKind", category)
+        self.assertIn("brandKind === 'music' ? 'music'", category)
+        self.assertIn("brandKind === 'media' ? 'video'", category)
+        self.assertNotIn("frontierCloudCatalogRevealKind", home)
+        self.assertIn("include_hidden: bool = False", api)
+        self.assertNotIn("SELECT EXISTS(SELECT 1 FROM media_visibility", api)
+        self.assertNotIn("_is_publicly_hidden(normalized_track, await _hidden_set())", api)
 
     def test_android_portrait_layout_stacks_player_above_sidebar(self):
         style = (ROOT / "static" / "css" / "player.css").read_text(encoding="utf-8")
