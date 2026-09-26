@@ -61,20 +61,19 @@ def _backup_view(member: dict, observed: dict, now: int) -> dict:
     configured = member.get("backup") if isinstance(member.get("backup"), dict) else {}
     enabled = bool(configured.get("enabled"))
     last_success = max(0, int(configured.get("last_success") or observed.get("last_success") or 0))
-    raw_state = str(configured.get("state") or observed.get("state") or "disabled")
+    raw_state = str(observed.get("state") or configured.get("state") or "disabled")
     lag = max(0, now - last_success) if enabled and last_success else 0
+    last_attempt = max(0, int(observed.get("last_attempt") or 0))
+    last_attempt_state = str(observed.get("last_attempt_state") or raw_state)
     if not enabled:
         health = "disabled"
-    elif raw_state == "receiving":
+    elif raw_state == "receiving" or last_attempt_state == "receiving":
         health = "running"
     elif not last_success:
         health = "waiting-first-backup"
     elif lag > BACKUP_INTERVAL_SECONDS + 6 * 60 * 60:
         health = "stale"
     else:
-        # A resource-configuration heartbeat historically rewrote ready to
-        # pending.  Freshness is therefore based on the durable success stamp,
-        # while raw_state remains visible in the technical detail.
         health = "healthy"
     return {
         "enabled": enabled,
@@ -85,6 +84,10 @@ def _backup_view(member: dict, observed: dict, now: int) -> dict:
         "lag_seconds": lag,
         "next_due": last_success + BACKUP_INTERVAL_SECONDS if enabled and last_success else 0,
         "checksum": str(configured.get("checksum") or observed.get("checksum") or "")[:64],
+        "last_size_bytes": max(0, int(observed.get("last_size_bytes") or 0)),
+        "recovery_points": max(0, int(observed.get("recovery_points") or 0)),
+        "last_attempt": last_attempt,
+        "last_attempt_state": last_attempt_state,
     }
 
 
@@ -123,11 +126,11 @@ async def _worker_activity(member_id: str, capabilities: list[str], database, no
             s.worker_jobs.c.state == "complete",
             s.worker_jobs.c.updated_at >= now - DAY_SECONDS,
         )) or 0)
-        retry_24h = int(await conn.scalar(select(func.coalesce(func.sum(
-            func.greatest(s.worker_jobs.c.attempts - 1, 0)), 0)).where(
+        retry_rows = [int(value or 0) for value in (await conn.execute(select(s.worker_jobs.c.attempts).where(
             s.worker_jobs.c.member_id == member_id,
             s.worker_jobs.c.updated_at >= now - DAY_SECONDS,
-        )) or 0)
+        ))).scalars()]
+        retry_24h = sum(max(0, value - 1) for value in retry_rows)
         shared_queued = 0
         if capabilities:
             shared_queued = int(await conn.scalar(select(func.count()).select_from(s.worker_jobs).where(
