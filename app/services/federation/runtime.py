@@ -18,6 +18,35 @@ from .transport import transport
 
 logger = logging.getLogger("frontiercloud.nodes")
 BACKUP_INTERVAL_SECONDS = 24 * 60 * 60
+BACKUP_RETRY_SECONDS = 5 * 60
+HEARTBEAT_WINDOW_SECONDS = 60 * 60
+HEARTBEAT_SAMPLE_LIMIT = 180
+
+
+def heartbeat_summary(previous: dict, rtt_ms: int, now: int | None = None) -> dict:
+    """Keep a bounded one-hour RTT window inside the existing relationship JSON."""
+    stamp = int(time.time()) if now is None else int(now)
+    old = previous.get("heartbeat") if isinstance(previous, dict) else {}
+    old = old if isinstance(old, dict) else {}
+    samples = []
+    for item in old.get("samples", []):
+        if (isinstance(item, list) and len(item) == 2
+                and isinstance(item[0], int) and isinstance(item[1], int)
+                and stamp - HEARTBEAT_WINDOW_SECONDS <= item[0] <= stamp
+                and item[1] >= 0):
+            samples.append([item[0], item[1]])
+    samples.append([stamp, max(0, int(rtt_ms))])
+    samples = samples[-HEARTBEAT_SAMPLE_LIMIT:]
+    values = [item[1] for item in samples]
+    return {
+        "current_ms": values[-1],
+        "min_ms": min(values),
+        "avg_ms": round(sum(values) / len(values)),
+        "max_ms": max(values),
+        "count": len(values),
+        "window_seconds": HEARTBEAT_WINDOW_SECONDS,
+        "samples": samples,
+    }
 
 
 class Runtime:
@@ -25,6 +54,7 @@ class Runtime:
         self.task = None
         self.wakeup = asyncio.Event()
         self.backup_attempts: dict[str, int] = {}
+        self.worker_tasks: set[asyncio.Task] = set()
 
     def start(self, *, revocations=False):
         if state.node["role"] != "Standalone" and not settings.TLS_ENABLED:
@@ -40,6 +70,12 @@ class Runtime:
             with suppress(asyncio.CancelledError):
                 await self.task
             self.task = None
+        tasks = list(self.worker_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self.worker_tasks.clear()
         await transport.close()
 
     async def call(self, relation: dict, path: str, value=None):
@@ -125,11 +161,13 @@ class Runtime:
             summary = await self.call(relation, "/internal/v1/heartbeat", value)
             if summary.get("protocol") != p.PROTOCOL_VERSION:
                 raise p.ProtocolError("Heartbeat protocol mismatch")
-            await state.heartbeat(identifier, True, int((time.monotonic() - start) * 1000), summary)
+            rtt_ms = int((time.monotonic() - start) * 1000)
+            summary["heartbeat"] = heartbeat_summary(relation.get("summary") or {}, rtt_ms)
+            await state.heartbeat(identifier, True, rtt_ms, summary)
             if relation["direction"] == "downstream":
                 await self.maybe_backup(relation)
             elif relation["direction"] == "upstream":
-                await self.work_once(relation)
+                await self.fill_worker_slots(relation)
         except Exception:
             await state.heartbeat(identifier, False)
             raise
@@ -141,9 +179,10 @@ class Runtime:
         if not member or not member["backup"].get("enabled"):
             return
         now = int(time.time())
-        last = max(int(member["backup"].get("last_success") or 0),
-                   int(self.backup_attempts.get(relation["relationship_id"], 0)))
-        if now - last < BACKUP_INTERVAL_SECONDS:
+        last_success = int(member["backup"].get("last_success") or 0)
+        last_attempt = int(self.backup_attempts.get(relation["relationship_id"], 0))
+        interval = BACKUP_INTERVAL_SECONDS if last_success >= last_attempt else BACKUP_RETRY_SECONDS
+        if now - max(last_success, last_attempt) < interval:
             return
         self.backup_attempts[relation["relationship_id"]] = now
         generation, artifact, checksum = await resource_pool.build_business_backup(state.database)
@@ -163,17 +202,7 @@ class Runtime:
         finally:
             artifact.unlink(missing_ok=True)
 
-    async def work_once(self, relation: dict):
-        from app.services import resource_pool
-        local = await resource_pool.follower_resource_summary(state.node, state.database)
-        compute = local.get("compute") or {}
-        if not compute.get("enabled") or int(compute.get("available_slots") or 0) <= 0:
-            return
-        capabilities = compute.get("capabilities") or []
-        response = await self.call(relation, "/internal/v1/jobs/lease", {"capabilities": capabilities})
-        job = response.get("job")
-        if not isinstance(job, dict):
-            return
+    async def execute_worker_job(self, relation: dict, job: dict) -> None:
         payload = job.get("payload") or {}
         object_id = str(payload.get("object_id") or "")
         from sqlalchemy import text
@@ -197,6 +226,45 @@ class Runtime:
                     result["sha256"] = digest.hexdigest()
         await self.call(relation, f"/internal/v1/jobs/{job['job_id']}/complete",
                         {"lease": job["lease"], "result": result})
+
+    def _worker_done(self, task: asyncio.Task) -> None:
+        self.worker_tasks.discard(task)
+        if not task.cancelled():
+            try:
+                error = task.exception()
+            except Exception:
+                error = None
+            if error is not None:
+                logger.warning("Compute worker task failed: %s", type(error).__name__)
+        self.wakeup.set()
+
+    async def fill_worker_slots(self, relation: dict) -> None:
+        """Fill the configured worker concurrency instead of treating slots as display-only."""
+        from app.services import resource_pool
+        local = await resource_pool.follower_resource_summary(state.node, state.database)
+        compute = local.get("compute") or {}
+        if not compute.get("enabled"):
+            return
+        slots = max(0, int(compute.get("worker_slots") or 0))
+        vacancies = max(0, slots - len(self.worker_tasks))
+        if vacancies <= 0:
+            return
+        capabilities = compute.get("capabilities") or []
+        for _ in range(vacancies):
+            response = await self.call(relation, "/internal/v1/jobs/lease", {"capabilities": capabilities})
+            job = response.get("job")
+            if not isinstance(job, dict):
+                break
+            task = asyncio.create_task(
+                self.execute_worker_job(relation, job),
+                name=f"node-worker-{str(job.get('job_id') or '')[:8]}",
+            )
+            self.worker_tasks.add(task)
+            task.add_done_callback(self._worker_done)
+
+    async def work_once(self, relation: dict):
+        """Backward-compatible entry point; now fills every configured free slot."""
+        await self.fill_worker_slots(relation)
 
     async def run(self):
         try:
