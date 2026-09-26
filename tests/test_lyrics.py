@@ -183,22 +183,24 @@ class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
         })
         self.assertIn("no-store", response.headers["cache-control"])
 
-    async def test_hidden_track_cannot_expose_lyrics(self):
-        loader = unittest.mock.AsyncMock()
+    async def test_hidden_track_remains_directly_accessible_for_lyrics(self):
+        hidden_set = unittest.mock.AsyncMock(return_value={"music/album"})
+        loader = unittest.mock.AsyncMock(return_value=(
+            "lyrics/shared.lrc",
+            [{"time": 1.0, "text": "one"}],
+        ))
         with (
             patch.object(media.lyrics, "validate_track", return_value=("music/album/song.mp3", Path("song.mp3"))),
-            patch.object(
-                media,
-                "_hidden_set",
-                new=unittest.mock.AsyncMock(return_value={"music/album"}),
-            ),
+            patch.object(media, "_hidden_set", new=hidden_set),
             patch.object(media.lyrics, "load_for_track", new=loader),
         ):
-            with self.assertRaises(HTTPException) as raised:
-                await media.get_lyrics_content("music/album/song.mp3")
+            response = await media.get_lyrics_content("music/album/song.mp3")
 
-        self.assertEqual(raised.exception.status_code, 404)
-        loader.assert_not_awaited()
+        self.assertEqual(json.loads(response.body), {
+            "entries": [{"time": 1.0, "text": "one"}],
+        })
+        hidden_set.assert_not_awaited()
+        loader.assert_awaited_once_with("music/album/song.mp3")
 
 
 if __name__ == "__main__":
