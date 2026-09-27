@@ -36,9 +36,9 @@ Admin media upload chooses a **site type**, never a concrete storage member. The
 
 The only supported site types are:
 
-- `primary` / 主站 — the Master Local placement (`member_kind=MasterLocal`, transport `Local`);
-- `direct` / 直连站点 — Follower placements whose current transport is `Direct`;
-- `relay` / 中继站点 — Follower placements whose current transport is `Relay`.
+- `primary` — the Master Local placement (`member_kind=MasterLocal`, transport `Local`);
+- `direct` — Follower placements whose current transport is `Direct`;
+- `relay` — Follower placements whose current transport is `Relay`.
 
 For Direct and Relay uploads, the user must not name a specific member. FrontierCloud selects among all members of the requested type that are storage-enabled, online, writable, and have enough writable capacity for the object. Placement prefers the lowest current `(used + reserved) / allocated` pressure and then more available bytes, so sequential/concurrent reservations spread naturally across ready members instead of sticking to one node. Member selection plus durable upload reservation is serialized by the storage write lock so concurrent Admin sessions see current `reserved_bytes`.
 
