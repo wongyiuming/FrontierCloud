@@ -13,6 +13,10 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
 CHROME = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "/usr/bin/google-chrome")
 ROOT = Path(__file__).resolve().parents[1]
 MAINTENANCE_FLAG = ROOT / "data" / ".frontiercloud-maintenance"
+EXPECTED_ADMIN_MODULE_ORDER = [
+    "media", "priority", "lyrics", "users", "security", "network",
+    "nodes", "site", "release", "key", "brand",
+]
 
 
 def require(value: bool, message: str) -> None:
@@ -181,6 +185,31 @@ def admin_focus_check(browser) -> None:
     page.goto(BASE_URL + "/api/v1/media/admin/", wait_until="domcontentloaded")
     page.locator("#siteAccessPanel .module-heading").wait_for(state="visible", timeout=15000)
     page.locator("#systemVersionPanel").wait_for(state="attached", timeout=15000)
+    page.locator('.admin-module[data-admin-module="brand"]').wait_for(state="attached", timeout=15000)
+    page.locator("#renameDirectory").wait_for(state="attached", timeout=15000)
+    page.wait_for_function(
+        "expected => document.querySelectorAll('.admin-console > .admin-module').length === expected",
+        arg=len(EXPECTED_ADMIN_MODULE_ORDER),
+        timeout=15000,
+    )
+    module_order = page.evaluate("""
+        () => [...document.querySelectorAll('.admin-console > .admin-module')]
+            .map(item => item.dataset.adminModule)
+    """)
+    require(
+        module_order == EXPECTED_ADMIN_MODULE_ORDER,
+        f"Admin DOM module order changed: {module_order}",
+    )
+    visual_order = page.evaluate("""
+        () => [...document.querySelectorAll('.admin-console > .admin-module')]
+            .map(item => ({name: item.dataset.adminModule, top: item.getBoundingClientRect().top}))
+            .sort((left, right) => left.top - right.top)
+            .map(item => item.name)
+    """)
+    require(
+        visual_order == EXPECTED_ADMIN_MODULE_ORDER,
+        f"Admin visual module order changed: {visual_order}",
+    )
     page.locator("#siteAccessPanel .module-heading").click()
     page.wait_for_function("document.querySelector('#siteAccessPanel').classList.contains('expanded')")
     page.wait_for_function("document.querySelector('#siteAccessState').textContent !== '正在加载'", timeout=10000)

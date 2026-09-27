@@ -204,7 +204,9 @@ assert(!adminHtml.includes('logOutput'));
 assert(!adminHtml.includes('securityToggle'));
 
 const adminJs = fs.readFileSync('static/js/admin.js', 'utf8');
+const directoryAdminJs = fs.readFileSync('static/js/directory-admin.js', 'utf8');
 const nodesJs = fs.readFileSync('static/js/nodes.js', 'utf8');
+new vm.Script(directoryAdminJs, {filename: 'static/js/directory-admin.js'});
 assert(!adminJs.includes('response.blob()'));
 assert(adminJs.includes('anchor.href = url'));
 assert(!adminJs.includes('attachGlobalActions'));
@@ -227,6 +229,12 @@ assert(adminJs.includes('function middleEllipsis'));
 assert(adminJs.includes('结果按所在目录分类'));
 assert(adminJs.includes('N=${relationCount}'));
 assert(adminJs.includes("params.set('match_mode'"));
+assert(directoryAdminJs.includes('文件夹优先级'));
+assert(directoryAdminJs.includes("/api/v1/media/admin/directory-priority"));
+assert(directoryAdminJs.includes("/api/v1/media/admin/directory/rename"));
+assert(directoryAdminJs.includes("renameButton.textContent = '改名'"));
+assert(directoryAdminJs.includes('priorityDirectoryButton = directoryPriorityRow'));
+assert(directoryAdminJs.includes('loadMediaPriority = async function loadMediaPriorityWithDirectories'));
 assert(nodesJs.includes('/resources'));
 assert(nodesJs.includes('Storage'));
 assert(nodesJs.includes('Backup'));
@@ -247,6 +255,7 @@ assert(adminJs.includes('storagePoolTimer = setInterval'));
 assert(!adminHtml.includes('storage-capacity-refresh.js'));
 
 const adminCss = fs.readFileSync('static/css/admin.css', 'utf8');
+const directoryAdminCss = fs.readFileSync('static/css/directory-admin.css', 'utf8');
 assert(adminCss.includes('.admin-side[data-admin-module="media"] { order: -2; }'));
 assert(adminCss.includes('.priority-panel { order: -1;'));
 assert(!adminCss.includes('#nodeTestPlayer'));
@@ -269,5 +278,7 @@ assert(adminCss.includes('.priority-pathbar'));
 assert(adminCss.includes('.priority-control'));
 assert(adminCss.includes('.lyrics-relation-json'));
 assert(adminCss.includes('.filename-toggle'));
+assert(directoryAdminCss.includes('.priority-directory-row'));
+assert(directoryAdminCss.includes('.priority-directory-control'));
 
 console.log('admin-ui-smoke-ok');
