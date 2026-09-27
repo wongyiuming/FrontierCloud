@@ -151,8 +151,11 @@ class Runtime:
             value = {}
             if relation["direction"] == "downstream":
                 from app.services import resource_pool
-                value = {"mode": relation["mode"],
-                         "resources": await resource_pool.member_configuration(relation["peer_id"], state.database)}
+                resources = await resource_pool.member_configuration(relation["peer_id"], state.database)
+                # Compute Worker is retired. Force the legacy desired field off so
+                # an older Follower also stops workers during a rolling upgrade.
+                resources["compute"] = {"enabled": False, "worker_slots": 0}
+                value = {"mode": relation["mode"], "resources": resources}
             summary = await self.call(relation, "/internal/v1/heartbeat", value)
             if summary.get("protocol") != p.PROTOCOL_VERSION:
                 raise p.ProtocolError("Heartbeat protocol mismatch")
