@@ -64,6 +64,17 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
             self.assertIn("must never overwrite", content)
             self.assertIn("explicit", content)
 
+    def test_upload_site_types_are_architectural_not_per_member_selection(self):
+        architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "Admin media upload chooses a **site type**, never a concrete storage member",
+            architecture,
+        )
+        self.assertIn("selector starts empty", architecture)
+        self.assertIn("Historical media requires **no migration**", architecture)
+        self.assertIn("low-saturation badges", architecture)
+        self.assertIn("storage write lock", architecture)
+
 
 if __name__ == "__main__":
     unittest.main()
