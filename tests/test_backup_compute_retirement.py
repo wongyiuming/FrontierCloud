@@ -75,6 +75,7 @@ class ComputeRetirementContractTests(unittest.TestCase):
         self.assertNotIn("fill_worker_slots", runtime)
         self.assertNotIn("execute_worker_job", runtime)
         self.assertNotIn("/internal/v1/jobs/lease", runtime)
+        self.assertIn('resources["compute"] = {"enabled": False, "worker_slots": 0}', runtime)
         self.assertNotIn("worker_jobs", observability)
         self.assertNotIn("shared_queued", observability)
 
