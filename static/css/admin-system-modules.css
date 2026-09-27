@@ -6,7 +6,7 @@
 }
 
 /* Canonical Admin module order. Keep related work together even when modules
-   such as site/release are injected at runtime after the static page loads. */
+   such as site/release/brand are injected at runtime after the static page loads. */
 .admin-console > .admin-module[data-admin-module="media"] { order: 10; }
 .admin-console > .admin-module[data-admin-module="priority"] { order: 20; }
 .admin-console > .admin-module[data-admin-module="lyrics"] { order: 30; }
@@ -17,6 +17,7 @@
 .admin-console > .admin-module[data-admin-module="site"] { order: 80; }
 .admin-console > .admin-module[data-admin-module="release"] { order: 90; }
 .admin-console > .admin-module[data-admin-module="key"] { order: 100; }
+.admin-console > .admin-module[data-admin-module="brand"] { order: 110; }
 
 /* The expand/collapse marker belongs to the module itself, not to the width
    left over inside its title button. Keep it pinned to the same far-right
