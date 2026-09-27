@@ -33,7 +33,7 @@
         </section>
 
         <section id="priorityPanel" class="admin-module priority-panel" data-admin-module="priority">
-            <button class="module-heading" type="button" aria-expanded="false"><span><strong>媒体展示优先级</strong><small>按媒体目录分类；滑块松手后保存确定值</small></span><b>＋</b></button>
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>媒体资源排序策略</strong><small>统一配置目录与媒体条目的排序优先级；调整后保存确定值</small></span><b>＋</b></button>
             <div class="module-content priority-content">
                 <form id="priorityFilterForm" class="priority-toolbar">
                     <input id="prioritySearch" type="search" maxlength="100" autocomplete="off" placeholder="搜索媒体名称或路径">
@@ -183,7 +183,7 @@
                 <form id="nodePromotion" class="nodes-toolbar hidden"><select id="nodeRole" aria-label="节点角色"><option>Master</option><option>Follower</option></select><input id="nodeEndpoint" type="url" required placeholder="当前节点 HTTPS 根地址"><input id="masterLocalCapacity" type="number" min="1" max="10240" value="1" aria-label="Master 本地存储池额度 GiB" placeholder="Master Local GiB"><button type="submit">固定角色</button></form>
                 <div id="nodePairing" class="hidden"><div class="nodes-toolbar"><button id="nodeIssuePair" type="button">生成一次性配对包</button><button id="nodeImportPair" type="button">导入 Follower 配对包</button></div><textarea id="nodePairPackage" rows="4" aria-label="一次性配对包" placeholder="配对包只用于建立当前关系，五分钟后过期"></textarea></div>
                 <div id="storagePoolSummary" class="nodes-pool-summary">Standalone 本地存储</div>
-                <div class="nodes-table-scroll"><table class="nodes-table"><thead><tr><th>节点 / HTTPS 地址</th><th>状态 / RTT / 心跳</th><th>Storage</th><th>Compute</th><th>Backup / Transport</th></tr></thead><tbody id="nodeRelationships"></tbody></table></div>
+                <div class="nodes-table-scroll"><table class="nodes-table"><thead><tr><th>节点 / HTTPS 地址</th><th>状态 / RTT / 心跳</th><th>Storage</th><th>Backup / Transport</th></tr></thead><tbody id="nodeRelationships"></tbody></table></div>
                 <form id="nodeReinitialize" class="nodes-toolbar hidden"><input id="nodeResetConfirmation" autocomplete="off" placeholder="输入当前节点 ID 确认重置"><button type="submit">重新初始化节点</button><span>撤销旧关系，保留媒体文件</span></form>
                 <div id="nodeOperationStatus" role="status"></div>
             </div>

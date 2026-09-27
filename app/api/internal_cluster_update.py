@@ -1,4 +1,4 @@
-"""Authenticated Master-to-Follower release control over the existing TLS federation plane."""
+"""Authenticated Master-to-Follower control over the existing TLS federation plane."""
 from __future__ import annotations
 
 import json
@@ -6,11 +6,13 @@ import re
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.api.internal_backup_control import router as backup_control_router
 from app.api.internal_nodes import authenticated
 from app.services.federation.state import state
 from app.services.release_control import agent_request, agent_status
 
-router = APIRouter(prefix="/internal/v1/cluster-update", include_in_schema=False)
+router = APIRouter(include_in_schema=False)
+cluster_router = APIRouter(prefix="/internal/v1/cluster-update", include_in_schema=False)
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -19,7 +21,7 @@ def require_master_relation(relation: dict) -> None:
         raise HTTPException(403, "Only the paired Master can control Follower releases")
 
 
-@router.post("/start")
+@cluster_router.post("/start")
 async def start(request: Request):
     relation = await authenticated(request)
     require_master_relation(relation)
@@ -42,8 +44,12 @@ async def start(request: Request):
     return {"accepted": True, "target_sha": target, "mode": mode}
 
 
-@router.post("/status")
+@cluster_router.post("/status")
 async def status(request: Request):
     relation = await authenticated(request)
     require_master_relation(relation)
     return {"status": await agent_status()}
+
+
+router.include_router(cluster_router)
+router.include_router(backup_control_router)

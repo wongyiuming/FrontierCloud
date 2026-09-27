@@ -17,7 +17,7 @@ from sqlalchemy import delete, func, select, text, update
 
 from app.core.client_ip import resolve_client_identity
 from app.core.config import settings
-from app.services import resource_pool
+from app.services import resource_pool, storage_capacity
 from app.services.federation import protocol as p
 from app.services.federation import schema as s
 from app.services.federation.catalog import catalog
@@ -140,7 +140,6 @@ async def heartbeat(request: Request):
             if resources is not None:
                 if relation["direction"] != "upstream":
                     raise p.ProtocolError("Invalid resource configuration direction")
-                from app.services import resource_pool
                 await resource_pool.accept_follower_configuration(resources, state.node, state.database)
         except (ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(400, "Invalid heartbeat configuration") from exc
@@ -148,8 +147,8 @@ async def heartbeat(request: Request):
     # must not hide a peer whose HTTPS/media ingress is broken.
     summary = {"app_version": p.APP_VERSION, "protocol": p.PROTOCOL_VERSION}
     if relation["direction"] == "upstream":
-        from app.services import resource_pool
-        summary.update(await resource_pool.follower_resource_summary(state.node, state.database))
+        local = await resource_pool.follower_resource_summary(state.node, state.database)
+        summary.update(storage_capacity.enrich_local_resource_summary(local))
     return summary
 
 
@@ -163,7 +162,6 @@ async def backup_begin(request: Request):
         generation = int(value["generation"])
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(400, "Invalid backup generation") from exc
-    from app.services import resource_pool
     await resource_pool.backup_begin(relation["peer_id"], generation, state.database)
     return {"status": "receiving"}
 
@@ -180,7 +178,6 @@ async def backup_chunk(request: Request):
         chunk_index = int(value["chunk_index"])
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(400, "Invalid backup chunk") from exc
-    from app.services import resource_pool
     await resource_pool.backup_append(relation["peer_id"], generation, chunk_index, chunk, state.database)
     return {"status": "receiving", "bytes": len(chunk)}
 
@@ -196,7 +193,6 @@ async def backup_commit(request: Request):
         checksum = str(value["checksum"])
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(400, "Invalid backup manifest") from exc
-    from app.services import resource_pool
     size = await resource_pool.backup_commit(
         relation["peer_id"], generation, checksum, state.node, state.database,
     )
@@ -212,7 +208,6 @@ async def job_lease(request: Request):
     capabilities = value.get("capabilities")
     if not isinstance(capabilities, list) or len(capabilities) > 32:
         raise HTTPException(400, "Invalid worker capabilities")
-    from app.services import resource_pool
     return {"job": await resource_pool.lease_job(relation["peer_id"], capabilities, state.database)}
 
 
@@ -224,7 +219,6 @@ async def job_complete(request: Request, job_id: str):
     value = json.loads(request.state.node_control_body or b"{}")
     if not isinstance(value.get("result"), dict):
         raise HTTPException(400, "Invalid worker result")
-    from app.services import resource_pool
     await resource_pool.complete_job(relation["peer_id"], job_id, str(value.get("lease") or ""),
                                      value["result"], state.database)
     return {"status": "complete"}
