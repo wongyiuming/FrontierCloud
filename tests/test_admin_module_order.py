@@ -55,6 +55,21 @@ class AdminModuleOrderTests(unittest.TestCase):
         self.assertEqual(names, [name for name, _order in EXPECTED_ORDER])
         self.assertIn("for (const module of modules) consoleRoot.append(module);", focus)
 
+    def test_toggle_marker_is_pinned_to_module_far_right(self):
+        css = (ROOT / "static/css/admin-system-modules.css").read_text(encoding="utf-8")
+        marker = re.search(
+            r"\.admin-console \.admin-module \.module-heading b\s*\{(?P<body>.*?)\}",
+            css,
+            re.S,
+        )
+        self.assertIsNotNone(marker)
+        body = marker.group("body")
+        self.assertIn("position: absolute;", body)
+        self.assertIn("top: 14px;", body)
+        self.assertIn("right: 14px;", body)
+        self.assertRegex(css, r"\.module-heading\s*\{[^}]*padding-right:\s*54px;", re.S)
+        self.assertRegex(css, r"\.security-header-actions\s*\{[^}]*margin-right:\s*40px;", re.S)
+
     def test_system_styles_and_dom_reorder_load_after_dynamic_modules(self):
         page = (ROOT / "app/api/v1/admin_page_integrity.py").read_text(encoding="utf-8")
         self.assertIn('static_asset_url("css/admin-system-modules.css")', page)
