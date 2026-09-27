@@ -24,7 +24,7 @@ from app.api.v1.admin_nodes import router as nodes_router
 from app.api.v1.admin_karaoke_users import router as admin_karaoke_users_router
 from app.api.internal_storage_integrity import install as install_internal_storage_integrity
 from app.services.health import readiness_response
-from app.services.media_directories import install_public_priority
+from app.services.media_directory_catalog import install_public_priority
 
 
 install_internal_storage_integrity()
