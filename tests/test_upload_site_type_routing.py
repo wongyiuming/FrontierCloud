@@ -176,6 +176,14 @@ class UploadSiteUiContractTests(unittest.TestCase):
         self.assertIn("Historical media requires **no migration**", architecture)
         self.assertIn("low-saturation badges", architecture)
 
+    def test_cluster_acceptance_uses_site_types_not_member_pinning(self):
+        acceptance = (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8")
+        self.assertIn('def upload_media(self, blob, filename, *, site_type):', acceptance)
+        self.assertIn('"site_type": site_type', acceptance)
+        self.assertIn('site_type="relay"', acceptance)
+        self.assertIn('site_type="direct"', acceptance)
+        self.assertNotIn('"storage_member_id": member_id', acceptance)
+
 
 if __name__ == "__main__":
     unittest.main()
