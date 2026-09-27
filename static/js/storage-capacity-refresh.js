@@ -1,5 +1,20 @@
-/* Keep Media Admin storage facts aligned with the live Storage Pool snapshot. */
+/* Keep Media Admin storage facts live and normalize the retired Compute column. */
 (() => {
+    const nodeTable = document.querySelector('#nodesPanel .nodes-table');
+    const computeHeader = [...(nodeTable?.querySelectorAll('thead th') || [])]
+        .find(cell => cell.textContent.trim() === 'Compute');
+    if (computeHeader) computeHeader.remove();
+
+    const normalizeNodeRows = () => {
+        document.querySelectorAll('#nodeRelationships td[colspan="5"]').forEach(cell => {
+            cell.colSpan = 4;
+        });
+    };
+    normalizeNodeRows();
+    const nodeRows = document.getElementById('nodeRelationships');
+    const rowObserver = nodeRows ? new MutationObserver(normalizeNodeRows) : null;
+    if (rowObserver) rowObserver.observe(nodeRows, {childList: true});
+
     const target = document.getElementById('uploadStorageMember');
     if (!target) return;
 
@@ -52,8 +67,6 @@
         }
     }
 
-    // Admin's initial role/status request is asynchronous; give it one turn to settle,
-    // then keep the selector current while the page remains open.
     setTimeout(() => {
         refreshStorageCapacity();
         timer = setInterval(refreshStorageCapacity, 10000);
@@ -61,5 +74,6 @@
 
     window.addEventListener('pagehide', () => {
         if (timer) clearInterval(timer);
+        if (rowObserver) rowObserver.disconnect();
     }, {once: true});
 })();
