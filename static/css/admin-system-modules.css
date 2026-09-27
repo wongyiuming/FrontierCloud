@@ -18,6 +18,26 @@
 .admin-console > .admin-module[data-admin-module="release"] { order: 90; }
 .admin-console > .admin-module[data-admin-module="key"] { order: 100; }
 
+/* The expand/collapse marker belongs to the module itself, not to the width
+   left over inside its title button. Keep it pinned to the same far-right
+   position even when a header also owns action buttons such as Refresh,
+   Public View or Logout. */
+.admin-console .admin-module .module-heading {
+    position: static;
+    padding-right: 54px;
+}
+.admin-console .admin-module .module-heading b {
+    position: absolute;
+    z-index: 4;
+    top: 14px;
+    right: 14px;
+    margin: 0;
+}
+.admin-console .admin-module > header .admin-header-actions,
+.admin-console .admin-module > header .security-header-actions {
+    margin-right: 40px;
+}
+
 /* Expanded modules become the viewport focus. Other modules remain in normal
    document flow above/below and are therefore pushed outside the screen. */
 .admin-console .admin-module.expanded {
