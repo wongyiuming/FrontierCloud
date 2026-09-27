@@ -10,6 +10,8 @@ _SOURCE_TREE_AVAILABLE = all((ROOT / path).exists() for path in (
     "README.md",
     "CONTRIBUTING.md",
     "ARCHITECTURE.md",
+    "Dockerfile",
+    "docker-compose.yaml",
     ".github/workflows/repository-policy.yml",
 ))
 
@@ -82,6 +84,20 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
         self.assertIn("Historical media requires **no migration**", architecture)
         self.assertIn("low-saturation badges", architecture)
         self.assertIn("storage write lock", architecture)
+
+    def test_media_mutation_fence_requires_single_web_process(self):
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        combined = dockerfile + "\n" + compose
+
+        self.assertIn('CMD ["uvicorn", "main:app"', dockerfile)
+        self.assertNotRegex(combined, re.compile(r"--workers(?:=|\s)", re.I))
+        self.assertNotRegex(combined, re.compile(r"\bWEB_CONCURRENCY\b", re.I))
+        self.assertNotRegex(combined, re.compile(r"\bgunicorn\b", re.I))
+        self.assertIn("single ASGI worker", architecture)
+        self.assertIn("distributed lock", architecture)
+        self.assertIn("media mutation", architecture.lower())
 
 
 if __name__ == "__main__":
