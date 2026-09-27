@@ -1,5 +1,133 @@
 'use strict';
 
+const uploadSiteLabels = {
+    primary: '主站',
+    direct: '直连站点',
+    relay: '中继站点',
+};
+
+function ensureUploadSiteTypeSelector() {
+    let selector = document.getElementById('uploadSiteType');
+    if (selector) return selector;
+    selector = document.createElement('select');
+    selector.id = 'uploadSiteType';
+    selector.className = 'upload-site-type';
+    selector.setAttribute('aria-label', '上传站点类型');
+    selector.innerHTML = '<option value="" selected>请选择上传站点类型</option>';
+    const legacy = document.getElementById('uploadStorageMember');
+    if (legacy?.parentNode) {
+        legacy.hidden = true;
+        legacy.setAttribute('aria-hidden', 'true');
+        legacy.setAttribute('tabindex', '-1');
+        legacy.parentNode.insertBefore(selector, legacy);
+    }
+    return selector;
+}
+
+const uploadSiteType = ensureUploadSiteTypeSelector();
+const mediaSiteTypes = new Map();
+
+function siteTypeFromItem(item) {
+    if (item?.site_type && uploadSiteLabels[item.site_type]) return item.site_type;
+    if (item?.transport === 'Direct') return 'direct';
+    if (item?.transport === 'Relay') return 'relay';
+    return 'primary';
+}
+
+function readyMember(member) {
+    return Boolean(member?.storage_enabled && member?.health === 'online' && member?.writable);
+}
+
+function countReadySiteTypes(pool) {
+    if (pool?.standalone) return {primary: 1, direct: 0, relay: 0};
+    const counts = {primary: 0, direct: 0, relay: 0};
+    for (const member of pool?.members || []) {
+        if (!readyMember(member) || member.member_kind === 'Auto') continue;
+        if (member.member_kind === 'MasterLocal') counts.primary += 1;
+        else if (member.transport === 'Direct') counts.direct += 1;
+        else if (member.transport === 'Relay') counts.relay += 1;
+    }
+    return counts;
+}
+
+function updateMediaUploadGate() {
+    const blocked = uploadRunning || !uploadSiteType?.value;
+    $('uploadFiles').disabled = blocked;
+    $('uploadFolder').disabled = blocked;
+    if (uploadSiteType) uploadSiteType.disabled = uploadRunning;
+}
+
+async function refreshUploadSiteTypes() {
+    const pool = await api('/api/v1/media/admin/storage-pool', {cache: 'no-store'});
+    clusterUpload = !pool.standalone;
+    const previous = uploadSiteType.value;
+    const counts = countReadySiteTypes(pool);
+    uploadSiteType.replaceChildren();
+
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = '请选择上传站点类型';
+    uploadSiteType.append(empty);
+
+    for (const value of ['primary', 'direct', 'relay']) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.disabled = counts[value] <= 0;
+        option.textContent = counts[value] > 0
+            ? `${uploadSiteLabels[value]} · ${counts[value]} ready`
+            : `${uploadSiteLabels[value]} · 暂无 ready 站点`;
+        uploadSiteType.append(option);
+    }
+    const previousOption = [...uploadSiteType.options]
+        .find(option => option.value === previous && !option.disabled);
+    uploadSiteType.value = previousOption ? previous : '';
+    updateMediaUploadGate();
+    return pool;
+}
+
+const originalSetUploadControlsDisabled = setUploadControlsDisabled;
+setUploadControlsDisabled = function setUploadControlsDisabledWithSiteType(disabled) {
+    originalSetUploadControlsDisabled(disabled);
+    updateMediaUploadGate();
+};
+
+uploadSiteType.onchange = updateMediaUploadGate;
+refreshStoragePool = refreshUploadSiteTypes;
+
+const originalApi = api;
+api = async function apiWithPlacementObservation(url, options = {}) {
+    const data = await originalApi(url, options);
+    if (String(url).startsWith('/api/v1/media/admin/tree') && Array.isArray(data?.items)) {
+        mediaSiteTypes.clear();
+        for (const item of data.items) {
+            const root = String(item.path || '').split('/', 1)[0];
+            if (item.kind === 'file' && (root === 'music' || root === 'vido')) {
+                mediaSiteTypes.set(item.path, siteTypeFromItem(item));
+            }
+        }
+    }
+    return data;
+};
+
+function decorateMediaSiteBadges() {
+    for (const row of document.querySelectorAll('.tree-row[data-path]')) {
+        row.querySelector('.media-site-badge')?.remove();
+        const siteType = mediaSiteTypes.get(row.dataset.path);
+        if (!siteType) continue;
+        const badge = document.createElement('span');
+        badge.className = `media-site-badge site-${siteType}`;
+        badge.textContent = uploadSiteLabels[siteType];
+        badge.title = `实际归属：${uploadSiteLabels[siteType]}`;
+        row.append(badge);
+    }
+}
+
+const originalRenderTree = renderTree;
+renderTree = async function renderTreeWithPlacementObservation() {
+    await originalRenderTree();
+    decorateMediaSiteBadges();
+};
+
 async function cancelClusterReservation(reservation) {
     if (!reservation?.upload_id) return;
     await api(`/api/v1/media/admin/upload/session/${reservation.upload_id}`, {
@@ -13,6 +141,12 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
     if (!files.length) return;
     if (files.length > uploadLimits.max_upload_task_files) {
         alert(`一次上传任务最多选择 ${uploadLimits.max_upload_task_files} 个文件`);
+        return;
+    }
+    const selectedSiteType = uploadSiteType.value;
+    if (!lyricUpload && !selectedSiteType) {
+        alert('请先选择上传站点类型');
+        updateMediaUploadGate();
         return;
     }
     if (!lyricUpload && !relativePaths && !currentPath) {
@@ -65,7 +199,7 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
                 if (clusterUpload && !lyricUpload) {
                     reservation = await api('/api/v1/media/admin/upload/session', {
                         method: 'POST', headers: requestHeaders(), body: JSON.stringify({
-                            storage_member_id: $('uploadStorageMember').value,
+                            site_type: selectedSiteType,
                             target_dir: currentPath,
                             relative_path: relativePaths ? relativePaths[index] : null,
                             filename: file.name,
@@ -85,14 +219,19 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
                     }
                 } else {
                     const formData = new FormData();
-                    if (!lyricUpload) formData.append('target_dir', currentPath);
+                    if (!lyricUpload) {
+                        formData.append('target_dir', currentPath);
+                        formData.append('site_type', selectedSiteType);
+                    }
                     if (relativePaths) formData.append('relative_path', relativePaths[index]);
                     formData.append('file', file, file.name);
                     result = await uploadOne(formData, progress,
                         lyricUpload ? '/api/v1/media/admin/upload/lyric' : '/api/v1/media/admin/upload/item');
                 }
                 successCount += 1;
-                addUploadResult(displayName, 'ok', result.path);
+                const siteType = lyricUpload ? null : (reservation?.site_type || result?.site_type || selectedSiteType);
+                const detail = siteType ? `${result.path} · ${uploadSiteLabels[siteType]}` : result.path;
+                addUploadResult(displayName, 'ok', detail);
             } catch (error) {
                 failedCount += 1;
                 addUploadResult(displayName, 'error', error.message);
@@ -129,3 +268,6 @@ $('delete').onclick = () => {
         },
     );
 };
+
+updateMediaUploadGate();
+refreshUploadSiteTypes().catch(() => updateMediaUploadGate());
