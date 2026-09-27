@@ -14,7 +14,7 @@
 
     const summary = document.createElement('span');
     summary.id = 'systemReleaseVersionSummary';
-    host?.appendChild(summary);
+    host?.replaceChildren(current, target, summary);
 
     const render = () => {
         const currentSha = current.textContent.trim();
