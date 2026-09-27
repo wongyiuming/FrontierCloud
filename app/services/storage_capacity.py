@@ -1,12 +1,13 @@
 """Human-facing storage capacity observations, separate from placement limits.
 
-`resource_pool.available_bytes` remains the scheduler's writable ceiling.  This
+`resource_pool.available_bytes` remains the scheduler's writable ceiling. This
 module exposes the four capacity facts operators actually need to inspect:
 physical total, current physical free, configured allocation and project use.
 """
 from __future__ import annotations
 
 import shutil
+import time
 
 
 def local_physical_capacity() -> tuple[int, int]:
@@ -30,7 +31,9 @@ def enrich_local_resource_summary(summary: dict) -> dict:
 
 async def enrich_pool_summary(summary: dict, store) -> dict:
     """Replace stale display facts with the freshest physical observations available."""
+    from sqlalchemy import update
     from app.services import resource_pool
+    from app.services.federation import schema as s
 
     result = dict(summary)
     members = [dict(member) for member in summary.get("members", [])]
@@ -40,6 +43,7 @@ async def enrich_pool_summary(summary: dict, store) -> dict:
         if relation.get("state") == "active"
     }
     local_total = local_free = None
+    local_member_id = None
     reserve = int(resource_pool.PHYSICAL_RESERVE_BYTES)
 
     for member in members:
@@ -47,6 +51,7 @@ async def enrich_pool_summary(summary: dict, store) -> dict:
         if kind == "MasterLocal":
             if local_total is None:
                 local_total, local_free = local_physical_capacity()
+            local_member_id = member.get("member_id")
             member["physical_total_bytes"] = local_total
             member["physical_free_bytes"] = local_free
         elif kind == "Follower":
@@ -63,9 +68,6 @@ async def enrich_pool_summary(summary: dict, store) -> dict:
         member["current_allocated_bytes"] = int(member.get("allocated_bytes") or 0)
         member["project_used_bytes"] = int(member.get("used_bytes") or 0)
 
-        # The media Admin's Auto member is created before these live physical
-        # observations are applied. Recalculate display-side writable capacity
-        # from the refreshed facts so Auto cannot keep showing a stale value.
         if kind != "Auto":
             logical = max(0, int(member.get("allocated_bytes") or 0)
                           - int(member.get("used_bytes") or 0)
@@ -76,6 +78,15 @@ async def enrich_pool_summary(summary: dict, store) -> dict:
             ) else 0
             member["available_bytes"] = available
             member["online_writable_bytes"] = available
+
+    # Keep the scheduler's MasterLocal pre-filter snapshot aligned with the live
+    # observation. The final reservation path still performs its own live disk
+    # check, so this only prevents a stale low/high snapshot from skewing candidates.
+    if local_member_id and local_free is not None:
+        async with store.database.begin() as conn:
+            await conn.execute(update(s.storage_members).where(
+                s.storage_members.c.member_id == local_member_id,
+            ).values(physical_free_bytes=int(local_free), updated_at=int(time.time())))
 
     real_members = [member for member in members if member.get("member_kind") != "Auto"]
     auto_available = max((int(member.get("available_bytes") or 0) for member in real_members), default=0)
