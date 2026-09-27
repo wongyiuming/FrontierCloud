@@ -69,4 +69,4 @@ node tests/player_cache_smoke.mjs
 docker compose config --quiet
 ```
 
-All development goes directly to the existing `dev` branch; creating additional development branches is prohibited. The only valid release pull request is same-repository `dev -> main`. Release promotion validates the merged PR provenance, exact successful `dev` push CI result, and identical reviewed `dev` / `main` trees, so release correctness does not depend on which GitHub merge method produced `main`. After a release PR is merged, fast-forward `dev` to the resulting `main` commit before continuing development.
+All engineering changes go directly to the existing `dev` branch; creating additional work branches is prohibited. The only valid release pull request is same-repository `dev -> main`. Release promotion validates the merged PR provenance, exact successful `dev` push CI result, and identical reviewed `dev` / `main` trees, so release correctness does not depend on which GitHub merge method produced `main`. After a release PR is merged, fast-forward `dev` to the resulting `main` commit before continuing engineering work.
