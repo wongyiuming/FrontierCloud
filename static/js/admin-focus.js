@@ -2,7 +2,7 @@
     const MODULE_ORDER = [
         'media', 'priority', 'lyrics', 'users',
         'security', 'network',
-        'nodes', 'site', 'release', 'key',
+        'nodes', 'site', 'release', 'key', 'brand',
     ];
     const MODULE_RANK = new Map(MODULE_ORDER.map((name, index) => [name, index]));
 
@@ -33,8 +33,8 @@
         });
     }
 
-    // release-admin.js and maintenance-admin.js run before this script, so both
-    // runtime-created system modules are present before the canonical reorder.
+    // release-admin.js, maintenance-admin.js and brand-admin.js run before this
+    // script, so all runtime-created modules are present before canonical reorder.
     reorderModules();
 
     for (const module of document.querySelectorAll('.admin-module')) {
@@ -65,6 +65,7 @@
     }
 
     new MutationObserver(records => {
+        let needsReorder = false;
         for (const record of records) {
             for (const node of record.addedNodes) {
                 if (!(node instanceof HTMLElement)) continue;
@@ -72,8 +73,10 @@
                 for (const module of modules) {
                     syncHeading(module, module.classList.contains('expanded'));
                     observer.observe(module, {attributes: true, attributeFilter: ['class']});
+                    needsReorder = true;
                 }
             }
         }
+        if (needsReorder) reorderModules();
     }).observe(document.body, {childList: true, subtree: true});
 })();
