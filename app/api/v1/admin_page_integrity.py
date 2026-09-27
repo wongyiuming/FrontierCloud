@@ -28,7 +28,13 @@ async def admin_page(request: Request,
 
     system_css = static_asset_url("css/admin-system-modules.css")
     directory_css = static_asset_url("css/directory-admin.css")
-    content = content.replace("</head>", f'<link rel="stylesheet" href="{system_css}">\n<link rel="stylesheet" href="{directory_css}">\n</head>')
+    upload_site_css = static_asset_url("css/upload-site-types.css")
+    content = content.replace(
+        "</head>",
+        f'<link rel="stylesheet" href="{system_css}">\n'
+        f'<link rel="stylesheet" href="{directory_css}">\n'
+        f'<link rel="stylesheet" href="{upload_site_css}">\n</head>',
+    )
 
     scripts = [
         static_asset_url("js/release-admin.js"),
