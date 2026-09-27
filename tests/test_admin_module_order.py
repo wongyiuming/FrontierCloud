@@ -62,6 +62,9 @@ class AdminModuleOrderTests(unittest.TestCase):
 
     def test_dynamic_reorder_is_idempotent_and_top_level_only(self):
         focus = (ROOT / "static/js/admin-focus.js").read_text(encoding="utf-8")
+        # Re-appending an already sorted module list creates new childList records.
+        # Guard the reorder itself and observe only direct Admin children so a
+        # late site/release/brand panel cannot create a recursive DOM move loop.
         self.assertIn(
             "if (modules.every((module, index) => module === sortedModules[index])) return;",
             focus,
