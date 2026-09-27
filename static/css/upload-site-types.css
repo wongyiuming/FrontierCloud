@@ -1,0 +1,37 @@
+/* Upload target and media placement markers are intentionally low-saturation.
+   They are observation aids, not status alarms. */
+.upload-site-type {
+    min-width: 150px;
+}
+
+.media-site-badge {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    padding: 2px 7px;
+    border: 1px solid;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.35;
+    letter-spacing: .01em;
+    white-space: nowrap;
+}
+
+.media-site-badge.site-primary {
+    color: #83b18d;
+    background: rgba(73, 123, 83, .13);
+    border-color: rgba(116, 164, 126, .34);
+}
+
+.media-site-badge.site-direct {
+    color: #c6ab69;
+    background: rgba(144, 112, 38, .13);
+    border-color: rgba(188, 157, 83, .34);
+}
+
+.media-site-badge.site-relay {
+    color: #c59089;
+    background: rgba(139, 69, 62, .13);
+    border-color: rgba(181, 105, 97, .34);
+}
