@@ -39,12 +39,28 @@ class BackupProxyContractTests(unittest.TestCase):
         self.assertIn('path.startswith("/internal/v1/backup/")', transport)
         self.assertIn("httpx.Timeout(60, connect=8)", transport)
 
+    def test_interrupted_generations_have_authenticated_abort_cleanup(self):
+        control = (ROOT / "app/api/internal_backup_control.py").read_text(encoding="utf-8")
+        registry = (ROOT / "app/api/internal_cluster_update.py").read_text(encoding="utf-8")
+        runtime = (ROOT / "app/services/federation/runtime.py").read_text(encoding="utf-8")
+
+        self.assertIn('router = APIRouter(prefix="/internal/v1/backup"', control)
+        self.assertIn('@router.post("/abort")', control)
+        self.assertIn("relation = await authenticated(request)", control)
+        self.assertIn('relation.get("direction") != "upstream"', control)
+        self.assertIn('state.node.get("role") != "Follower"', control)
+        self.assertIn('state="failed"', control)
+        self.assertIn("delete(s.business_backup_chunks)", control)
+        self.assertIn("router.include_router(backup_control_router)", registry)
+        self.assertGreaterEqual(runtime.count('"/internal/v1/backup/abort"'), 2)
+
 
 class ComputeRetirementContractTests(unittest.TestCase):
     def test_worker_is_not_a_product_or_runtime_feature(self):
         nodes = (ROOT / "static/js/nodes.js").read_text(encoding="utf-8")
         admin = (ROOT / "app/api/v1/admin_nodes.py").read_text(encoding="utf-8")
         runtime = (ROOT / "app/services/federation/runtime.py").read_text(encoding="utf-8")
+        observability = (ROOT / "app/services/node_observability.py").read_text(encoding="utf-8")
 
         self.assertNotIn("Compute Worker", nodes)
         self.assertNotIn("worker_slots", nodes)
@@ -55,6 +71,8 @@ class ComputeRetirementContractTests(unittest.TestCase):
         self.assertNotIn("fill_worker_slots", runtime)
         self.assertNotIn("execute_worker_job", runtime)
         self.assertNotIn("/internal/v1/jobs/lease", runtime)
+        self.assertNotIn("worker_jobs", observability)
+        self.assertNotIn("shared_queued", observability)
 
 
 if __name__ == "__main__":
