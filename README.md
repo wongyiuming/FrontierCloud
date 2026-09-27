@@ -2,7 +2,7 @@
 
 FrontierCloud is a self-hosted media browsing, playback, karaoke, cluster-storage, backup, and administration system. FastAPI provides the business/control plane, native browser JavaScript provides the UI, and Docker Compose runs Web/API, Nginx, MySQL, Redis, Updater, and the required WebRTC STUN service.
 
-The current design is intentionally strict: a cluster has one business Master, Followers are resource nodes rather than secondary business sites, managed media mutations are transactional, and production releases come only from the reviewed `dev -> main` path.
+The current design is intentionally strict: a cluster has one business Master, Followers are resource nodes rather than secondary business sites, managed media mutations are transactional, and releases come only from the reviewed `dev -> main` path.
 
 - [Project Wiki](https://github.com/wongyiuming/FrontierCloud/wiki)
 - [Architecture boundaries](ARCHITECTURE.md)
@@ -35,7 +35,7 @@ docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'
 docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token'
 ```
 
-MySQL credentials are stored as `mysql_password` and `mysql_root_password` in the same directory. Restarts do not rotate these values.
+MySQL credentials are stored as `mysql_password` and `mysql_root_password` in the same directory. Restarts do not rotate these values. Startup logs list newly created secret names without printing values.
 
 Rapidly click the second half of the home logo five times to enter the Admin Key. Rapidly click the first half five times to force a UI cache refresh. Admin can replace the long-term key, generate a new random key, or issue a single-use temporary key with a 15/30/60/120 minute sliding session. Persistent Admin sessions default to 180 minutes of inactivity.
 
@@ -75,7 +75,7 @@ The Storage Pool contains Master Local plus enabled Storage Followers. Playback/
 
 ### Single Web worker is an architecture requirement
 
-The managed-media mutation fence is currently process-local. Production Web therefore runs one ASGI worker. Do not increase `WEB_CONCURRENCY`, start multiple Gunicorn/Uvicorn workers, or horizontally scale the Web process until the mutation fence has first been replaced with a database/distributed lock and corresponding concurrency regressions exist.
+The managed-media mutation fence is currently process-local. Deployed Web therefore runs one ASGI worker. Do not increase `WEB_CONCURRENCY`, start multiple Gunicorn/Uvicorn workers, or horizontally scale the Web process until the mutation fence has first been replaced with a database/distributed lock and corresponding concurrency regressions exist.
 
 ## Media and storage
 
@@ -204,7 +204,7 @@ A new `main` release is publishable only when FrontierCloud can prove:
 
 GitHub verification is cached and supports optional `GITHUB_API_TOKEN` authentication plus rate-limit backoff. If current verification is unavailable, the running service remains available but new upgrade authorization fails closed. Last-known-good release evidence is display-only and never authorizes a new upgrade.
 
-System Release Management presents production state semantically: a converged cluster states that the current SHA matches `main` HEAD, while a real pending upgrade displays separate current and pending-release SHAs. Rollback uses the previous Web-managed SHA recorded by the Updater.
+System Release Management presents release state semantically: a converged cluster states that the current SHA matches `main` HEAD, while a real pending upgrade displays separate current and pending-release SHAs. Rollback uses the previous Web-managed SHA recorded by the Updater.
 
 ## Data and operations
 
