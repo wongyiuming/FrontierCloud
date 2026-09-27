@@ -1,0 +1,33 @@
+name: Repository Policy
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+jobs:
+  main-pr-topology:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Enforce same-repository dev to main only
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$BASE_REF" != "main" ]]; then
+            echo "::error::repository-policy workflow was invoked for unexpected base '$BASE_REF'"
+            exit 1
+          fi
+          if [[ "$HEAD_REF" != "dev" || "$HEAD_REPO" != "$BASE_REPO" ]]; then
+            echo "::error::main only accepts a same-repository dev -> main promotion PR; got $HEAD_REPO:$HEAD_REF -> $BASE_REPO:$BASE_REF"
+            exit 1
+          fi
+          echo "Valid release topology: $HEAD_REPO:dev -> $BASE_REPO:main"

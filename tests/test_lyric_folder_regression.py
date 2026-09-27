@@ -10,8 +10,27 @@ from fastapi import HTTPException, UploadFile
 from starlette.requests import Request
 
 from app.api.v1 import admin_upload_guard
-from app.services import lyrics
+from app.services import lyrics, media_manager
 from app.services import lyrics_hierarchy_integrity as integrity
+
+
+class _BeginContext:
+    def __init__(self, conn):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, _kind, _value, _traceback):
+        return False
+
+
+class _Engine:
+    def __init__(self):
+        self.conn = object()
+
+    def begin(self):
+        return _BeginContext(self.conn)
 
 
 class NestedLyricCatalogRegressionTests(unittest.TestCase):
@@ -76,6 +95,87 @@ class NestedLyricCatalogRegressionTests(unittest.TestCase):
         self.assertEqual(result["counts"]["lyrics"], 1)
         self.assertEqual(result["counts"]["relations"], 1)
 
+    def test_upload_depth_is_the_same_as_catalog_depth(self):
+        self.assertEqual(
+            integrity.validate_upload_relative_path("歌手/专辑/歌曲.lrc", "歌曲.lrc"),
+            "歌手/专辑/歌曲.lrc",
+        )
+        self.assertEqual(
+            integrity.validate_upload_relative_path("歌手/歌曲.lrc", "歌曲.lrc"),
+            "歌手/歌曲.lrc",
+        )
+        self.assertEqual(
+            integrity.validate_upload_relative_path(None, "歌曲.lrc"),
+            "歌曲.lrc",
+        )
+        for invalid in (
+            "歌手/专辑/碟1/歌曲.lrc",
+            ".隐藏/歌曲.lrc",
+            "歌手/.隐藏/歌曲.lrc",
+        ):
+            with self.assertRaises(HTTPException, msg=invalid) as raised:
+                integrity.validate_upload_relative_path(invalid, "歌曲.lrc")
+            self.assertEqual(raised.exception.status_code, 400)
+
+
+class NestedLyricAdminSurfaceRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_media_tree_browses_nested_lyrics_and_never_lists_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            lyric_root = root / "lyrics"
+            album = lyric_root / "artist" / "album"
+            album.mkdir(parents=True)
+            (album / "song.lrc").write_text("[00:01]line", encoding="utf-8")
+            (lyric_root / "default.lrc").write_text("[00:00]fallback", encoding="utf-8")
+            fallback = AsyncMock(side_effect=AssertionError("lyrics tree must not use the legacy flat scanner"))
+
+            with (
+                patch.object(lyrics, "MEDIA_ROOT", root),
+                patch.object(media_manager, "MEDIA_ROOT", root),
+            ):
+                at_root = await integrity._list_lyric_tree("lyrics", fallback)
+                at_artist = await integrity._list_lyric_tree("lyrics/artist", fallback)
+                at_album = await integrity._list_lyric_tree("lyrics/artist/album", fallback)
+
+            self.assertEqual([item["path"] for item in at_root["items"]], ["lyrics/artist"])
+            self.assertEqual([item["path"] for item in at_artist["items"]], ["lyrics/artist/album"])
+            self.assertEqual([item["path"] for item in at_album["items"]], ["lyrics/artist/album/song.lrc"])
+            self.assertNotIn(lyrics.DEFAULT_LYRIC_PATH, {
+                item["path"] for result in (at_root, at_artist, at_album) for item in result["items"]
+            })
+
+    async def test_search_and_collect_support_nested_lyrics_but_protect_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            lyric_root = root / "lyrics"
+            album = lyric_root / "artist" / "album"
+            album.mkdir(parents=True)
+            song = album / "song.lrc"
+            song.write_text("[00:01]line", encoding="utf-8")
+            default = lyric_root / "default.lrc"
+            default.write_text("[00:00]fallback", encoding="utf-8")
+
+            original_scan = lambda *_args: (_ for _ in ()).throw(AssertionError("legacy lyric scan used"))
+            original_collect = AsyncMock(side_effect=AssertionError("legacy lyric collect used"))
+            with (
+                patch.object(lyrics, "MEDIA_ROOT", root),
+                patch.object(media_manager, "MEDIA_ROOT", root),
+            ):
+                catalog = integrity._lyric_search_catalog_sync(
+                    "lyrics", lyric_root, {".lrc"}, set(), original_scan,
+                )
+                selected = await integrity._collect_with_nested_lyrics(
+                    ["lyrics/artist", "lyrics/artist/album/song.lrc"], original_collect,
+                )
+                for protected in ("lyrics", lyrics.DEFAULT_LYRIC_PATH):
+                    with self.assertRaises(HTTPException, msg=protected):
+                        await integrity._collect_with_nested_lyrics([protected], original_collect)
+
+            self.assertEqual([item["path"] for item in catalog], ["lyrics/artist/album/song.lrc"])
+            self.assertEqual([path for path, _target in selected], [
+                "lyrics/artist", "lyrics/artist/album/song.lrc",
+            ])
+
 
 class LyricUploadRegistrationRegressionTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
@@ -90,10 +190,12 @@ class LyricUploadRegistrationRegressionTests(unittest.IsolatedAsyncioTestCase):
             "server": ("test", 443),
         })
 
-    async def test_success_is_returned_only_after_managed_object_registration(self):
+    async def test_success_commits_object_and_audit_in_the_same_transaction(self):
         upload = UploadFile(filename="song.lrc", file=io.BytesIO(b"[00:01]line"))
         audit = AsyncMock()
+        fake_engine = _Engine()
         with (
+            patch.object(admin_upload_guard, "engine", fake_engine),
             patch.object(
                 admin_upload_guard.MediaManager,
                 "upload_lyric",
@@ -101,8 +203,8 @@ class LyricUploadRegistrationRegressionTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 admin_upload_guard.media_objects,
-                "ensure_objects",
-                new=AsyncMock(return_value={"lyrics/artist/album/song.lrc": "lyric-id"}),
+                "ensure_object",
+                new=AsyncMock(return_value="lyric-id"),
             ) as register,
             patch.object(admin_upload_guard, "invalidate_media_catalog", new=AsyncMock()),
             patch.object(admin_upload_guard.legacy_admin, "_mutation_audit", return_value=audit),
@@ -112,7 +214,10 @@ class LyricUploadRegistrationRegressionTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(result, {"path": "lyrics/artist/album/song.lrc"})
-        register.assert_awaited_once_with([("lyrics/artist/album/song.lrc", "lyric")])
+        register.assert_awaited_once_with(
+            fake_engine.conn, "lyrics/artist/album/song.lrc", "lyric",
+        )
+        self.assertIs(audit.await_args_list[-1].args[0], fake_engine.conn)
         self.assertEqual(audit.await_args_list[-1].args[1], "success")
 
     async def test_registration_failure_rolls_back_the_published_file(self):
@@ -125,6 +230,7 @@ class LyricUploadRegistrationRegressionTests(unittest.IsolatedAsyncioTestCase):
             upload = UploadFile(filename="song.lrc", file=io.BytesIO(b"[00:01]line"))
             audit = AsyncMock()
             with (
+                patch.object(admin_upload_guard, "engine", _Engine()),
                 patch.object(admin_upload_guard, "MEDIA_ROOT", root),
                 patch.object(admin_upload_guard, "LYRICS_ROOT", lyric_root),
                 patch.object(
@@ -134,7 +240,7 @@ class LyricUploadRegistrationRegressionTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 patch.object(
                     admin_upload_guard.media_objects,
-                    "ensure_objects",
+                    "ensure_object",
                     new=AsyncMock(side_effect=RuntimeError("db failed")),
                 ),
                 patch.object(admin_upload_guard, "invalidate_media_catalog", new=AsyncMock()),
@@ -150,11 +256,84 @@ class LyricUploadRegistrationRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse((lyric_root / "artist").exists())
             self.assertEqual(audit.await_args_list[-1].args[1], "failed")
 
+    async def test_success_audit_failure_rolls_back_file_and_object_transaction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            lyric_root = root / "lyrics"
+            target = lyric_root / "artist" / "song.lrc"
+            target.parent.mkdir(parents=True)
+            target.write_text("[00:01]line", encoding="utf-8")
+            upload = UploadFile(filename="song.lrc", file=io.BytesIO(b"[00:01]line"))
+            audit = AsyncMock(side_effect=[RuntimeError("audit failed"), None])
+            with (
+                patch.object(admin_upload_guard, "engine", _Engine()),
+                patch.object(admin_upload_guard, "MEDIA_ROOT", root),
+                patch.object(admin_upload_guard, "LYRICS_ROOT", lyric_root),
+                patch.object(
+                    admin_upload_guard.MediaManager,
+                    "upload_lyric",
+                    new=AsyncMock(return_value="lyrics/artist/song.lrc"),
+                ),
+                patch.object(
+                    admin_upload_guard.media_objects,
+                    "ensure_object",
+                    new=AsyncMock(return_value="lyric-id"),
+                ),
+                patch.object(admin_upload_guard, "invalidate_media_catalog", new=AsyncMock()),
+                patch.object(admin_upload_guard.legacy_admin, "_mutation_audit", return_value=audit),
+            ):
+                with self.assertRaises(HTTPException):
+                    await admin_upload_guard.upload_lyric(
+                        self.request(), upload, "artist/song.lrc", "session",
+                    )
+            self.assertFalse(target.exists())
+
+    async def test_cache_invalidation_failure_never_deletes_committed_lyric(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            lyric_root = root / "lyrics"
+            target = lyric_root / "artist" / "song.lrc"
+            target.parent.mkdir(parents=True)
+            target.write_text("[00:01]line", encoding="utf-8")
+            upload = UploadFile(filename="song.lrc", file=io.BytesIO(b"[00:01]line"))
+            audit = AsyncMock()
+            with (
+                patch.object(admin_upload_guard, "engine", _Engine()),
+                patch.object(admin_upload_guard, "MEDIA_ROOT", root),
+                patch.object(admin_upload_guard, "LYRICS_ROOT", lyric_root),
+                patch.object(
+                    admin_upload_guard.MediaManager,
+                    "upload_lyric",
+                    new=AsyncMock(return_value="lyrics/artist/song.lrc"),
+                ),
+                patch.object(
+                    admin_upload_guard.media_objects,
+                    "ensure_object",
+                    new=AsyncMock(return_value="lyric-id"),
+                ),
+                patch.object(
+                    admin_upload_guard,
+                    "invalidate_media_catalog",
+                    new=AsyncMock(side_effect=RuntimeError("redis unavailable")),
+                ),
+                patch.object(admin_upload_guard.legacy_admin, "_mutation_audit", return_value=audit),
+            ):
+                result = await admin_upload_guard.upload_lyric(
+                    self.request(), upload, "artist/song.lrc", "session",
+                )
+            self.assertEqual(result["path"], "lyrics/artist/song.lrc")
+            self.assertTrue(target.is_file())
+            self.assertEqual(audit.await_args_list[-1].args[1], "success")
+
     def test_endpoint_override_and_integrity_install_are_mandatory(self):
         root = Path(__file__).resolve().parents[1]
         endpoints = (root / "app/api/v1/endpoints.py").read_text(encoding="utf-8")
+        integrity_source = (root / "app/services/lyrics_hierarchy_integrity.py").read_text(encoding="utf-8")
         self.assertIn('"/upload/lyric"', endpoints)
         self.assertIn("install_lyrics_hierarchy_integrity()", endpoints)
+        self.assertIn("MediaManager.list_tree = staticmethod(list_tree)", integrity_source)
+        self.assertIn("MediaManager._collect = staticmethod(collect)", integrity_source)
+        self.assertIn("MediaManager.upload_lyric = staticmethod(upload_lyric)", integrity_source)
 
 
 if __name__ == "__main__":

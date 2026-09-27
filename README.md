@@ -2,6 +2,8 @@
 
 Self-hosted media browsing, playback, karaoke, and administration. FastAPI provides the business API and native browser JavaScript provides the media UI and real-time karaoke session. Docker Compose bundles Web/API, Nginx, MySQL, Redis, and the required WebRTC STUN service.
 
+Before changing cross-cutting behavior, read [ARCHITECTURE.md](ARCHITECTURE.md) and [CONTRIBUTING.md](CONTRIBUTING.md). They define repository topology and non-negotiable architecture boundaries.
+
 ## Start
 
 HTTP needs no configuration or `.env` file:
@@ -39,14 +41,14 @@ Public ports bind IPv4 by default. Set `PUBLIC_BIND_ADDRESS=::` in `.env` only w
 
 ## Features and limits
 
-- Admin manages uploads, downloads, visibility, deletion, and track-to-lyric links. Lyric folder uploads preserve their relative album directories, and one-click linking associates exact same-stem music and LRC filenames (preferring the same relative album path and reporting ambiguity). One lyric can serve multiple tracks; each track has at most one lyric.
+- Admin manages uploads, downloads, visibility, deletion, controlled folder rename, and track-to-lyric links. Lyric folder uploads preserve up to two directory levels below `lyrics` (`lyrics/<category>/<subdir>/<file>.lrc`), and one-click linking associates exact same-stem music and LRC filenames (preferring the same relative album path and reporting ambiguity). One lyric can serve multiple tracks; each track has at most one lyric. `lyrics/default.lrc` is an internal playback fallback and is not presented or counted as user-managed lyric content.
 - LRC uploads support timestamps and offsets, with a 2 MiB limit. Audio playback shows four synchronized, smoothly scrolling lyric lines above the heartbeat; fullscreen lyrics remain available.
 - The current audio or video can enter karaoke from its player button or a three-finger 1.5-second press. The page reuses the selected media and Master-owned lyrics, supports separate input and output devices where available, and records only the microphone voice bus. Guests can sing and preview in memory. New accounts receive 200 MiB; the Master automatically places recordings in the storage pool, and downloaded recordings carry synchronized lyric metadata for later re-upload.
 - Search is Admin-only, supports Simplified/Traditional Chinese and pinyin, and includes file paths. It searches the selected directory and descendants, up to one media-type root; global `data/media` queries are rejected. Results are capped at 200.
 - Playback scores and lyric links bind to stable media object IDs. Next-track preloading uses the player's queue; offline switching requires a completed preload. Speculative downloads are capped at 128 MiB per track.
-- Nodes default to Standalone. HTTP remains Standalone; fixed Master/Follower roles require certificate-verified HTTPS and fail closed if TLS is later unavailable. A cluster has one business Master and any number of resource Followers. Followers expose node management, health, metrics, signed data transfer, backup, and worker APIs; public pages go to the Master and business APIs are rejected centrally.
+- Nodes default to Standalone. HTTP remains Standalone; fixed Master/Follower roles require certificate-verified HTTPS and fail closed if TLS is later unavailable. A cluster has one business Master and any number of resource Followers. Followers expose node management, health, metrics, signed data transfer, storage control, and backup control; public pages go to the Master and business APIs are rejected centrally.
 - The Master owns one global media catalog and a storage pool containing its fixed-capacity Local member plus enabled Followers. One logical path identifies one complete media object at exactly one member. Admin selects a writable member before media upload; playback and download resolve Local, Direct, or Relay transport transparently. Lyrics, associations, playback facts, users, and audit facts remain on the Master.
-- Storage, Compute, and Backup are configured independently for each Follower. Followers can execute leased, retryable work near their files and asynchronously store bounded-memory, chunked Master business backups, including LRC content. Backups are recovery artifacts, not online replicas or automatic failover. Nodes containing media or recordings cannot be revoked or reinitialized, and capacity cannot be reduced below use.
+- Storage and Backup are configured independently for each Follower. Compute Worker has been retired and is not a product/runtime capability. Followers asynchronously store bounded-memory, chunked Master business backups, including LRC content. Backups are recovery artifacts, not online replicas or automatic failover. Nodes containing media or recordings cannot be revoked or reinitialized, and capacity cannot be reduced below use.
 - IP views aggregate each address once and sort numerically or by its last attack. The summary separates observed, active, historical, permanent, and allowlisted addresses while MySQL retains the full event timeline. The first automatic ban lasts 24 hours; the second is permanent. Admin can release, permanently ban, or allowlist an IP. Nginx applies known bans before proxying, with a short propagation delay.
 - WebRTC observation is mandatory. STUN uses `SERVER_NAME` and `WEBRTC_STUN_PORT`; probing starts on connection and repeats every 30 seconds. Admin shows public-IP-first and WebRTC-IP-first aggregate views; MySQL is the source of truth for complete event history and aggregate state.
 
@@ -54,7 +56,7 @@ Public ports bind IPv4 by default. Set `PUBLIC_BIND_ADDRESS=::` in `.env` only w
 
 Media, lyrics, and recordings live under host `./data`; MySQL, Redis, and secrets use `mysql_data`, `redis_data`, and `runtime_secrets` volumes. Back up the database, data, and secrets together. Restarts retain roles; only explicit Admin reinitialization resets an empty node. Fixed Master/Follower roles require TLS on restart; disabling TLS fails startup instead of resetting or downgrading the role. Ordinary `docker compose down` preserves data; `down --volumes` destroys database and secret volumes.
 
-Do not rename or move managed files directly: paths locate objects, but cannot declare identity changes. No move API is currently provided. Deletion uses a MySQL journal and temporary quarantine; do not manually remove pending recovery data. If recovery blocks mutations, restore MySQL and restart Web. Shared-media multi-worker/multi-replica operation is not supported by this recovery mechanism.
+Do not rename, move, or delete managed files directly on the filesystem: paths and stable object IDs participate in business metadata. Admin provides a controlled same-parent folder rename for supported `music/vido` folders; it updates storage and metadata transactionally and is not a general cross-parent move API. Deletion uses a MySQL journal and temporary quarantine; do not manually remove pending recovery data. If recovery blocks mutations, restore MySQL and restart Web. Shared-media multi-worker/multi-replica operation is not supported by this recovery mechanism.
 
 `/health/live` reports liveness; `/health/ready` and `/health` report readiness. `/metrics` exposes Prometheus-compatible metrics with the generated Bearer token. Logs go to stdout/stderr in JSON or text. FrontierCloud does not deploy or manage monitoring/log platforms, dashboards, collectors, or alert rules.
 
@@ -67,4 +69,4 @@ node tests/player_cache_smoke.mjs
 docker compose config --quiet
 ```
 
-Changes enter `main` through reviewed pull requests. Release promotion validates the merged PR provenance, exact successful `dev` push CI result, and identical reviewed `dev` / `main` trees, so release correctness does not depend on which GitHub merge method produced `main`.
+All development goes directly to the existing `dev` branch; creating additional development branches is prohibited. The only valid release pull request is same-repository `dev -> main`. Release promotion validates the merged PR provenance, exact successful `dev` push CI result, and identical reviewed `dev` / `main` trees, so release correctness does not depend on which GitHub merge method produced `main`. After a release PR is merged, fast-forward `dev` to the resulting `main` commit before continuing development.
