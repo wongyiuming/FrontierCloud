@@ -205,6 +205,12 @@ class Runtime:
         generation, artifact, checksum = await resource_pool.build_business_backup(state.database)
         started = False
         try:
+            # New followers clean any orphaned receiving generation before this
+            # attempt. Older followers may not expose /abort yet, so this is best-effort.
+            try:
+                await self.call(relation, "/internal/v1/backup/abort", {"generation": generation})
+            except Exception:
+                pass
             await self.call(relation, "/internal/v1/backup/begin", {"generation": generation})
             started = True
             with artifact.open("rb") as source:
