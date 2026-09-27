@@ -93,6 +93,8 @@ Two directories below `lyrics` is the maximum. Upload, validation, Admin tree, s
 - it cannot be selected as a normal delete/download target;
 - a fallback relation does not make a track appear to have a user-managed lyric in Admin.
 
+Same-name auto-link is fallback automation, not an authority over user decisions. It may fill a missing relation or replace `lyrics/default.lrc`, but it **must never overwrite an explicit user-managed lyric relation**, even when that selected lyric file is temporarily unavailable. Auto-link must scan only the supported media and lyric hierarchy; historical orphan files outside that hierarchy cannot re-enter business state through automation.
+
 An accepted lyric upload is successful only after the file and its managed-object registration are durable together. A failed registration/audit transaction removes the newly published file. A later cache-invalidation failure must never delete an already committed lyric.
 
 ## 8. Catalog and cache consistency
@@ -123,7 +125,7 @@ Dynamic modules must join this same final DOM/visual order. Reordering code must
 
 The repository has two canonical branches:
 
-- `dev` — development and complete CI authority;
+- `dev` — implementation and complete CI authority;
 - `main` — reviewed release history.
 
 Absolute repository policy:
@@ -131,7 +133,7 @@ Absolute repository policy:
 - **Do not create any new branch.** Additional feature/fix/release/temporary branches are prohibited.
 - all changes go to the existing `dev`;
 - the only PR into `main` is same-repository `dev -> main`;
-- after the release PR is merged, fast-forward `dev` to the resulting `main` commit before further development;
+- after the release PR is merged, fast-forward `dev` to the resulting `main` commit before further work;
 - never force-rewrite `dev` or `main`.
 
 GitHub-side ref creation cannot be fully prevented by a unit test, so the no-new-branch invariant must remain documented here, in `CONTRIBUTING.md`, and in the Wiki/ruleset configuration.

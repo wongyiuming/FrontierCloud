@@ -5,8 +5,18 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+_SOURCE_TREE_AVAILABLE = all((ROOT / path).exists() for path in (
+    "README.md",
+    "CONTRIBUTING.md",
+    "ARCHITECTURE.md",
+    ".github/workflows/repository-policy.yml",
+))
 
 
+@unittest.skipUnless(
+    _SOURCE_TREE_AVAILABLE,
+    "repository-policy contracts run against the GitHub checkout, not the runtime image",
+)
 class RepositoryPolicyRegressionTests(unittest.TestCase):
     def test_main_prs_are_dev_to_main_only(self):
         workflow = (ROOT / ".github/workflows/repository-policy.yml").read_text(encoding="utf-8")
@@ -39,6 +49,14 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
         self.assertIn("Compute Worker is retired", architecture)
         self.assertIn("Folder rename", architecture)
         self.assertIn("lyrics/default.lrc", architecture)
+
+    def test_auto_link_is_documented_as_non_destructive_fallback_automation(self):
+        architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        for content in (architecture, contributing):
+            self.assertIn("auto-link", content)
+            self.assertIn("must never overwrite", content)
+            self.assertIn("explicit", content)
 
 
 if __name__ == "__main__":

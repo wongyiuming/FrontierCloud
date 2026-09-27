@@ -1,6 +1,6 @@
 # Contributing to FrontierCloud
 
-FrontierCloud intentionally uses a two-branch delivery model.  These rules are architectural constraints, not suggestions.
+FrontierCloud intentionally uses a two-branch delivery model. These rules are architectural constraints, not suggestions.
 
 ## Repository topology — MUST NOT violate
 
@@ -10,8 +10,8 @@ FrontierCloud intentionally uses a two-branch delivery model.  These rules are a
 - Do not open a feature/fix branch directly against `main`.
 - Do not force-push or rewrite `dev` or `main`.
 - Do not commit implementation work directly to `main`.
-- After a `dev -> main` release PR is merged, fast-forward `dev` to the resulting `main` merge commit before the next development commit. This keeps the two histories linear even when GitHub creates a merge commit for the release PR.
-- Historical non-canonical branches may exist until the repository owner deletes them. They are not development targets and must not be reused.
+- After a `dev -> main` release PR is merged, fast-forward `dev` to the resulting `main` merge commit before the next implementation commit. This keeps the two histories linear even when GitHub creates a merge commit for the release PR.
+- Historical non-canonical branches may exist until the repository owner deletes them. They are not implementation targets and must not be reused.
 
 The repository can fail an invalid PR topology, but repository-local code cannot reliably prevent somebody with GitHub ref permission from creating a branch. The **no-new-branch rule therefore remains an explicit human/automation invariant** and should also be mirrored in the GitHub Wiki and repository ruleset/branch-protection settings.
 
@@ -48,6 +48,7 @@ Never weaken an existing regression merely to make a new implementation pass. If
 - Folder rename is a rename inside the same parent, not a general move API. Cross-member rename must remain rollback-capable.
 - Lyrics support at most two directory levels below `lyrics`: `lyrics/<category>/<subdir>/<file>.lrc`. Every upload, catalog, tree, search, download, and delete surface must enforce the same boundary.
 - `lyrics/default.lrc` is an internal playback fallback. It is not user content and must not appear in Admin lists/counts/search or be exposed as a normal mutable object.
+- Same-name lyric auto-link is fallback automation: it may replace missing/default fallback state but **must never overwrite an explicit user-managed lyric relation**, even if that selected lyric file is temporarily unavailable.
 - Admin module order is intentional and protected by regression tests. Do not reorder modules incidentally while changing a module.
 
 ## Release evidence

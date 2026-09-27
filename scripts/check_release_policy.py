@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fail CI if production release controls drift away from main-only policy."""
 from pathlib import Path
+import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -127,4 +128,13 @@ for path in ("Dockerfile", "nginx/Dockerfile", "updater/Dockerfile"):
     require("COPY --chmod=" not in source, f"{path} requires BuildKit COPY --chmod")
     require("RUN --mount=" not in source, f"{path} requires BuildKit RUN --mount")
 
-print("Release policy contract passed: reviewed dev provenance and P1 runtime hardening are enforced")
+# Repository-policy tests need README/.github/architecture files which are
+# intentionally not copied into the runtime image. Run them here, against the
+# checked-out source tree, and let the runtime discovery skip them there.
+from tests.test_repository_policy import RepositoryPolicyRegressionTests
+
+policy_suite = unittest.defaultTestLoader.loadTestsFromTestCase(RepositoryPolicyRegressionTests)
+policy_result = unittest.TextTestRunner(verbosity=1).run(policy_suite)
+require(policy_result.wasSuccessful(), "Repository policy regression failed")
+
+print("Release policy contract passed: reviewed dev provenance and repository boundaries are enforced")

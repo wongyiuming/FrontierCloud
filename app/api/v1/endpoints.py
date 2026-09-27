@@ -24,12 +24,14 @@ from app.api.v1.admin_nodes import router as nodes_router
 from app.api.v1.admin_karaoke_users import router as admin_karaoke_users_router
 from app.api.internal_storage_integrity import install as install_internal_storage_integrity
 from app.services.health import readiness_response
+from app.services.lyrics_auto_link_integrity import install as install_lyrics_auto_link_integrity
 from app.services.lyrics_hierarchy_integrity import install as install_lyrics_hierarchy_integrity
 from app.services.media_directory_catalog import install_public_priority
 
 
 install_internal_storage_integrity()
 install_lyrics_hierarchy_integrity()
+install_lyrics_auto_link_integrity()
 install_public_priority()
 
 _ADMIN_OVERRIDE_PATHS = {
