@@ -49,7 +49,7 @@ class MasterMutationFenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "renamed")
         self.assertFalse(lock.exclusive)
 
-    async def test_master_upload_reservation_is_created_under_shared_fence(self):
+    async def test_master_upload_reservation_fences_existing_recovery_wrapper(self):
         lock = _Lock()
 
         async def delegate(payload, request, session_hash):
@@ -57,16 +57,19 @@ class MasterMutationFenceTests(unittest.IsolatedAsyncioTestCase):
             return {"upload_id": "u1"}
 
         payload = SimpleNamespace()
+        direct_cluster = AsyncMock(side_effect=AssertionError("fence must not bypass recovery wrapper"))
         with (
             patch.object(integrity, "media_mutation_lock", lock),
             patch.object(integrity, "node_state", SimpleNamespace(node={"role": "Master"})),
             patch.object(integrity, "ensure_media_mutations_ready"),
-            patch.object(integrity.cluster, "create_upload_session", new=AsyncMock(side_effect=delegate)),
+            patch.object(integrity.masterlocal, "create_upload_session", new=AsyncMock(side_effect=delegate)),
+            patch.object(integrity.cluster, "create_upload_session", new=direct_cluster),
         ):
             result = await integrity.create_upload_session(payload, object(), "session")
 
         self.assertEqual(result["upload_id"], "u1")
         self.assertEqual(lock.shared_count, 0)
+        direct_cluster.assert_not_awaited()
 
     async def test_master_delete_and_visibility_mutations_use_shared_fence(self):
         lock = _Lock()
@@ -94,21 +97,17 @@ class MasterMutationFenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hidden["status"], "ok")
         self.assertEqual(lock.shared_count, 0)
 
-    def test_override_router_is_installed_before_legacy_cluster_mutation_routes(self):
+    def test_override_router_precedes_recovery_delete_and_cluster_routes(self):
         from pathlib import Path
 
         endpoints = Path(__file__).resolve().parents[1].joinpath(
             "app/api/v1/endpoints.py"
         ).read_text(encoding="utf-8")
         self.assertIn("install_master_mutation_integrity()", endpoints)
-        self.assertLess(
-            endpoints.index("_include_admin(master_mutation_router)"),
-            endpoints.index("_include_admin(delete_integrity_router)"),
-        )
-        self.assertLess(
-            endpoints.index("_include_admin(master_mutation_router)"),
-            endpoints.index("_include_admin(_without_paths(cluster_admin_router"),
-        )
+        master = endpoints.index("_include_admin(master_mutation_router)")
+        self.assertLess(master, endpoints.index("_include_admin(masterlocal_recovery_router)"))
+        self.assertLess(master, endpoints.index("_include_admin(delete_integrity_router)"))
+        self.assertLess(master, endpoints.index("_include_admin(_without_paths(cluster_admin_router"))
 
 
 if __name__ == "__main__":

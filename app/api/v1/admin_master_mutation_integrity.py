@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Request
 from app.api.v1 import admin as legacy_admin
 from app.api.v1 import admin_cluster_integrity as cluster
 from app.api.v1 import admin_delete_integrity as deletion
+from app.api.v1 import admin_masterlocal_recovery as masterlocal
 from app.services import media_directories
 from app.services.federation.state import state as node_state
 from app.services.media_manager import ensure_media_mutations_ready, media_mutation_lock
@@ -38,10 +39,12 @@ async def create_upload_session(
     session_hash: str = Depends(require_session),
 ):
     if node_state.node.get("role") != "Master":
-        return await cluster.create_upload_session(payload, request, session_hash)
+        return await masterlocal.create_upload_session(payload, request, session_hash)
     async with media_mutation_lock.shared():
         ensure_media_mutations_ready()
-        return await cluster.create_upload_session(payload, request, session_hash)
+        # Preserve the existing recovery/reconciliation layer. The fence wraps
+        # that full reservation path; it must not bypass directly to cluster.
+        return await masterlocal.create_upload_session(payload, request, session_hash)
 
 
 @router.post("/hide")
