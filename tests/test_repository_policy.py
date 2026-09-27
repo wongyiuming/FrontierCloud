@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -11,6 +12,10 @@ _SOURCE_TREE_AVAILABLE = all((ROOT / path).exists() for path in (
     "ARCHITECTURE.md",
     ".github/workflows/repository-policy.yml",
 ))
+
+
+def _plain_markdown(value: str) -> str:
+    return re.sub(r"[*_`]", "", value)
 
 
 @unittest.skipUnless(
@@ -43,10 +48,11 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
     def test_retired_compute_and_managed_rename_are_documented(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        plain_architecture = _plain_markdown(architecture)
         self.assertNotIn("Storage, Compute, and Backup", readme)
         self.assertNotIn("worker APIs", readme)
         self.assertNotIn("No move API is currently provided", readme)
-        self.assertIn("Compute Worker is retired", architecture)
+        self.assertIn("Compute Worker is retired", plain_architecture)
         self.assertIn("Folder rename", architecture)
         self.assertIn("lyrics/default.lrc", architecture)
 
