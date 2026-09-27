@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from app.services import media_directories
+from app.services import media_directories, media_directory_catalog
 
 
 class _Context:
@@ -119,10 +119,25 @@ class DirectoryPriorityContractTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual([item["name"] for item in result], ["B", "A", "C"])
 
+    async def test_priority_catalog_cache_hit_skips_mysql_sort(self):
+        from app.api.v1 import media
+
+        media._directory_priority_installed = False
+        media_directory_catalog.install_public_priority()
+        cached = [{"name": "cached", "url": "/cached"}]
+        with (
+            patch.object(media, "load_media_catalog", new=AsyncMock(return_value=(7, cached))),
+            patch.object(media_directories, "sort_directory_entries", new=AsyncMock()) as sorter,
+        ):
+            result = await media.get_media_categories("music", media.AUDIO_EXTS)
+        self.assertEqual(result, cached)
+        sorter.assert_not_awaited()
+
     def test_priority_and_rename_are_wired_into_admin_and_public_catalog(self):
         root = Path(__file__).resolve().parents[1]
         api = (root / "app/api/v1/admin_directories.py").read_text(encoding="utf-8")
         service = (root / "app/services/media_directories.py").read_text(encoding="utf-8")
+        catalog = (root / "app/services/media_directory_catalog.py").read_text(encoding="utf-8")
         client = (root / "static/js/directory-admin.js").read_text(encoding="utf-8")
         page = (root / "app/api/v1/admin_page_integrity.py").read_text(encoding="utf-8")
         internal = (root / "app/api/internal_media_control.py").read_text(encoding="utf-8")
@@ -131,8 +146,10 @@ class DirectoryPriorityContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('@router.post("/directory/rename")', api)
         self.assertIn("object_kind='directory'", service)
         self.assertIn("media_playback_stats", service)
-        self.assertIn("media.get_media_categories = prioritized_categories", service)
-        self.assertIn("media.get_media_subcategories = prioritized_subcategories", service)
+        self.assertIn("media.get_media_categories = prioritized_categories", catalog)
+        self.assertIn("media.get_media_subcategories = prioritized_subcategories", catalog)
+        self.assertIn("cached is not None", catalog)
+        self.assertIn("store_media_catalog", catalog)
         self.assertIn("文件夹优先级", client)
         self.assertIn("renameDirectory", client)
         self.assertIn("/api/v1/media/admin/directory/rename", client)
