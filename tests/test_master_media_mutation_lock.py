@@ -53,6 +53,7 @@ class MasterMutationFenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_master_upload_reservation_fences_existing_recovery_wrapper(self):
         lock = _Lock()
         storage_lock = asyncio.Lock()
+        database = object()
 
         async def delegate(payload, request, session_hash):
             self.assertEqual(lock.shared_count, 1)
@@ -75,7 +76,7 @@ class MasterMutationFenceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 integrity,
                 "node_state",
-                SimpleNamespace(node={"role": "Master"}, database=object()),
+                SimpleNamespace(node={"role": "Master"}, database=database),
             ),
             patch.object(integrity, "ensure_media_mutations_ready"),
             patch.object(integrity.upload_site_routing, "choose_member", new=choose_member),
@@ -88,7 +89,7 @@ class MasterMutationFenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["site_type"], "primary")
         self.assertEqual(lock.shared_count, 0)
         self.assertFalse(storage_lock.locked())
-        choose_member.assert_awaited_once_with("primary", 3, integrity.node_state.database)
+        choose_member.assert_awaited_once_with("primary", 3, database)
         direct_cluster.assert_not_awaited()
 
     async def test_master_delete_and_visibility_mutations_use_shared_fence(self):
