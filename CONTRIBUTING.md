@@ -45,7 +45,7 @@ Never weaken an existing regression merely to make a new implementation pass. If
 - Heartbeat health is independent from Backup work. Backup failure must never mark a healthy node offline.
 - Backup is a recovery artifact, not online replication, HA, or automatic failover.
 - Managed paths are changed only through FrontierCloud transactions. Do not rename/move/delete managed files directly on disk as a substitute for metadata updates.
-- Folder rename is a rename inside the same parent, not a general move API. Cross-member rename must remain rollback-capable.
+- Folder rename is a rename inside the same parent, not a general move API. Cross-member rename must remain rollback-capable. Master rename is the exclusive path mutation; upload reservation, delete, hide/unhide, and priority changes must participate in the same mutation-fence protocol.
 - Lyrics support at most two directory levels below `lyrics`: `lyrics/<category>/<subdir>/<file>.lrc`. Every upload, catalog, tree, search, download, and delete surface must enforce the same boundary.
 - `lyrics/default.lrc` is an internal playback fallback. It is not user content and must not appear in Admin lists/counts/search or be exposed as a normal mutable object.
 - Same-name lyric auto-link is fallback automation: it may replace missing/default fallback state but **must never overwrite an explicit user-managed lyric relation**, even if that selected lyric file is temporarily unavailable.

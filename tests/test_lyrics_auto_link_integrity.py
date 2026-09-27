@@ -24,8 +24,10 @@ class _Begin:
 class _Connection:
     def __init__(self, existing: dict[str, str | None]):
         self.existing = existing
+        self.scalar_sql: list[str] = []
 
-    async def scalar(self, _statement, params=None):
+    async def scalar(self, statement, params=None):
+        self.scalar_sql.append(str(statement))
         return self.existing.get(str((params or {}).get("media_id")))
 
 
@@ -122,6 +124,8 @@ class LyricAutoLinkRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "new-lyric-id",
             "lyrics/b/fallback.lrc",
         ))
+        self.assertTrue(conn.scalar_sql)
+        self.assertTrue(all("FOR UPDATE" in statement for statement in conn.scalar_sql))
         self.assertEqual(audit.await_args.args[1], "success")
         self.assertEqual(audit.await_args.args[2], 1)
         self.assertEqual(audit.await_args.args[3]["preserved"], 1)
@@ -149,6 +153,7 @@ class LyricAutoLinkRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["preserved"], 1)
         self.assertEqual(result["linked"], 0)
+        self.assertIn("FOR UPDATE", conn.scalar_sql[0])
         ensure_object.assert_not_awaited()
         upsert.assert_not_awaited()
 
@@ -160,6 +165,7 @@ class LyricAutoLinkRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("lyrics.auto_relate_matching_names = auto_relate_matching_names", module)
         self.assertIn("preserved", module)
         self.assertIn("LYRIC_FILE_DEPTHS", module)
+        self.assertIn("FOR UPDATE", module)
         self.assertIn("str(current) != lyrics.DEFAULT_LYRIC_PATH", module)
 
 

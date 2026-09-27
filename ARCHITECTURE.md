@@ -61,6 +61,8 @@ Folder rename is deliberately narrower than a general move API:
 - if a later member or Master metadata commit fails, already moved members are rolled back in reverse order;
 - offline Followers block a rename that cannot be completed safely.
 
+All Master path mutations participate in one process-local reader/writer fence. Cross-member folder rename owns the exclusive fence from preflight through commit/rollback. Upload-session reservation, global delete, hide/unhide, and priority mutations enter through a shared fence; upload reservations and `pending_delete` then remain durable database fences after that short shared section ends. A new path-mutation entry point must join this protocol instead of creating an independent race window.
+
 Do not turn folder rename into an arbitrary cross-parent move without a new transaction design and federation regression coverage.
 
 ## 6. Directory priority
@@ -93,7 +95,7 @@ Two directories below `lyrics` is the maximum. Upload, validation, Admin tree, s
 - it cannot be selected as a normal delete/download target;
 - a fallback relation does not make a track appear to have a user-managed lyric in Admin.
 
-Same-name auto-link is fallback automation, not an authority over user decisions. It may fill a missing relation or replace `lyrics/default.lrc`, but it **must never overwrite an explicit user-managed lyric relation**, even when that selected lyric file is temporarily unavailable. Auto-link must scan only the supported media and lyric hierarchy; historical orphan files outside that hierarchy cannot re-enter business state through automation.
+Same-name auto-link is fallback automation, not an authority over user decisions. It may fill a missing relation or replace `lyrics/default.lrc`, but it **must never overwrite an explicit user-managed lyric relation**, even when that selected lyric file is temporarily unavailable. The current-relation check and replacement happen under the same database row lock so a concurrent manual link cannot be overwritten. Auto-link must scan only the supported media and lyric hierarchy; historical orphan files outside that hierarchy cannot re-enter business state through automation.
 
 An accepted lyric upload is successful only after the file and its managed-object registration are durable together. A failed registration/audit transaction removes the newly published file. A later cache-invalidation failure must never delete an already committed lyric.
 
@@ -101,7 +103,7 @@ An accepted lyric upload is successful only after the file and its managed-objec
 
 Redis catalog generations cache expensive scans/sorts. Browser/API cache headers must not make mutable directory structure remain stale after a successful Admin mutation.
 
-For mutable catalog APIs, the HTTP client revalidates while the server-side Redis generation remains the expensive-work cache. Mutations that change paths, visibility, priority, or catalog membership invalidate the generation.
+For mutable catalog APIs, the HTTP client revalidates while the server-side Redis generation remains the expensive-work cache. Mutations that change paths, visibility, priority, or catalog membership invalidate the generation. Cache invalidation is fail-soft after a durable business commit: a Redis failure is logged and TTL recovery remains available; it must not turn a committed mutation into a false client-visible failure.
 
 ## 9. Admin GUI contract
 

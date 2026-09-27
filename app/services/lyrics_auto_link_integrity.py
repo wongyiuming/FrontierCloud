@@ -95,6 +95,7 @@ async def auto_relate_matching_names(*, audit=None) -> dict[str, int]:
                 current = await conn.scalar(text("""
                     SELECT lyric_path FROM media_lyric_links
                     WHERE media_id=:media_id
+                    FOR UPDATE
                 """), {"media_id": media_id})
                 # Any non-default relation is an explicit business choice. Even
                 # if its file is temporarily unavailable, auto-link must not
