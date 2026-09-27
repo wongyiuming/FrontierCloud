@@ -25,9 +25,10 @@ async def upload_item(
     target_dir: Annotated[str, Form()] = "",
     relative_path: Annotated[str | None, Form()] = None,
     session_hash: str = Depends(legacy_admin.require_session),
+    site_type: Annotated[str | None, Form()] = None,
 ):
+    source = relative_path or file.filename or ""
     if node_state.node["role"] == "Master":
-        source = relative_path or file.filename or ""
         try:
             await admin_service.audit(
                 session_hash,
@@ -42,15 +43,21 @@ async def upload_item(
             await file.close()
         raise HTTPException(
             status_code=409,
-            detail="Master 媒体上传必须通过 Storage Pool；请刷新管理页后重试",
+            detail="Master 媒体上传必须通过站点类型路由；请刷新管理页后重试",
         )
-    return await legacy_admin.upload_item(
+    if str(site_type or "").strip().lower() != "primary":
+        await file.close()
+        raise HTTPException(status_code=400, detail="Standalone 媒体上传必须选择主站")
+    result = await legacy_admin.upload_item(
         request,
         file,
         target_dir,
         relative_path,
         session_hash,
     )
+    if isinstance(result, dict):
+        return {**result, "site_type": "primary", "site_label": "主站"}
+    return result
 
 
 def _rollback_unregistered_lyric(saved_path: str) -> None:
@@ -85,8 +92,8 @@ async def upload_lyric(
 ):
     """Publish an LRC only when its managed-object record commits atomically.
 
-    The physical file is staged/published first.  Object registration and the
-    success audit then share one MySQL transaction.  A failure before that
+    The physical file is staged/published first. Object registration and the
+    success audit then share one MySQL transaction. A failure before that
     transaction commits removes the file; failures in cache invalidation after
     commit never remove a durable, registered lyric.
     """
