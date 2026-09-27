@@ -54,7 +54,9 @@ _ADMIN_OVERRIDE_PATHS = {
     "/hide",
     "/download",
 }
-_CLUSTER_OVERRIDE_PATHS = {"/storage-pool", "/upload/session", "/upload/item"}
+_CLUSTER_OVERRIDE_PATHS = {"/storage-pool", "/upload/session", "/upload/item", "/hide"}
+_MASTERLOCAL_OVERRIDE_PATHS = {"/upload/session"}
+_DELETE_OVERRIDE_PATHS = {"/delete"}
 _NODE_OVERRIDE_PATHS = {"/nodes/{identifier}/revoke"}
 _KARAOKE_OVERRIDE_PATHS = {
     "/account/status",
@@ -97,8 +99,8 @@ _include_admin(brand_admin_router, prefix="/media/admin/brand")
 _include_admin(site_admin_router)
 _include_admin(upload_guard_router)
 _include_admin(master_mutation_router)
-_include_admin(masterlocal_recovery_router)
-_include_admin(delete_integrity_router)
+_include_admin(_without_paths(masterlocal_recovery_router, _MASTERLOCAL_OVERRIDE_PATHS))
+_include_admin(_without_paths(delete_integrity_router, _DELETE_OVERRIDE_PATHS))
 _include_admin(page_integrity_router)
 _include_admin(admin_directories_router)
 _include_admin(_without_paths(cluster_admin_router, _CLUSTER_OVERRIDE_PATHS))
