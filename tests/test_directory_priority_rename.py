@@ -122,16 +122,24 @@ class DirectoryPriorityContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_priority_catalog_cache_hit_skips_mysql_sort(self):
         from app.api.v1 import media
 
-        media._directory_priority_installed = False
-        media_directory_catalog.install_public_priority()
-        cached = [{"name": "cached", "url": "/cached"}]
-        with (
-            patch.object(media, "load_media_catalog", new=AsyncMock(return_value=(7, cached))),
-            patch.object(media_directories, "sort_directory_entries", new=AsyncMock()) as sorter,
-        ):
-            result = await media.get_media_categories("music", media.AUDIO_EXTS)
-        self.assertEqual(result, cached)
-        sorter.assert_not_awaited()
+        original_categories = media.get_media_categories
+        original_subcategories = media.get_media_subcategories
+        original_installed = getattr(media, "_directory_priority_installed", False)
+        try:
+            media._directory_priority_installed = False
+            media_directory_catalog.install_public_priority()
+            cached = [{"name": "cached", "url": "/cached"}]
+            with (
+                patch.object(media, "load_media_catalog", new=AsyncMock(return_value=(7, cached))),
+                patch.object(media_directories, "sort_directory_entries", new=AsyncMock()) as sorter,
+            ):
+                result = await media.get_media_categories("music", media.AUDIO_EXTS)
+            self.assertEqual(result, cached)
+            sorter.assert_not_awaited()
+        finally:
+            media.get_media_categories = original_categories
+            media.get_media_subcategories = original_subcategories
+            media._directory_priority_installed = original_installed
 
     def test_priority_and_rename_are_wired_into_admin_and_public_catalog(self):
         root = Path(__file__).resolve().parents[1]
