@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
 import logging
 import secrets
 import time
@@ -54,7 +53,11 @@ class Runtime:
         self.task = None
         self.wakeup = asyncio.Event()
         self.backup_attempts: dict[str, int] = {}
-        self.worker_tasks: set[asyncio.Task] = set()
+        self.backup_tasks: dict[str, asyncio.Task] = {}
+        # A business backup scans the full database and writes a compressed
+        # artifact. Keep that work serial across followers so a fleet-wide due
+        # time cannot multiply database, CPU and disk pressure on the Master.
+        self.backup_semaphore = asyncio.Semaphore(1)
 
     def start(self, *, revocations=False):
         if state.node["role"] != "Standalone" and not settings.TLS_ENABLED:
@@ -70,12 +73,12 @@ class Runtime:
             with suppress(asyncio.CancelledError):
                 await self.task
             self.task = None
-        tasks = list(self.worker_tasks)
+        tasks = list(self.backup_tasks.values())
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        self.worker_tasks.clear()
+        self.backup_tasks.clear()
         await transport.close()
 
     async def call(self, relation: dict, path: str, value=None):
@@ -99,7 +102,6 @@ class Runtime:
         identifier, credential = uuid.uuid4().hex, secrets.token_urlsafe(48)
         await state.prepare(identifier, peer, credential, actor)
         relation = await state.relationship(identifier)
-        # A durable pending record lets the loop finish activation after interruption.
         challenge = uuid.uuid4().hex
         await transport.request(peer["endpoint"], "/internal/v1/pair", method="POST", value={
             "package": envelope, "relationship_id": identifier, "credential": credential,
@@ -111,7 +113,6 @@ class Runtime:
 
     async def revoke(self, identifier: str, actor: str):
         relation = await state.relationship(identifier)
-        # Local trust is removed even if the peer is unreachable.
         await state.revoke(identifier, actor)
         try:
             await self.notify_revocation(relation)
@@ -134,7 +135,6 @@ class Runtime:
     async def tick(self, relation: dict):
         identifier = relation["relationship_id"]
         if relation["state"] == "revoked":
-            # Idempotent peer tombstones; retries use fresh nonce authentication.
             await self.notify_revocation(relation)
             return
         if relation["state"] == "pending":
@@ -146,31 +146,59 @@ class Runtime:
                 await state.activate(identifier, "pair-recovery")
                 relation = await state.relationship(identifier)
             else:
-                return  # The Master owns confirmation; a pending Follower never routes.
+                return
         start = time.monotonic()
         try:
-            # Check the pinned identity on recovery, not an arbitrary replacement endpoint.
             if relation["status"] != "online":
                 await transport.identity(relation["peer_endpoint"], expected_id=relation["peer_id"],
                     expected_key=relation["peer_key"], role="Follower" if relation["direction"] == "downstream" else "Master")
             value = {}
             if relation["direction"] == "downstream":
                 from app.services import resource_pool
-                value = {"mode": relation["mode"],
-                         "resources": await resource_pool.member_configuration(relation["peer_id"], state.database)}
+                resources = await resource_pool.member_configuration(relation["peer_id"], state.database)
+                # Compute Worker is retired. Force the legacy desired field off so
+                # an older Follower also stops workers during a rolling upgrade.
+                resources["compute"] = {"enabled": False, "worker_slots": 0}
+                value = {"mode": relation["mode"], "resources": resources}
             summary = await self.call(relation, "/internal/v1/heartbeat", value)
             if summary.get("protocol") != p.PROTOCOL_VERSION:
                 raise p.ProtocolError("Heartbeat protocol mismatch")
             rtt_ms = int((time.monotonic() - start) * 1000)
             summary["heartbeat"] = heartbeat_summary(relation.get("summary") or {}, rtt_ms)
             await state.heartbeat(identifier, True, rtt_ms, summary)
-            if relation["direction"] == "downstream":
-                await self.maybe_backup(relation)
-            elif relation["direction"] == "upstream":
-                await self.fill_worker_slots(relation)
         except Exception:
             await state.heartbeat(identifier, False)
             raise
+
+        if relation["direction"] == "downstream":
+            self.schedule_backup(relation)
+
+    def schedule_backup(self, relation: dict) -> None:
+        """Run backup transport outside the heartbeat loop, one task per relation."""
+        identifier = relation["relationship_id"]
+        current = self.backup_tasks.get(identifier)
+        if current and not current.done():
+            return
+        task = asyncio.create_task(self._run_backup(relation), name=f"node-backup-{identifier[:8]}")
+        self.backup_tasks[identifier] = task
+        task.add_done_callback(lambda completed, rel=identifier: self._backup_done(rel, completed))
+
+    async def _run_backup(self, relation: dict) -> None:
+        async with self.backup_semaphore:
+            await self.maybe_backup(relation)
+
+    def _backup_done(self, identifier: str, task: asyncio.Task) -> None:
+        if self.backup_tasks.get(identifier) is task:
+            self.backup_tasks.pop(identifier, None)
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except Exception:
+            error = None
+        if error is not None:
+            logger.warning("Backup task deferred: %s", type(error).__name__,
+                           extra={"context": {"relationship_id": identifier}})
 
     async def maybe_backup(self, relation: dict):
         from app.services import resource_pool
@@ -186,8 +214,16 @@ class Runtime:
             return
         self.backup_attempts[relation["relationship_id"]] = now
         generation, artifact, checksum = await resource_pool.build_business_backup(state.database)
+        started = False
         try:
+            # New followers clean any orphaned receiving generation before this
+            # attempt. Older followers may not expose /abort yet, so this is best-effort.
+            try:
+                await self.call(relation, "/internal/v1/backup/abort", {"generation": generation})
+            except Exception:
+                pass
             await self.call(relation, "/internal/v1/backup/begin", {"generation": generation})
+            started = True
             with artifact.open("rb") as source:
                 chunk_index = 0
                 while chunk := source.read(192 * 1024):
@@ -199,72 +235,15 @@ class Runtime:
             await self.call(relation, "/internal/v1/backup/commit", {
                 "generation": generation, "checksum": checksum,
             })
+        except Exception:
+            if started:
+                try:
+                    await self.call(relation, "/internal/v1/backup/abort", {"generation": generation})
+                except Exception:
+                    pass
+            raise
         finally:
             artifact.unlink(missing_ok=True)
-
-    async def execute_worker_job(self, relation: dict, job: dict) -> None:
-        payload = job.get("payload") or {}
-        object_id = str(payload.get("object_id") or "")
-        from sqlalchemy import text
-        async with state.database.connect() as conn:
-            path = await conn.scalar(text("SELECT media_path FROM media_objects WHERE media_id=:id"), {"id": object_id})
-        if not path:
-            result = {"error": "object_not_found"}
-        else:
-            from app.api.v1.media import MEDIA_ROOT
-            target = (MEDIA_ROOT / path).resolve()
-            if MEDIA_ROOT not in target.parents or not target.is_file():
-                result = {"error": "object_not_found"}
-            else:
-                info = target.stat()
-                result = {"size_bytes": info.st_size, "updated_at": info.st_mtime_ns}
-                if job["job_type"] == "hash":
-                    digest = hashlib.sha256()
-                    with target.open("rb") as source:
-                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                            digest.update(chunk)
-                    result["sha256"] = digest.hexdigest()
-        await self.call(relation, f"/internal/v1/jobs/{job['job_id']}/complete",
-                        {"lease": job["lease"], "result": result})
-
-    def _worker_done(self, task: asyncio.Task) -> None:
-        self.worker_tasks.discard(task)
-        if not task.cancelled():
-            try:
-                error = task.exception()
-            except Exception:
-                error = None
-            if error is not None:
-                logger.warning("Compute worker task failed: %s", type(error).__name__)
-        self.wakeup.set()
-
-    async def fill_worker_slots(self, relation: dict) -> None:
-        """Fill the configured worker concurrency instead of treating slots as display-only."""
-        from app.services import resource_pool
-        local = await resource_pool.follower_resource_summary(state.node, state.database)
-        compute = local.get("compute") or {}
-        if not compute.get("enabled"):
-            return
-        slots = max(0, int(compute.get("worker_slots") or 0))
-        vacancies = max(0, slots - len(self.worker_tasks))
-        if vacancies <= 0:
-            return
-        capabilities = compute.get("capabilities") or []
-        for _ in range(vacancies):
-            response = await self.call(relation, "/internal/v1/jobs/lease", {"capabilities": capabilities})
-            job = response.get("job")
-            if not isinstance(job, dict):
-                break
-            task = asyncio.create_task(
-                self.execute_worker_job(relation, job),
-                name=f"node-worker-{str(job.get('job_id') or '')[:8]}",
-            )
-            self.worker_tasks.add(task)
-            task.add_done_callback(self._worker_done)
-
-    async def work_once(self, relation: dict):
-        """Backward-compatible entry point; now fills every configured free slot."""
-        await self.fill_worker_slots(relation)
 
     async def run(self):
         try:

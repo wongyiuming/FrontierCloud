@@ -8,7 +8,7 @@ from sqlalchemy import select, text
 
 from app.api.v1 import admin_cluster_integrity as cluster
 from app.api.v1 import admin_delete_integrity as delete_integrity
-from app.services import resource_pool
+from app.services import resource_pool, storage_capacity
 from app.services.federation import protocol as p
 from app.services.federation import schema as s
 from app.services.federation.state import state as node_state
@@ -65,7 +65,8 @@ async def recover_expired_masterlocal(limit: int = 50) -> int:
 @router.get("/storage-pool")
 async def storage_pool(session_hash: str = Depends(cluster.require_session)):
     await recover_expired_masterlocal()
-    return await cluster.storage_pool(session_hash)
+    summary = await cluster.storage_pool(session_hash)
+    return await storage_capacity.enrich_pool_summary(summary, node_state)
 
 
 @router.post("/upload/session")
