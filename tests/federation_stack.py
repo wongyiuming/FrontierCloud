@@ -236,14 +236,17 @@ print(json.dumps(asyncio.run(read())))
             "backup_enabled": backup,
         })
 
-    def upload_media(self, blob, filename, *, member_id):
+    def upload_media(self, blob, filename, *, site_type):
         reservation = self.api("/api/v1/media/admin/upload/session", {
-            "storage_member_id": member_id,
+            "site_type": site_type,
             "target_dir": "music/shared",
             "relative_path": None,
             "filename": filename,
             "size_bytes": len(blob),
         })
+        expected_transport = {"primary": "Local", "direct": "Direct", "relay": "Relay"}[site_type]
+        assert reservation["site_type"] == site_type
+        assert reservation["transport"] == expected_transport
         headers = {"Content-Type": "application/octet-stream"}
         upload_url = reservation["upload_url"]
         if reservation["transport"] == "Direct":
@@ -601,16 +604,16 @@ print(asyncio.run(read_enabled()))
                      description="Follower resource configuration heartbeat")
 
             a.mode("Relay")
-            a.upload_media(source, "relay.wav", member_id=follower_id)
+            a.upload_media(source, "relay.wav", site_type="relay")
             a.mode("Direct")
-            direct_resource = a.upload_media(source, "direct.wav", member_id=follower_id)
+            direct_resource = a.upload_media(source, "direct.wav", site_type="direct")
             a.resource = direct_resource
             assert len(a.resources()) == 3
             a.api("/api/v1/media/admin/upload/session", {
-                "storage_member_id": follower_id, "target_dir": "music/shared",
+                "site_type": "direct", "target_dir": "music/shared",
                 "relative_path": None, "filename": "direct.wav", "size_bytes": len(source),
             }, expected=409)
-            report["checks"].append("Master reservations place Relay/Direct uploads and enforce global path uniqueness")
+            report["checks"].append("site-type reservations place Relay/Direct uploads and enforce global path uniqueness")
 
             lyric = b"[00:01.00]MASTER OWNED LYRIC\n[00:05.00]next line\n"
             response = a.client.post(a.endpoint + "/api/v1/media/admin/upload/lyric",
