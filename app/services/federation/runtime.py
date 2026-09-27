@@ -54,6 +54,10 @@ class Runtime:
         self.wakeup = asyncio.Event()
         self.backup_attempts: dict[str, int] = {}
         self.backup_tasks: dict[str, asyncio.Task] = {}
+        # A business backup scans the full database and writes a compressed
+        # artifact. Keep that work serial across followers so a fleet-wide due
+        # time cannot multiply database, CPU and disk pressure on the Master.
+        self.backup_semaphore = asyncio.Semaphore(1)
 
     def start(self, *, revocations=False):
         if state.node["role"] != "Standalone" and not settings.TLS_ENABLED:
@@ -175,9 +179,13 @@ class Runtime:
         current = self.backup_tasks.get(identifier)
         if current and not current.done():
             return
-        task = asyncio.create_task(self.maybe_backup(relation), name=f"node-backup-{identifier[:8]}")
+        task = asyncio.create_task(self._run_backup(relation), name=f"node-backup-{identifier[:8]}")
         self.backup_tasks[identifier] = task
         task.add_done_callback(lambda completed, rel=identifier: self._backup_done(rel, completed))
+
+    async def _run_backup(self, relation: dict) -> None:
+        async with self.backup_semaphore:
+            await self.maybe_backup(relation)
 
     def _backup_done(self, identifier: str, task: asyncio.Task) -> None:
         if self.backup_tasks.get(identifier) is task:

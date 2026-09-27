@@ -229,7 +229,13 @@ assert(nodesJs.includes('Backup'));
 assert(!nodesJs.includes('Compute'));
 assert(!nodesJs.includes('worker_slots'));
 assert(!nodesJs.includes('compute_enabled'));
+assert(nodesJs.includes('cell.colSpan = 4'));
+assert(nodesJs.includes("failed: 'Failed'"));
 assert(!nodesJs.includes('nodeTest'));
+
+assert(adminJs.includes('async function refreshStoragePool()'));
+assert(adminJs.includes('storagePoolTimer = setInterval'));
+assert(!adminHtml.includes('storage-capacity-refresh.js'));
 
 const adminCss = fs.readFileSync('static/css/admin.css', 'utf8');
 assert(adminCss.includes('.admin-side[data-admin-module="media"] { order: -2; }'));

@@ -13,6 +13,7 @@ from . import protocol as p
 class Transport:
     def __init__(self):
         self.client: httpx.AsyncClient | None = None
+        self.backup_client: httpx.AsyncClient | None = None
 
     def open(self):
         if self.client is None:
@@ -20,11 +21,22 @@ class Transport:
                 follow_redirects=False, timeout=httpx.Timeout(10, connect=8),
                 limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
                 headers={"Accept-Encoding": "identity", "Accept": "application/json"})
+        if self.backup_client is None:
+            # Backup chunks can legitimately spend much longer in flight. A
+            # dedicated single-connection pool prevents them from consuming the
+            # short-lived control connections used by heartbeats and revocation.
+            self.backup_client = httpx.AsyncClient(verify=ssl.create_default_context(), trust_env=False,
+                follow_redirects=False, timeout=httpx.Timeout(60, connect=8),
+                limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+                headers={"Accept-Encoding": "identity", "Accept": "application/json"})
 
     async def close(self):
         if self.client is not None:
             await self.client.aclose()
             self.client = None
+        if self.backup_client is not None:
+            await self.backup_client.aclose()
+            self.backup_client = None
 
     async def request(self, origin: str, path: str, *, method="GET", value=None, relation=None, credential=None):
         origin = p.endpoint(origin)
@@ -40,8 +52,10 @@ class Transport:
         limit = (p.MAX_LYRIC_RESPONSE_BYTES
                  if (path.startswith("/internal/v1/recordings/") and path.endswith("/stat"))
                  else p.MAX_CONTROL_BYTES)
-        timeout = httpx.Timeout(60, connect=8) if path.startswith("/internal/v1/backup/") else httpx.Timeout(10, connect=8)
-        async with self.client.stream(method, origin + path, content=body, headers=headers, timeout=timeout) as response:
+        is_backup = path.startswith("/internal/v1/backup/")
+        timeout = httpx.Timeout(60, connect=8) if is_backup else httpx.Timeout(10, connect=8)
+        client = self.backup_client if is_backup else self.client
+        async with client.stream(method, origin + path, content=body, headers=headers, timeout=timeout) as response:
             if response.status_code != 200:
                 # Do not log pairing tokens, credentials, or arbitrary upstream bodies.
                 raise p.ProtocolError(f"Node control HTTP {response.status_code}")

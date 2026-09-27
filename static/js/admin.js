@@ -6,6 +6,8 @@ let uploadRunning = false;
 let clusterUpload = false;
 let mediaSearchTimer = null;
 let securityTimer = null;
+let storagePoolTimer = null;
+let storagePoolLoading = false;
 let securityLoading = false;
 let securityPage = 1;
 let securityPages = 1;
@@ -104,6 +106,7 @@ async function api(url, options = {}) {
     const response = await fetch(url, options);
     if (response.status === 401) {
         if (securityTimer) clearInterval(securityTimer);
+        if (storagePoolTimer) clearInterval(storagePoolTimer);
         alert('特权模式已失效，请重新提权');
         location.href = '/api/v1/media';
         throw new Error('特权模式已失效');
@@ -111,6 +114,43 @@ async function api(url, options = {}) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(formatErrorDetail(data.detail));
     return data;
+}
+
+async function refreshStoragePool() {
+    if (storagePoolLoading) return;
+    storagePoolLoading = true;
+    try {
+        const pool = await api('/api/v1/media/admin/storage-pool', {cache: 'no-store'});
+        const target = $('uploadStorageMember');
+        const previous = target.value;
+        const writable = (pool.members || []).filter(member =>
+            member.storage_enabled && member.health === 'online' && member.writable);
+        target.replaceChildren();
+        if (!writable.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = '暂无可写存储节点';
+            option.disabled = true;
+            option.selected = true;
+            target.append(option);
+        } else {
+            for (const member of writable) {
+                const option = document.createElement('option');
+                option.value = member.member_id;
+                if (member.member_kind === 'Auto') {
+                    option.textContent = `自动选择 · 当前可写 ${(Number(member.available_bytes || 0) / 1073741824).toFixed(2)} GiB`;
+                } else {
+                    const name = member.member_kind === 'MasterLocal' ? 'Master Local' : member.member_id;
+                    option.textContent = `${name} · ${member.transport} · 物理总容量 ${(Number(member.physical_total_bytes || 0) / 1073741824).toFixed(2)} GiB · 当前物理 ${(Number(member.physical_free_bytes || 0) / 1073741824).toFixed(2)} GiB · 当前分配 ${(Number(member.current_allocated_bytes ?? member.allocated_bytes ?? 0) / 1073741824).toFixed(2)} GiB · 当前项目资源占用 ${(Number(member.project_used_bytes ?? member.used_bytes ?? 0) / 1073741824).toFixed(2)} GiB`;
+                }
+                target.append(option);
+            }
+            if ([...target.options].some(option => option.value === previous)) target.value = previous;
+        }
+        target.classList.remove('hidden');
+    } finally {
+        storagePoolLoading = false;
+    }
 }
 
 function escapeHtml(value) {
@@ -1314,6 +1354,7 @@ $('download').onclick = async () => {
 
 $('backPublic').onclick = () => { location.href = '/api/v1/media'; };
 $('logout').onclick = async () => {
+    if (storagePoolTimer) clearInterval(storagePoolTimer);
     try {
         await fetch('/api/v1/media/admin/logout', {method: 'POST', headers: requestHeaders(false)});
     } finally {
@@ -1341,15 +1382,9 @@ $('logout').onclick = async () => {
             return;
         }
         if (status.node_role === 'Master') {
-            const pool = await api('/api/v1/media/admin/storage-pool');
-            const target = $('uploadStorageMember'); target.replaceChildren();
-            for (const member of pool.members || []) {
-                if (!member.storage_enabled || member.health !== 'online' || !member.writable) continue;
-                const option = document.createElement('option'); option.value = member.member_id;
-                option.textContent = `${member.member_kind === 'MasterLocal' ? 'Master Local' : member.member_id} · ${member.transport} · ${(member.available_bytes / 1073741824).toFixed(2)} GiB 可写`;
-                target.append(option);
-            }
-            target.classList.remove('hidden'); clusterUpload = true;
+            clusterUpload = true;
+            await refreshStoragePool();
+            storagePoolTimer = setInterval(() => refreshStoragePool().catch(() => {}), 10000);
         }
         if (status.credential_kind !== 'persistent') {
             for (const id of ['randomKey', 'customKey', 'customKeyConfirm', 'customKeySubmit', 'temporaryKeyMinutes', 'temporaryKey']) {

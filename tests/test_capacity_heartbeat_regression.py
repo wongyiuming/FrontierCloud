@@ -151,6 +151,32 @@ class HeartbeatIsolationRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(controller.call.await_args.args[1], "/internal/v1/heartbeat")
         self.assertFalse(hasattr(controller, "fill_worker_slots"))
 
+    async def test_full_backup_builds_are_serialized_across_followers(self):
+        from app.services.federation import runtime as runtime_module
+
+        controller = runtime_module.Runtime()
+        active = 0
+        maximum = 0
+
+        async def backup(_relation):
+            nonlocal active, maximum
+            active += 1
+            maximum = max(maximum, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+
+        controller.maybe_backup = AsyncMock(side_effect=backup)
+        first = self.relation("downstream")
+        second = {**self.relation("downstream"), "relationship_id": "d" * 32,
+                  "peer_id": "e" * 32}
+        controller.schedule_backup(first)
+        controller.schedule_backup(second)
+        tasks = list(controller.backup_tasks.values())
+        await asyncio.gather(*tasks)
+
+        self.assertEqual(controller.maybe_backup.await_count, 2)
+        self.assertEqual(maximum, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

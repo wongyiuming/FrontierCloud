@@ -183,8 +183,8 @@
     function backupPanel(member, observed) {
         const backup = observed?.backup || member.backup || {};
         const health = backup.health || 'disabled';
-        const labels = {healthy: 'Healthy', running: 'Backing up', stale: 'Stale', 'waiting-first-backup': 'Waiting first backup', disabled: 'Disabled'};
-        const tone = health === 'healthy' ? 'good' : (health === 'running' || health === 'waiting-first-backup' ? 'warn' : health === 'stale' ? 'bad' : 'muted');
+        const labels = {healthy: 'Healthy', running: 'Backing up', failed: 'Failed', stale: 'Stale', 'waiting-first-backup': 'Waiting first backup', disabled: 'Disabled'};
+        const tone = health === 'healthy' ? 'good' : (health === 'running' || health === 'waiting-first-backup' ? 'warn' : (health === 'failed' || health === 'stale') ? 'bad' : 'muted');
         const section = make('section', 'node-resource-panel backup');
         const heading = make('div', 'node-resource-heading');
         heading.append(make('strong', '', 'Backup'), pill(labels[health] || backup.raw_state || 'Unknown', tone));
@@ -253,6 +253,7 @@
         const config = configBox(member);
         const actions = make('div', 'node-card-actions');
         const mode = document.createElement('select');
+        mode.setAttribute('aria-label', `${member.member_id} 数据传输模式`);
         mode.title = 'Relay 由 Master 中转业务数据；Direct 允许数据面直接访问 Follower。';
         for (const value of ['Relay', 'Direct']) { const option = document.createElement('option'); option.value = value; option.textContent = value; mode.append(option); }
         mode.value = relation.mode;
@@ -264,14 +265,16 @@
                 backup_enabled: config.backupEnabled.checked,
             });
             return await waitForEffective(member.member_id);
-        }, 'apply'), button('撤销关系', () => post(`/${relation.relationship_id}/revoke`), 'danger'));
+        }, 'apply', '只有 Follower 回报的 Observed 配置与 Desired 一致才显示已生效。'),
+        button('撤销关系', () => post(`/${relation.relationship_id}/revoke`), 'danger',
+            'Follower 仍持有有效 Storage Pool 文件时后端会拒绝撤销。'));
         shell.append(config.grid, actions);
         return shell;
     }
 
     function memberCard(member, relation, observed) {
         const row = document.createElement('tr'); row.className = 'node-card-row';
-        const cell = document.createElement('td'); cell.colSpan = 5;
+        const cell = document.createElement('td'); cell.colSpan = 4;
         const card = make('article', 'node-card');
         const header = make('header', 'node-card-header');
         const title = make('div', 'node-card-title');
@@ -287,15 +290,22 @@
 
     function followerRelationCard(relation, observed) {
         const row = document.createElement('tr'); row.className = 'node-card-row';
-        const cell = document.createElement('td'); cell.colSpan = 5;
+        const cell = document.createElement('td'); cell.colSpan = 4;
         const card = make('article', 'node-card');
         const header = make('header', 'node-card-header');
-        header.append(make('strong', '', relation.peer_id), pill(String(relation.status || 'UNKNOWN').toUpperCase(), relation.status === 'online' ? 'good' : 'bad'));
+        const title = make('div', 'node-card-title');
+        title.append(make('strong', '', relation.peer_id), make('small', '', relation.peer_endpoint || ''));
+        const badges = make('div', 'node-card-badges');
+        badges.append(pill(String(relation.status || 'UNKNOWN').toUpperCase(), relation.status === 'online' ? 'good' : 'bad'), pill(relation.mode || '-', 'muted'));
+        header.append(title, badges);
         const managed = make('section', 'node-resource-panel storage');
-        managed.append(make('div', 'node-metric-primary', 'Master Managed'), make('div', 'node-note', 'Storage / Backup 的 Desired 配置由 Master 下发，本节点只回报 Observed 状态。'));
+        managed.append(make('div', 'node-resource-heading', ''), make('div', 'node-metric-primary', 'Master Managed'), make('div', 'node-note', 'Storage / Backup 的 Desired 配置由 Master 下发，本节点只回报 Observed 状态。'));
         const grid = make('div', 'node-card-grid'); grid.append(connectionPanel(relation, observed), managed);
         const controlsBox = make('div', 'node-card-controls');
-        controlsBox.append(button('撤销关系', () => post(`/${relation.relationship_id}/revoke`), 'danger'));
+        controlsBox.append(make('div', 'node-note', 'Follower 不能自行修改资源策略。'));
+        const actions = make('div', 'node-card-actions');
+        actions.append(button('撤销关系', () => post(`/${relation.relationship_id}/revoke`), 'danger'));
+        controlsBox.append(actions);
         card.append(header, grid, controlsBox); cell.append(card); row.append(cell);
         return row;
     }
