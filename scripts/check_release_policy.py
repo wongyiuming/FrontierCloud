@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Fail CI if production release controls drift away from main-only policy."""
 from pathlib import Path
+import sys
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
 def read(path: str) -> str:
