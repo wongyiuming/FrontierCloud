@@ -86,7 +86,7 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
                 } else {
                     const formData = new FormData();
                     if (!lyricUpload) formData.append('target_dir', currentPath);
-                    if (!lyricUpload && relativePaths) formData.append('relative_path', relativePaths[index]);
+                    if (relativePaths) formData.append('relative_path', relativePaths[index]);
                     formData.append('file', file, file.name);
                     result = await uploadOne(formData, progress,
                         lyricUpload ? '/api/v1/media/admin/upload/lyric' : '/api/v1/media/admin/upload/item');

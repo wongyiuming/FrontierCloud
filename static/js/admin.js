@@ -293,9 +293,11 @@ function setUploadControlsDisabled(disabled) {
     $('uploadFiles').disabled = disabled;
     $('uploadFolder').disabled = disabled;
     $('uploadLyrics').disabled = disabled;
+    $('uploadLyricsFolder').disabled = disabled;
     $('fileInput').disabled = disabled;
     $('folderInput').disabled = disabled;
     $('lyricsInput').disabled = disabled;
+    $('lyricsFolderInput').disabled = disabled;
 }
 
 function setProgress(elementId, percentId, value) {
@@ -422,7 +424,7 @@ async function runUploadTask(fileList, relativePaths = null, lyricUpload = false
                 } else {
                     const formData = new FormData();
                     if (!lyricUpload) formData.append('target_dir', currentPath);
-                    if (!lyricUpload && relativePaths) formData.append('relative_path', relativePaths[index]);
+                    if (relativePaths) formData.append('relative_path', relativePaths[index]);
                     formData.append('file', file, file.name);
                     result = await uploadOne(formData, progress,
                         lyricUpload ? '/api/v1/media/admin/upload/lyric' : '/api/v1/media/admin/upload/item');
@@ -650,6 +652,21 @@ async function loadLyricCatalog() {
 }
 
 $('lyricsRefresh').onclick = () => loadLyricCatalog().catch(error => alert(error.message));
+$('lyricsAutoLink').onclick = async () => {
+    const button = $('lyricsAutoLink');
+    button.disabled = true;
+    try {
+        const result = await api('/api/v1/media/admin/lyrics/auto-relate', {
+            method: 'POST', headers: requestHeaders(), body: '{}',
+        });
+        await loadLyricCatalog();
+        $('lyricsModeStatus').textContent = `同名关联完成：关联 ${result.linked}，无匹配 ${result.unmatched}，歧义 ${result.ambiguous}`;
+    } catch (error) {
+        alert(error.message);
+    } finally {
+        button.disabled = false;
+    }
+};
 for (const id of ['lyricsTrackFilter', 'lyricsFileFilter']) {
     $(id).oninput = () => {
         clearTimeout(lyricSearchTimer);
@@ -1294,6 +1311,7 @@ $('dismissKey').onclick = () => $('newKeyResult').classList.add('hidden');
 $('uploadFiles').onclick = () => $('fileInput').click();
 $('uploadFolder').onclick = () => $('folderInput').click();
 $('uploadLyrics').onclick = () => $('lyricsInput').click();
+$('uploadLyricsFolder').onclick = () => $('lyricsFolderInput').click();
 $('fileInput').onchange = async event => {
     await runUploadTask(event.target.files);
     event.target.value = '';
@@ -1305,6 +1323,12 @@ $('folderInput').onchange = async event => {
 };
 $('lyricsInput').onchange = async event => {
     await runUploadTask(event.target.files, null, true);
+    event.target.value = '';
+};
+$('lyricsFolderInput').onchange = async event => {
+    const files = [...event.target.files].filter(file => file.name.toLowerCase().endsWith('.lrc'));
+    const paths = files.map(file => file.webkitRelativePath || file.name);
+    await runUploadTask(files, paths, true);
     event.target.value = '';
 };
 

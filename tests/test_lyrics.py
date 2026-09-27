@@ -70,7 +70,7 @@ class LyricFormatTests(unittest.TestCase):
 
 
 class LyricUploadTests(unittest.IsolatedAsyncioTestCase):
-    async def test_upload_is_flat_validated_and_world_readable(self):
+    async def test_upload_is_validated_and_world_readable(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             lyric_root = root / "lyrics"
@@ -87,6 +87,31 @@ class LyricUploadTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((lyric_root / "共享歌词.lrc").read_text(encoding="utf-8"), "[00:01.00]第一行\n[00:05.25]第二行")
             self.assertTrue((lyric_root / "共享歌词.lrc").stat().st_mode & 0o004)
 
+    async def test_folder_upload_preserves_relative_album_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            lyric_root = root / "lyrics"
+            lyric_root.mkdir()
+            upload = UploadFile(filename="同名歌曲.lrc", file=io.BytesIO("[00:01]歌词".encode()))
+            with (
+                patch.object(media_manager, "MEDIA_ROOT", root),
+                patch.object(media_manager, "LYRICS_ROOT", lyric_root),
+            ):
+                saved = await media_manager.MediaManager.upload_lyric(
+                    upload, "歌手/专辑/同名歌曲.lrc",
+                )
+            await upload.close()
+
+            self.assertEqual(saved, "lyrics/歌手/专辑/同名歌曲.lrc")
+            self.assertTrue((lyric_root / "歌手" / "专辑" / "同名歌曲.lrc").is_file())
+
+    async def test_folder_upload_rejects_parent_traversal(self):
+        upload = UploadFile(filename="song.lrc", file=io.BytesIO(b"[00:01]line"))
+        with self.assertRaises(HTTPException) as raised:
+            await media_manager.MediaManager.upload_lyric(upload, "album/../song.lrc")
+        await upload.close()
+        self.assertEqual(raised.exception.status_code, 400)
+
     async def test_upload_rejects_unsupported_extension(self):
         upload = UploadFile(filename="lyrics.txt", file=io.BytesIO(b"[00:01]line"))
         with self.assertRaises(HTTPException) as raised:
@@ -96,6 +121,30 @@ class LyricUploadTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
+    def test_same_name_matching_prefers_relative_album_and_skips_ambiguity(self):
+        pairs, ambiguous, unmatched = lyrics.matching_lyric_pairs(
+            [
+                "music/artist/album/song.mp3",
+                "music/other/unique.flac",
+                "music/other/duplicate.wav",
+                "music/other/missing.m4a",
+            ],
+            [
+                "lyrics/artist/album/song.lrc",
+                "lyrics/other/song.lrc",
+                "lyrics/collection/unique.lrc",
+                "lyrics/a/duplicate.lrc",
+                "lyrics/b/duplicate.lrc",
+            ],
+        )
+
+        self.assertEqual(pairs, [
+            ("music/artist/album/song.mp3", "lyrics/artist/album/song.lrc"),
+            ("music/other/unique.flac", "lyrics/collection/unique.lrc"),
+        ])
+        self.assertEqual(ambiguous, 1)
+        self.assertEqual(unmatched, 1)
+
     def test_catalog_scope_rejects_global_media_root(self):
         for scope, kind in (("", "track"), ("data/media", "track"), ("music", "lyric")):
             with self.subTest(scope=scope, kind=kind), self.assertRaises(ValueError):

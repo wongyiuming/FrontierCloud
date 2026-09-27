@@ -39,7 +39,7 @@ Public ports bind IPv4 by default. Set `PUBLIC_BIND_ADDRESS=::` in `.env` only w
 
 ## Features and limits
 
-- Admin manages uploads, downloads, visibility, deletion, and track-to-lyric links. One lyric can serve multiple tracks; each track has at most one lyric.
+- Admin manages uploads, downloads, visibility, deletion, and track-to-lyric links. Lyric folder uploads preserve their relative album directories, and one-click linking associates exact same-stem music and LRC filenames (preferring the same relative album path and reporting ambiguity). One lyric can serve multiple tracks; each track has at most one lyric.
 - LRC uploads support timestamps and offsets, with a 2 MiB limit. Audio playback shows four synchronized, smoothly scrolling lyric lines above the heartbeat; fullscreen lyrics remain available.
 - The current audio or video can enter karaoke from its player button or a three-finger 1.5-second press. The page reuses the selected media and Master-owned lyrics, supports separate input and output devices where available, and records only the microphone voice bus. Guests can sing and preview in memory. New accounts receive 200 MiB; the Master automatically places recordings in the storage pool, and downloaded recordings carry synchronized lyric metadata for later re-upload.
 - Search is Admin-only, supports Simplified/Traditional Chinese and pinyin, and includes file paths. It searches the selected directory and descendants, up to one media-type root; global `data/media` queries are rejected. Results are capped at 200.
