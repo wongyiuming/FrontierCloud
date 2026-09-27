@@ -607,12 +607,16 @@ async def upload_item(
 async def upload_lyric(
     request: Request,
     file: Annotated[UploadFile, File(...)],
+    relative_path: Annotated[str | None, Form()] = None,
     session_hash: str = Depends(require_session),
 ):
-    source = file.filename or ""
+    source = relative_path or file.filename or ""
     try:
         try:
-            saved_path = await MediaManager.upload_lyric(file, audit=_mutation_audit(session_hash, "upload_lyric", [source], request))
+            saved_path = await MediaManager.upload_lyric(
+                file, relative_path,
+                audit=_mutation_audit(session_hash, "upload_lyric", [source], request),
+            )
         except HTTPException as exc:
             await admin_service.audit(
                 session_hash, "upload_lyric", 1, source, "failed", str(exc.detail), request,
@@ -664,6 +668,17 @@ async def lyric_relations(
         await admin_service.audit(session_hash, "lyric_relations", len(linked_paths), str(payload.get("origin_path", "")), "failed", str(exc), request)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "relations": count}
+
+
+@router.post("/lyrics/auto-relate")
+async def lyric_auto_relate(
+    request: Request,
+    session_hash: str = Depends(require_session),
+):
+    result = await lyrics.auto_relate_matching_names(
+        audit=_mutation_audit(session_hash, "lyric_auto_relate", [], request),
+    )
+    return {"status": "ok", **result}
 
 
 @router.post("/key/rotate")

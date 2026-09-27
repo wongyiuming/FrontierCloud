@@ -326,14 +326,25 @@ class MediaManager:
                         break
 
     @staticmethod
-    async def upload_lyric(upload: UploadFile, *, audit: MutationAudit | None = None) -> str:
+    async def upload_lyric(
+        upload: UploadFile,
+        relative_path: str | None = None,
+        *,
+        audit: MutationAudit | None = None,
+    ) -> str:
         from app.services.lyrics import parse_lrc_bytes
 
-        name = MediaManager.validate_name(upload.filename or "")
+        relative = MediaManager.normalize_relative(relative_path) if relative_path else None
+        name = MediaManager.validate_name(relative or upload.filename or "")
         ext = Path(name).suffix.lower()
         if ext not in LYRIC_EXTS:
             raise HTTPException(status_code=400, detail="歌词只支持 .lrc")
-        destination = LYRICS_ROOT / name
+        nested = Path(relative).parent if relative else Path()
+        destination = (LYRICS_ROOT / nested / name).resolve()
+        try:
+            destination.relative_to(LYRICS_ROOT)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="非法歌词路径") from exc
         if destination.exists():
             raise HTTPException(status_code=409, detail="上传失败，已存在同名歌词")
 
@@ -341,6 +352,7 @@ class MediaManager:
         os.close(fd)
         tmp = Path(tmp_name)
         published = False
+        created_dirs: list[Path] = []
         try:
             payload = bytearray()
             while True:
@@ -366,7 +378,11 @@ class MediaManager:
                 if audit is not None:
                     async with engine.begin() as conn:
                         await audit(conn, "pending", 1, {"path": destination.relative_to(MEDIA_ROOT).as_posix()})
-                LYRICS_ROOT.mkdir(parents=True, exist_ok=True)
+                missing = destination.parent
+                while missing != LYRICS_ROOT and not missing.exists():
+                    created_dirs.append(missing)
+                    missing = missing.parent
+                destination.parent.mkdir(parents=True, exist_ok=True)
                 tmp.chmod(0o644)
                 try:
                     os.link(tmp, destination)
@@ -378,6 +394,12 @@ class MediaManager:
             return destination.relative_to(MEDIA_ROOT).as_posix()
         finally:
             tmp.unlink(missing_ok=True)
+            if not published:
+                for directory in created_dirs:
+                    try:
+                        directory.rmdir()
+                    except (FileNotFoundError, OSError):
+                        break
 
     @staticmethod
     def ensure_download_readable(path: Path) -> None:

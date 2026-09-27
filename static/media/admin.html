@@ -129,6 +129,7 @@
                 </div>
                 <div class="lyrics-toolbar">
                     <span id="lyricsModeStatus">请选择一份歌词</span>
+                    <button id="lyricsAutoLink" type="button">按同名一键关联</button>
                     <button id="lyricsRefresh" type="button">刷新</button>
                     <button id="lyricsSaveLink" class="hidden" type="button">保存关联</button>
                 </div>
@@ -215,6 +216,7 @@
                     <button id="uploadFiles">上传文件</button>
                     <button id="uploadFolder">上传文件夹</button>
                     <button id="uploadLyrics">上传歌词</button>
+                    <button id="uploadLyricsFolder">上传歌词文件夹</button>
                 </div>
             </div>
             <select id="uploadStorageMember" class="hidden" aria-label="上传目标存储成员"></select>
@@ -246,6 +248,7 @@
     <input id="fileInput" type="file" multiple hidden accept=".mp3,.m4a,.flac,.wav,.mp4,.webm,.mkv">
     <input id="folderInput" type="file" multiple webkitdirectory directory hidden>
     <input id="lyricsInput" type="file" multiple hidden accept=".lrc">
+    <input id="lyricsFolderInput" type="file" multiple webkitdirectory directory hidden accept=".lrc">
 
     <div id="modal" class="modal hidden">
         <div class="modal-box">
