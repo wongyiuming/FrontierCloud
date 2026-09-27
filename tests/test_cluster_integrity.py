@@ -144,7 +144,12 @@ class ClusterRouteIntegrityTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(HTTPException) as raised:
                 await admin_upload_guard.upload_item(
-                    object(), file, "music/artist", None, "primary", "actor"
+                    request=object(),
+                    file=file,
+                    target_dir="music/artist",
+                    relative_path=None,
+                    session_hash="actor",
+                    site_type="primary",
                 )
         self.assertEqual(raised.exception.status_code, 409)
 
