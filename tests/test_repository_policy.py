@@ -33,6 +33,14 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
         self.assertIn('[[ "$HEAD_REF" != "dev" || "$HEAD_REPO" != "$BASE_REPO" ]]', workflow)
         self.assertIn('same-repository dev -> main', workflow)
 
+    def test_noncanonical_branch_creation_is_detected(self):
+        workflow = (ROOT / ".github/workflows/repository-policy.yml").read_text(encoding="utf-8")
+        self.assertRegex(workflow, r"(?m)^  create:\s*$")
+        self.assertIn("github.ref_type == 'branch'", workflow)
+        self.assertIn('CREATED_REF: ${{ github.ref_name }}', workflow)
+        self.assertIn('[[ "$CREATED_REF" != "dev" && "$CREATED_REF" != "main" ]]', workflow)
+        self.assertIn("new branches are prohibited", workflow)
+
     def test_no_new_branch_rule_is_explicit_and_release_flow_is_two_branch(self):
         contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
         architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")

@@ -4,12 +4,31 @@ permissions:
   contents: read
 
 on:
+  create:
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, edited, ready_for_review]
 
 jobs:
+  branch-creation-policy:
+    if: ${{ github.event_name == 'create' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Reject non-canonical branch creation
+        env:
+          CREATED_REF: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$CREATED_REF" != "dev" && "$CREATED_REF" != "main" ]]; then
+            echo "::error::new branches are prohibited; only existing canonical refs dev and main are allowed (created: $CREATED_REF)"
+            exit 1
+          fi
+          echo "Canonical branch event: $CREATED_REF"
+
   main-pr-topology:
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:

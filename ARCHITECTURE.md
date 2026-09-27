@@ -79,6 +79,12 @@ Folder rename is deliberately narrower than a general move API:
 
 All Master path mutations participate in one process-local reader/writer fence. Cross-member folder rename owns the exclusive fence from preflight through commit/rollback. Upload-session reservation, global delete, hide/unhide, and priority mutations enter through a shared fence; upload reservations and `pending_delete` then remain durable database fences after that short shared section ends. A new path-mutation entry point must join this protocol instead of creating an independent race window.
 
+### Process model for mutation safety
+
+The production Web service must run a **single ASGI worker**. The media mutation fence above is process-local; starting multiple Uvicorn/Gunicorn workers or setting `WEB_CONCURRENCY` would create independent locks and silently invalidate rename/upload/delete/hide serialization.
+
+Do not add multiple Web workers as a performance tweak. Multi-process or horizontally scaled Web execution requires replacing the process-local media mutation fence with a database-backed or distributed lock, plus new cross-process concurrency regressions, before deployment topology changes are allowed.
+
 Do not turn folder rename into an arbitrary cross-parent move without a new transaction design and federation regression coverage.
 
 ## 6. Directory priority
@@ -154,7 +160,7 @@ Absolute repository policy:
 - after the release PR is merged, fast-forward `dev` to the resulting `main` commit before further work;
 - never force-rewrite `dev` or `main`.
 
-GitHub-side ref creation cannot be fully prevented by a unit test, so the no-new-branch invariant must remain documented here, in `CONTRIBUTING.md`, and in the Wiki/ruleset configuration.
+GitHub-side ref creation cannot be fully prevented by a unit test. The repository-policy workflow detects non-canonical branch creation after the event, while true pre-creation prevention requires GitHub repository ruleset/administrative enforcement. The no-new-branch invariant must remain documented here, in `CONTRIBUTING.md`, and in the Wiki/ruleset configuration.
 
 ## 11. Regression rule
 
