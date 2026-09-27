@@ -28,7 +28,7 @@ data/media/lyrics
 
 The startup initializer creates the managed data tree and grants the unprivileged Web process the required access.
 
-Initialization also creates persistent runtime secrets in the `runtime_secrets` volume. Read the current Admin Key or metrics token with:
+Initialization also creates runtime secrets in the persistent `runtime_secrets` volume. Read the current Admin Key or metrics token with:
 
 ```bash
 docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'
