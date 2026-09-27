@@ -123,7 +123,7 @@ class ClusterRouteIntegrityTests(unittest.IsolatedAsyncioTestCase):
             ("/api/v1/karaoke/account/status", "GET"): "app.api.v1.karaoke_integrity",
             ("/api/v1/karaoke/account/recordings", "GET"): "app.api.v1.karaoke_integrity",
             ("/api/v1/karaoke/account/recordings/ticket", "POST"): "app.api.v1.karaoke_integrity",
-            ("/api/v1/karaoke/account/recordings/{recording_id}/pending", "GET"): "app.api.v1.karaoke_integrity",
+            ("/api/v1/karaoke/account/recordings/{recording_id}/pending", "DELETE"): "app.api.v1.karaoke_integrity",
             ("/api/v1/karaoke/account/recordings/{recording_id}", "DELETE"): "app.api.v1.karaoke_integrity",
             ("/api/v1/karaoke/account", "DELETE"): "app.api.v1.karaoke_integrity",
         }
