@@ -30,6 +30,22 @@ The Master exposes one logical storage pool containing Master Local plus enabled
 - Storage allocation is FrontierCloud logical capacity. Physical disk capacity is observed separately.
 - Admin Storage wording is intentionally split into `physical used / all` and `used / allocated`; do not conflate filesystem free space with FrontierCloud quota.
 
+### Upload site types
+
+Admin media upload chooses a **site type**, never a concrete storage member. The selector starts empty and media upload does not begin until a type is explicitly selected.
+
+The only supported site types are:
+
+- `primary` / 主站 — the Master Local placement (`member_kind=MasterLocal`, transport `Local`);
+- `direct` / 直连站点 — Follower placements whose current transport is `Direct`;
+- `relay` / 中继站点 — Follower placements whose current transport is `Relay`.
+
+For Direct and Relay uploads, the user must not name a specific member. FrontierCloud selects among all members of the requested type that are storage-enabled, online, writable, and have enough writable capacity for the object. Placement prefers the lowest current `(used + reserved) / allocated` pressure and then more available bytes, so sequential/concurrent reservations spread naturally across ready members instead of sticking to one node. Member selection plus durable upload reservation is serialized by the storage write lock so concurrent Admin sessions see current `reserved_bytes`.
+
+Historical media requires **no migration** for this feature. Existing `storage_member_id`, `member_kind`, and `transport` remain the source of truth; Admin derives the visible site type from those fields. A missing transport in a local/Standalone media tree is treated as primary/local. Changing this presentation must not rewrite historical ownership.
+
+Site-type colors in Admin are observation aids only: local/primary uses a muted green marker, Direct a muted amber marker, and Relay a muted red marker. They must remain low-saturation badges rather than full-row alert colors.
+
 Compute Worker is **retired**. Worker slots, leased compute scheduling, worker UI, or product-level Compute configuration must not be reintroduced accidentally through compatibility code.
 
 ## 4. Heartbeat and Backup
