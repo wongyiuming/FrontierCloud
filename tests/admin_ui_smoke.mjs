@@ -225,8 +225,10 @@ assert(adminJs.includes('N=${relationCount}'));
 assert(adminJs.includes("params.set('match_mode'"));
 assert(nodesJs.includes('/resources'));
 assert(nodesJs.includes('Storage'));
-assert(nodesJs.includes('Compute'));
 assert(nodesJs.includes('Backup'));
+assert(!nodesJs.includes('Compute'));
+assert(!nodesJs.includes('worker_slots'));
+assert(!nodesJs.includes('compute_enabled'));
 assert(!nodesJs.includes('nodeTest'));
 
 const adminCss = fs.readFileSync('static/css/admin.css', 'utf8');
