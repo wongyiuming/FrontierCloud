@@ -47,10 +47,23 @@ class AdminModuleOrderTests(unittest.TestCase):
         self.assertIn("panel.dataset.adminModule = 'site'", maintenance)
         self.assertIn("panel.dataset.adminModule = 'release'", release)
 
-    def test_system_order_stylesheet_is_loaded_after_base_admin_css(self):
+    def test_dom_reorder_matches_visual_order(self):
+        focus = (ROOT / "static/js/admin-focus.js").read_text(encoding="utf-8")
+        match = re.search(r"const MODULE_ORDER = \[(?P<body>.*?)\];", focus, re.S)
+        self.assertIsNotNone(match)
+        names = re.findall(r"'([^']+)'", match.group("body"))
+        self.assertEqual(names, [name for name, _order in EXPECTED_ORDER])
+        self.assertIn("for (const module of modules) consoleRoot.append(module);", focus)
+
+    def test_system_styles_and_dom_reorder_load_after_dynamic_modules(self):
         page = (ROOT / "app/api/v1/admin_page_integrity.py").read_text(encoding="utf-8")
         self.assertIn('static_asset_url("css/admin-system-modules.css")', page)
         self.assertIn('content.replace("</head>"', page)
+        release_pos = page.index('static_asset_url("js/release-admin.js")')
+        maintenance_pos = page.index('static_asset_url("js/maintenance-admin.js")')
+        focus_pos = page.index('static_asset_url("js/admin-focus.js")')
+        self.assertLess(release_pos, focus_pos)
+        self.assertLess(maintenance_pos, focus_pos)
 
 
 if __name__ == "__main__":
