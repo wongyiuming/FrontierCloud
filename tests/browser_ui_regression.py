@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -238,6 +239,89 @@ def admin_focus_check(browser) -> None:
     context.close()
 
 
+def folder_priority_rename_check(browser) -> None:
+    require(bool(ADMIN_KEY), "ADMIN_KEY is required for folder priority/rename regression")
+    music_root = ROOT / "data" / "media" / "music"
+    fixture = music_root / "ui-regression" / "fixture.wav"
+    first = music_root / "aa-folder-priority"
+    second = music_root / "zz-folder-priority"
+    renamed = music_root / "mm-folder-renamed"
+    require(fixture.is_file(), "UI fixture audio is missing")
+
+    for path in (first, second, renamed):
+        shutil.rmtree(path, ignore_errors=True)
+    music_root.chmod(0o777)
+    for path in (first, second):
+        path.mkdir(parents=True)
+        path.chmod(0o777)
+        shutil.copy2(fixture, path / "fixture.wav")
+
+    context = browser.new_context(viewport={"width": 1280, "height": 800})
+    try:
+        response = context.request.post(BASE_URL + "/api/v1/media/admin/elevate", form={"token": ADMIN_KEY})
+        require(response.ok, f"Admin elevation failed: HTTP {response.status}")
+        page = context.new_page()
+        page.goto(BASE_URL + "/api/v1/media/admin/", wait_until="domcontentloaded")
+        page.locator("#renameDirectory").wait_for(state="attached", timeout=15000)
+        page.wait_for_function("typeof api === 'function' && typeof requestHeaders === 'function'", timeout=5000)
+        result = page.evaluate("""
+            async () => {
+                const call = (url, options = {}) => api(url, options);
+                await call('/api/v1/media/admin/directory-priority', {
+                    method: 'POST',
+                    headers: requestHeaders(),
+                    body: JSON.stringify({path: 'music/zz-folder-priority', value: 77}),
+                });
+                const ranked = await call('/api/v1/media/catalog/categories?media_type=music');
+                const rankedNames = (ranked.entries || []).map(item => item.name);
+
+                const renameResult = await call('/api/v1/media/admin/directory/rename', {
+                    method: 'POST',
+                    headers: requestHeaders(),
+                    body: JSON.stringify({path: 'music/zz-folder-priority', new_name: 'mm-folder-renamed'}),
+                });
+                const afterRename = await call('/api/v1/media/catalog/categories?media_type=music');
+                const renamedNames = (afterRename.entries || []).map(item => item.name);
+                const priorityState = await call('/api/v1/media/admin/directory-priorities?scope=music');
+                const migrated = (priorityState.items || []).find(item => item.path === 'music/mm-folder-renamed') || null;
+
+                await call('/api/v1/media/admin/directory/rename', {
+                    method: 'POST',
+                    headers: requestHeaders(),
+                    body: JSON.stringify({path: 'music/mm-folder-renamed', new_name: 'zz-folder-priority'}),
+                });
+                await call('/api/v1/media/admin/directory-priority', {
+                    method: 'POST',
+                    headers: requestHeaders(),
+                    body: JSON.stringify({path: 'music/zz-folder-priority', value: 0}),
+                });
+                return {
+                    rankedNames,
+                    renamedNames,
+                    renameResult,
+                    migrated,
+                };
+            }
+        """)
+
+        ranked_names = result["rankedNames"]
+        require("aa-folder-priority" in ranked_names, "priority fixture A is missing from public catalog")
+        require("zz-folder-priority" in ranked_names, "priority fixture Z is missing from public catalog")
+        require(
+            ranked_names.index("zz-folder-priority") < ranked_names.index("aa-folder-priority"),
+            f"folder priority did not change public ordering: {ranked_names}",
+        )
+        require(result["renameResult"]["new_path"] == "music/mm-folder-renamed", "rename API returned the wrong target path")
+        require("zz-folder-priority" not in result["renamedNames"], "old folder name remained in public catalog after rename")
+        require("mm-folder-renamed" in result["renamedNames"], "new folder name did not appear in public catalog after rename")
+        require(result["migrated"] is not None, "folder priority record did not migrate to renamed path")
+        require(int(result["migrated"]["preference"]) == 77, "folder priority value changed during rename")
+    finally:
+        context.close()
+        for path in (first, second, renamed):
+            shutil.rmtree(path, ignore_errors=True)
+
+
 def maintenance_page_check(browser) -> None:
     subprocess.run(["sudo", "touch", str(MAINTENANCE_FLAG)], check=True)
     try:
@@ -275,6 +359,7 @@ def main() -> None:
             logo_cross_page_cache_check(browser)
             tesla_player_layout_check(browser)
             admin_focus_check(browser)
+            folder_priority_rename_check(browser)
             maintenance_page_check(browser)
         finally:
             browser.close()
