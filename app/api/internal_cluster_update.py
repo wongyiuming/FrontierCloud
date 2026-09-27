@@ -9,8 +9,12 @@ from fastapi import APIRouter, HTTPException, Request
 from app.api.internal_backup_control import router as backup_control_router
 from app.api.internal_media_control import router as media_control_router
 from app.api.internal_nodes import authenticated
+from app.api.internal_worker_retirement import install as install_internal_worker_retirement
 from app.services.federation.state import state
 from app.services.release_control import agent_request, agent_status
+
+
+install_internal_worker_retirement()
 
 router = APIRouter(include_in_schema=False)
 cluster_router = APIRouter(prefix="/internal/v1/cluster-update", include_in_schema=False)

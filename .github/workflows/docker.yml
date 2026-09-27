@@ -350,13 +350,13 @@ jobs:
           printf 'RIFF0000WAVEfmt ' > /tmp/ci-one.wav
           printf 'RIFF1111WAVEfmt ' > /tmp/ci-two.wav
           curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -F 'target_dir=' -F 'relative_path=music/ci-folder/one.wav' -F 'file=@/tmp/ci-one.wav;type=audio/wav' \
+            -F 'site_type=primary' -F 'target_dir=' -F 'relative_path=music/ci-folder/one.wav' -F 'file=@/tmp/ci-one.wav;type=audio/wav' \
             https://ci.frontiercloud.local/api/v1/media/admin/upload/item | grep 'music/ci-folder/one.wav'
           curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -F 'target_dir=music/ci-multiple' -F 'file=@/tmp/ci-one.wav;type=audio/wav' \
+            -F 'site_type=primary' -F 'target_dir=music/ci-multiple' -F 'file=@/tmp/ci-one.wav;type=audio/wav' \
             https://ci.frontiercloud.local/api/v1/media/admin/upload/item | grep 'music/ci-multiple/ci-one.wav'
           curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -F 'target_dir=music/ci-multiple' -F 'file=@/tmp/ci-two.wav;type=audio/wav' \
+            -F 'site_type=primary' -F 'target_dir=music/ci-multiple' -F 'file=@/tmp/ci-two.wav;type=audio/wav' \
             https://ci.frontiercloud.local/api/v1/media/admin/upload/item | grep 'music/ci-multiple/ci-two.wav'
           curl -fsS -b /tmp/admin-cookies.txt \
             'https://ci.frontiercloud.local/api/v1/media/admin/download?paths=%5B%22music%2Fci-multiple%2Fci-one.wav%22%5D' \

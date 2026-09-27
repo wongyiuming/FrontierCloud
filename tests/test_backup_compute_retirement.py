@@ -81,6 +81,14 @@ class ComputeRetirementContractTests(unittest.TestCase):
         self.assertNotIn("worker_jobs", observability)
         self.assertNotIn("shared_queued", observability)
 
+    def test_retirement_filter_is_installed_before_internal_router_registration(self):
+        retirement = (ROOT / "app/api/internal_worker_retirement.py").read_text(encoding="utf-8")
+        registry = (ROOT / "app/api/internal_cluster_update.py").read_text(encoding="utf-8")
+
+        self.assertIn('RETIRED_WORKER_PREFIX = "/internal/v1/jobs/"', retirement)
+        self.assertIn("internal_nodes.router.routes[:]", retirement)
+        self.assertIn("install_internal_worker_retirement()", registry)
+
 
 if __name__ == "__main__":
     unittest.main()
