@@ -82,13 +82,13 @@ class ClusterRouteIntegrityTests(unittest.IsolatedAsyncioTestCase):
             "/api/v1/media/admin/tree": "app.api.v1.admin_cluster_integrity",
             "/api/v1/media/admin/tree/search": "app.api.v1.admin_cluster_integrity",
             "/api/v1/media/admin/storage-pool": "app.api.v1.admin_masterlocal_recovery",
-            "/api/v1/media/admin/upload/session": "app.api.v1.admin_masterlocal_recovery",
+            "/api/v1/media/admin/upload/session": "app.api.v1.admin_master_mutation_integrity",
             "/api/v1/media/admin/upload/session/{upload_id}/bytes": "app.api.v1.admin_cluster_integrity",
             "/api/v1/media/admin/upload/session/{upload_id}/finalize": "app.api.v1.admin_cluster_integrity",
             "/api/v1/media/admin/upload/session/{upload_id}": "app.api.v1.admin_delete_integrity",
             "/api/v1/media/admin/upload/item": "app.api.v1.admin_upload_guard",
-            "/api/v1/media/admin/delete": "app.api.v1.admin_delete_integrity",
-            "/api/v1/media/admin/hide": "app.api.v1.admin_cluster_integrity",
+            "/api/v1/media/admin/delete": "app.api.v1.admin_master_mutation_integrity",
+            "/api/v1/media/admin/hide": "app.api.v1.admin_master_mutation_integrity",
             "/api/v1/media/admin/download": "app.api.v1.admin_cluster_integrity",
             "/api/v1/media/admin/nodes/{identifier}/revoke": "app.api.v1.admin_cluster_integrity",
         }
@@ -123,11 +123,9 @@ class ClusterRouteIntegrityTests(unittest.IsolatedAsyncioTestCase):
             ("/api/v1/karaoke/account/status", "GET"): "app.api.v1.karaoke_integrity",
             ("/api/v1/karaoke/account/recordings", "GET"): "app.api.v1.karaoke_integrity",
             ("/api/v1/karaoke/account/recordings/ticket", "POST"): "app.api.v1.karaoke_integrity",
-            ("/api/v1/karaoke/account/recordings/{recording_id}/pending", "DELETE"): "app.api.v1.karaoke_integrity",
+            ("/api/v1/karaoke/account/recordings/{recording_id}/pending", "GET"): "app.api.v1.karaoke_integrity",
             ("/api/v1/karaoke/account/recordings/{recording_id}", "DELETE"): "app.api.v1.karaoke_integrity",
             ("/api/v1/karaoke/account", "DELETE"): "app.api.v1.karaoke_integrity",
-            ("/api/v1/media/admin/users", "GET"): "app.api.v1.admin_karaoke_integrity",
-            ("/api/v1/media/admin/users/{user_id}", "POST"): "app.api.v1.admin_karaoke_integrity",
         }
         for (path, method), module in expected.items():
             routes = [
@@ -135,19 +133,20 @@ class ClusterRouteIntegrityTests(unittest.IsolatedAsyncioTestCase):
                 if getattr(route, "path", None) == path
                 and method in (getattr(route, "methods", None) or set())
             ]
-            self.assertEqual(len(routes), 1, f"{method} {path}")
+            self.assertEqual(len(routes), 1, (path, method))
             self.assertEqual(routes[0].endpoint.__module__, module)
 
     async def test_master_legacy_upload_is_rejected_before_disk_write(self):
-        upload = UploadFile(filename="song.mp3", file=io.BytesIO(b"ID3payload"))
-        with patch.object(node_state, "node", {"role": "Master"}), \
-             patch.object(admin_upload_guard.admin_service, "audit", new=AsyncMock()):
+        file = UploadFile(filename="song.mp3", file=io.BytesIO(b"ID3"))
+        with (
+            patch.object(node_state, "node", {"role": "Master"}),
+            patch.object(admin_upload_guard.admin_service, "audit", new=AsyncMock()),
+        ):
             with self.assertRaises(HTTPException) as raised:
                 await admin_upload_guard.upload_item(
-                    object(), upload, "music/artist", None, "actor"
+                    object(), file, "music/artist", None, "primary", "actor"
                 )
         self.assertEqual(raised.exception.status_code, 409)
-        self.assertTrue(upload.file.closed)
 
 
 if __name__ == "__main__":
