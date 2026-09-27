@@ -1,22 +1,12 @@
-"""Operator-facing node observability derived from existing federation state.
-
-This module intentionally adds no schema.  It turns the resource-pool and worker
-facts already owned by the Master into an operations view: desired vs observed
-configuration, real leased-job occupancy, recent worker activity, backup
-freshness, and connection telemetry.
-"""
+"""Operator-facing connection, storage and backup observability."""
 from __future__ import annotations
 
 import time
 
-from sqlalchemy import func, select
-
 from app.services import resource_pool
-from app.services.federation import schema as s
 from app.services.federation.state import state
 
-DAY_SECONDS = 24 * 60 * 60
-BACKUP_INTERVAL_SECONDS = DAY_SECONDS
+BACKUP_INTERVAL_SECONDS = 24 * 60 * 60
 
 
 def _resource_sync(desired: dict, observed: dict, keys: tuple[str, ...], online: bool) -> str:
@@ -69,6 +59,8 @@ def _backup_view(member: dict, observed: dict, now: int) -> dict:
         health = "disabled"
     elif raw_state == "receiving" or last_attempt_state == "receiving":
         health = "running"
+    elif last_attempt_state == "failed":
+        health = "failed"
     elif not last_success:
         health = "waiting-first-backup"
     elif lag > BACKUP_INTERVAL_SECONDS + 6 * 60 * 60:
@@ -91,84 +83,11 @@ def _backup_view(member: dict, observed: dict, now: int) -> dict:
     }
 
 
-def _placement_reason(row: dict) -> str:
-    result = row.get("result") if isinstance(row.get("result"), dict) else {}
-    placement = result.get("_placement") if isinstance(result.get("_placement"), dict) else {}
-    reason = str(placement.get("reason") or "")
-    if reason == "pinned":
-        return "显式指定此节点"
-    if reason == "capability-fifo":
-        return "能力匹配 + FIFO，共享任务由该节点先领取"
-    if row.get("state") == "queued" and row.get("member_id"):
-        return "显式等待此节点领取"
-    if int(row.get("attempts") or 0) > 0:
-        return "已由此节点领取；旧任务未持久化原始调度理由"
-    return "尚未调度"
-
-
-async def _worker_activity(member_id: str, capabilities: list[str], database, now: int) -> dict:
-    async with database.connect() as conn:
-        rows = [dict(row) for row in (await conn.execute(
-            select(s.worker_jobs).where(s.worker_jobs.c.member_id == member_id)
-            .order_by(s.worker_jobs.c.updated_at.desc()).limit(12)
-        )).mappings()]
-        running = int(await conn.scalar(select(func.count()).select_from(s.worker_jobs).where(
-            s.worker_jobs.c.member_id == member_id,
-            s.worker_jobs.c.state == "leased",
-            s.worker_jobs.c.lease_expires_at > now,
-        )) or 0)
-        queued_pinned = int(await conn.scalar(select(func.count()).select_from(s.worker_jobs).where(
-            s.worker_jobs.c.member_id == member_id,
-            s.worker_jobs.c.state == "queued",
-        )) or 0)
-        completed_24h = int(await conn.scalar(select(func.count()).select_from(s.worker_jobs).where(
-            s.worker_jobs.c.member_id == member_id,
-            s.worker_jobs.c.state == "complete",
-            s.worker_jobs.c.updated_at >= now - DAY_SECONDS,
-        )) or 0)
-        retry_rows = [int(value or 0) for value in (await conn.execute(select(s.worker_jobs.c.attempts).where(
-            s.worker_jobs.c.member_id == member_id,
-            s.worker_jobs.c.updated_at >= now - DAY_SECONDS,
-        ))).scalars()]
-        retry_24h = sum(max(0, value - 1) for value in retry_rows)
-        shared_queued = 0
-        if capabilities:
-            shared_queued = int(await conn.scalar(select(func.count()).select_from(s.worker_jobs).where(
-                s.worker_jobs.c.member_id.is_(None),
-                s.worker_jobs.c.state == "queued",
-                s.worker_jobs.c.job_type.in_(capabilities),
-            )) or 0)
-    recent = [{
-        "job_id": row["job_id"],
-        "job_type": row["job_type"],
-        "media_id": row.get("media_id"),
-        "state": row["state"],
-        "attempts": int(row.get("attempts") or 0),
-        "created_at": int(row.get("created_at") or 0),
-        "updated_at": int(row.get("updated_at") or 0),
-        "lease_expires_at": int(row.get("lease_expires_at") or 0),
-        "placement_reason": _placement_reason(row),
-    } for row in rows]
-    return {
-        "running": running,
-        "queued_pinned": queued_pinned,
-        "shared_queued": shared_queued,
-        "completed_24h": completed_24h,
-        "retries_24h": retry_24h,
-        "recent": recent,
-    }
-
-
 async def snapshot() -> dict:
     now = int(time.time())
     relationships = await state.list_relationships()
     relation_by_peer = {row["peer_id"]: row for row in relationships}
-    result = {
-        "generated_at": now,
-        "role": state.node["role"],
-        "members": [],
-        "cluster": {"shared_queued": 0, "running": 0, "completed_24h": 0},
-    }
+    result = {"generated_at": now, "role": state.node["role"], "members": []}
     if state.node["role"] != "Master":
         result["relationships"] = [{
             "relationship_id": row["relationship_id"],
@@ -182,37 +101,15 @@ async def snapshot() -> dict:
         relation = relation_by_peer.get(member["member_id"])
         summary = relation.get("summary") if relation and isinstance(relation.get("summary"), dict) else {}
         observed_storage = summary.get("storage") if isinstance(summary.get("storage"), dict) else {}
-        observed_compute = summary.get("compute") if isinstance(summary.get("compute"), dict) else {}
         observed_backup = summary.get("backup") if isinstance(summary.get("backup"), dict) else {}
         online = member["member_kind"] == "MasterLocal" or bool(relation and relation.get("status") == "online")
         desired_storage = {
             "enabled": bool(member.get("storage_enabled")),
             "allocated_bytes": int(member.get("allocated_bytes") or 0),
         }
-        compute = member.get("compute") if isinstance(member.get("compute"), dict) else {}
-        desired_compute = {
-            "enabled": bool(compute.get("enabled")),
-            "worker_slots": int(compute.get("worker_slots") or 0),
-        }
         backup = member.get("backup") if isinstance(member.get("backup"), dict) else {}
         desired_backup = {"enabled": bool(backup.get("enabled"))}
-        capabilities = [str(item) for item in compute.get("capabilities", []) if isinstance(item, str)]
-        activity = await _worker_activity(member["member_id"], capabilities, state.database, now)
-        slots = desired_compute["worker_slots"] if desired_compute["enabled"] else 0
-        compute_view = {
-            **desired_compute,
-            "cpu_percent": int(compute.get("cpu_percent") or observed_compute.get("cpu_percent") or 0),
-            "memory_available_bytes": int(compute.get("memory_available_bytes") or observed_compute.get("memory_available_bytes") or 0),
-            "capabilities": capabilities,
-            "running": activity["running"],
-            "available_slots": max(0, slots - activity["running"]),
-            "queued_pinned": activity["queued_pinned"],
-            "shared_queued": activity["shared_queued"],
-            "completed_24h": activity["completed_24h"],
-            "retries_24h": activity["retries_24h"],
-            "recent": activity["recent"],
-        }
-        item = {
+        result["members"].append({
             "member_id": member["member_id"],
             "member_kind": member["member_kind"],
             "relationship_id": member.get("relationship_id"),
@@ -220,21 +117,10 @@ async def snapshot() -> dict:
             "sync": {
                 "storage": "effective" if member["member_kind"] == "MasterLocal" else _resource_sync(
                     desired_storage, observed_storage, ("enabled", "allocated_bytes"), online),
-                "compute": "effective" if member["member_kind"] == "MasterLocal" else _resource_sync(
-                    desired_compute, observed_compute, ("enabled", "worker_slots"), online),
                 "backup": "effective" if member["member_kind"] == "MasterLocal" else _resource_sync(
                     desired_backup, observed_backup, ("enabled",), online),
             },
-            "observed": {
-                "storage": observed_storage,
-                "compute": observed_compute,
-                "backup": observed_backup,
-            },
-            "compute": compute_view,
+            "observed": {"storage": observed_storage, "backup": observed_backup},
             "backup": _backup_view(member, observed_backup, now),
-        }
-        result["members"].append(item)
-        result["cluster"]["running"] += activity["running"]
-        result["cluster"]["completed_24h"] += activity["completed_24h"]
-        result["cluster"]["shared_queued"] = max(result["cluster"]["shared_queued"], activity["shared_queued"])
+        })
     return result
