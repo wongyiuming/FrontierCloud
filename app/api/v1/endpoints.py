@@ -32,12 +32,14 @@ from app.services.lyrics_auto_link_integrity import install as install_lyrics_au
 from app.services.lyrics_hierarchy_integrity import install as install_lyrics_hierarchy_integrity
 from app.services.media_delete_convergence import install as install_media_delete_convergence
 from app.services.media_directory_catalog import install_public_priority
+from app.services.media_visibility_integrity import install as install_media_visibility_integrity
 
 
 install_internal_storage_integrity()
 install_lyrics_hierarchy_integrity()
 install_lyrics_auto_link_integrity()
 install_media_delete_convergence()
+install_media_visibility_integrity()
 install_master_mutation_integrity()
 install_public_priority()
 

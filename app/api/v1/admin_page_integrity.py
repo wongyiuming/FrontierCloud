@@ -38,6 +38,7 @@ async def admin_page(request: Request,
         static_asset_url("js/admin-focus.js"),
         static_asset_url("js/directory-admin.js"),
         static_asset_url("js/admin-upload-integrity.js"),
+        static_asset_url("js/admin-visibility-integrity.js"),
     ]
     tags = "\n".join(f'<script src="{source}"></script>' for source in scripts)
     content = content.replace("</body>", f"{tags}\n</body>")
