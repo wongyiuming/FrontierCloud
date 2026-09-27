@@ -1,4 +1,4 @@
-/* Keep Media Admin storage facts live and normalize the retired Compute column. */
+/* Keep Media Admin storage facts live and normalize legacy node markup. */
 (() => {
     const nodeTable = document.querySelector('#nodesPanel .nodes-table');
     const computeHeader = [...(nodeTable?.querySelectorAll('thead th') || [])]
@@ -8,6 +8,13 @@
     const normalizeNodeRows = () => {
         document.querySelectorAll('#nodeRelationships td[colspan="5"]').forEach(cell => {
             cell.colSpan = 4;
+        });
+        document.querySelectorAll('#nodeRelationships .node-resource-panel.backup .node-pill').forEach(pill => {
+            if (pill.textContent.trim().toLowerCase() === 'failed') {
+                pill.textContent = 'Failed';
+                pill.classList.remove('muted', 'warn', 'good');
+                pill.classList.add('bad');
+            }
         });
     };
     normalizeNodeRows();
