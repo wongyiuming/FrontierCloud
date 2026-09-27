@@ -35,7 +35,12 @@ function siteTypeFromItem(item) {
 }
 
 function readyMember(member) {
-    return Boolean(member?.storage_enabled && member?.health === 'online' && member?.writable);
+    return Boolean(
+        member?.storage_enabled
+        && member?.health === 'online'
+        && member?.writable
+        && Number(member?.available_bytes || 0) > 0
+    );
 }
 
 function countReadySiteTypes(pool) {
