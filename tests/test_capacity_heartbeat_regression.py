@@ -126,8 +126,6 @@ class HeartbeatIsolationRegressionTests(unittest.IsolatedAsyncioTestCase):
             patch("app.services.resource_pool.member_configuration", AsyncMock(return_value={})),
         ):
             await controller.tick(relation)
-            # Let the deliberately failing background backup task finish and invoke
-            # its done callback. It must not produce a second, failed heartbeat.
             await asyncio.sleep(0)
             await asyncio.sleep(0)
 
@@ -136,24 +134,22 @@ class HeartbeatIsolationRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(heartbeat_args[0], relation["relationship_id"])
         self.assertIs(heartbeat_args[1], True)
 
-    async def test_compute_failure_cannot_turn_successful_heartbeat_into_failure(self):
+    async def test_upstream_tick_is_heartbeat_only_after_worker_retirement(self):
         from app.services.federation import protocol as p
         from app.services.federation import runtime as runtime_module
 
         fake_state = self.fake_state()
         controller = runtime_module.Runtime()
         controller.call = AsyncMock(return_value={"protocol": p.PROTOCOL_VERSION})
-        controller.fill_worker_slots = AsyncMock(side_effect=RuntimeError("worker lease failed"))
         relation = self.relation("upstream")
 
         with patch.object(runtime_module, "state", fake_state):
             await controller.tick(relation)
 
         self.assertEqual(fake_state.heartbeat.await_count, 1)
-        heartbeat_args = fake_state.heartbeat.await_args.args
-        self.assertEqual(heartbeat_args[0], relation["relationship_id"])
-        self.assertIs(heartbeat_args[1], True)
-        controller.fill_worker_slots.assert_awaited_once_with(relation)
+        self.assertEqual(controller.call.await_count, 1)
+        self.assertEqual(controller.call.await_args.args[1], "/internal/v1/heartbeat")
+        self.assertFalse(hasattr(controller, "fill_worker_slots"))
 
 
 if __name__ == "__main__":
