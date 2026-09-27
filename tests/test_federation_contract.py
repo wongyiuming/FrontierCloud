@@ -144,6 +144,8 @@ class FederationContractTests(unittest.TestCase):
         self.assertIn("python3 scripts/validate_env_contract.py", workflow)
         self.assertIn("Run source configuration tests", workflow)
         self.assertIn("Run unit and runtime tests", workflow)
+        self.assertIn("tests/test_backup_compute_retirement.py", workflow)
+        self.assertIn("! -name 'test_backup_compute_retirement.py'", workflow)
         self.assertIn("tests/test_deployment_contract.py", workflow)
         self.assertIn("tests/test_federation_contract.py", workflow)
         self.assertIn("find tests -maxdepth 1 -type f -name 'test_*.py'", workflow)
