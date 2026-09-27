@@ -1,25 +1,37 @@
-"""Serialize Master path mutations against cross-member folder rename.
+"""Serialize Master path mutations and route uploads by site type.
 
 A rename is one exclusive path transaction. Other Master operations establish a
-short shared fence while they validate and publish durable state (for example an
-upload reservation or pending-delete marker). Once that durable state exists,
-the rename preflight can see it and reject safely instead of racing it.
+short shared fence while they validate and publish durable state. Media uploads
+select a site type, never a concrete storage member; placement inside that type
+is automatic.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from app.api.v1 import admin as legacy_admin
 from app.api.v1 import admin_cluster_integrity as cluster
 from app.api.v1 import admin_delete_integrity as deletion
 from app.api.v1 import admin_masterlocal_recovery as masterlocal
-from app.services import media_directories
+from app.services import media_directories, upload_site_routing
+from app.services.federation import protocol as p
 from app.services.federation.state import state as node_state
 from app.services.media_manager import ensure_media_mutations_ready, media_mutation_lock
 
 
 router = APIRouter()
 require_session = legacy_admin.require_session
+
+
+class SiteTypeUploadReservation(BaseModel):
+    site_type: Literal["primary", "direct", "relay"]
+    target_dir: str = Field(max_length=1024)
+    relative_path: str | None = Field(None, max_length=1024)
+    filename: str = Field(min_length=1, max_length=255)
+    size_bytes: int = Field(gt=0, le=10 * 1024 ** 3)
 
 
 def _is_master_media_paths(payload: dict) -> bool:
@@ -34,17 +46,36 @@ def _is_master_media_paths(payload: dict) -> bool:
 
 @router.post("/upload/session")
 async def create_upload_session(
-    payload: cluster.ClusterUploadReservation,
+    payload: SiteTypeUploadReservation,
     request: Request,
     session_hash: str = Depends(require_session),
 ):
     if node_state.node.get("role") != "Master":
-        return await masterlocal.create_upload_session(payload, request, session_hash)
+        raise HTTPException(409, "站点类型上传需要 Master")
     async with media_mutation_lock.shared():
         ensure_media_mutations_ready()
-        # Preserve the existing recovery/reconciliation layer. The fence wraps
-        # that full reservation path; it must not bypass directly to cluster.
-        return await masterlocal.create_upload_session(payload, request, session_hash)
+        try:
+            member = await upload_site_routing.choose_member(
+                payload.site_type,
+                payload.size_bytes,
+                node_state.database,
+            )
+        except p.ProtocolError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+        legacy_payload = cluster.ClusterUploadReservation(
+            storage_member_id=str(member["member_id"]),
+            target_dir=payload.target_dir,
+            relative_path=payload.relative_path,
+            filename=payload.filename,
+            size_bytes=payload.size_bytes,
+        )
+        # Preserve the existing MasterLocal recovery/reconciliation layer. The
+        # shared fence wraps selection and durable reservation as one operation.
+        result = await masterlocal.create_upload_session(legacy_payload, request, session_hash)
+        result["site_type"] = payload.site_type
+        result["site_label"] = upload_site_routing.SITE_LABELS[payload.site_type]
+        return result
 
 
 @router.post("/hide")
