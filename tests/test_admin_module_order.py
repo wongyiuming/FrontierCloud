@@ -58,7 +58,17 @@ class AdminModuleOrderTests(unittest.TestCase):
         self.assertIsNotNone(match)
         names = re.findall(r"'([^']+)'", match.group("body"))
         self.assertEqual(names, [name for name, _order in EXPECTED_ORDER])
-        self.assertIn("for (const module of modules) consoleRoot.append(module);", focus)
+        self.assertIn("for (const module of sortedModules) consoleRoot.append(module);", focus)
+
+    def test_dynamic_reorder_is_idempotent_and_top_level_only(self):
+        focus = (ROOT / "static/js/admin-focus.js").read_text(encoding="utf-8")
+        self.assertIn(
+            "if (modules.every((module, index) => module === sortedModules[index])) return;",
+            focus,
+        )
+        self.assertIn("moduleObserver.observe(consoleRoot, {childList: true});", focus)
+        self.assertNotIn(".observe(document.body, {childList: true, subtree: true});", focus)
+        self.assertIn("if (reorderScheduled) return;", focus)
 
     def test_toggle_marker_is_pinned_to_module_far_right(self):
         css = (ROOT / "static/css/admin-system-modules.css").read_text(encoding="utf-8")
