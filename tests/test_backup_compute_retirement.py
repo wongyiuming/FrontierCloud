@@ -10,6 +10,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def effective_routes(routes):
+    """Flatten preserved include-router trees for route-surface assertions."""
+    for route in routes:
+        candidates = getattr(route, "effective_candidates", None)
+        if callable(candidates):
+            yield from effective_routes(candidates())
+        else:
+            yield route
+
+
 class BackupProxyContractTests(unittest.TestCase):
     def test_encoded_backup_chunk_exceeds_default_64k_but_fits_backup_limit(self):
         body = json.dumps({
@@ -80,6 +90,28 @@ class ComputeRetirementContractTests(unittest.TestCase):
         self.assertIn('resources["compute"] = {"enabled": False, "worker_slots": 0}', runtime)
         self.assertNotIn("worker_jobs", observability)
         self.assertNotIn("shared_queued", observability)
+
+    def test_worker_control_routes_are_not_mounted(self):
+        from main import app
+
+        paths = {
+            str(getattr(route, "path", ""))
+            for route in effective_routes(app.routes)
+        }
+        self.assertFalse(
+            any(path.startswith("/internal/v1/jobs/") for path in paths),
+            sorted(path for path in paths if "/jobs/" in path),
+        )
+        self.assertIn("/internal/v1/identity", paths)
+        self.assertIn("/internal/v1/heartbeat", paths)
+
+    def test_retirement_filter_is_installed_before_internal_router_registration(self):
+        retirement = (ROOT / "app/api/internal_worker_retirement.py").read_text(encoding="utf-8")
+        registry = (ROOT / "app/api/internal_cluster_update.py").read_text(encoding="utf-8")
+
+        self.assertIn('RETIRED_WORKER_PREFIX = "/internal/v1/jobs/"', retirement)
+        self.assertIn("internal_nodes.router.routes[:]", retirement)
+        self.assertIn("install_internal_worker_retirement()", registry)
 
 
 if __name__ == "__main__":
