@@ -79,11 +79,9 @@ async def enrich_pool_summary(summary: dict, store) -> dict:
             member["available_bytes"] = available
             member["online_writable_bytes"] = available
 
-    # Keep the scheduler's MasterLocal pre-filter snapshot aligned with the live
-    # observation. The final reservation path still performs its own live disk
-    # check, so this only prevents a stale low/high snapshot from skewing candidates.
-    if local_member_id and local_free is not None:
-        async with store.database.begin() as conn:
+    database = getattr(store, "database", None)
+    if local_member_id and local_free is not None and database is not None:
+        async with database.begin() as conn:
             await conn.execute(update(s.storage_members).where(
                 s.storage_members.c.member_id == local_member_id,
             ).values(physical_free_bytes=int(local_free), updated_at=int(time.time())))
