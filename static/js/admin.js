@@ -990,8 +990,8 @@ function priorityMediaRow(item, data) {
             <small><span>${item.type === 'audio' ? '音乐' : '视频'}</span><code>${expandableFilename(fileName, 58)}${item.hidden ? ' · 已隐藏' : ''}</code></small>
         </div>
         <label class="priority-control">
-            <span>展示优先级 <output>${preference}</output></span>
-            <input type="range" min="${Number(data.minimum)}" max="${Number(data.maximum)}" value="${preference}" step="1" aria-label="${escapeHtml(item.title)}的展示优先级">
+            <span>排序优先级 <output>${preference}</output></span>
+            <input type="range" min="${Number(data.minimum)}" max="${Number(data.maximum)}" value="${preference}" step="1" aria-label="${escapeHtml(item.title)}的排序优先级">
         </label>`;
     bindExpandableFilenames(row);
     const slider = row.querySelector('input[type="range"]');
