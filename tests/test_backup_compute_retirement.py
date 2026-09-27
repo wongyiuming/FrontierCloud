@@ -58,13 +58,17 @@ class BackupProxyContractTests(unittest.TestCase):
 class ComputeRetirementContractTests(unittest.TestCase):
     def test_worker_is_not_a_product_or_runtime_feature(self):
         nodes = (ROOT / "static/js/nodes.js").read_text(encoding="utf-8")
+        admin_html = (ROOT / "static/media/admin.html").read_text(encoding="utf-8")
+        legacy_cleanup = (ROOT / "static/js/storage-capacity-refresh.js").read_text(encoding="utf-8")
         admin = (ROOT / "app/api/v1/admin_nodes.py").read_text(encoding="utf-8")
         runtime = (ROOT / "app/services/federation/runtime.py").read_text(encoding="utf-8")
         observability = (ROOT / "app/services/node_observability.py").read_text(encoding="utf-8")
 
+        self.assertNotIn("<th>Compute</th>", admin_html)
         self.assertNotIn("Compute Worker", nodes)
         self.assertNotIn("worker_slots", nodes)
         self.assertNotIn("compute_enabled", nodes)
+        self.assertIn("computeHeader.remove()", legacy_cleanup)
         settings = admin.split("class ResourceSettings", 1)[1].split("\n\ndef checked", 1)[0]
         self.assertNotIn("compute_enabled", settings)
         self.assertNotIn("worker_slots", settings)
