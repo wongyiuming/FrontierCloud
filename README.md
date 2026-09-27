@@ -1,66 +1,239 @@
 # FrontierCloud
 
-Self-hosted media browsing, playback, karaoke, and administration. FastAPI provides the business API and native browser JavaScript provides the media UI and real-time karaoke session. Docker Compose bundles Web/API, Nginx, MySQL, Redis, and the required WebRTC STUN service.
+FrontierCloud is a self-hosted media browsing, playback, karaoke, cluster-storage, backup, and administration system. FastAPI provides the business/control plane, native browser JavaScript provides the UI, and Docker Compose runs Web/API, Nginx, MySQL, Redis, Updater, and the required WebRTC STUN service.
 
-Before changing cross-cutting behavior, read [ARCHITECTURE.md](ARCHITECTURE.md) and [CONTRIBUTING.md](CONTRIBUTING.md). They define repository topology and non-negotiable architecture boundaries.
+The current design is intentionally strict: a cluster has one business Master, Followers are resource nodes rather than secondary business sites, managed media mutations are transactional, and production releases come only from the reviewed `dev -> main` path.
 
-## Start
+- [Project Wiki](https://github.com/wongyiuming/FrontierCloud/wiki)
+- [Architecture boundaries](ARCHITECTURE.md)
+- [Engineering / Git rules](CONTRIBUTING.md)
 
-HTTP needs no configuration or `.env` file:
+Read `ARCHITECTURE.md` and `CONTRIBUTING.md` before changing cross-cutting behavior.
+
+## Quick start
+
+HTTP needs no `.env` file:
 
 ```bash
 docker compose up -d --build --wait
 ```
 
-Open `http://localhost`. Put audio in `data/media/music`, video in `data/media/vido`, and UTF-8 LRC lyrics in `data/media/lyrics`, or upload through Admin WebUI.
-The startup initializer creates these directories and gives the unprivileged Web process access to the mounted `data` tree.
+Open `http://localhost`. Media can be uploaded through Admin, or initialized under:
 
-Initialization generates an Admin Key, two MySQL passwords, and a metrics Bearer token in the persistent `runtime_secrets` volume. Startup logs list newly created secret names without printing values. Read the current key or token with:
+```text
+data/media/music
+data/media/vido
+data/media/lyrics
+```
+
+The startup initializer creates the managed data tree and grants the unprivileged Web process the required access.
+
+Initialization also creates persistent runtime secrets in the `runtime_secrets` volume. Read the current Admin Key or metrics token with:
 
 ```bash
 docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'
 docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token'
-# Database credentials use mysql_password and mysql_root_password in the same directory.
 ```
 
-Keep secrets private. Restarts do not rotate them. Rapidly click the second half of the home logo five times to enter the Admin Key; rapidly click the first half five times to force a UI cache refresh. Admin WebUI can replace the key with a random or confirmed custom key, or issue a single-use temporary key with a 15, 30, 60, or 120 minute sliding session. Replacement invalidates other admin sessions and unused temporary keys. Persistent sessions default to 180 minutes of inactivity; the long-term key itself does not expire.
+MySQL credentials are stored as `mysql_password` and `mysql_root_password` in the same directory. Restarts do not rotate these values.
+
+Rapidly click the second half of the home logo five times to enter the Admin Key. Rapidly click the first half five times to force a UI cache refresh. Admin can replace the long-term key, generate a new random key, or issue a single-use temporary key with a 15/30/60/120 minute sliding session. Persistent Admin sessions default to 180 minutes of inactivity.
 
 ## HTTPS and configuration
 
-Create `.env` with:
+Create `.env`:
 
 ```dotenv
 TLS_ENABLED=true
 SERVER_NAME=media.example.com
 ```
 
-Provide a matching certificate at `certs/fullchain.pem` and private key at `certs/privkey.pem`. HTTPS requires `SERVER_NAME`; HTTP does not. The project selects transport behavior from `TLS_ENABLED`, not deployment names.
-Public ports bind IPv4 by default. Set `PUBLIC_BIND_ADDRESS=::` in `.env` only when the host is ready to publish IPv6.
+Provide a certificate at `certs/fullchain.pem` and private key at `certs/privkey.pem`, or use the supported path overrides in `.env.example`.
 
-[.env.example](.env.example) lists every supported setting and its purpose. Optional settings are commented and have technical defaults. Secrets are generated internally, not supplied through `.env`; remove unsupported legacy entries before upgrading. Alternative certificate paths and published ports are optional settings.
+Fixed Master/Follower roles require certificate-verified HTTPS. HTTP remains valid for Standalone operation; a fixed cluster role fails closed rather than silently downgrading when its TLS requirements disappear.
 
-## Features and limits
+Public ports bind IPv4 by default. Set `PUBLIC_BIND_ADDRESS=::` only when the host and network are intentionally ready to publish IPv6.
 
-- Admin manages uploads, downloads, visibility, deletion, controlled folder rename, and track-to-lyric links. Lyric folder uploads preserve up to two directory levels below `lyrics` (`lyrics/<category>/<subdir>/<file>.lrc`), and one-click linking associates exact same-stem music and LRC filenames (preferring the same relative album path and reporting ambiguity). One lyric can serve multiple tracks; each track has at most one lyric. `lyrics/default.lrc` is an internal playback fallback and is not presented or counted as user-managed lyric content.
-- LRC uploads support timestamps and offsets, with a 2 MiB limit. Audio playback shows four synchronized, smoothly scrolling lyric lines above the heartbeat; fullscreen lyrics remain available.
-- The current audio or video can enter karaoke from its player button or a three-finger 1.5-second press. The page reuses the selected media and Master-owned lyrics, supports separate input and output devices where available, and records only the microphone voice bus. Guests can sing and preview in memory. New accounts receive 200 MiB; the Master automatically places recordings in the storage pool, and downloaded recordings carry synchronized lyric metadata for later re-upload.
-- Search is Admin-only, supports Simplified/Traditional Chinese and pinyin, and includes file paths. It searches the selected directory and descendants, up to one media-type root; global `data/media` queries are rejected. Results are capped at 200.
-- Playback scores and lyric links bind to stable media object IDs. Next-track preloading uses the player's queue; offline switching requires a completed preload. Speculative downloads are capped at 128 MiB per track.
-- Nodes default to Standalone. HTTP remains Standalone; fixed Master/Follower roles require certificate-verified HTTPS and fail closed if TLS is later unavailable. A cluster has one business Master and any number of resource Followers. Followers expose node management, health, metrics, signed data transfer, storage control, and backup control; public pages go to the Master and business APIs are rejected centrally.
-- The Master owns one global media catalog and a storage pool containing its fixed-capacity Local member plus enabled Followers. One logical path identifies one complete media object at exactly one member. Admin selects a writable member before media upload; playback and download resolve Local, Direct, or Relay transport transparently. Lyrics, associations, playback facts, users, and audit facts remain on the Master.
-- Storage and Backup are configured independently for each Follower. Compute Worker has been retired and is not a product/runtime capability. Followers asynchronously store bounded-memory, chunked Master business backups, including LRC content. Backups are recovery artifacts, not online replicas or automatic failover. Nodes containing media or recordings cannot be revoked or reinitialized, and capacity cannot be reduced below use.
-- IP views aggregate each address once and sort numerically or by its last attack. The summary separates observed, active, historical, permanent, and allowlisted addresses while MySQL retains the full event timeline. The first automatic ban lasts 24 hours; the second is permanent. Admin can release, permanently ban, or allowlist an IP. Nginx applies known bans before proxying, with a short propagation delay.
-- WebRTC observation is mandatory. STUN uses `SERVER_NAME` and `WEBRTC_STUN_PORT`; probing starts on connection and repeats every 30 seconds. Admin shows public-IP-first and WebRTC-IP-first aggregate views; MySQL is the source of truth for complete event history and aggregate state.
+`.env.example` is the supported configuration contract. Runtime secrets are generated internally rather than supplied through `.env`.
+
+## Architecture snapshot
+
+### Roles and authority
+
+- **Standalone** is the default single-node full-business mode.
+- **Master** is the only business authority in a cluster. It owns the global media catalog, lyrics and lyric relations, playback facts, karaoke users/recordings business state, Admin audit facts, node configuration, and release coordination.
+- **Follower** is a resource node paired to one Master. It can provide Storage and/or Backup plus authenticated health/control/data-plane services. It is not a second public business site.
+- **Compute Worker is retired.** Historical compatibility tables may still exist, but Worker slots, scheduling, and product UI are not active capabilities.
+
+Public business pages and business APIs terminate at the Master. Fixed roles use certificate-verified HTTPS between nodes.
+
+### One logical media object, one placement
+
+The Master global catalog records each managed media object's stable identity, logical path, current storage owner, object identity, lifecycle state, and transfer mode. One logical path identifies one complete object on one member; FrontierCloud is not a cross-node chunking filesystem and does not infer ownership by scanning every Follower.
+
+The Storage Pool contains Master Local plus enabled Storage Followers. Playback/download resolve the placement transparently through **Local**, **Direct**, or **Relay** transport.
+
+### Single Web worker is an architecture requirement
+
+The managed-media mutation fence is currently process-local. Production Web therefore runs one ASGI worker. Do not increase `WEB_CONCURRENCY`, start multiple Gunicorn/Uvicorn workers, or horizontally scale the Web process until the mutation fence has first been replaced with a database/distributed lock and corresponding concurrency regressions exist.
+
+## Media and storage
+
+### Upload by site type
+
+Admin media upload does **not** select a concrete Follower. The site selector starts empty and the operator chooses one of three placement types:
+
+- `primary` — Master Local / Local transport;
+- `direct` — an eligible Direct Follower;
+- `relay` — an eligible Relay Follower.
+
+For Direct/Relay, FrontierCloud chooses among all ready members of that type that are storage-enabled, online, writable, and large enough for the object. Placement prefers lower `(used + reserved) / allocated` pressure and then more available bytes. Selection and durable upload reservation share the storage write lock so concurrent uploads see current reservations.
+
+Historical media does not need migration for this model: existing owner/member/transport facts remain authoritative and the UI derives the visible site type from them.
+
+### Capacity semantics
+
+Admin deliberately separates physical observation from FrontierCloud quota:
+
+- **physical used / all** — real filesystem usage and total capacity;
+- **used / allocated** — FrontierCloud project usage and configured logical allocation;
+- `reserved_bytes` — capacity held by in-progress uploads;
+- `writable` / health — whether new placements are currently safe.
+
+Logical allocation is never treated as physical free space.
+
+### Folder priority, visibility, rename, and delete
+
+Folders are first-class sorting objects. Public category/subcategory ordering is:
+
+```text
+directory priority descending -> name
+```
+
+Directory priority is separate from media-file priority and moves with a successful folder rename.
+
+Admin supports controlled same-parent rename for real managed `music` / `vido` directories. Rename updates bytes and metadata together, joins the global media-mutation fence, coordinates all affected storage members on a Master, and rolls moved members back in reverse order if a later step fails. Active uploads, pending deletion state, a real target collision, or a required offline Follower block the operation. A deleted directory name may be reused when only stale directory metadata remains.
+
+Visibility is inherited. Admin distinguishes a directly hidden object from an object hidden by an ancestor so it does not offer an ineffective "unhide" action at the wrong level.
+
+Managed deletion uses recovery/journal semantics and converges pending remote deletes. Do not replace these workflows with direct `mv` / `rm` operations on `./data`.
+
+## Lyrics and lyric relations
+
+Lyrics are Master-owned business content even when the associated audio bytes live on Followers.
+
+Supported hierarchy:
+
+```text
+lyrics/<file>.lrc
+lyrics/<category>/<file>.lrc
+lyrics/<category>/<subdir>/<file>.lrc
+```
+
+Two directories below `lyrics` is the maximum. Upload, validation, Admin tree/search, download/delete collection, catalog, and relation management enforce the same boundary.
+
+Admin supports both single-file and folder LRC upload. Folder upload preserves the supported relative directory structure. The relation browser shows recursive file counts for lyric and music directories.
+
+One-click same-name auto-link matches exact music/LRC stems and prefers the same relative album path. Ambiguous duplicate lyric names are reported instead of guessed. Auto-link may fill a missing relation or replace the system fallback, but it never overwrites an explicit user-managed lyric relation.
+
+`lyrics/default.lrc` is an internal playback fallback. It is generated/repaired at runtime, excluded from Admin trees/search/counts and user relation counts, and cannot be treated as ordinary user-managed lyric content.
+
+Accepted lyric upload is complete only after both the file and its managed-object registration are durable. Registration failure rolls the newly published file back; a later cache-invalidation failure does not erase a committed lyric.
+
+## Playback and karaoke
+
+- LRC uploads support timestamps/offsets with a 2 MiB limit.
+- Audio playback provides synchronized lyrics and fullscreen lyrics.
+- Player sidebars show the current media directory relative path rather than a legacy fixed label.
+- Playback scores and lyric links bind to stable media object IDs.
+- Next-track preloading uses the player queue; offline switching requires a completed preload. Speculative downloads are capped at 128 MiB per track.
+- Audio/video can enter Karaoke from the player button or a three-finger 1.5-second press. Guests can sing and preview in memory. Registered users receive recording quota, and the Master places recordings in the Storage Pool.
+
+## Cluster, heartbeat, and Backup
+
+Storage and Backup are independently configured on Followers. A saved desired setting is not considered effective until the Follower reports the observed state through authenticated heartbeat/control traffic.
+
+Heartbeat health is intentionally independent from Backup work. Backup is asynchronous and a failed backup attempt does not turn a successful heartbeat into an offline node.
+
+Backup sends bounded, chunked Master business-recovery artifacts, including LRC content, to enabled Backup Followers. Recovery points include integrity/checksum metadata. Backup is **not** live SQL replication, HA storage, automatic Master election, or automatic failover.
+
+Nodes that still own protected media/recordings cannot be revoked or reinitialized, and configured storage capacity cannot be reduced below current use.
+
+## Security and network observation
+
+- IP views aggregate each address while MySQL retains the full event timeline.
+- The first automatic ban lasts 24 hours; the second is permanent. Admin can release, permanently ban, or allowlist an address.
+- Nginx enforces known bans before proxying, with a short propagation delay.
+- WebRTC observation is mandatory. STUN uses `SERVER_NAME` and `WEBRTC_STUN_PORT`; probing starts on connection and repeats every 30 seconds.
+- Admin provides public-IP-first and WebRTC-IP-first aggregate views.
+
+## Admin console
+
+The Admin console has an intentional, regression-tested module order:
+
+1. Media management
+2. Media sorting policy
+3. Lyric relations
+4. Karaoke users
+5. IP security
+6. WebRTC network relations
+7. Nodes
+8. Site access state
+9. System release management
+10. Admin Key
+11. Brand Logo
+
+Dynamic modules must join the same DOM and visual order; reordering logic is idempotent and browser-tested.
+
+## Release management
+
+FrontierCloud has exactly two canonical branches:
+
+```text
+dev   implementation + complete CI authority
+main  reviewed release history
+```
+
+No feature/fix/release/temporary branches are allowed. Engineering changes go directly to the existing `dev`; the only valid PR into `main` is same-repository `dev -> main`. After a release PR merges, `dev` must be fast-forwarded to the resulting `main` merge commit before further work. Never force-rewrite either canonical branch.
+
+A new `main` release is publishable only when FrontierCloud can prove:
+
+1. current `main` HEAD is associated with the accepted merged `dev -> main` PR;
+2. the exact promoted `dev` SHA has successful push CI;
+3. the reviewed `dev` tree equals the `main` tree.
+
+GitHub verification is cached and supports optional `GITHUB_API_TOKEN` authentication plus rate-limit backoff. If current verification is unavailable, the running service remains available but new upgrade authorization fails closed. Last-known-good release evidence is display-only and never authorizes a new upgrade.
+
+System Release Management presents the production state semantically: a converged cluster shows `SHA · 已与 main HEAD 一致`; an actual pending upgrade shows `当前 SHA -> 待发布 SHA`. Rollback uses the previous Web-managed SHA recorded by the Updater.
 
 ## Data and operations
 
-Media, lyrics, and recordings live under host `./data`; MySQL, Redis, and secrets use `mysql_data`, `redis_data`, and `runtime_secrets` volumes. Back up the database, data, and secrets together. Restarts retain roles; only explicit Admin reinitialization resets an empty node. Fixed Master/Follower roles require TLS on restart; disabling TLS fails startup instead of resetting or downgrading the role. Ordinary `docker compose down` preserves data; `down --volumes` destroys database and secret volumes.
+Persistent state includes:
 
-Do not rename, move, or delete managed files directly on the filesystem: paths and stable object IDs participate in business metadata. Admin provides a controlled same-parent folder rename for supported `music/vido` folders; it updates storage and metadata transactionally and is not a general cross-parent move API. Deletion uses a MySQL journal and temporary quarantine; do not manually remove pending recovery data. If recovery blocks mutations, restore MySQL and restart Web. Shared-media multi-worker/multi-replica operation is not supported by this recovery mechanism.
+```text
+./data           media, lyrics, recordings
+mysql_data       durable business/catalog/cluster facts
+redis_data       runtime cache/coordination
+runtime_secrets  Admin/MySQL/metrics secrets
+```
 
-`/health/live` reports liveness; `/health/ready` and `/health` report readiness. `/metrics` exposes Prometheus-compatible metrics with the generated Bearer token. Logs go to stdout/stderr in JSON or text. FrontierCloud does not deploy or manage monitoring/log platforms, dashboards, collectors, or alert rules.
+Back up MySQL, `./data`, and `runtime_secrets` as one recovery asset set. Restoring only one side can create catalog/filesystem drift.
+
+Normal `docker compose down` preserves volumes. `docker compose down --volumes` destroys database and secret volumes and is not a normal upgrade or troubleshooting step.
+
+Health endpoints:
+
+```text
+/health/live
+/health/ready
+/health
+```
+
+`/metrics` exposes Prometheus-compatible metrics using the generated Bearer token. Logs go to stdout/stderr. FrontierCloud does not deploy a monitoring/logging platform, dashboard, collector, or alerting system on its own.
 
 ## Checks
+
+Local baseline:
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py' -v
@@ -69,4 +242,4 @@ node tests/player_cache_smoke.mjs
 docker compose config --quiet
 ```
 
-All engineering changes go directly to the existing `dev` branch; creating additional work branches is prohibited. The only valid release pull request is same-repository `dev -> main`. Release promotion validates the merged PR provenance, exact successful `dev` push CI result, and identical reviewed `dev` / `main` trees, so release correctness does not depend on which GitHub merge method produced `main`. After a release PR is merged, fast-forward `dev` to the resulting `main` commit before continuing engineering work.
+GitHub Actions on the exact final `dev` SHA is the release authority. The main workflow includes exact-promotion verification, real Chromium UI regression, real multi-node HTTPS cluster acceptance, Compose/source/configuration checks, unit/runtime tests, edge/security checks, and public/Admin flows.
