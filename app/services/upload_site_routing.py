@@ -51,11 +51,12 @@ def site_type_for_transport(transport: str | None, *, local_default: bool = True
 
 
 def ready_for_upload(member: dict, size: int = 0) -> bool:
+    required = max(1, int(size))
     return bool(
         member.get("storage_enabled")
         and str(member.get("health") or "") == "online"
         and member.get("writable")
-        and int(member.get("available_bytes") or 0) >= max(0, int(size))
+        and int(member.get("available_bytes") or 0) >= required
     )
 
 
