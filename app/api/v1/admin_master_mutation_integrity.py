@@ -16,7 +16,7 @@ from app.api.v1 import admin as legacy_admin
 from app.api.v1 import admin_cluster_integrity as cluster
 from app.api.v1 import admin_delete_integrity as deletion
 from app.api.v1 import admin_masterlocal_recovery as masterlocal
-from app.services import media_directories, upload_site_routing
+from app.services import media_directories, resource_pool, upload_site_routing
 from app.services.federation import protocol as p
 from app.services.federation.state import state as node_state
 from app.services.media_manager import ensure_media_mutations_ready, media_mutation_lock
@@ -54,25 +54,28 @@ async def create_upload_session(
         raise HTTPException(409, "站点类型上传需要 Master")
     async with media_mutation_lock.shared():
         ensure_media_mutations_ready()
-        try:
-            member = await upload_site_routing.choose_member(
-                payload.site_type,
-                payload.size_bytes,
-                node_state.database,
-            )
-        except p.ProtocolError as exc:
-            raise HTTPException(409, str(exc)) from exc
+        # Multiple Admin sessions may reserve concurrently. Keep placement
+        # selection and durable reservation in one short lock so every chooser
+        # sees the latest reserved_bytes and load spreads across ready members.
+        async with resource_pool.storage_write_lock:
+            try:
+                member = await upload_site_routing.choose_member(
+                    payload.site_type,
+                    payload.size_bytes,
+                    node_state.database,
+                )
+            except p.ProtocolError as exc:
+                raise HTTPException(409, str(exc)) from exc
 
-        legacy_payload = cluster.ClusterUploadReservation(
-            storage_member_id=str(member["member_id"]),
-            target_dir=payload.target_dir,
-            relative_path=payload.relative_path,
-            filename=payload.filename,
-            size_bytes=payload.size_bytes,
-        )
-        # Preserve the existing MasterLocal recovery/reconciliation layer. The
-        # shared fence wraps selection and durable reservation as one operation.
-        result = await masterlocal.create_upload_session(legacy_payload, request, session_hash)
+            legacy_payload = cluster.ClusterUploadReservation(
+                storage_member_id=str(member["member_id"]),
+                target_dir=payload.target_dir,
+                relative_path=payload.relative_path,
+                filename=payload.filename,
+                size_bytes=payload.size_bytes,
+            )
+            # Preserve the existing MasterLocal recovery/reconciliation layer.
+            result = await masterlocal.create_upload_session(legacy_payload, request, session_hash)
         result["site_type"] = payload.site_type
         result["site_label"] = upload_site_routing.SITE_LABELS[payload.site_type]
         return result
