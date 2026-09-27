@@ -11,15 +11,15 @@
 
     function createRenameButton() {
         if (document.getElementById('renameDirectory')) return document.getElementById('renameDirectory');
-        const button = document.createElement('button');
-        button.id = 'renameDirectory';
-        button.type = 'button';
-        button.disabled = true;
-        button.textContent = '改名';
-        button.title = '重命名单个已选择文件夹';
+        const renameButton = document.createElement('button');
+        renameButton.id = 'renameDirectory';
+        renameButton.type = 'button';
+        renameButton.disabled = true;
+        renameButton.textContent = '改名';
+        renameButton.title = '重命名单个已选择文件夹';
         const deleteButton = document.getElementById('delete');
-        if (deleteButton?.parentNode) deleteButton.parentNode.insertBefore(button, deleteButton);
-        return button;
+        if (deleteButton?.parentNode) deleteButton.parentNode.insertBefore(renameButton, deleteButton);
+        return renameButton;
     }
 
     const renameButton = createRenameButton();
