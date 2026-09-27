@@ -39,8 +39,6 @@ class Mode(BaseModel):
 class ResourceSettings(BaseModel):
     storage_enabled: bool = False
     storage_capacity_gib: int = Field(ge=0, le=10240)
-    compute_enabled: bool = False
-    worker_slots: int = Field(ge=0, le=256)
     backup_enabled: bool = False
 
 
@@ -191,7 +189,7 @@ async def resource_settings(request: Request, identifier: str, payload: Resource
             state.node["node_id"] if relation is None else relation["peer_id"],
             storage_enabled=payload.storage_enabled,
             allocated_bytes=payload.storage_capacity_gib * 1024 ** 3 if payload.storage_enabled else 0,
-            compute_enabled=payload.compute_enabled, worker_slots=payload.worker_slots,
+            compute_enabled=False, worker_slots=0,
             backup_enabled=payload.backup_enabled, actor=actor, store=state,
         )
         runtime.wakeup.set()
