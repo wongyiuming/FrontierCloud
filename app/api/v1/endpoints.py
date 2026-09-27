@@ -30,19 +30,25 @@ from app.api.internal_storage_integrity import install as install_internal_stora
 from app.services.federation_mode_integrity import install as install_federation_mode_integrity
 from app.services.health import readiness_response
 from app.services.lyrics_auto_link_integrity import install as install_lyrics_auto_link_integrity
+from app.services.lyrics_directory_counts import install as install_lyrics_directory_counts
 from app.services.lyrics_hierarchy_integrity import install as install_lyrics_hierarchy_integrity
 from app.services.media_delete_convergence import install as install_media_delete_convergence
 from app.services.media_directory_catalog import install_public_priority
+from app.services.media_directory_rename_integrity import install as install_media_directory_rename_integrity
 from app.services.media_visibility_integrity import install as install_media_visibility_integrity
+from app.services.player_directory_label_integrity import install as install_player_directory_label_integrity
 
 
 install_internal_storage_integrity()
 install_federation_mode_integrity()
 install_lyrics_hierarchy_integrity()
+install_lyrics_directory_counts()
 install_lyrics_auto_link_integrity()
 install_media_delete_convergence()
+install_media_directory_rename_integrity()
 install_media_visibility_integrity()
 install_master_mutation_integrity()
+install_player_directory_label_integrity()
 install_public_priority()
 
 _ADMIN_OVERRIDE_PATHS = {

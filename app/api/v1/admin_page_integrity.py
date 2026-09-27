@@ -33,10 +33,12 @@ async def admin_page(request: Request,
 
     scripts = [
         static_asset_url("js/release-admin.js"),
+        static_asset_url("js/release-version-ui.js"),
         static_asset_url("js/maintenance-admin.js"),
         static_asset_url("js/brand-admin.js"),
         static_asset_url("js/admin-focus.js"),
         static_asset_url("js/directory-admin.js"),
+        static_asset_url("js/lyrics-directory-counts.js"),
         static_asset_url("js/admin-upload-integrity.js"),
         static_asset_url("js/admin-visibility-integrity.js"),
     ]
