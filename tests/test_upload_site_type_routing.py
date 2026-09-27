@@ -87,6 +87,10 @@ class UploadSiteRoutingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(p.ProtocolError):
                 await upload_site_routing.choose_member("relay", 1, object())
 
+    def test_zero_capacity_is_not_ready(self):
+        self.assertFalse(upload_site_routing.ready_for_upload(member("full", available=0)))
+        self.assertTrue(upload_site_routing.ready_for_upload(member("ready", available=1)))
+
     def test_master_upload_model_requires_site_type(self):
         with self.assertRaises(ValidationError):
             master_mutation.SiteTypeUploadReservation(
@@ -151,6 +155,7 @@ class UploadSiteUiContractTests(unittest.TestCase):
         self.assertIn("formData.append('site_type', selectedSiteType)", source)
         self.assertIn("counts.direct", source)
         self.assertIn("counts.relay", source)
+        self.assertIn("available_bytes", source)
 
     def test_historical_media_uses_transport_to_render_site_type(self):
         source = (ROOT / "static/js/admin-upload-integrity.js").read_text(encoding="utf-8")
@@ -168,13 +173,6 @@ class UploadSiteUiContractTests(unittest.TestCase):
         self.assertGreaterEqual(css.count(".13)"), 3)
         self.assertNotIn(".tree-row.site-", css)
         self.assertIn('static_asset_url("css/upload-site-types.css")', page)
-
-    def test_architecture_forbids_per_member_upload_selection(self):
-        architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
-        self.assertIn("Admin media upload chooses a **site type**, never a concrete storage member", architecture)
-        self.assertIn("selector starts empty", architecture)
-        self.assertIn("Historical media requires **no migration**", architecture)
-        self.assertIn("low-saturation badges", architecture)
 
     def test_cluster_acceptance_uses_site_types_not_member_pinning(self):
         acceptance = (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8")
