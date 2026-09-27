@@ -40,7 +40,8 @@ class Transport:
         limit = (p.MAX_LYRIC_RESPONSE_BYTES
                  if (path.startswith("/internal/v1/recordings/") and path.endswith("/stat"))
                  else p.MAX_CONTROL_BYTES)
-        async with self.client.stream(method, origin + path, content=body, headers=headers) as response:
+        timeout = httpx.Timeout(60, connect=8) if path.startswith("/internal/v1/backup/") else httpx.Timeout(10, connect=8)
+        async with self.client.stream(method, origin + path, content=body, headers=headers, timeout=timeout) as response:
             if response.status_code != 200:
                 # Do not log pairing tokens, credentials, or arbitrary upstream bodies.
                 raise p.ProtocolError(f"Node control HTTP {response.status_code}")
