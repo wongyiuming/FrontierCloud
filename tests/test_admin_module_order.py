@@ -18,6 +18,7 @@ EXPECTED_ORDER = [
     ("site", 80),
     ("release", 90),
     ("key", 100),
+    ("brand", 110),
 ]
 
 
@@ -36,16 +37,20 @@ class AdminModuleOrderTests(unittest.TestCase):
         self.assertEqual(names[0:3], ["media", "priority", "lyrics"])
         self.assertEqual(names[4:6], ["security", "network"])
         self.assertEqual(names[6:9], ["nodes", "site", "release"])
+        self.assertEqual(names[-1], "brand")
 
     def test_static_and_runtime_modules_use_the_order_contract_names(self):
         html = (ROOT / "static/media/admin.html").read_text(encoding="utf-8")
         release = (ROOT / "static/js/release-admin.js").read_text(encoding="utf-8")
         maintenance = (ROOT / "static/js/maintenance-admin.js").read_text(encoding="utf-8")
+        brand = (ROOT / "static/js/brand-admin.js").read_text(encoding="utf-8")
 
         for module in ("media", "priority", "lyrics", "users", "security", "network", "nodes", "key"):
             self.assertIn(f'data-admin-module="{module}"', html)
         self.assertIn("panel.dataset.adminModule = 'site'", maintenance)
         self.assertIn("panel.dataset.adminModule = 'release'", release)
+        self.assertIn("panel.dataset.adminModule = 'brand'", brand)
+        self.assertIn("consoleRoot?.append(panel)", brand)
 
     def test_dom_reorder_matches_visual_order(self):
         focus = (ROOT / "static/js/admin-focus.js").read_text(encoding="utf-8")
@@ -53,7 +58,20 @@ class AdminModuleOrderTests(unittest.TestCase):
         self.assertIsNotNone(match)
         names = re.findall(r"'([^']+)'", match.group("body"))
         self.assertEqual(names, [name for name, _order in EXPECTED_ORDER])
-        self.assertIn("for (const module of modules) consoleRoot.append(module);", focus)
+        self.assertIn("for (const module of sortedModules) consoleRoot.append(module);", focus)
+
+    def test_dynamic_reorder_is_idempotent_and_top_level_only(self):
+        focus = (ROOT / "static/js/admin-focus.js").read_text(encoding="utf-8")
+        # Re-appending an already sorted module list creates new childList records.
+        # Guard the reorder itself and observe only direct Admin children so a
+        # late site/release/brand panel cannot create a recursive DOM move loop.
+        self.assertIn(
+            "if (modules.every((module, index) => module === sortedModules[index])) return;",
+            focus,
+        )
+        self.assertIn("moduleObserver.observe(consoleRoot, {childList: true});", focus)
+        self.assertNotIn(".observe(document.body, {childList: true, subtree: true});", focus)
+        self.assertIn("if (reorderScheduled) return;", focus)
 
     def test_toggle_marker_is_pinned_to_module_far_right(self):
         css = (ROOT / "static/css/admin-system-modules.css").read_text(encoding="utf-8")
@@ -76,9 +94,11 @@ class AdminModuleOrderTests(unittest.TestCase):
         self.assertIn('content.replace("</head>"', page)
         release_pos = page.index('static_asset_url("js/release-admin.js")')
         maintenance_pos = page.index('static_asset_url("js/maintenance-admin.js")')
+        brand_pos = page.index('static_asset_url("js/brand-admin.js")')
         focus_pos = page.index('static_asset_url("js/admin-focus.js")')
         self.assertLess(release_pos, focus_pos)
         self.assertLess(maintenance_pos, focus_pos)
+        self.assertLess(brand_pos, focus_pos)
 
 
 if __name__ == "__main__":

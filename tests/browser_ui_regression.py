@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,6 +14,10 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
 CHROME = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "/usr/bin/google-chrome")
 ROOT = Path(__file__).resolve().parents[1]
 MAINTENANCE_FLAG = ROOT / "data" / ".frontiercloud-maintenance"
+EXPECTED_ADMIN_MODULE_ORDER = [
+    "media", "priority", "lyrics", "users", "security", "network",
+    "nodes", "site", "release", "key", "brand",
+]
 
 
 def require(value: bool, message: str) -> None:
@@ -181,6 +186,31 @@ def admin_focus_check(browser) -> None:
     page.goto(BASE_URL + "/api/v1/media/admin/", wait_until="domcontentloaded")
     page.locator("#siteAccessPanel .module-heading").wait_for(state="visible", timeout=15000)
     page.locator("#systemVersionPanel").wait_for(state="attached", timeout=15000)
+    page.locator('.admin-module[data-admin-module="brand"]').wait_for(state="attached", timeout=15000)
+    page.locator("#renameDirectory").wait_for(state="attached", timeout=15000)
+    page.wait_for_function(
+        "expected => document.querySelectorAll('.admin-console > .admin-module').length === expected",
+        arg=len(EXPECTED_ADMIN_MODULE_ORDER),
+        timeout=15000,
+    )
+    module_order = page.evaluate("""
+        () => [...document.querySelectorAll('.admin-console > .admin-module')]
+            .map(item => item.dataset.adminModule)
+    """)
+    require(
+        module_order == EXPECTED_ADMIN_MODULE_ORDER,
+        f"Admin DOM module order changed: {module_order}",
+    )
+    visual_order = page.evaluate("""
+        () => [...document.querySelectorAll('.admin-console > .admin-module')]
+            .map(item => ({name: item.dataset.adminModule, top: item.getBoundingClientRect().top}))
+            .sort((left, right) => left.top - right.top)
+            .map(item => item.name)
+    """)
+    require(
+        visual_order == EXPECTED_ADMIN_MODULE_ORDER,
+        f"Admin visual module order changed: {visual_order}",
+    )
     page.locator("#siteAccessPanel .module-heading").click()
     page.wait_for_function("document.querySelector('#siteAccessPanel').classList.contains('expanded')")
     page.wait_for_function("document.querySelector('#siteAccessState').textContent !== '正在加载'", timeout=10000)
@@ -207,6 +237,95 @@ def admin_focus_check(browser) -> None:
     require(page.locator("#siteEnterMaintenance").count() == 1, "site maintenance enter control is missing")
     require(page.locator("#siteEndMaintenance").count() == 1, "site maintenance exit control is missing")
     context.close()
+
+
+def folder_priority_rename_check(browser) -> None:
+    require(bool(ADMIN_KEY), "ADMIN_KEY is required for folder priority/rename regression")
+    music_root = ROOT / "data" / "media" / "music"
+    fixture = music_root / "ui-regression" / "fixture.wav"
+    first = music_root / "aa-folder-priority"
+    second = music_root / "zz-folder-priority"
+    renamed = music_root / "mm-folder-renamed"
+    require(fixture.is_file(), "UI fixture audio is missing")
+
+    subprocess.run(
+        ["sudo", "rm", "-rf", str(first), str(second), str(renamed)],
+        check=True,
+    )
+    subprocess.run(["sudo", "chmod", "0777", str(music_root)], check=True)
+    for path in (first, second):
+        subprocess.run(["sudo", "mkdir", "-p", str(path)], check=True)
+        subprocess.run(["sudo", "chmod", "0777", str(path)], check=True)
+        subprocess.run(["sudo", "cp", str(fixture), str(path / "fixture.wav")], check=True)
+        subprocess.run(["sudo", "chmod", "0666", str(path / "fixture.wav")], check=True)
+
+    context = browser.new_context(viewport={"width": 1280, "height": 800})
+    try:
+        response = context.request.post(BASE_URL + "/api/v1/media/admin/elevate", form={"token": ADMIN_KEY})
+        require(response.ok, f"Admin elevation failed: HTTP {response.status}")
+        page = context.new_page()
+        page.goto(BASE_URL + "/api/v1/media/admin/", wait_until="domcontentloaded")
+        page.locator("#renameDirectory").wait_for(state="attached", timeout=15000)
+        page.wait_for_function("typeof api === 'function' && typeof requestHeaders === 'function'", timeout=5000)
+        result = page.evaluate("""
+            async () => {
+                const call = (url, options = {}) => api(url, options);
+                await call('/api/v1/media/admin/directory-priority', {
+                    method: 'POST',
+                    headers: requestHeaders(),
+                    body: JSON.stringify({path: 'music/zz-folder-priority', value: 77}),
+                });
+                const ranked = await call('/api/v1/media/catalog/categories?media_type=music');
+                const rankedNames = (ranked.entries || []).map(item => item.name);
+
+                const renameResult = await call('/api/v1/media/admin/directory/rename', {
+                    method: 'POST',
+                    headers: requestHeaders(),
+                    body: JSON.stringify({path: 'music/zz-folder-priority', new_name: 'mm-folder-renamed'}),
+                });
+                const afterRename = await call('/api/v1/media/catalog/categories?media_type=music');
+                const renamedNames = (afterRename.entries || []).map(item => item.name);
+                const priorityState = await call('/api/v1/media/admin/directory-priorities?scope=music');
+                const migrated = (priorityState.items || []).find(item => item.path === 'music/mm-folder-renamed') || null;
+
+                await call('/api/v1/media/admin/directory/rename', {
+                    method: 'POST',
+                    headers: requestHeaders(),
+                    body: JSON.stringify({path: 'music/mm-folder-renamed', new_name: 'zz-folder-priority'}),
+                });
+                await call('/api/v1/media/admin/directory-priority', {
+                    method: 'POST',
+                    headers: requestHeaders(),
+                    body: JSON.stringify({path: 'music/zz-folder-priority', value: 0}),
+                });
+                return {
+                    rankedNames,
+                    renamedNames,
+                    renameResult,
+                    migrated,
+                };
+            }
+        """)
+
+        ranked_names = result["rankedNames"]
+        require("aa-folder-priority" in ranked_names, "priority fixture A is missing from public catalog")
+        require("zz-folder-priority" in ranked_names, "priority fixture Z is missing from public catalog")
+        require(
+            ranked_names.index("zz-folder-priority") < ranked_names.index("aa-folder-priority"),
+            f"folder priority did not change public ordering: {ranked_names}",
+        )
+        require(result["renameResult"]["new_path"] == "music/mm-folder-renamed", "rename API returned the wrong target path")
+        require("zz-folder-priority" not in result["renamedNames"], "old folder name remained in public catalog after rename")
+        require("mm-folder-renamed" in result["renamedNames"], "new folder name did not appear in public catalog after rename")
+        require(result["migrated"] is not None, "folder priority record did not migrate to renamed path")
+        require(int(result["migrated"]["preference"]) == 77, "folder priority value changed during rename")
+    finally:
+        context.close()
+        subprocess.run(
+            ["sudo", "rm", "-rf", str(first), str(second), str(renamed)],
+            check=False,
+        )
+        subprocess.run(["sudo", "chmod", "0755", str(music_root)], check=False)
 
 
 def maintenance_page_check(browser) -> None:
@@ -246,6 +365,7 @@ def main() -> None:
             logo_cross_page_cache_check(browser)
             tesla_player_layout_check(browser)
             admin_focus_check(browser)
+            folder_priority_rename_check(browser)
             maintenance_page_check(browser)
         finally:
             browser.close()

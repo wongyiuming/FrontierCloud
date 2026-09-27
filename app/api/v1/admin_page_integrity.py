@@ -27,13 +27,15 @@ async def admin_page(request: Request,
         content = content.replace(marker, static_asset_url(asset))
 
     system_css = static_asset_url("css/admin-system-modules.css")
-    content = content.replace("</head>", f'<link rel="stylesheet" href="{system_css}">\n</head>')
+    directory_css = static_asset_url("css/directory-admin.css")
+    content = content.replace("</head>", f'<link rel="stylesheet" href="{system_css}">\n<link rel="stylesheet" href="{directory_css}">\n</head>')
 
     scripts = [
         static_asset_url("js/release-admin.js"),
         static_asset_url("js/maintenance-admin.js"),
         static_asset_url("js/brand-admin.js"),
         static_asset_url("js/admin-focus.js"),
+        static_asset_url("js/directory-admin.js"),
         static_asset_url("js/admin-upload-integrity.js"),
     ]
     tags = "\n".join(f'<script src="{source}"></script>' for source in scripts)

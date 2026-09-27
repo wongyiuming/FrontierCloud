@@ -31,6 +31,22 @@
         method: 'POST', headers: requestHeaders(), body: JSON.stringify(value),
     });
 
+    function storageFacts(source = {}) {
+        const total = Number(source.physical_total_bytes || 0);
+        const free = Number(source.physical_free_bytes || 0);
+        return {
+            total,
+            physicalUsed: Math.max(0, total - free),
+            allocated: Number(source.current_allocated_bytes ?? source.allocated_bytes ?? 0),
+            used: Number(source.project_used_bytes ?? source.used_bytes ?? 0),
+        };
+    }
+
+    function storageText(source = {}) {
+        const facts = storageFacts(source);
+        return `物理 used / all ${gib(facts.physicalUsed)} / ${gib(facts.total)} · 已使用 / 已分配 ${gib(facts.used)} / ${gib(facts.allocated)}`;
+    }
+
     function relativeTime(stamp) {
         if (!stamp) return '从未';
         const delta = Math.round(Number(stamp) - Date.now() / 1000);
@@ -136,9 +152,10 @@
         const online = followers.filter(item => item.connection?.status === 'online').length;
         const backupEnabled = followers.filter(item => item.backup?.enabled).length;
         const backupHealthy = followers.filter(item => item.backup?.health === 'healthy').length;
+        const poolFacts = storageFacts(pool);
         overview.append(
             overviewCard('Follower', `${online} / ${followers.length}`, online === followers.length ? '全部在线' : '存在离线或降级节点', 'good'),
-            overviewCard('Storage', gib(pool.physical_total_bytes), `当前物理 ${gib(pool.physical_free_bytes)} · 当前分配 ${gib(pool.current_allocated_bytes ?? pool.allocated_bytes)} · 当前项目占用 ${gib(pool.project_used_bytes ?? pool.used_bytes)}`, 'storage'),
+            overviewCard('Storage', `${gib(poolFacts.physicalUsed)} / ${gib(poolFacts.total)}`, `物理 used / all · 已使用 / 已分配 ${gib(poolFacts.used)} / ${gib(poolFacts.allocated)}`, 'storage'),
             overviewCard('Backup', `${backupHealthy} / ${backupEnabled}`, backupEnabled ? '健康 / 已启用备份节点' : '尚未启用备份节点', 'backup'),
         );
     }
@@ -168,15 +185,12 @@
         const section = make('section', 'node-resource-panel storage');
         const heading = make('div', 'node-resource-heading');
         heading.append(make('strong', '', 'Storage'), pill(member.storage_enabled ? 'Enabled' : 'Disabled', member.storage_enabled ? 'info' : 'muted'));
-        const total = Number(member.physical_total_bytes || 0);
-        const physical = Number(member.physical_free_bytes || 0);
-        const allocated = Number(member.current_allocated_bytes ?? member.allocated_bytes ?? 0);
-        const used = Number(member.project_used_bytes ?? member.used_bytes ?? 0);
-        section.append(heading, make('div', 'node-metric-primary', gib(physical)), kv([
-            ['物理总容量', gib(total)], ['当前物理', gib(physical)],
-            ['当前分配', gib(allocated)], ['当前项目资源占用', gib(used)],
+        const facts = storageFacts(member);
+        section.append(heading, make('div', 'node-metric-primary', `${gib(facts.physicalUsed)} / ${gib(facts.total)}`), kv([
+            ['物理 used / all', `${gib(facts.physicalUsed)} / ${gib(facts.total)}`],
+            ['已使用 / 已分配', `${gib(facts.used)} / ${gib(facts.allocated)}`],
         ]), syncLine(observed?.sync?.storage || (member.member_kind === 'MasterLocal' ? 'effective' : 'awaiting')),
-        make('div', 'node-note', '当前物理为该媒体文件系统当前可用空间；分配是 FrontierCloud 配额；项目占用只统计本项目托管资源。'));
+        make('div', 'node-note', '物理表示该媒体文件系统已用 / 总容量；已使用 / 已分配表示 FrontierCloud 项目占用 / 分配配额。'));
         return section;
     }
 
@@ -332,7 +346,7 @@
             const role = $('nodeRole'), capacity = $('masterLocalCapacity'); capacity.disabled = role.value !== 'Master'; role.onchange = () => { capacity.disabled = role.value !== 'Master'; };
             renderOverview(node, observability);
             const pool = node.storage_pool;
-            $('storagePoolSummary').textContent = pool ? `Storage Pool · 物理总容量 ${gib(pool.physical_total_bytes)} · 当前物理 ${gib(pool.physical_free_bytes)} · 当前分配 ${gib(pool.current_allocated_bytes ?? pool.allocated_bytes)} · 当前项目资源占用 ${gib(pool.project_used_bytes ?? pool.used_bytes)}` : `${node.role} · 资源策略由 Master 管理`;
+            $('storagePoolSummary').textContent = pool ? `Storage Pool · ${storageText(pool)}` : `${node.role} · 资源策略由 Master 管理`;
             renderRows(node, observability);
         });
         refreshQueue = current.catch(() => {}); return current;

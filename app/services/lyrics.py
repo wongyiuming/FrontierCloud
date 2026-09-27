@@ -514,6 +514,77 @@ async def replace_relations(origin_kind: str, origin_path: str, linked_paths: li
     return len(pairs)
 
 
+def matching_lyric_pairs(
+    track_paths: list[str], lyric_paths: list[str],
+) -> tuple[list[tuple[str, str]], int, int]:
+    """Match exact stems, preferring the same relative album path."""
+    by_stem: dict[str, list[str]] = {}
+    by_relative_stem: dict[str, str] = {}
+    for lyric_path in lyric_paths:
+        relative = Path(lyric_path).relative_to("lyrics")
+        by_stem.setdefault(relative.stem, []).append(lyric_path)
+        by_relative_stem[relative.with_suffix("").as_posix()] = lyric_path
+
+    pairs: list[tuple[str, str]] = []
+    ambiguous = 0
+    unmatched = 0
+    for track_path in track_paths:
+        relative = Path(track_path).relative_to("music")
+        exact = by_relative_stem.get(relative.with_suffix("").as_posix())
+        if exact:
+            pairs.append((track_path, exact))
+            continue
+        candidates = by_stem.get(relative.stem, [])
+        if len(candidates) == 1:
+            pairs.append((track_path, candidates[0]))
+        elif len(candidates) > 1:
+            ambiguous += 1
+        else:
+            unmatched += 1
+    return pairs, ambiguous, unmatched
+
+
+async def auto_relate_matching_names(*, audit=None) -> dict[str, int]:
+    """Associate audio and LRC objects whose extension-free names match exactly."""
+    await asyncio.to_thread(ensure_default_lyric_file)
+    lyric_paths = sorted(
+        path.relative_to(MEDIA_ROOT).as_posix()
+        for path in LYRICS_ROOT.rglob("*.lrc")
+        if path.is_file() and not path.is_symlink() and path.name != "default.lrc"
+    )
+    from app.services.federation.state import state as node_state
+    if node_state.node.get("role") == "Master":
+        async with engine.connect() as conn:
+            result = await conn.execute(text("""
+                SELECT media_path FROM global_media_objects
+                WHERE object_kind='audio' AND state='active'
+                ORDER BY media_path
+            """))
+            track_paths = [str(row["media_path"]) for row in result.mappings().all()]
+    else:
+        track_paths = sorted(
+            path.relative_to(MEDIA_ROOT).as_posix()
+            for path in MUSIC_ROOT.rglob("*")
+            if path.is_file() and not path.is_symlink() and path.suffix.lower() in AUDIO_EXTS
+        )
+    pairs, ambiguous, unmatched = matching_lyric_pairs(track_paths, lyric_paths)
+
+    from app.services.media_manager import ensure_media_mutations_ready, media_mutation_lock
+    async with media_mutation_lock:
+        ensure_media_mutations_ready()
+        now = _utcnow()
+        async with engine.begin() as conn:
+            for track_path, lyric_path in pairs:
+                track_path, media_id = await _track_identity(conn, track_path)
+                lyric_id = await media_objects.ensure_object(conn, lyric_path, "lyric")
+                await _upsert_relation(conn, media_id, track_path, lyric_id, lyric_path, now)
+            if audit is not None:
+                await audit(conn, "success", len(pairs), {
+                    "ambiguous": ambiguous, "unmatched": unmatched,
+                })
+    return {"linked": len(pairs), "ambiguous": ambiguous, "unmatched": unmatched}
+
+
 async def attach_links(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     enriched = [dict(item) for item in items]
     media_ids = [str(item["media_id"]) for item in enriched]

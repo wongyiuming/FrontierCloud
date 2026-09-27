@@ -1,0 +1,38 @@
+/* Directory priority is a first-class control beside directory navigation. */
+.priority-directory-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+    align-items: center;
+    gap: 14px;
+    padding: 8px 10px;
+}
+.priority-directory-enter {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 0;
+    color: inherit;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+}
+.priority-directory-enter:hover,
+.priority-directory-enter:focus-visible {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+}
+.priority-directory-control {
+    min-width: 220px;
+}
+@media (max-width: 760px) {
+    .priority-directory-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .priority-directory-control {
+        min-width: 0;
+    }
+}

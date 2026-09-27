@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from app.api.v1.admin import router as admin_router
 from app.api.v1.admin_cluster_integrity import router as cluster_admin_router
 from app.api.v1.admin_delete_integrity import router as delete_integrity_router
+from app.api.v1.admin_directories import router as admin_directories_router
 from app.api.v1.admin_karaoke_integrity import router as admin_karaoke_integrity_router
 from app.api.v1.admin_masterlocal_recovery import router as masterlocal_recovery_router
 from app.api.v1.admin_node_observability import router as node_observability_router
@@ -23,9 +24,11 @@ from app.api.v1.admin_nodes import router as nodes_router
 from app.api.v1.admin_karaoke_users import router as admin_karaoke_users_router
 from app.api.internal_storage_integrity import install as install_internal_storage_integrity
 from app.services.health import readiness_response
+from app.services.media_directory_catalog import install_public_priority
 
 
 install_internal_storage_integrity()
+install_public_priority()
 
 _ADMIN_OVERRIDE_PATHS = {
     "",
@@ -86,6 +89,7 @@ _include_admin(upload_guard_router)
 _include_admin(masterlocal_recovery_router)
 _include_admin(delete_integrity_router)
 _include_admin(page_integrity_router)
+_include_admin(admin_directories_router)
 _include_admin(_without_paths(cluster_admin_router, _CLUSTER_OVERRIDE_PATHS))
 _include_admin(_without_paths(admin_router, _ADMIN_OVERRIDE_PATHS))
 _include_admin(_without_paths(nodes_router, _NODE_OVERRIDE_PATHS))

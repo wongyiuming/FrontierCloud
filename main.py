@@ -100,6 +100,7 @@ QUIET_REQUEST_PATHS = frozenset({
     "/metrics",
     "/api/v1/health",
 })
+CATALOG_CACHE_CONTROL = b"private, no-cache, must-revalidate"
 
 
 class RealIPLogMiddleware:
@@ -187,6 +188,31 @@ class RealIPLogMiddleware:
             reset_request_context(context_tokens)
 
 
+class CatalogFreshnessMiddleware:
+    """Keep mutable catalog APIs fresh while Redis remains the expensive-work cache."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http" or not str(scope.get("path") or "").startswith("/api/v1/media/catalog/"):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = [
+                    (name, value)
+                    for name, value in message.get("headers", [])
+                    if name.lower() != b"cache-control"
+                ]
+                headers.append((b"cache-control", CATALOG_CACHE_CONTROL))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
 def render_query_log(target: str) -> str:
     """Decode URL query values for humans without turning separators into structure."""
     try:
@@ -207,6 +233,7 @@ app.add_middleware(IPSecurityMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RealIPLogMiddleware)
 app.add_middleware(NodeRoleMiddleware)
+app.add_middleware(CatalogFreshnessMiddleware)
 app.include_router(api_v1_router, prefix="/api/v1")
 
 

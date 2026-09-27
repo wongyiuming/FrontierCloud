@@ -199,10 +199,8 @@
                 <div id="brandLogoStatus" class="brand-logo-status">尚未加载</div>
             </div>
         `;
-        const mediaPanel = document.querySelector('[data-admin-module="media"]');
-        (mediaPanel?.parentElement || document.querySelector('.admin-console'))?.insertBefore(
-            panel, mediaPanel || null,
-        );
+        const consoleRoot = document.querySelector('.admin-console');
+        consoleRoot?.append(panel);
         panel.querySelector('.module-heading').onclick = async () => {
             const open = !panel.classList.contains('expanded');
             for (const module of document.querySelectorAll('.admin-module')) {
