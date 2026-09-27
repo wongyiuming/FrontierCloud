@@ -53,6 +53,7 @@ class UploadSiteRoutingTests(unittest.IsolatedAsyncioTestCase):
             member("direct-busy", transport="Direct", used=800, available=200),
             member("direct-ready", transport="Direct", used=100, available=900),
             member("direct-offline", transport="Direct", health="offline", available=1000),
+            member("direct-full", transport="Direct", available=0),
             member("relay-ready", transport="Relay", used=0, available=1000),
         ]
         with patch.object(
@@ -167,6 +168,13 @@ class UploadSiteUiContractTests(unittest.TestCase):
         self.assertGreaterEqual(css.count(".13)"), 3)
         self.assertNotIn(".tree-row.site-", css)
         self.assertIn('static_asset_url("css/upload-site-types.css")', page)
+
+    def test_architecture_forbids_per_member_upload_selection(self):
+        architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        self.assertIn("Admin media upload chooses a **site type**, never a concrete storage member", architecture)
+        self.assertIn("selector starts empty", architecture)
+        self.assertIn("Historical media requires **no migration**", architecture)
+        self.assertIn("low-saturation badges", architecture)
 
 
 if __name__ == "__main__":
