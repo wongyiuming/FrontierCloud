@@ -5,6 +5,19 @@
     scrollbar-gutter: stable;
 }
 
+/* Canonical Admin module order. Keep related work together even when modules
+   such as site/release are injected at runtime after the static page loads. */
+.admin-console > .admin-module[data-admin-module="media"] { order: 10; }
+.admin-console > .admin-module[data-admin-module="priority"] { order: 20; }
+.admin-console > .admin-module[data-admin-module="lyrics"] { order: 30; }
+.admin-console > .admin-module[data-admin-module="users"] { order: 40; }
+.admin-console > .admin-module[data-admin-module="security"] { order: 50; }
+.admin-console > .admin-module[data-admin-module="network"] { order: 60; }
+.admin-console > .admin-module[data-admin-module="nodes"] { order: 70; }
+.admin-console > .admin-module[data-admin-module="site"] { order: 80; }
+.admin-console > .admin-module[data-admin-module="release"] { order: 90; }
+.admin-console > .admin-module[data-admin-module="key"] { order: 100; }
+
 /* Expanded modules become the viewport focus. Other modules remain in normal
    document flow above/below and are therefore pushed outside the screen. */
 .admin-console .admin-module.expanded {
