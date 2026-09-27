@@ -204,7 +204,7 @@ A new `main` release is publishable only when FrontierCloud can prove:
 
 GitHub verification is cached and supports optional `GITHUB_API_TOKEN` authentication plus rate-limit backoff. If current verification is unavailable, the running service remains available but new upgrade authorization fails closed. Last-known-good release evidence is display-only and never authorizes a new upgrade.
 
-System Release Management presents the production state semantically: a converged cluster shows `SHA · 已与 main HEAD 一致`; an actual pending upgrade shows `当前 SHA -> 待发布 SHA`. Rollback uses the previous Web-managed SHA recorded by the Updater.
+System Release Management presents production state semantically: a converged cluster states that the current SHA matches `main` HEAD, while a real pending upgrade displays separate current and pending-release SHAs. Rollback uses the previous Web-managed SHA recorded by the Updater.
 
 ## Data and operations
 
