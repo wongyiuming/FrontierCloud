@@ -248,13 +248,16 @@ def folder_priority_rename_check(browser) -> None:
     renamed = music_root / "mm-folder-renamed"
     require(fixture.is_file(), "UI fixture audio is missing")
 
-    for path in (first, second, renamed):
-        shutil.rmtree(path, ignore_errors=True)
-    music_root.chmod(0o777)
+    subprocess.run(
+        ["sudo", "rm", "-rf", str(first), str(second), str(renamed)],
+        check=True,
+    )
+    subprocess.run(["sudo", "chmod", "0777", str(music_root)], check=True)
     for path in (first, second):
-        path.mkdir(parents=True)
-        path.chmod(0o777)
-        shutil.copy2(fixture, path / "fixture.wav")
+        subprocess.run(["sudo", "mkdir", "-p", str(path)], check=True)
+        subprocess.run(["sudo", "chmod", "0777", str(path)], check=True)
+        subprocess.run(["sudo", "cp", str(fixture), str(path / "fixture.wav")], check=True)
+        subprocess.run(["sudo", "chmod", "0666", str(path / "fixture.wav")], check=True)
 
     context = browser.new_context(viewport={"width": 1280, "height": 800})
     try:
@@ -318,8 +321,11 @@ def folder_priority_rename_check(browser) -> None:
         require(int(result["migrated"]["preference"]) == 77, "folder priority value changed during rename")
     finally:
         context.close()
-        for path in (first, second, renamed):
-            shutil.rmtree(path, ignore_errors=True)
+        subprocess.run(
+            ["sudo", "rm", "-rf", str(first), str(second), str(renamed)],
+            check=False,
+        )
+        subprocess.run(["sudo", "chmod", "0755", str(music_root)], check=False)
 
 
 def maintenance_page_check(browser) -> None:
