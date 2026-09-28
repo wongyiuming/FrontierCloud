@@ -152,6 +152,8 @@ Accepted lyric upload is complete only after both the file and its managed-objec
 
 ## Cluster, heartbeat, and Backup
 
+FrontierCloud targets one-core VPS deployments. The product runtime accepts bounded streaming and ordinary request handling, but rejects burst or sustained high-load computation. Runtime transcoding, compression, inference, bulk transformation, subprocess execution, executor offload, and compute-heavy dependencies are outside the business boundary. CI enforces this statically, caps Web at one CPU, fails compute-caused timeouts, and requires CPU to return below 20% for five consecutive samples within 15 seconds after business tests.
+
 Storage and Backup are independently configured on Followers. A saved desired setting is not considered effective until the Follower reports the observed state through authenticated heartbeat/control traffic.
 
 Heartbeat health is intentionally independent from Backup work. Backup is asynchronous and a failed backup attempt does not turn a successful heartbeat into an offline node.
@@ -245,4 +247,4 @@ docker compose config --quiet
 
 GitHub Actions on the exact final `dev` SHA is the release authority. The main workflow includes exact-promotion verification, real Chromium UI regression, real multi-node HTTPS cluster acceptance, Compose/source/configuration checks, unit/runtime tests, edge/security checks, and public/Admin flows.
 
-The September 2026 audit also maintains a persistent private-CA validation cluster with one Master, three Direct Followers and six Relay Followers. Its CD reconciler uses the same Admin “upgrade and distribute” transaction as an operator, verifies every application and Updater runtime SHA, and keeps maintenance closed on incomplete releases. Measured results are recorded in the audit report; they are evidence for that host and dataset, not a throughput SLA.
+CI cluster acceptance is fixed at three nodes: one Master, one Direct Follower, and one Relay Follower. The separate persistent private-CA validation installation uses one Master, three Direct Followers, and six Relay Followers. Its CD reconciler uses the same Admin “upgrade and distribute” transaction as an operator, verifies every application and Updater runtime SHA, and keeps maintenance closed on incomplete releases. Measured results are evidence for that host and dataset, not a throughput SLA.

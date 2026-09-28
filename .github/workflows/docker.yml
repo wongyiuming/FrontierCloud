@@ -278,6 +278,7 @@ jobs:
 
       - name: Validate configuration and frontend syntax
         run: |
+          python3 scripts/check_cpu_boundary.py
           python3 scripts/validate_env_contract.py
           python3 scripts/check_release_policy.py
           docker compose config --quiet
@@ -295,12 +296,15 @@ jobs:
           node tests/network_observation_smoke.mjs
 
       - name: Build and start services
-        run: docker compose up -d --build --remove-orphans --wait --wait-timeout 180
+        run: |
+          docker compose up -d --build --remove-orphans --wait --wait-timeout 180
+          docker update --cpus 1.0 "$(docker compose ps -q web)"
 
       - name: Run source configuration tests
         run: |
           python3 -m unittest -v \
             tests/test_backup_compute_retirement.py \
+            tests/test_cpu_boundary.py \
             tests/test_deployment_contract.py \
             tests/test_federation_contract.py \
             tests/test_updater_p0_contract.py
@@ -310,12 +314,14 @@ jobs:
           mapfile -t runtime_tests < <(
             find tests -maxdepth 1 -type f -name 'test_*.py' \
               ! -name 'test_backup_compute_retirement.py' \
+              ! -name 'test_cpu_boundary.py' \
               ! -name 'test_deployment_contract.py' \
               ! -name 'test_federation_contract.py' \
               ! -name 'test_updater_p0_contract.py' \
               -printf '/app/%p\n' | sort
           )
-          docker compose exec -T web python -m unittest -v "${runtime_tests[@]}"
+          timeout --signal=TERM --kill-after=5s 120s \
+            docker compose exec -T web python -m unittest -v "${runtime_tests[@]}"
           docker compose exec -T nginx nginx -t
           docker compose exec -T redis redis-cli ping | grep PONG
           docker compose exec -T mysql sh -c 'MYSQL_PWD=$(cat /run/frontiercloud-secrets/mysql_password) mysqladmin ping -h 127.0.0.1 -umedia_admin --silent'
@@ -428,9 +434,14 @@ jobs:
             -H 'Content-Type: application/json' -d '{"ip":"203.0.113.77"}' \
             https://ci.frontiercloud.local/api/v1/media/admin/security/whitelist/remove | grep '"status":"ok"'
 
+      - name: Require one-core CPU recovery
+        run: python3 scripts/check_cpu_quiescence.py "$(docker compose ps -q web)" --threshold 20 --consecutive 5 --timeout 15
+
       - name: Show service logs on failure
         if: failure()
-        run: docker compose logs --no-color
+        run: |
+          docker compose logs --no-color
+          docker compose stop -t 3 web
 
       - name: Stop and clean CI services
         if: always()

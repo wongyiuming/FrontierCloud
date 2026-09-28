@@ -122,6 +122,8 @@ Starts a real application stack and runs Chromium regression coverage for real D
 
 ### test-cluster
 
+The CI cluster is fixed at three nodes: one Master, one Direct Follower, and one Relay Follower. The ten-node persistent development topology is validated separately and is not a CI node-count requirement.
+
 Builds a real multi-node HTTPS topology and exercises role fixing, pairing, heartbeats, Storage/transport behavior, cluster control, and Follower acceptance behavior.
 
 ### test-compose

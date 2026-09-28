@@ -61,6 +61,22 @@ class FederationContractTests(unittest.TestCase):
         self.assertNotIn("ignore_https_errors", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
         self.assertIn("ignore-certificate-errors-spki-list", (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8"))
 
+    def test_ci_cluster_is_exactly_one_master_one_direct_and_one_relay(self):
+        harness = (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8")
+        self.assertIn('(\"master-a\", \"direct-b\", \"relay-c\")', harness)
+        self.assertIn('service[\"cpus\"] = 1.0', harness)
+        self.assertTrue((ROOT / "tests/federation_ten_node.py").is_file())
+        self.assertFalse((ROOT / "tests/federation_seven_node.py").exists())
+
+    def test_ci_rejects_compute_and_stops_timed_out_fixture(self):
+        workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
+        self.assertIn("python3 scripts/check_cpu_boundary.py", workflow)
+        self.assertIn("docker update --cpus 1.0", workflow)
+        self.assertIn("timeout --signal=TERM --kill-after=5s 120s", workflow)
+        self.assertIn("scripts/check_cpu_quiescence.py", workflow)
+        self.assertIn("--threshold 20 --consecutive 5 --timeout 15", workflow)
+        self.assertIn("docker compose stop -t 3 web", workflow)
+
     def test_round_one_browser_ui_is_part_of_authoritative_dev_ci(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
         browser = workflow.split("  browser-ui:", 1)[1].split("  test-cluster:", 1)[0]

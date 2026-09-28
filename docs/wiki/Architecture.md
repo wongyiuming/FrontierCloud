@@ -29,6 +29,8 @@ The frontend is native HTML/CSS/JavaScript. Karaoke reuses the browser media sta
 
 ## 2. Runtime components
 
+FrontierCloud is designed for a one-core VPS. Product requests may stream bounded chunks and perform ordinary control-plane work, but the runtime must not introduce burst or sustained high-load computation. Transcoding, compression, inference, bulk transformation, child processes, executor offload, and compute-heavy dependencies are rejected at review and in CI. CPU recovery checks detect runaway work; they do not authorize computation below a numeric ceiling.
+
 | Component | Purpose |
 | --- | --- |
 | Nginx | HTTP/HTTPS entry, static delivery, proxying, maintenance mode, edge/IP enforcement, internal route limits |
