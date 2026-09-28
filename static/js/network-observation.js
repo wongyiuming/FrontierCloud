@@ -1,8 +1,14 @@
 (function observeClientNetwork() {
-    const urls = Array.isArray(window.frontierCloudStunUrls)
-        ? window.frontierCloudStunUrls.filter(url => typeof url === 'string' && /^stuns?:/.test(url)).slice(0, 4)
+    const embedded = document.getElementById('frontierCloudNetworkConfig');
+    let config = {};
+    if (embedded) {
+        try { config = JSON.parse(embedded.textContent) || {}; } catch (_error) { /* Invalid config is reported as disabled. */ }
+    }
+    const configuredUrls = embedded ? config.stun_urls : window.frontierCloudStunUrls;
+    const urls = Array.isArray(configuredUrls)
+        ? configuredUrls.filter(url => typeof url === 'string' && /^stuns?:/.test(url)).slice(0, 4)
         : [];
-    const interval = Math.max(10000, Number(window.frontierCloudWebrtcIntervalMs) || 30000);
+    const interval = Math.max(10000, Number(embedded ? config.interval_ms : window.frontierCloudWebrtcIntervalMs) || 30000);
 
     async function report(addresses, failure = null) {
         window.frontierCloudObservedAddresses = [...addresses].slice(0, 8);
@@ -56,4 +62,15 @@
 
     probe();
     setInterval(probe, interval);
+})();
+
+(function loadTemporaryPlaybackContinuityDiagnostics() {
+    const retireAt = Date.parse('2026-10-15T00:00:00Z');
+    if (Date.now() >= retireAt || typeof PLAYER_KIND === 'undefined' || PLAYER_KIND !== 'audio') return;
+    if (document.getElementById('frontierCloudPlaybackContinuityDiagnostics')) return;
+    const script = document.createElement('script');
+    script.id = 'frontierCloudPlaybackContinuityDiagnostics';
+    script.src = '/static/js/playback-continuity-diagnostics.js';
+    script.async = true;
+    document.head.appendChild(script);
 })();
