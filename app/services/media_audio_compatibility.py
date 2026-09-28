@@ -6,6 +6,7 @@ import json
 import logging
 import mimetypes
 import os
+import shutil
 import urllib.parse
 import uuid
 import weakref
@@ -26,6 +27,9 @@ BROWSER_NATIVE_AUDIO_CODECS = {
     ".mkv": frozenset({"aac", "mp3", "opus", "vorbis"}),
 }
 _DECISION_CACHE_LIMIT = 1024
+_CACHE_HARD_LIMIT_BYTES = 8 * 1024 * 1024 * 1024
+_CACHE_MIN_LIMIT_BYTES = 1024 * 1024 * 1024
+_CACHE_FREE_RESERVE_BYTES = 512 * 1024 * 1024
 _decision_cache: OrderedDict[str, Path] = OrderedDict()
 _loop_states: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
@@ -55,6 +59,45 @@ def _cache_root(source: Path) -> Path:
     root = parent / CACHE_DIRECTORY_NAME
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _cache_limit(root: Path) -> int:
+    total = shutil.disk_usage(root).total
+    return min(_CACHE_HARD_LIMIT_BYTES, max(_CACHE_MIN_LIMIT_BYTES, total // 10))
+
+
+def _cache_files(root: Path) -> list[tuple[int, int, Path]]:
+    files: list[tuple[int, int, Path]] = []
+    for candidate in root.iterdir():
+        if not candidate.is_file() or candidate.name.startswith("."):
+            continue
+        try:
+            stat = candidate.stat()
+        except OSError:
+            continue
+        files.append((stat.st_mtime_ns, stat.st_size, candidate))
+    return sorted(files, key=lambda item: item[0])
+
+
+def _trim_cache(root: Path, *, keep: Path | None = None, required_free: int = 0) -> None:
+    entries = _cache_files(root)
+    total = sum(size for _mtime, size, _path in entries)
+    usage = shutil.disk_usage(root)
+    free = usage.free
+    limit = _cache_limit(root)
+    for _mtime, size, candidate in entries:
+        if total <= limit and free >= required_free:
+            break
+        if keep is not None and candidate == keep:
+            continue
+        try:
+            candidate.unlink()
+        except OSError:
+            continue
+        total -= size
+        free += size
+    if required_free and free < required_free:
+        raise MediaCompatibilityError("Insufficient free space for browser audio compatibility cache")
 
 
 def _decision_get(key: str) -> Path | None:
@@ -134,15 +177,13 @@ def _transcode_command(source: Path, destination: Path) -> list[str]:
         "-i",
         str(source),
         "-map",
-        "0:v?",
-        "-map",
-        "0:a?",
+        "0",
         "-map_metadata",
         "0",
-        "-c:v",
+        "-map_chapters",
+        "0",
+        "-c",
         "copy",
-        "-sn",
-        "-dn",
     ]
     if suffix == ".webm":
         command.extend(["-c:a", "libopus", "-b:a", "160k", "-ac", "2", "-ar", "48000"])
@@ -192,11 +233,20 @@ async def browser_compatible_video(source: Path) -> Path:
     decision_key = f"{path_hash}:{version}"
     remembered = _decision_get(decision_key)
     if remembered is not None and (remembered == source or remembered.is_file()):
+        if remembered != source:
+            try:
+                os.utime(remembered, None)
+            except OSError:
+                pass
         return remembered
 
     root = _cache_root(source)
     destination = root / f"{path_hash}-{version}{suffix}"
     if destination.is_file():
+        try:
+            os.utime(destination, None)
+        except OSError:
+            pass
         _decision_put(decision_key, destination)
         return destination
 
@@ -205,6 +255,10 @@ async def browser_compatible_video(source: Path) -> Path:
         if remembered is not None and (remembered == source or remembered.is_file()):
             return remembered
         if destination.is_file():
+            try:
+                os.utime(destination, None)
+            except OSError:
+                pass
             _decision_put(decision_key, destination)
             return destination
         try:
@@ -213,8 +267,14 @@ async def browser_compatible_video(source: Path) -> Path:
             if not codecs or all(codec in native for codec in codecs):
                 _decision_put(decision_key, source)
                 return source
+            source_size = source.stat().st_size
+            _trim_cache(
+                root,
+                required_free=source_size + _CACHE_FREE_RESERVE_BYTES,
+            )
             await _build_compatible_copy(source, destination)
             _cleanup_stale_versions(root, path_hash, destination)
+            _trim_cache(root, keep=destination, required_free=_CACHE_FREE_RESERVE_BYTES)
             _decision_put(decision_key, destination)
             logger.info(
                 "Generated browser audio compatibility artifact",

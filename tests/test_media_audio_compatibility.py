@@ -49,6 +49,17 @@ class MediaAudioCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             cache_root = Path(directory) / compatibility.CACHE_DIRECTORY_NAME
             self.assertEqual(list(cache_root.glob("*.mp4")), [])
 
+    def test_transcode_only_reencodes_audio_and_preserves_other_streams(self):
+        command = compatibility._transcode_command(Path("movie.mp4"), Path("playback.mp4"))
+        map_index = command.index("-map")
+        codec_index = command.index("-c")
+        self.assertEqual(command[map_index + 1], "0")
+        self.assertEqual(command[codec_index + 1], "copy")
+        self.assertNotIn("-sn", command)
+        self.assertNotIn("-dn", command)
+        self.assertIn("-c:a", command)
+        self.assertIn("aac", command)
+
 
 class MediaAudioCompatibilityContractTests(unittest.TestCase):
     def test_runtime_installs_ffmpeg_and_playback_integrity_layer(self):
