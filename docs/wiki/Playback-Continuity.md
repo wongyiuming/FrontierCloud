@@ -29,7 +29,9 @@ current Deck playing
 -> standby stops
 ```
 
-The **200 ms** threshold is a deliberate safety margin for embedded Chromium scheduling jitter. Do not move the transition back to natural `ended` without new real-device evidence and regression coverage.
+The **200 ms** threshold is a deliberate wall-time safety margin for embedded Chromium scheduling jitter. FrontierCloud divides media-time remaining by the current playback rate, so the planned overlap stays 200 ms at 0.5x, 1x, or 2x. The timer may still run late when an embedded renderer is throttled; it remains useful as long as the old media is still actively playing. Do not move the transition back to natural `ended` without new real-device evidence and regression coverage.
+
+If standby playback has started but the main Deck has not confirmed takeover after eight seconds, FrontierCloud leaves the standby audible and retries the main Deck. A handoff generation and the player's switch sequence reject delayed callbacks from older selections. The bridge stops only after current main playback is confirmed or a newer selection supersedes it.
 
 ## Ended fallback
 

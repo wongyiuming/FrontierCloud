@@ -51,6 +51,13 @@ class PlaybackContinuityCoreContractTests(unittest.TestCase):
             self.assertIn(source, self.core)
         self.assertIn("duplicate system media control must be suppressed after handoff", self.frontend_smoke)
 
+    def test_handoff_uses_wall_time_and_keeps_bridge_during_main_recovery(self):
+        self.assertIn("remainingWallSeconds", self.core)
+        self.assertIn("handoffGeneration", self.core)
+        self.assertIn("scheduleMainRecovery", self.core)
+        self.assertIn("main recovery must keep the audible bridge alive", self.frontend_smoke)
+        self.assertIn("a stale handoff must not leave the newer selection muted", self.frontend_smoke)
+
 
 if __name__ == "__main__":
     unittest.main()

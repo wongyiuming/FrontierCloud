@@ -40,6 +40,8 @@
         let pendingSource = null;
         let pollTimer = null;
         let activeDiagnosticId = null;
+        let handoffGeneration = 0;
+        let activeTakeover = null;
 
         const now = () => performance.now();
         const safeNumber = value => Number.isFinite(Number(value)) ? Number(value) : null;
@@ -61,6 +63,13 @@
             return Math.max(0, duration - current);
         }
 
+        function remainingWallSeconds() {
+            const remaining = remainingSeconds();
+            const rate = safeNumber(art?.video?.playbackRate);
+            if (remaining === null) return null;
+            return remaining / (rate !== null && rate > 0 ? rate : 1);
+        }
+
         function stateSnapshot(extra = {}) {
             const main = art?.video || null;
             return {
@@ -68,6 +77,7 @@
                 current_index: typeof currentIndex === 'number' ? currentIndex : null,
                 switch_sequence: typeof playerSwitchSequence === 'number' ? playerSwitchSequence : null,
                 remaining_seconds: remainingSeconds(),
+                remaining_wall_seconds: remainingWallSeconds(),
                 visibility: document.visibilityState,
                 hidden: Boolean(document.hidden),
                 main_paused: main?.paused ?? null,
@@ -79,6 +89,8 @@
                 standby_ready_state: standby?.element?.readyState ?? null,
                 standby_current_time: safeNumber(standby?.element?.currentTime),
                 handoff_in_flight: handoffInFlight,
+                handoff_generation: handoffGeneration,
+                takeover_switch_sequence: activeTakeover?.switchSequence ?? null,
                 ...extra,
             };
         }
@@ -153,6 +165,13 @@
             handoffTimerDue = null;
         }
 
+        function clearTakeoverMonitor(record = activeTakeover) {
+            if (!record) return;
+            if (record.timer !== null) window.clearTimeout(record.timer);
+            art?.off?.('video:playing', record.listener);
+            if (activeTakeover === record) activeTakeover = null;
+        }
+
         function cleanupStandby({preserveObjectUrl = false} = {}) {
             clearHandoffTimer();
             if (!standby) return;
@@ -185,7 +204,7 @@
                 clearHandoffTimer();
                 return;
             }
-            const remaining = remainingSeconds();
+            const remaining = remainingWallSeconds();
             if (remaining === null) return;
             if (remaining <= HANDOFF_SECONDS) {
                 clearHandoffTimer();
@@ -200,7 +219,7 @@
             handoffTimer = window.setTimeout(() => {
                 handoffTimer = null;
                 handoffTimerDue = null;
-                const latest = remainingSeconds();
+                const latest = remainingWallSeconds();
                 if (latest !== null && latest > HANDOFF_SECONDS + 0.03) {
                     schedulePreEndHandoff();
                     return;
@@ -279,6 +298,13 @@
             if (standby?.ready) schedulePreEndHandoff();
         }
 
+        function restoreMainDeckSettings(mainVideo, userAudio) {
+            if (!mainVideo || !userAudio) return;
+            mainVideo.volume = userAudio.volume;
+            mainVideo.muted = userAudio.muted;
+            mainVideo.playbackRate = userAudio.playbackRate;
+        }
+
         function restoreMainDeckAudio(mainVideo, userAudio, bridge) {
             if (!mainVideo || !bridge) return;
             const bridgeTime = safeNumber(bridge.currentTime);
@@ -286,20 +312,82 @@
             if (bridgeTime !== null && mainTime !== null && bridgeTime > 0.05 && Math.abs(bridgeTime - mainTime) > 0.08) {
                 try { mainVideo.currentTime = bridgeTime; } catch (_error) {}
             }
-            mainVideo.volume = userAudio.volume;
-            mainVideo.muted = userAudio.muted;
-            mainVideo.playbackRate = userAudio.playbackRate;
+            restoreMainDeckSettings(mainVideo, userAudio);
+        }
+
+        function scheduleMainRecovery(record) {
+            if (!record || activeTakeover !== record) return;
+            if (record.timer !== null) window.clearTimeout(record.timer);
+            record.timer = window.setTimeout(() => {
+                record.timer = null;
+                const current = activeTakeover === record
+                    && record.generation === handoffGeneration
+                    && standby === record.candidate
+                    && record.candidate.bridgeActive;
+                if (!current) {
+                    clearTakeoverMonitor(record);
+                    return;
+                }
+                if (record.switchSequence !== null
+                        && (currentIndex !== record.targetIndex
+                            || playerSwitchSequence !== record.switchSequence)) {
+                    report('preend_handoff_superseded', 'newer_track_selection', {
+                        target_index: record.targetIndex,
+                        generation: record.generation,
+                    });
+                    record.candidate.bridgeActive = false;
+                    handoffInFlight = false;
+                    try { record.candidate.element.pause(); } catch (_error) {}
+                    restoreMainDeckSettings(art?.video, record.userAudio);
+                    clearTakeoverMonitor(record);
+                    cleanupStandby({preserveObjectUrl: true});
+                    activeDiagnosticId = null;
+                    return;
+                }
+                report('preend_main_deck_pending', 'main_not_playing_before_deadline', {
+                    target_index: record.targetIndex,
+                    generation: record.generation,
+                });
+                if (art?.video && !art.video.paused && !art.video.ended
+                        && Number(art.video.currentTime) > 0.05) {
+                    record.listener();
+                    return;
+                }
+                try {
+                    if (record.switchSequence === null) {
+                        pendingSource = 'pre-end-recovery';
+                        originalSelectMedia(record.targetIndex);
+                        record.switchSequence = playerSwitchSequence;
+                        if (art?.video) art.video.muted = true;
+                        pendingSource = null;
+                    }
+                    Promise.resolve(art?.play?.()).catch(error => {
+                        report('preend_main_deck_retry_failed', short(error?.name || 'play_failed', 64), {
+                            target_index: record.targetIndex,
+                            generation: record.generation,
+                        });
+                    });
+                } catch (error) {
+                    pendingSource = null;
+                    report('preend_main_deck_retry_failed', short(error?.name || 'play_failed', 64), {
+                        target_index: record.targetIndex,
+                        generation: record.generation,
+                    });
+                }
+                scheduleMainRecovery(record);
+            }, MAIN_TAKEOVER_TIMEOUT_MS);
         }
 
         async function performPreEndHandoff(trigger) {
             if (handoffInFlight || !standby?.ready || !standbyMatchesCurrentNext()) return false;
-            const remaining = remainingSeconds();
+            const remaining = remainingWallSeconds();
             if (remaining === null || remaining > HANDOFF_SECONDS + 0.03 || !art?.video || art.video.paused || art.video.ended) return false;
 
             const candidate = standby;
             const oldVideo = art.video;
             const oldIndex = currentIndex;
             const targetIndex = candidate.index;
+            const generation = ++handoffGeneration;
             const userAudio = {
                 volume: Number.isFinite(Number(oldVideo.volume)) ? Number(oldVideo.volume) : 0.7,
                 muted: Boolean(oldVideo.muted),
@@ -331,19 +419,59 @@
             }
 
             candidate.bridgeActive = true;
+            const record = {
+                candidate,
+                generation,
+                listener: null,
+                switchSequence: null,
+                targetIndex,
+                timer: null,
+                userAudio,
+            };
             const takeover = () => {
-                if (standby !== candidate || currentIndex !== targetIndex || !candidate.bridgeActive) return;
+                if (standby !== candidate || !candidate.bridgeActive || activeTakeover !== record) return;
+                if (record.switchSequence === null) return;
+                if (generation !== handoffGeneration
+                        || currentIndex !== targetIndex
+                        || playerSwitchSequence !== record.switchSequence) {
+                    candidate.bridgeActive = false;
+                    handoffInFlight = false;
+                    try { candidate.element.pause(); } catch (_error) {}
+                    restoreMainDeckSettings(art?.video, userAudio);
+                    clearTakeoverMonitor(record);
+                    cleanupStandby({preserveObjectUrl: true});
+                    report('preend_handoff_superseded', 'newer_track_playing', {target_index: targetIndex, generation});
+                    activeDiagnosticId = null;
+                    return;
+                }
                 const mainVideo = art?.video;
                 restoreMainDeckAudio(mainVideo, userAudio, candidate.element);
                 candidate.bridgeActive = false;
                 handoffInFlight = false;
                 try { candidate.element.pause(); } catch (_error) {}
+                clearTakeoverMonitor(record);
                 cleanupStandby({preserveObjectUrl: true});
-                art.off?.('video:playing', takeover);
-                report('preend_main_deck_resumed', 'main_playing_after_bridge', {target_index: targetIndex});
+                report('preend_main_deck_resumed', 'main_playing_after_bridge', {target_index: targetIndex, generation});
                 activeDiagnosticId = null;
             };
+            record.listener = takeover;
+            activeTakeover = record;
             art.on?.('video:playing', takeover);
+            candidate.element.addEventListener('ended', () => {
+                if (activeTakeover !== record || standby !== candidate || !candidate.bridgeActive) return;
+                if (art?.video && !art.video.paused && !art.video.ended
+                        && Number(art.video.currentTime) > 0.05) {
+                    takeover();
+                    return;
+                }
+                report('preend_bridge_ended', 'main_never_took_over', {target_index: targetIndex, generation});
+                candidate.bridgeActive = false;
+                handoffInFlight = false;
+                clearTakeoverMonitor(record);
+                cleanupStandby({preserveObjectUrl: true});
+                activeDiagnosticId = null;
+                if (currentIndex === targetIndex) playNext('bridge-ended-fallback');
+            }, {once: true});
 
             try {
                 oldVideo.pause();
@@ -352,23 +480,19 @@
                 dispatchTrackRequest(pendingSource, 'next', true, {target_index: targetIndex, trigger});
                 originalSelectMedia(targetIndex);
                 if (art?.video) art.video.muted = true;
+                record.switchSequence = playerSwitchSequence;
+                scheduleMainRecovery(record);
                 systemGuardUntil = now() + SYSTEM_DEDUP_MS;
-                report('preend_bridge_active', 'standby_playing_before_old_end', {target_index: targetIndex, trigger});
+                report('preend_bridge_active', 'standby_playing_before_old_end', {target_index: targetIndex, trigger, generation});
             } catch (error) {
                 pendingSource = null;
-                handoffInFlight = false;
-                candidate.bridgeActive = true;
-                report('preend_main_switch_failed', short(error?.name || error?.message || 'switch_failed', 128), {target_index: targetIndex});
+                report('preend_main_switch_failed', short(error?.name || error?.message || 'switch_failed', 128), {target_index: targetIndex, generation});
+                scheduleMainRecovery(record);
                 return true;
             } finally {
                 pendingSource = null;
             }
 
-            window.setTimeout(() => {
-                if (standby === candidate && candidate.bridgeActive) {
-                    report('preend_main_deck_pending', 'main_not_playing_before_deadline', {target_index: targetIndex});
-                }
-            }, MAIN_TAKEOVER_TIMEOUT_MS);
             return true;
         }
 
