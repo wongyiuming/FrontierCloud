@@ -19,7 +19,6 @@ ROOT = pathlib.Path("/workspace")
 CONTROL_DIR = pathlib.Path("/run/frontiercloud-updater")
 SOCKET_PATH = CONTROL_DIR / "control.sock"
 STATUS_PATH = CONTROL_DIR / "status.json"
-REPLACEMENT_PATH = CONTROL_DIR / "replacement.json"
 MAINTENANCE_DIR = pathlib.Path("/run/frontiercloud-maintenance")
 MAINTENANCE_FLAG = MAINTENANCE_DIR / "enabled"
 FORCE_OPEN_FLAG = ROOT / "data" / ".frontiercloud-force-open"
@@ -28,7 +27,6 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 RELEASE_IMAGE_TAG_RE = re.compile(r"^frontiercloud-(?:web|nginx):([0-9a-f]{40})$")
 TASKS: queue.Queue[tuple[str, str, bool]] = queue.Queue(maxsize=1)
 WRITE_LOCK = threading.Lock()
-START_LOCK = threading.Lock()
 SERVER_ACTIVE = False
 RUNTIME_SHA = ""
 SERVICE_NAMES = {
@@ -158,15 +156,11 @@ def create_from_snapshot(engine, snap: dict, image: str):
 def replace(engine, snap: dict, image: str):
     name = snap["Name"].lstrip("/")
     try:
-        try:
-            old = engine.containers.get(name)
-        except docker.errors.NotFound:
-            old = None
-        if old is not None:
-            old.reload()
-            if old.status == "running":
-                old.stop(timeout=10)
-            old.remove(force=True)
+        old = engine.containers.get(name)
+        old.reload()
+        if old.status == "running":
+            old.stop(timeout=10)
+        old.remove(force=True)
         return create_from_snapshot(engine, snap, image)
     except Exception:
         try:
@@ -290,52 +284,6 @@ def restore_local(engine, snapshots: dict[str, dict], old_sha: str) -> None:
             log(f"git restore failed: {type(exc).__name__}: {exc}")
 
 
-def persist_replacement(snapshots: dict, old_sha: str, target: str) -> None:
-    """Durable recovery input before the first existing container is removed."""
-    CONTROL_DIR.mkdir(parents=True, exist_ok=True)
-    temporary = CONTROL_DIR / "replacement.tmp"
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump({"snapshots": snapshots, "old_sha": old_sha, "target": target}, stream)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, REPLACEMENT_PATH)
-
-
-def recover_interrupted_release() -> bool:
-    """A process crash loses the in-memory queue; never leave it permanently busy."""
-    current = read_status()
-    if current.get("state") not in {"queued", "running", "distributing"}:
-        return False
-    target = str(current.get("target_sha") or "")
-    maintenance(True, target)
-    FORCE_OPEN_FLAG.unlink(missing_ok=True)
-    detail = "Updater process interrupted; maintenance retained; retry the standard release"
-    engine = None
-    try:
-        if current.get("state") == "running" and current.get("phase") == "replacing":
-            if current.get("current_sha") == target:
-                REPLACEMENT_PATH.unlink(missing_ok=True)
-            else:
-                journal = json.loads(REPLACEMENT_PATH.read_text(encoding="utf-8"))
-                if journal.get("target") != target or journal.get("old_sha") != current.get("current_sha"):
-                    raise RuntimeError("replacement journal does not match interrupted release")
-                engine = client()
-                restore_local(engine, journal["snapshots"], journal["old_sha"])
-                REPLACEMENT_PATH.unlink(missing_ok=True)
-        elif current.get("state") == "running" and current.get("phase") == "building":
-            old_sha = str(current.get("current_sha") or "")
-            if SHA_RE.fullmatch(old_sha):
-                git("reset", "--hard", old_sha, timeout=60)
-    except Exception as exc:
-        detail += f"; recovery requires attention: {type(exc).__name__}: {exc}"
-    finally:
-        if engine is not None:
-            engine.close()
-    write_status(state="failed", phase="interrupted", detail=detail, updater_runtime_sha=RUNTIME_SHA)
-    return True
-
-
 def request_runtime_restart(target: str, previous_sha: str) -> None:
     write_status(
         state="restarting", phase="updater-restart", current_sha=target,
@@ -397,7 +345,6 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
                 except Exception:
                     if service in {"web", "nginx"}:
                         raise
-            persist_replacement(snapshots, old_sha, target)
             write_status(phase="replacing")
             for service in ("secrets-init", "media-init"):
                 if service not in snapshots:
@@ -413,7 +360,6 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
             local_replaced = True
             previous_sha = old_sha if mode == "upgrade" else ""
             write_status(current_sha=target, previous_sha=previous_sha)
-            REPLACEMENT_PATH.unlink(missing_ok=True)
         else:
             web = service_container(engine, "web")
             local_replaced = True
@@ -441,7 +387,7 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
             )
             log(f"release complete: {target} ({mode})")
     except BaseException as exc:
-        if engine is not None and not local_replaced:
+        if engine is not None and not local_replaced and snapshots:
             restore_local(engine, snapshots, old_sha)
         write_status(state="failed", phase="failed", detail=f"{type(exc).__name__}: {exc}")
         log(f"release failed; maintenance remains enabled: {type(exc).__name__}: {exc}")
@@ -478,16 +424,13 @@ class Handler(socketserver.StreamRequestHandler):
                 hold = bool(request.get("hold_maintenance", False))
                 if not SHA_RE.fullmatch(target) or mode not in {"upgrade", "rollback"}:
                     raise ValueError("invalid release request")
-                with START_LOCK:
-                    current = read_status()
-                    if current.get("state") in {"queued", "running", "distributing", "restarting"} or TASKS.full():
-                        response = {"ok": False, "reason": "release already running", "status": current}
-                    else:
-                        # Publish intent before waking the worker; concurrent starts
-                        # cannot both pass and queued cannot overwrite running.
-                        write_status(state="queued", phase="queued", target_sha=target, mode=mode, detail="")
-                        TASKS.put_nowait((target, mode, hold))
-                        response = {"ok": True, "accepted": True, "target_sha": target, "mode": mode}
+                current = read_status()
+                if current.get("state") in {"queued", "running", "distributing", "restarting"}:
+                    response = {"ok": False, "reason": "release already running", "status": current}
+                else:
+                    TASKS.put_nowait((target, mode, hold))
+                    write_status(state="queued", phase="queued", target_sha=target, mode=mode, detail="")
+                    response = {"ok": True, "accepted": True, "target_sha": target, "mode": mode}
             else:
                 raise ValueError("unknown updater action")
         except queue.Full:
@@ -510,7 +453,7 @@ def main() -> None:
             state="idle", phase="idle", current_sha=RUNTIME_SHA, previous_sha="",
             updater_runtime_sha=RUNTIME_SHA, detail="",
         )
-    elif not complete_pending_restart() and not recover_interrupted_release():
+    elif not complete_pending_restart():
         write_status(updater_runtime_sha=RUNTIME_SHA)
     threading.Thread(target=worker, name="frontiercloud-release-worker", daemon=True).start()
     with socketserver.ThreadingUnixStreamServer(str(SOCKET_PATH), Handler) as server:

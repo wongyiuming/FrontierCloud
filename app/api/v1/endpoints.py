@@ -32,7 +32,6 @@ from app.services.health import readiness_response
 from app.services.lyrics_auto_link_integrity import install as install_lyrics_auto_link_integrity
 from app.services.lyrics_directory_counts import install as install_lyrics_directory_counts
 from app.services.lyrics_hierarchy_integrity import install as install_lyrics_hierarchy_integrity
-from app.services.media_audio_compatibility import install as install_media_audio_compatibility
 from app.services.media_delete_convergence import install as install_media_delete_convergence
 from app.services.media_directory_catalog import install_public_priority
 from app.services.media_directory_rename_integrity import install as install_media_directory_rename_integrity
@@ -45,7 +44,6 @@ install_federation_mode_integrity()
 install_lyrics_hierarchy_integrity()
 install_lyrics_directory_counts()
 install_lyrics_auto_link_integrity()
-install_media_audio_compatibility()
 install_media_delete_convergence()
 install_media_directory_rename_integrity()
 install_media_visibility_integrity()

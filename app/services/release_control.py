@@ -444,7 +444,7 @@ async def release_status(*, refresh_ci: bool = False) -> dict:
     followers = await follower_release_statuses()
     target = str(ci.get("sha") or "")
     current = str(local.get("current_sha") or "")
-    busy = local.get("state") in {"queued", "running", "distributing", "restarting"}
+    busy = local.get("state") in {"queued", "running", "distributing"}
     policy_ready, policy_detail = updater_policy_status(local, followers)
     convergence_needed = followers_need_convergence(followers, target)
     return {

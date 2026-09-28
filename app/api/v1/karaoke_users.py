@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import ssl
@@ -112,12 +111,7 @@ async def change_password(request: Request, payload: PasswordPayload):
     if not await accounts.verify_password(payload.current_password, user["password_hash"]):
         await accounts.audit(request, user["user_id"], "password-change", "failure")
         raise HTTPException(400, "当前密码错误")
-    try:
-        encoded = await accounts.hash_password(payload.new_password)
-    except ValueError as exc:
-        await accounts.audit(request, user["user_id"], "password-change", "failure",
-                             detail={"reason": "password-policy"})
-        raise HTTPException(400, str(exc)) from exc
+    encoded = await accounts.hash_password(payload.new_password)
     async with state.database.begin() as conn:
         await conn.execute(update(ks.users).where(ks.users.c.user_id == user["user_id"])
                            .values(password_hash=encoded, updated_at=int(time.time())))
@@ -207,7 +201,7 @@ async def _recording_stat(row: dict) -> dict:
     member, relation = await _member_and_relation(row["storage_member_id"])
     if relation is None:
         from app.services import karaoke_storage
-        return await asyncio.to_thread(karaoke_storage.stat, member["member_id"], row["user_id"], row["recording_id"])
+        return karaoke_storage.stat(member["member_id"], row["user_id"], row["recording_id"])
     return await runtime.call(relation, f"/internal/v1/recordings/{row['recording_id']}/stat",
                               {"user_id": row["user_id"]})
 

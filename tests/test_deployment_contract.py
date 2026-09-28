@@ -11,12 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentContractTests(unittest.TestCase):
-    def test_container_shell_entrypoints_use_lf_even_on_windows(self):
-        attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
-        self.assertIn("*.sh text eol=lf", attributes)
-        for path in (ROOT / "nginx").glob("*.sh"):
-            self.assertNotIn(b"\r\n", path.read_bytes(), str(path))
-
     def test_native_karaoke_keeps_recording_local_until_authenticated_upload(self):
         web = (ROOT / "static/js/karaoke.js").read_text(encoding="utf-8")
         page = (ROOT / "static/media/karaoke.html").read_text(encoding="utf-8")

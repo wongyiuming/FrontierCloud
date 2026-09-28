@@ -85,7 +85,7 @@
   </section>
 </div>
 <noscript>当前浏览器必须启用脚本才能使用卡拉OK。</noscript>
-<script id="frontierCloudNetworkConfig" type="application/json">{"stun_urls":{{STUN_URLS}},"interval_ms":{{WEBRTC_INTERVAL_MS}}}</script>
+<script>window.frontierCloudStunUrls={{STUN_URLS}};window.frontierCloudWebrtcIntervalMs={{WEBRTC_INTERVAL_MS}};</script>
 <script src="{{NETWORK_OBSERVATION_JS_URL}}" defer></script>
 <script src="{{KARAOKE_JS_URL}}" defer></script>
 <script src="/static/js/lyrics-window.js" defer></script>
