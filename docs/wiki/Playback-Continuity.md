@@ -24,6 +24,7 @@ current Deck playing
 -> old Deck pauses
 -> main Deck selects the next track while muted
 -> main Deck reaches playing
+-> main Deck currentTime advances during a 500 ms confirmation window
 -> main Deck synchronizes to bridge position
 -> user volume/mute/rate state is restored
 -> standby stops
@@ -31,7 +32,7 @@ current Deck playing
 
 The **200 ms** threshold is a deliberate wall-time safety margin for embedded Chromium scheduling jitter. FrontierCloud divides media-time remaining by the current playback rate, so the planned overlap stays 200 ms at 0.5x, 1x, or 2x. The timer may still run late when an embedded renderer is throttled; it remains useful as long as the old media is still actively playing. Do not move the transition back to natural `ended` without new real-device evidence and regression coverage.
 
-If standby playback has started but the main Deck has not confirmed takeover after eight seconds, FrontierCloud leaves the standby audible and retries the main Deck. A handoff generation and the player's switch sequence reject delayed callbacks from older selections. The bridge stops only after current main playback is confirmed or a newer selection supersedes it.
+If standby playback has started but the main Deck has not confirmed takeover after eight seconds, FrontierCloud leaves the standby audible and retries the main Deck. The `playing` event is treated only as a candidate signal: `currentTime` must advance by at least 50 ms during a 500 ms probe before the bridge is released. A stalled clock is reported as `preend_main_deck_stalled`. A handoff generation and the player's switch sequence reject delayed callbacks from older selections. The bridge stops only after measured main playback progress or a newer selection supersedes it.
 
 ## Ended fallback
 
@@ -55,7 +56,7 @@ The Tesla diagnostic API is temporary, memory-only, and independently retired. R
 
 The contract is protected by:
 
-- `tests/playback_handoff_smoke.mjs`, which exercises T-200 ms standby-first handoff, takeover, duplicate system-control suppression, and ended fallback;
+- `tests/playback_handoff_smoke.mjs`, which exercises T-200 ms standby-first handoff, measured-clock takeover, false `playing` events, duplicate system-control suppression, and ended fallback;
 - `tests/network_observation_smoke.mjs`, which runs that handoff regression and validates this Wiki page, the MD core contract, and the Wiki sidebar directly from the checkout before image build;
 - `tests/test_playback_continuity_core_contract.py`, which verifies the permanent runtime code contract inside the Web image;
 - the normal Docker Compose, Chromium UI, HTTPS cluster, source, and runtime release gates.

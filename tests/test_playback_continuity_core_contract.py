@@ -55,7 +55,10 @@ class PlaybackContinuityCoreContractTests(unittest.TestCase):
         self.assertIn("remainingWallSeconds", self.core)
         self.assertIn("handoffGeneration", self.core)
         self.assertIn("scheduleMainRecovery", self.core)
+        self.assertIn("MAIN_PROGRESS_CONFIRM_MS = 500", self.core)
+        self.assertIn("playing_event_without_clock_progress", self.core)
         self.assertIn("main recovery must keep the audible bridge alive", self.frontend_smoke)
+        self.assertIn("a playing event without clock progress must keep the bridge audible", self.frontend_smoke)
         self.assertIn("a stale handoff must not leave the newer selection muted", self.frontend_smoke)
 
 

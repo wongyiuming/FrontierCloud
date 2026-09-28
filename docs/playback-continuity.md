@@ -28,12 +28,13 @@ Audio playback uses a warm standby bridge for the next track.
 5. At T-200 ms, FrontierCloud calls `standby.play()` while the old Deck is still actively playing.
 6. The old Deck is paused only after standby playback succeeds.
 7. The normal player then selects the same next track with the main Deck muted while it catches the already-playing bridge.
-8. When the main Deck emits `video:playing`, it is synchronized to the bridge position, the user's volume/mute/playback-rate state is restored, and the standby is stopped.
-9. The next cycle then prepares the following track.
+8. A main Deck `video:playing` event starts a 500 ms progress probe. Only measured `currentTime` advancement confirms takeover; the event alone is insufficient.
+9. After measured progress, the main Deck is synchronized to the bridge position, the user's volume/mute/playback-rate state is restored, and the standby is stopped.
+10. The next cycle then prepares the following track.
 
 The timer is a target, not a real-time guarantee. Embedded Chromium may run it late when the page is throttled. A late callback still starts the handoff while the old media remains active; once the old element has ended, the pre-end path no longer claims success.
 
-If the standby is already playing but the main Deck does not confirm takeover within eight seconds, FrontierCloud keeps the standby audible and retries the main Deck. Each handoff carries a monotonic generation plus the player switch sequence, so a delayed event from an older selection cannot seek, mute, or stop a newer track. The standby is released only after current main playback is confirmed or a newer selection supersedes the handoff.
+If the standby is already playing but the main Deck does not confirm takeover within eight seconds, FrontierCloud keeps the standby audible and retries the main Deck. A `playing` event with a stalled media clock is reported as `preend_main_deck_stalled` and cannot release the bridge. Each handoff carries a monotonic generation plus the player switch sequence, so a delayed event from an older selection cannot seek, mute, or stop a newer track. The standby is released only after current main playback is confirmed by clock progress or a newer selection supersedes the handoff.
 
 The ordering is intentional:
 
@@ -43,6 +44,7 @@ standby warm
 -> old Deck pauses
 -> main Deck selects next track
 -> main Deck playing
+-> main Deck clock advances for the confirmation window
 -> bridge relinquishes audio
 ```
 
@@ -85,7 +87,7 @@ The core loader has no retirement date. The diagnostic endpoint, memory ring, an
 
 The following regressions are release gates:
 
-- `tests/playback_handoff_smoke.mjs` verifies wall-time T-200 ms behavior across playback rates, standby-first ordering, main-deck takeover and retry, stale-event isolation, system-event deduplication, and early-failure fallback.
+- `tests/playback_handoff_smoke.mjs` verifies wall-time T-200 ms behavior across playback rates, standby-first ordering, measured-clock takeover, false `playing` events, main-deck retry, stale-event isolation, system-event deduplication, and early-failure fallback.
 - `tests/network_observation_smoke.mjs` imports the handoff smoke and validates this MD, the Wiki page, and the Wiki sidebar directly from the GitHub checkout before the runtime image is built.
 - `tests/test_playback_continuity_core_contract.py` protects the permanent loader, the 200 ms threshold, source deduplication, fallback behavior, and standby-first ordering inside the runtime image.
 - the normal Chromium, cluster, Compose, source, and runtime release gates remain mandatory.

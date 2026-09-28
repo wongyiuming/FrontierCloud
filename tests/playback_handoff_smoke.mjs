@@ -199,6 +199,8 @@ function scenario({rejectStandby = false, currentTime = 9.81, playbackRate = 1} 
     assert.equal(s.run('window.frontierCloudPlaybackContinuityHandoff.status().bridge_active'), true);
 
     s.run("art.emit('video:playing')");
+    s.oldVideo.currentTime = 0.2;
+    s.runTimersAt(500);
     assert.equal(s.oldVideo.muted, false, 'main deck restores the user mute state after takeover');
     assert.equal(s.createdMedia[0].pauseCalls >= 1, true, 'standby stops after main-deck takeover');
     assert.equal(s.run('window.frontierCloudPlaybackContinuityHandoff.status().bridge_active'), false);
@@ -243,7 +245,31 @@ function scenario({rejectStandby = false, currentTime = 9.81, playbackRate = 1} 
     assert.equal(s.run('window.frontierCloudPlaybackContinuityHandoff.status().bridge_active'), true);
 
     s.run("art.emit('video:playing')");
+    s.oldVideo.currentTime = 0.2;
+    s.runTimersAt(500);
     assert.equal(standby.paused, true, 'the bridge stops only after main playback is confirmed');
+    assert.equal(s.run('window.frontierCloudPlaybackContinuityHandoff.status().bridge_active'), false);
+}
+
+{
+    const s = scenario();
+    s.runPoll();
+    s.runImmediateTimers();
+    await flush();
+
+    const standby = s.createdMedia[0];
+    s.run("art.emit('video:playing')");
+    s.oldVideo.currentTime = 0.015;
+    s.runTimersAt(500);
+    assert.equal(standby.paused, false, 'a playing event without clock progress must keep the bridge audible');
+    assert.equal(s.oldVideo.muted, true, 'a stalled main deck must stay muted');
+    assert.equal(s.run('window.frontierCloudPlaybackContinuityHandoff.status().bridge_active'), true);
+
+    s.run("art.emit('video:playing')");
+    s.oldVideo.currentTime = 0.215;
+    s.runTimersAt(500);
+    assert.equal(standby.paused, true, 'the bridge retires after measured main clock progress');
+    assert.equal(s.oldVideo.muted, false);
     assert.equal(s.run('window.frontierCloudPlaybackContinuityHandoff.status().bridge_active'), false);
 }
 
