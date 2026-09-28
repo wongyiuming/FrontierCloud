@@ -292,6 +292,7 @@ jobs:
           node --check static/js/karaoke-ui.js
           node tests/admin_ui_smoke.mjs
           node tests/player_cache_smoke.mjs
+          node tests/network_observation_smoke.mjs
 
       - name: Build and start services
         run: docker compose up -d --build --remove-orphans --wait --wait-timeout 180

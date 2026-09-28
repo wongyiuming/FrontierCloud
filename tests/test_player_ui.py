@@ -54,7 +54,12 @@ class PlayerUIContractTests(unittest.TestCase):
         self.assertIn(": FrontierVideoPlayer", script)
         self.assertIn("<video class=\"art-video\"", script)
         self.assertIn("get playRequested()", script)
-        self.assertIn("const resume = art.playRequested", script)
+        self.assertIn("if (nativeName === 'ended') this._playRequested = false", script)
+        self.assertNotIn("this.video.addEventListener('ended', () => { this._playRequested = false", script)
+        self.assertIn("if ('mediaSession' in navigator && !art.video?.ended)", script)
+        self.assertIn("const resume = art.playRequested || playbackState?.lastTick != null", script)
+        url_setter = script.split("set url(value)", 1)[1].split("get currentTime()", 1)[0]
+        self.assertNotIn("this.video.load()", url_setter)
         self.assertNotIn("new Artplayer", script)
         self.assertNotIn("art.e['video:error']", script)
         self.assertNotIn("cdnjs.cloudflare.com/ajax/libs/artplayer", templates)

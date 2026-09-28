@@ -146,7 +146,13 @@ class FrontierMediaPlayer {
             volumechange: 'video:volumechange', progress: 'video:progress',
         };
         for (const [nativeName, playerName] of Object.entries(forward)) {
-            this.video.addEventListener(nativeName, event => this._emit(playerName, event));
+            this.video.addEventListener(nativeName, event => {
+                // Clear the completed track's intent before business handlers run.
+                // video:ended may synchronously select and play the next track, which
+                // must be allowed to set a fresh playback intent that survives this event.
+                if (nativeName === 'ended') this._playRequested = false;
+                this._emit(playerName, event);
+            });
         }
         this.video.addEventListener('loadstart', () => { this.loading.show = true; this.controls.show = true; });
         this.video.addEventListener('waiting', () => { this.loading.show = true; this.controls.show = true; });
@@ -155,7 +161,7 @@ class FrontierMediaPlayer {
         this.video.addEventListener('playing', () => { this.loading.show = false; this.notice.show = false; this._syncPlaybackUi(); this._scheduleControlsHide(); });
         this.video.addEventListener('play', () => { this._syncPlaybackUi(); this.controls.show = true; });
         this.video.addEventListener('pause', () => { this._syncPlaybackUi(); this._showControls(); });
-        this.video.addEventListener('ended', () => { this._playRequested = false; this._syncPlaybackUi(); this._showControls(); });
+        this.video.addEventListener('ended', () => { this._syncPlaybackUi(); this._showControls(); });
         this.video.addEventListener('timeupdate', () => this._syncTime());
         this.video.addEventListener('durationchange', () => this._syncTime());
         this.video.addEventListener('progress', () => this._syncBuffered());
@@ -348,8 +354,9 @@ class FrontierMediaPlayer {
         const url = String(value || '');
         if (url === this._url && this.video.getAttribute('src') === url) return;
         this._url = url;
+        // Assigning src already starts resource selection. Avoid an extra load()
+        // cycle so background browsers see the smallest possible media-session gap.
         this.video.src = url;
-        this.video.load();
     }
 
     get currentTime() { return Number(this.video.currentTime) || 0; }
@@ -796,7 +803,12 @@ function bindPlayerBusinessEvents() {
 
     art.on('pause', () => {
         accountPlaybackTime();
-        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+        // A media element emits pause as part of reaching its natural end.
+        // Automatic next-track playback is one continuous user-authorized session;
+        // do not advertise a transient system-level pause between adjacent tracks.
+        if ('mediaSession' in navigator && !art.video?.ended) {
+            navigator.mediaSession.playbackState = 'paused';
+        }
         stopLyricClock();
     });
 
@@ -823,7 +835,10 @@ function bindPlayerBusinessEvents() {
         }
         remoteRetrySequence = sequence;
         const position = video.currentTime;
-        const resume = art.playRequested;
+        // Preserve playback across a recoverable media error. playRequested is the
+        // primary intent flag; playbackState covers a browser-side pause/error that
+        // can arrive after the element had already been actively playing.
+        const resume = art.playRequested || playbackState?.lastTick != null;
         video.src = media.url;
         video.load();
         const restore = () => {
@@ -868,9 +883,11 @@ function initPlayer(media, index) {
         else art.currentTime = 0;
         if (previousObjectUrl) URL.revokeObjectURL(previousObjectUrl);
         art.title = middleEllipsis(media.title, 54);
+        // Publish next-track metadata before play() so an OS background media
+        // controller never observes a new source under the previous track identity.
+        updateMediaSession(media);
         Promise.resolve(art.play()).then(() => {
             if (sequence !== playerSwitchSequence) return;
-            updateMediaSession(media);
             startLyricClock();
         }).catch(error => {
             if (sequence !== playerSwitchSequence || error.name === 'AbortError') return;

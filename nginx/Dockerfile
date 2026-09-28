@@ -1,7 +1,7 @@
 FROM nginx:1.30.4-alpine
 
 # Remove the bundled default server.
-RUN rm /etc/nginx/conf.d/default.conf
+RUN apk upgrade --no-cache && rm /etc/nginx/conf.d/default.conf
 
 # Keep runtime environment substitution in Nginx templates. Avoid BuildKit-only
 # COPY --chmod so the in-cluster updater can build with the legacy Docker builder.
