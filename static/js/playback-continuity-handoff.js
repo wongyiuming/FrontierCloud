@@ -6,6 +6,8 @@
     const STANDBY_POLL_MS = 250;
     const MIN_READY_STATE = 3;
     const MAIN_TAKEOVER_TIMEOUT_MS = 8000;
+    const MAIN_PROGRESS_CONFIRM_MS = 500;
+    const MAIN_PROGRESS_MIN_SECONDS = 0.05;
     const DIAGNOSTIC_RETIRE_AT = Date.parse('2026-10-15T00:00:00Z');
     const DIAGNOSTIC_ENDPOINT = '/api/v1/media/playback-continuity-diagnostics';
 
@@ -168,6 +170,7 @@
         function clearTakeoverMonitor(record = activeTakeover) {
             if (!record) return;
             if (record.timer !== null) window.clearTimeout(record.timer);
+            if (record.progressTimer !== null) window.clearTimeout(record.progressTimer);
             art?.off?.('video:playing', record.listener);
             if (activeTakeover === record) activeTakeover = null;
         }
@@ -426,6 +429,7 @@
                 switchSequence: null,
                 targetIndex,
                 timer: null,
+                progressTimer: null,
                 userAudio,
             };
             const takeover = () => {
@@ -445,14 +449,47 @@
                     return;
                 }
                 const mainVideo = art?.video;
-                restoreMainDeckAudio(mainVideo, userAudio, candidate.element);
-                candidate.bridgeActive = false;
-                handoffInFlight = false;
-                try { candidate.element.pause(); } catch (_error) {}
-                clearTakeoverMonitor(record);
-                cleanupStandby({preserveObjectUrl: true});
-                report('preend_main_deck_resumed', 'main_playing_after_bridge', {target_index: targetIndex, generation});
-                activeDiagnosticId = null;
+                if (!mainVideo || mainVideo.paused || mainVideo.ended || record.progressTimer !== null) return;
+                const progressStart = safeNumber(mainVideo.currentTime);
+                if (progressStart === null) return;
+                record.progressTimer = window.setTimeout(() => {
+                    record.progressTimer = null;
+                    if (standby !== candidate || !candidate.bridgeActive || activeTakeover !== record) return;
+                    if (generation !== handoffGeneration
+                            || currentIndex !== targetIndex
+                            || playerSwitchSequence !== record.switchSequence
+                            || art?.video !== mainVideo) {
+                        takeover();
+                        return;
+                    }
+                    const progressEnd = safeNumber(mainVideo.currentTime);
+                    const progressed = !mainVideo.paused
+                        && !mainVideo.ended
+                        && progressEnd !== null
+                        && progressEnd - progressStart >= MAIN_PROGRESS_MIN_SECONDS;
+                    if (!progressed) {
+                        report('preend_main_deck_stalled', 'playing_event_without_clock_progress', {
+                            target_index: targetIndex,
+                            generation,
+                            progress_start: progressStart,
+                            progress_end: progressEnd,
+                        });
+                        if (record.timer === null) scheduleMainRecovery(record);
+                        return;
+                    }
+                    restoreMainDeckAudio(mainVideo, userAudio, candidate.element);
+                    candidate.bridgeActive = false;
+                    handoffInFlight = false;
+                    try { candidate.element.pause(); } catch (_error) {}
+                    clearTakeoverMonitor(record);
+                    cleanupStandby({preserveObjectUrl: true});
+                    report('preend_main_deck_resumed', 'main_clock_progressed_after_bridge', {
+                        target_index: targetIndex,
+                        generation,
+                        progress_seconds: progressEnd - progressStart,
+                    });
+                    activeDiagnosticId = null;
+                }, MAIN_PROGRESS_CONFIRM_MS);
             };
             record.listener = takeover;
             activeTakeover = record;
