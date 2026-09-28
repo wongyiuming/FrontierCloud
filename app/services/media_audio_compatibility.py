@@ -233,20 +233,11 @@ async def browser_compatible_video(source: Path) -> Path:
     decision_key = f"{path_hash}:{version}"
     remembered = _decision_get(decision_key)
     if remembered is not None and (remembered == source or remembered.is_file()):
-        if remembered != source:
-            try:
-                os.utime(remembered, None)
-            except OSError:
-                pass
         return remembered
 
     root = _cache_root(source)
     destination = root / f"{path_hash}-{version}{suffix}"
     if destination.is_file():
-        try:
-            os.utime(destination, None)
-        except OSError:
-            pass
         _decision_put(decision_key, destination)
         return destination
 
@@ -255,10 +246,6 @@ async def browser_compatible_video(source: Path) -> Path:
         if remembered is not None and (remembered == source or remembered.is_file()):
             return remembered
         if destination.is_file():
-            try:
-                os.utime(destination, None)
-            except OSError:
-                pass
             _decision_put(decision_key, destination)
             return destination
         try:

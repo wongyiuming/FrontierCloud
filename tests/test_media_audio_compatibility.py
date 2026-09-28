@@ -36,7 +36,9 @@ class MediaAudioCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(playback, source)
             self.assertTrue(playback.is_file())
             self.assertEqual(await compatibility.probe_audio_codecs(playback), ("aac",))
+            mtime_ns = playback.stat().st_mtime_ns
             self.assertEqual(await compatibility.browser_compatible_video(source), playback)
+            self.assertEqual(playback.stat().st_mtime_ns, mtime_ns)
 
     async def test_native_aac_audio_keeps_original_object(self):
         with tempfile.TemporaryDirectory() as directory:
