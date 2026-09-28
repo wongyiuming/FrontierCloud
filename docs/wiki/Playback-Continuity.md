@@ -53,9 +53,9 @@ The Tesla diagnostic API is temporary, memory-only, and independently retired. R
 
 The contract is protected by:
 
-- `tests/playback_handoff_smoke.mjs`;
-- `tests/network_observation_smoke.mjs`, which executes the handoff smoke in frontend CI;
-- `tests/test_playback_continuity_core_contract.py`;
-- the normal Docker Compose / Chromium / cluster release gates.
+- `tests/playback_handoff_smoke.mjs`, which exercises T-200 ms standby-first handoff, takeover, duplicate system-control suppression, and ended fallback;
+- `tests/network_observation_smoke.mjs`, which runs that handoff regression and validates this Wiki page, the MD core contract, and the Wiki sidebar directly from the checkout before image build;
+- `tests/test_playback_continuity_core_contract.py`, which verifies the permanent runtime code contract inside the Web image;
+- the normal Docker Compose, Chromium UI, HTTPS cluster, source, and runtime release gates.
 
 Any change to the 200 ms threshold, standby-first ordering, ended fallback, or system-control deduplication requires matching test and documentation changes.
