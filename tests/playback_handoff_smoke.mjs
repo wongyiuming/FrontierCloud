@@ -58,14 +58,15 @@ async function flush() {
     await new Promise(resolve => setImmediate(resolve));
 }
 
-function scenario({rejectStandby = false} = {}) {
+function scenario({rejectStandby = false, currentTime = 9.81, playbackRate = 1} = {}) {
     const timers = [];
     const intervals = [];
     const createdMedia = [];
     const oldVideo = new FakeMedia();
-    oldVideo.currentTime = 9.81;
+    oldVideo.currentTime = currentTime;
     oldVideo.duration = 10;
     oldVideo.paused = false;
+    oldVideo.playbackRate = playbackRate;
 
     const windowListeners = new Map();
     const windowObject = {
@@ -132,6 +133,7 @@ function scenario({rejectStandby = false} = {}) {
             },
             off(name, listener) { artEvents.get(name)?.delete(listener); return this; },
             emit(name) { for (const listener of [...(artEvents.get(name) || [])]) listener(); },
+            play() { return this.video.play(); },
         };
         function nextMediaIndex() { return (currentIndex + 1) % currentMediaList.length; }
         function discardNextPreload() { nextPreload = null; }
@@ -166,6 +168,14 @@ function scenario({rejectStandby = false} = {}) {
         runImmediateTimers() {
             for (const entry of timers) {
                 if (!entry.cancelled && entry.ms <= 1) {
+                    entry.cancelled = true;
+                    entry.fn();
+                }
+            }
+        },
+        runTimersAt(ms) {
+            for (const entry of [...timers]) {
+                if (!entry.cancelled && Math.abs(entry.ms - ms) < 1) {
                     entry.cancelled = true;
                     entry.fn();
                 }
@@ -209,6 +219,46 @@ function scenario({rejectStandby = false} = {}) {
     assert.equal(s.run('currentIndex'), 0, 'failed early handoff must leave business state unchanged');
     s.run("playNext('legacy-next')");
     assert.equal(s.run('currentIndex'), 1, 'normal ended-style fallback remains available');
+}
+
+{
+    const s = scenario({currentTime: 9.5, playbackRate: 2});
+    s.runPoll();
+    const transition = s.timers.find(entry => !entry.cancelled && Math.abs(entry.ms - 50) < 1);
+    assert.ok(transition, 'T-200ms must use wall time when playback speed is not 1x');
+}
+
+{
+    const s = scenario();
+    s.runPoll();
+    s.runImmediateTimers();
+    await flush();
+
+    const standby = s.createdMedia[0];
+    assert.equal(s.run('window.frontierCloudPlaybackContinuityHandoff.status().bridge_active'), true);
+    s.runTimersAt(8000);
+    await flush();
+    assert.equal(s.oldVideo.playCalls, 1, 'a missed main takeover must retry main playback');
+    assert.equal(standby.paused, false, 'main recovery must keep the audible bridge alive');
+    assert.equal(s.run('window.frontierCloudPlaybackContinuityHandoff.status().bridge_active'), true);
+
+    s.run("art.emit('video:playing')");
+    assert.equal(standby.paused, true, 'the bridge stops only after main playback is confirmed');
+    assert.equal(s.run('window.frontierCloudPlaybackContinuityHandoff.status().bridge_active'), false);
+}
+
+{
+    const s = scenario();
+    s.runPoll();
+    s.runImmediateTimers();
+    await flush();
+
+    const standby = s.createdMedia[0];
+    s.run('selectMedia(0)');
+    s.run("art.emit('video:playing')");
+    assert.equal(standby.paused, true, 'a newer selection must retire the old bridge');
+    assert.equal(s.oldVideo.muted, false, 'a stale handoff must not leave the newer selection muted');
+    assert.equal(s.run('window.frontierCloudPlaybackContinuityHandoff.status().bridge_active'), false);
 }
 
 console.log('playback-handoff-smoke-ok');

@@ -24,12 +24,16 @@ Audio playback uses a warm standby bridge for the next track.
 1. Existing speculative preload remains bounded by `PRELOAD_MAX_BYTES`.
 2. When the next preload becomes a complete Blob URL, a separate standby media element receives that URL and calls `load()` while the current track is still playing.
 3. The standby is considered warm only at `readyState >= 3` (`HAVE_FUTURE_DATA`) or after `canplay`.
-4. The permanent handoff threshold is **200 ms before natural end**.
+4. The permanent handoff threshold is **200 ms of wall time before natural end**. Media-time remaining is divided by the current playback rate, so 0.5x, 1x, and 2x playback retain the same planned overlap.
 5. At T-200 ms, FrontierCloud calls `standby.play()` while the old Deck is still actively playing.
 6. The old Deck is paused only after standby playback succeeds.
 7. The normal player then selects the same next track with the main Deck muted while it catches the already-playing bridge.
 8. When the main Deck emits `video:playing`, it is synchronized to the bridge position, the user's volume/mute/playback-rate state is restored, and the standby is stopped.
 9. The next cycle then prepares the following track.
+
+The timer is a target, not a real-time guarantee. Embedded Chromium may run it late when the page is throttled. A late callback still starts the handoff while the old media remains active; once the old element has ended, the pre-end path no longer claims success.
+
+If the standby is already playing but the main Deck does not confirm takeover within eight seconds, FrontierCloud keeps the standby audible and retries the main Deck. Each handoff carries a monotonic generation plus the player switch sequence, so a delayed event from an older selection cannot seek, mute, or stop a newer track. The standby is released only after current main playback is confirmed or a newer selection supersedes the handoff.
 
 The ordering is intentional:
 
@@ -81,7 +85,7 @@ The core loader has no retirement date. The diagnostic endpoint, memory ring, an
 
 The following regressions are release gates:
 
-- `tests/playback_handoff_smoke.mjs` verifies T-200 ms warm standby behavior, standby-first ordering, main-deck takeover, system-event deduplication, and early-failure fallback.
+- `tests/playback_handoff_smoke.mjs` verifies wall-time T-200 ms behavior across playback rates, standby-first ordering, main-deck takeover and retry, stale-event isolation, system-event deduplication, and early-failure fallback.
 - `tests/network_observation_smoke.mjs` imports the handoff smoke and validates this MD, the Wiki page, and the Wiki sidebar directly from the GitHub checkout before the runtime image is built.
 - `tests/test_playback_continuity_core_contract.py` protects the permanent loader, the 200 ms threshold, source deduplication, fallback behavior, and standby-first ordering inside the runtime image.
 - the normal Chromium, cluster, Compose, source, and runtime release gates remain mandatory.

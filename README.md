@@ -147,10 +147,12 @@ Accepted lyric upload is complete only after both the file and its managed-objec
 - Audio playback provides synchronized lyrics and fullscreen lyrics.
 - Player sidebars show the current media directory relative path rather than a legacy fixed label.
 - Playback scores and lyric links bind to stable media object IDs.
-- Next-track preloading uses the player queue; offline switching requires a completed preload. Speculative downloads are capped at 128 MiB per track.
+- Next-track preloading uses the player queue; offline switching requires a completed preload. Speculative downloads are capped at 128 MiB per track. Audio continuity warms a standby media pipeline and starts it 200 ms of wall time before natural end; the old Deck pauses only after standby playback succeeds, and a delayed main takeover keeps the audible bridge alive while retrying.
 - Audio/video can enter Karaoke from the player button or a three-finger 1.5-second press. Guests can sing and preview in memory. Registered users receive recording quota, and the Master places recordings in the Storage Pool.
 
 ## Cluster, heartbeat, and Backup
+
+FrontierCloud targets one-core VPS deployments. The product runtime accepts bounded streaming and ordinary request handling, but rejects burst or sustained high-load computation. Runtime transcoding, compression, inference, bulk transformation, subprocess execution, executor offload, and compute-heavy dependencies are outside the business boundary. CI enforces this statically, caps Web at one CPU, fails compute-caused timeouts, and requires CPU to return below 20% for five consecutive samples within 15 seconds after business tests.
 
 Storage and Backup are independently configured on Followers. A saved desired setting is not considered effective until the Follower reports the observed state through authenticated heartbeat/control traffic.
 
@@ -245,4 +247,4 @@ docker compose config --quiet
 
 GitHub Actions on the exact final `dev` SHA is the release authority. The main workflow includes exact-promotion verification, real Chromium UI regression, real multi-node HTTPS cluster acceptance, Compose/source/configuration checks, unit/runtime tests, edge/security checks, and public/Admin flows.
 
-The September 2026 audit also maintains a persistent private-CA validation cluster with one Master, three Direct Followers and six Relay Followers. Its CD reconciler uses the same Admin “upgrade and distribute” transaction as an operator, verifies every application and Updater runtime SHA, and keeps maintenance closed on incomplete releases. Measured results are recorded in the audit report; they are evidence for that host and dataset, not a throughput SLA.
+CI cluster acceptance is fixed at three nodes: one Master, one Direct Follower, and one Relay Follower. The separate persistent private-CA validation installation uses one Master, three Direct Followers, and six Relay Followers. Its CD reconciler uses the same Admin “upgrade and distribute” transaction as an operator, verifies every application and Updater runtime SHA, and keeps maintenance closed on incomplete releases. Measured results are evidence for that host and dataset, not a throughput SLA.

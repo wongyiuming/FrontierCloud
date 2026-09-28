@@ -117,11 +117,11 @@ def main():
 
         lyric = master.client.post(master.endpoint + "/api/v1/media/admin/upload/lyric",
                                    headers={"X-CSRF-Token": master.csrf},
-                                   files={"file": ("seven.lrc", b"[00:00.00]Seven node lyric\n", "text/plain")})
+                                   files={"file": ("ten.lrc", b"[00:00.00]Ten node lyric\n", "text/plain")})
         assert lyric.status_code == 200
         for site_type in ("direct", "relay"):
             master.api("/api/v1/media/admin/lyrics/relations", {
-                "origin_kind": "track", "origin_path": resources[site_type][0]["path"], "linked_paths": ["lyrics/seven.lrc"]})
+                "origin_kind": "track", "origin_path": resources[site_type][0]["path"], "linked_paths": ["lyrics/ten.lrc"]})
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(env={**os.environ, "HOME": str(browser_home)}, args=[
                 "--autoplay-policy=no-user-gesture-required", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"])
@@ -130,7 +130,7 @@ def main():
             browser.close()
         report["checks"].append("Chromium trusts the private CA without TLS bypass; Direct/Relay playback, lyrics and microphone recording")
 
-        user = master.register_karaoke_user("seven_audit")
+        user = master.register_karaoke_user("ten_audit")
         master.karaoke_api("/password", {"current_password": "Huawei@123", "new_password": "weak"}, expected=400)
         malformed = b"{invalid"
         blob = b"AUDIO" + malformed + len(malformed).to_bytes(8, "big") + b"FRONTIERCLOUD-KARAOKE-V1"

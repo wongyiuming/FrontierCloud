@@ -42,6 +42,8 @@ Never weaken an existing regression merely to make a new implementation pass. If
 - Master-owned business state (lyrics, lyric relations, playback/business facts, users, audit facts) must not silently migrate to Followers.
 - One managed media object is complete and belongs to exactly one storage member. Do not split one logical object across storage members.
 - Compute Worker is retired. Do not add worker slots, compute scheduling, worker UI, or worker product configuration back without an explicit architecture decision.
+- Product runtime changes that add burst or sustained high-load computation are rejected. Do not add transcoding, compression, inference, bulk transformation, process execution, executor offload, or compute-heavy runtime dependencies. This is a one-core service boundary, not a tunable CPU budget.
+- CI runs the Web container with one CPU. A compute-caused test timeout fails the build; failure handling stops the Web fixture before cleanup. After business tests, CPU must fall below 20% of one core for five consecutive one-second samples within 15 seconds. The threshold detects failure to recover and does not authorize compute-heavy work below it.
 - Heartbeat health is independent from Backup work. Backup failure must never mark a healthy node offline.
 - Backup is a recovery artifact, not online replication, HA, or automatic failover.
 - Managed paths are changed only through FrontierCloud transactions. Do not rename/move/delete managed files directly on disk as a substitute for metadata updates.

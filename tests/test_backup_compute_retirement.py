@@ -11,6 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BackupProxyContractTests(unittest.TestCase):
+    def test_business_backup_is_chunked_without_cpu_compression(self):
+        pool = (ROOT / "app/services/resource_pool.py").read_text(encoding="utf-8")
+        self.assertNotIn("import gzip", pool)
+        self.assertNotIn(".jsonl.gz", pool)
+        self.assertIn(".jsonl", pool)
+
     def test_encoded_backup_chunk_exceeds_default_64k_but_fits_backup_limit(self):
         body = json.dumps({
             "generation": 1,

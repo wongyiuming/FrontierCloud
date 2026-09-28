@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import asyncio
 import base64
-import gzip
 import json
 import os
 import ssl
@@ -409,10 +408,10 @@ async def build_business_backup(database=engine) -> tuple[int, Path, str]:
     from sqlalchemy import text
     from app.api.v1.media import MEDIA_ROOT
     generation = int(time.time_ns())
-    descriptor, name = tempfile.mkstemp(prefix="frontier-business-backup-", suffix=".jsonl.gz")
+    descriptor, name = tempfile.mkstemp(prefix="frontier-business-backup-", suffix=".jsonl")
     os.close(descriptor)
     try:
-        with gzip.open(name, "wb", compresslevel=6) as output:
+        with open(name, "wb") as output:
             def write(value: dict) -> None:
                 output.write(json.dumps(value, ensure_ascii=False, separators=(",", ":"),
                                         sort_keys=True).encode("utf-8") + b"\n")

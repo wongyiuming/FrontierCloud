@@ -1,4 +1,4 @@
-"""Disposable two-node HTTPS and browser acceptance harness.
+"""Disposable three-node HTTPS and browser acceptance harness.
 
 Infrastructure is test-only. Compose configurations and private CA material are
 generated in a temporary directory; no hosted user data or deployment is used.
@@ -120,6 +120,7 @@ class Node:
                 })
             if name == "web":
                 service["environment"]["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt"
+                service["cpus"] = 1.0
             for volume in service.get("volumes", []):
                 if volume.get("target") == "/app/data":
                     volume["source"] = str(self.data)
@@ -195,7 +196,7 @@ class Node:
     def pair(self, follower):
         package = follower.api("/api/v1/media/admin/nodes/pair-package", {})
         result = self.api("/api/v1/media/admin/nodes/pair", {"package": package})
-        self.relation = result["relationship_id"]
+        follower.relation = result["relationship_id"]
         return package
 
     def resources(self):
@@ -214,21 +215,22 @@ print(json.dumps(asyncio.run(read())))
 """
         return json.loads(self.web(program))
 
-    def wait_online(self, after=0):
+    def wait_online(self, after=0, relation=None):
+        relationship_id = relation or self.relation
         def ready():
             rows = self.nodes()["relationships"]
-            return any(row["relationship_id"] == self.relation and row["status"] == "online"
+            return any(row["relationship_id"] == relationship_id and row["status"] == "online"
                        and (row["last_heartbeat"] or 0) > after for row in rows)
         wait_for(ready, description=f"{self.name} relationship recovery")
 
     def relationship(self):
         return next(row for row in self.nodes()["relationships"] if row["relationship_id"] == self.relation)
 
-    def mode(self, value):
-        self.api(f"/api/v1/media/admin/nodes/{self.relation}/mode", {"mode": value})
+    def mode(self, value, relation=None):
+        self.api(f"/api/v1/media/admin/nodes/{relation or self.relation}/mode", {"mode": value})
 
-    def configure_resources(self, *, storage=True, capacity_gib=2, compute=True, backup=True):
-        return self.api(f"/api/v1/media/admin/nodes/{self.relation}/resources", {
+    def configure_resources(self, *, storage=True, capacity_gib=2, compute=False, backup=True, relation=None):
+        return self.api(f"/api/v1/media/admin/nodes/{relation or self.relation}/resources", {
             "storage_enabled": storage,
             "storage_capacity_gib": capacity_gib if storage else 0,
             "compute_enabled": compute,
@@ -452,7 +454,10 @@ def browser_pair(browser, master, follower):
         ".some(row => row.textContent.includes(peer))",
         arg=follower.nodes()["node_id"], timeout=60000,
     )
-    master.relation = master.nodes()["relationships"][0]["relationship_id"]
+    follower.relation = next(
+        row["relationship_id"] for row in master.nodes()["relationships"]
+        if row["peer_id"] == follower.nodes()["node_id"]
+    )
     follower_page.locator('#nodesRefresh').click()
     follower_page.wait_for_function("count => document.querySelector('#nodeRelationships').rows.length === count", arg=len(follower.nodes()["relationships"]))
     master_context.close()
@@ -499,6 +504,32 @@ def browser_checks(browser, master, resource):
     assert page.url == player_url
     page.evaluate("async () => { await art.video.play(); art.video.pause(); art.video.currentTime=1; await art.video.play(); }")
     page.wait_for_function("art.video.currentTime > 1", timeout=10000)
+    page.wait_for_function("window.frontierCloudPlaybackContinuityHandoff?.installed", timeout=10000)
+    continuity_start = page.evaluate("""
+        () => {
+            window.__frontierContinuityRequests = [];
+            window.addEventListener('frontiercloud:track-change-request', event => {
+                window.__frontierContinuityRequests.push(event.detail);
+            });
+            art.video.playbackRate = 2;
+            art.video.currentTime = Math.min(6, Math.max(1, art.video.duration / 2));
+            return currentIndex;
+        }
+    """)
+    page.wait_for_function(
+        "window.frontierCloudPlaybackContinuityHandoff.status().standby_ready",
+        timeout=15000,
+    )
+    page.evaluate("art.video.currentTime = Math.max(0, art.video.duration - 1)")
+    page.wait_for_function(
+        "start => currentIndex !== start && !window.frontierCloudPlaybackContinuityHandoff.status().bridge_active && art.video.currentTime > 0.05",
+        arg=continuity_start,
+        timeout=10000,
+    )
+    continuity_requests = page.evaluate("window.__frontierContinuityRequests")
+    assert any(item.get("source") == "pre-end-200ms" and item.get("accepted")
+               for item in continuity_requests)
+    page.evaluate("art.video.playbackRate = 1")
     karaoke_id = page.evaluate(
         "id => currentMediaList.find(item => item.resource_id === id).karaoke_id",
         resource["resource_id"],
@@ -561,17 +592,17 @@ def main():
         base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.yaml"),
                                   "config", "--format", "json"))
         try:
-            for index, name in enumerate(("master-a", "follower-b")):
+            for index, name in enumerate(("master-a", "direct-b", "relay-c")):
                 node = Node(name, directory, base, ca, bundle, index)
                 nodes.append(node)
-            a, b = nodes
+            a, b, c = nodes
             # Master Local content is imported once during promotion. A Follower
             # must join empty and receives files only through Storage Pool jobs.
             wav(a.data / "media/music/shared/master.wav", seconds=20, tone=500)
             upload_source = directory / "upload-source.wav"
             wav(upload_source, seconds=20, tone=700)
             source = upload_source.read_bytes()
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with ThreadPoolExecutor(max_workers=3) as executor:
                 list(executor.map(Node.start, nodes))
             report["checks"].append("trusted TLS succeeds; unknown CA and wrong hostname rejected on every node")
 
@@ -579,12 +610,17 @@ def main():
                 browser = launch_browser(playwright, nodes)
                 browser_promote(browser, a, "Master")
                 browser_promote(browser, b, "Follower")
+                browser_promote(browser, c, "Follower")
                 browser_pair(browser, a, b)
+                browser_pair(browser, a, c)
                 browser.close()
-            a.wait_online()
-            assert len(a.nodes()["relationships"]) == 1 and len(b.nodes()["relationships"]) == 1
+            a.relation = b.relation
+            a.wait_online(relation=b.relation)
+            a.wait_online(relation=c.relation)
+            assert len(a.nodes()["relationships"]) == 2
+            assert len(b.nodes()["relationships"]) == 1 and len(c.nodes()["relationships"]) == 1
             assert len(a.resources()) == 1
-            report["checks"].append("fixed Master/Follower roles, stable identities, one-to-many topology")
+            report["checks"].append("fixed one-Master/two-Follower CI topology with stable identities")
 
             redirected = b.client.get(b.endpoint + "/api/v1/media", follow_redirects=False)
             assert redirected.status_code == 307 and redirected.headers["location"].startswith(a.endpoint)
@@ -596,8 +632,11 @@ def main():
             report["checks"].append("Follower business gate redirects public HTML and rejects business APIs")
 
             follower_id = b.nodes()["node_id"]
-            a.configure_resources(storage=True, capacity_gib=2, compute=True, backup=True)
-            follower_enabled = f"""
+            relay_id = c.nodes()["node_id"]
+            a.configure_resources(storage=True, capacity_gib=2, backup=True, relation=b.relation)
+            a.configure_resources(storage=True, capacity_gib=2, backup=True, relation=c.relation)
+            def follower_enabled(member_id):
+                return f"""
 import asyncio
 from sqlalchemy import text
 from app.core.db import engine
@@ -605,15 +644,17 @@ async def read_enabled():
     async with engine.connect() as connection:
         return int(await connection.scalar(text(
             'SELECT storage_enabled FROM cluster_storage_members WHERE member_id=:member_id'
-        ), {{'member_id': {follower_id!r}}}) or 0)
+        ), {{'member_id': {member_id!r}}}) or 0)
 print(asyncio.run(read_enabled()))
 """
-            wait_for(lambda: b.web(follower_enabled).strip() == "1",
-                     description="Follower resource configuration heartbeat")
+            wait_for(lambda: b.web(follower_enabled(follower_id)).strip() == "1",
+                     description="Direct Follower resource configuration heartbeat")
+            wait_for(lambda: c.web(follower_enabled(relay_id)).strip() == "1",
+                     description="Relay Follower resource configuration heartbeat")
 
-            a.mode("Relay")
+            a.mode("Relay", relation=c.relation)
             a.upload_media(source, "relay.wav", site_type="relay")
-            a.mode("Direct")
+            a.mode("Direct", relation=b.relation)
             direct_resource = a.upload_media(source, "direct.wav", site_type="direct")
             a.resource = direct_resource
             assert len(a.resources()) == 3
@@ -668,8 +709,8 @@ print(asyncio.run(read_enabled()))
                 assert (urlsplit_origin(full.url) == a.endpoint) == (mode == "Relay")
             report["checks"].append("Relay/Direct media supports HEAD, Range, ETag, CORS and continuity")
 
-            baseline_used = next(row for row in a.nodes()["storage_pool"]["members"]
-                                 if row["member_id"] == follower_id)["used_bytes"]
+            baseline_used = sum(row["used_bytes"] for row in a.nodes()["storage_pool"]["members"]
+                                if row["member_id"] in {follower_id, relay_id})
             user = a.register_karaoke_user()
             status = a.client.get(a.endpoint + "/api/v1/karaoke/account/status").json()
             assert status["authenticated"] and status["user"]["quota_bytes"] == 200 * 1024 * 1024
@@ -706,9 +747,9 @@ print(asyncio.run(read_enabled()))
             a.kcsrf = a.client.cookies.get("__Host-karaoke_csrf")
             a.karaoke_api("/logout", {})
             a.api(f"/api/v1/media/admin/users/{user['user_id']}", {"action": "delete", "quota_mib": None})
-            assert not any((b.data / "recordings").rglob("*.bin"))
-            wait_for(lambda: next(row for row in a.nodes()["storage_pool"]["members"]
-                                  if row["member_id"] == follower_id)["used_bytes"] == baseline_used,
+            assert not any(path for node in (b, c) for path in (node.data / "recordings").rglob("*.bin"))
+            wait_for(lambda: sum(row["used_bytes"] for row in a.nodes()["storage_pool"]["members"]
+                                 if row["member_id"] in {follower_id, relay_id}) == baseline_used,
                      description="recording capacity release")
             report["checks"].append("automatic recording placement, Relay/Direct, quota, lyrics, ban and deletion")
 
@@ -752,7 +793,7 @@ print(asyncio.run(read_enabled()))
                                          if "initial_runtime_secrets" not in line), flush=True)
                     except Exception:
                         pass
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with ThreadPoolExecutor(max_workers=3) as executor:
                 list(executor.map(lambda node: node.stop(), reversed(nodes)))
             command("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(directory))
             subprocess.run(["docker", "network", "rm", network], capture_output=True)

@@ -54,9 +54,9 @@ class Runtime:
         self.wakeup = asyncio.Event()
         self.backup_attempts: dict[str, int] = {}
         self.backup_tasks: dict[str, asyncio.Task] = {}
-        # A business backup scans the full database and writes a compressed
-        # artifact. Keep that work serial across followers so a fleet-wide due
-        # time cannot multiply database, CPU and disk pressure on the Master.
+        # A business backup scans the full database. Keep that work serial
+        # across followers so a fleet-wide due time cannot multiply database,
+        # CPU and disk pressure on the Master.
         self.backup_semaphore = asyncio.Semaphore(1)
 
     def start(self, *, revocations=False):

@@ -35,5 +35,5 @@ cd "$candidate"
 docker build -t frontiercloud-acceptance-web .
 docker build -t frontiercloud-acceptance-nginx -f nginx/Dockerfile .
 docker build -t frontiercloud-updater -f updater/Dockerfile .
-/root/frontiercloud-audit-20260927/venv/bin/python -m tests.federation_seven_node \
+/root/frontiercloud-audit-20260927/venv/bin/python -m tests.federation_ten_node \
     --directory "$result"

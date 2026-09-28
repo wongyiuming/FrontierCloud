@@ -128,7 +128,7 @@ Starts a real application stack and runs Chromium regression tests. This protect
 
 ### test-cluster
 
-Builds the same application across a real verified HTTPS multi-node topology and exercises role fixing, pairing, heartbeat, Storage/transport behavior, control APIs, and Follower acceptance.
+Builds the same application across exactly three verified HTTPS nodes: one Master, one Direct Follower, and one Relay Follower. It exercises role fixing, pairing, heartbeat, Storage/transport behavior, control APIs, and Follower acceptance. The persistent 1 Master + 3 Direct + 6 Relay development environment is a separate destructive/CD acceptance surface and must not be copied into CI.
 
 ### test-compose
 
@@ -141,6 +141,12 @@ Runs/aggregates:
 - IP/edge/security tests;
 - public and Admin flows;
 - cleanup.
+
+## One-core compute boundary
+
+Burst and sustained high-load computation are outside FrontierCloud's product boundary. A change must be rejected if it adds runtime transcoding, compression, inference, bulk transformation, child-process execution, executor offload, or a compute-heavy dependency. There is no exception list or percentage allowance for these features.
+
+CI checks the boundary before building, runs Web with one CPU, and places a 120-second hard timeout around runtime tests. A timeout fails CI and the failure handler stops the Web fixture before final cleanup. After business flows, Web must fall below 20% of one core for five consecutive one-second samples within 15 seconds. This recovery test detects a runaway or continuously worsening CPU condition; it does not make computation acceptable merely because one sample is below 20%.
 
 ## 7. Exact-SHA rule
 
