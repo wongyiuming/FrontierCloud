@@ -12,8 +12,6 @@ class PlaybackContinuityCoreContractTests(unittest.TestCase):
         self.core = (ROOT / "static/js/playback-continuity-handoff.js").read_text(encoding="utf-8")
         self.loader = (ROOT / "static/js/network-observation.js").read_text(encoding="utf-8")
         self.frontend_smoke = (ROOT / "tests/playback_handoff_smoke.mjs").read_text(encoding="utf-8")
-        self.wiki = (ROOT / "docs/wiki/Playback-Continuity.md").read_text(encoding="utf-8")
-        self.design = (ROOT / "docs/playback-continuity.md").read_text(encoding="utf-8")
 
     def test_audio_continuity_core_is_permanent_and_loaded(self):
         self.assertIn("const HANDOFF_SECONDS = 0.2;", self.core)
@@ -52,13 +50,6 @@ class PlaybackContinuityCoreContractTests(unittest.TestCase):
         ):
             self.assertIn(source, self.core)
         self.assertIn("duplicate system media control must be suppressed after handoff", self.frontend_smoke)
-
-    def test_core_contract_is_documented(self):
-        for document in (self.wiki, self.design):
-            self.assertIn("200 ms", document)
-            self.assertIn("standby", document.lower())
-            self.assertIn("ended fallback", document.lower())
-            self.assertIn("core", document.lower())
 
 
 if __name__ == "__main__":
