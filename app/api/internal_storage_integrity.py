@@ -1,6 +1,7 @@
 """Crash-safe Follower storage publish path."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -10,6 +11,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text, update
+
+from app.core.file_digest import file_digest
 
 from app.api import internal_nodes as legacy_internal
 from app.services import resource_pool
@@ -133,12 +136,7 @@ async def storage_stat(request: Request, original: str):
     target = (MEDIA_ROOT / path).resolve()
     if MEDIA_ROOT not in target.parents or not target.is_file():
         raise HTTPException(404, "Storage object not found")
-    digest = hashlib.sha256()
-    with target.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return {"object_id": original, "size_bytes": target.stat().st_size,
-            "sha256": digest.hexdigest(), "etag": f'"{digest.hexdigest()}"'}
+    return {"object_id": original, **await asyncio.to_thread(file_digest, target)}
 
 
 def install() -> None:

@@ -49,11 +49,13 @@ class SiteControlTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(opened["source"], "manual-open-override")
 
     async def test_busy_release_cannot_be_forced_open(self):
-        with patch.object(site_control.release_control, "agent_status", AsyncMock(return_value={
-            "state": "running", "phase": "replacing",
-        })):
-            with self.assertRaisesRegex(RuntimeError, "版本发布正在执行"):
-                await site_control.set_maintenance(False)
+        for state in ("queued", "running", "distributing", "restarting"):
+            with self.subTest(state=state), patch.object(site_control.release_control, "agent_status", AsyncMock(return_value={
+                "state": state, "phase": "replacing",
+            })):
+                self.assertTrue((await site_control.status())["maintenance"])
+                with self.assertRaisesRegex(RuntimeError, "版本发布正在执行"):
+                    await site_control.set_maintenance(False)
 
     def test_web_release_preflight_does_not_clear_open_override(self):
         self.force_open.write_text("test\n", encoding="utf-8")

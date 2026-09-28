@@ -1,6 +1,7 @@
 """HTTPS-only V1 control endpoints; independent relationship authentication."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import base64
 import json
@@ -17,6 +18,7 @@ from sqlalchemy import delete, func, select, text, update
 
 from app.core.client_ip import resolve_client_identity
 from app.core.config import settings
+from app.core.file_digest import file_digest
 from app.services import resource_pool, storage_capacity
 from app.services.federation import protocol as p
 from app.services.federation import schema as s
@@ -361,12 +363,7 @@ async def storage_stat(request: Request, original: str):
         raise HTTPException(404, "Storage object not found")
     from app.api.v1.media import MEDIA_ROOT
     target = (MEDIA_ROOT / value["path"]).resolve()
-    digest = hashlib.sha256()
-    with target.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return {"object_id": original, "size_bytes": target.stat().st_size,
-            "sha256": digest.hexdigest(), "etag": f'"{digest.hexdigest()}"'}
+    return {"object_id": original, **await asyncio.to_thread(file_digest, target)}
 
 
 @router.post("/storage/{original}/delete")
@@ -486,7 +483,7 @@ async def recording_stat(request: Request, recording_id: str):
         raise HTTPException(403, "Only a Follower stores recordings")
     try:
         value = json.loads(request.state.node_control_body or b"{}")
-        return karaoke_storage.stat(relation["relationship_id"], value["user_id"], recording_id)
+        return await asyncio.to_thread(karaoke_storage.stat, relation["relationship_id"], value["user_id"], recording_id)
     except (KeyError, ValueError, TypeError) as exc:
         raise HTTPException(400, "Invalid recording stat request") from exc
 

@@ -7,6 +7,7 @@ The current design is intentionally strict: a cluster has one business Master, F
 - [Project Wiki](https://github.com/wongyiuming/FrontierCloud/wiki)
 - [Architecture boundaries](ARCHITECTURE.md)
 - [Engineering / Git rules](CONTRIBUTING.md)
+- [2026-09 four-area audit and validation](docs/audits/2026-09-27.md)
 
 Read `ARCHITECTURE.md` and `CONTRIBUTING.md` before changing cross-cutting behavior.
 
@@ -243,3 +244,5 @@ docker compose config --quiet
 ```
 
 GitHub Actions on the exact final `dev` SHA is the release authority. The main workflow includes exact-promotion verification, real Chromium UI regression, real multi-node HTTPS cluster acceptance, Compose/source/configuration checks, unit/runtime tests, edge/security checks, and public/Admin flows.
+
+The September 2026 audit also maintains a persistent private-CA validation cluster with one Master, three Direct Followers and six Relay Followers. Its CD reconciler uses the same Admin “upgrade and distribute” transaction as an operator, verifies every application and Updater runtime SHA, and keeps maintenance closed on incomplete releases. Measured results are recorded in the audit report; they are evidence for that host and dataset, not a throughput SLA.
