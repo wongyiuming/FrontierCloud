@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -52,9 +53,9 @@ class MediaAudioCompatibilityTests(unittest.IsolatedAsyncioTestCase):
 class MediaAudioCompatibilityContractTests(unittest.TestCase):
     def test_runtime_installs_ffmpeg_and_playback_integrity_layer(self):
         root = Path(__file__).resolve().parents[1]
-        dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
         endpoints = (root / "app" / "api" / "v1" / "endpoints.py").read_text(encoding="utf-8")
-        self.assertIn("ffmpeg", dockerfile)
+        self.assertIsNotNone(shutil.which("ffmpeg"))
+        self.assertIsNotNone(shutil.which("ffprobe"))
         self.assertIn("install_media_audio_compatibility()", endpoints)
 
 
