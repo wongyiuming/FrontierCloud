@@ -299,13 +299,13 @@ The version summary is semantic rather than always showing `current -> target`.
 Converged example:
 
 ```text
-<sha> · 已与 main HEAD 一致
+<sha> · matches main HEAD
 ```
 
 Pending upgrade example:
 
 ```text
-当前 <sha> -> 待发布 <sha>
+current <sha> -> pending <sha>
 ```
 
 If both SHAs are the same, an arrow transition should not be interpreted as meaningful deployment work.

@@ -307,8 +307,8 @@ Admin supports uploading a folder of LRC files while preserving supported relati
 
 The lyric relation browser can browse both sides hierarchically and displays recursive file counts:
 
-- lyric folders -> `N 份歌词`;
-- music folders -> `N 首曲目`.
+- lyric folders -> a localized `N lyric files` count;
+- music folders -> a localized `N tracks` count.
 
 `lyrics/default.lrc` is excluded from user-visible lyric counts.
 

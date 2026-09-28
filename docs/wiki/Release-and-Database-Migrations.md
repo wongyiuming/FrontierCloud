@@ -217,13 +217,13 @@ The UI distinguishes current production state from an actual pending transition.
 Converged:
 
 ```text
-<current sha> · 已与 main HEAD 一致
+<current sha> · matches main HEAD
 ```
 
 Pending upgrade:
 
 ```text
-当前 <current sha> -> 待发布 <target sha>
+current <current sha> -> pending <target sha>
 ```
 
 The old always-present `current -> target` format was misleading after convergence because it could display the same SHA on both sides.
