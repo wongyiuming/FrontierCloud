@@ -6,7 +6,6 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from app.api.internal_nodes import authenticated
 from app.api.v1.admin import require_session
 from app.services import playback_continuity_diagnostics as diagnostics
 from app.services.federation.runtime import runtime
@@ -15,7 +14,7 @@ from app.services.federation.state import state
 router = APIRouter(prefix="/playback-continuity-diagnostics")
 admin_router = APIRouter(prefix="/playback-continuity-diagnostics")
 MAX_BODY_BYTES = 24 * 1024
-RELAY_PATH = "/api/v1/media/playback-continuity-diagnostics/relay"
+RELAY_PATH = "/internal/v1/playback-continuity-diagnostics"
 
 
 async def _json_body(request: Request, *, authenticated_body: bool = False) -> dict:
@@ -75,23 +74,6 @@ async def submit(request: Request):
         payload,
         source_node=node_id,
         delivery="master-local" if role == "Master" else "standalone-local",
-    )
-    return Response(status_code=202, headers={"Cache-Control": "no-store"})
-
-
-@router.post("/relay")
-async def relay(request: Request):
-    _require_live_interface()
-    relation = await authenticated(request)
-    if state.node["role"] != "Master" or relation["direction"] != "downstream":
-        raise HTTPException(403, "Only a Master accepts playback diagnostic relay")
-    payload = diagnostics.normalize_report(await _json_body(request, authenticated_body=True))
-    if not payload.get("diagnostic_id") or not payload.get("stage"):
-        raise HTTPException(400, "Diagnostic identity and stage are required")
-    await diagnostics.store.add(
-        payload,
-        source_node=relation["peer_id"],
-        delivery="follower-relay",
     )
     return Response(status_code=202, headers={"Cache-Control": "no-store"})
 

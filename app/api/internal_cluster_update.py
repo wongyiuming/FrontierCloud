@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from app.api.internal_backup_control import router as backup_control_router
 from app.api.internal_media_control import router as media_control_router
 from app.api.internal_nodes import authenticated
+from app.api.internal_playback_diagnostics import router as playback_diagnostics_router
 from app.api.internal_worker_retirement import install as install_internal_worker_retirement
 from app.services.federation.state import state
 from app.services.release_control import agent_request, agent_status
@@ -59,3 +60,4 @@ async def status(request: Request):
 router.include_router(cluster_router)
 router.include_router(backup_control_router)
 router.include_router(media_control_router)
+router.include_router(playback_diagnostics_router)

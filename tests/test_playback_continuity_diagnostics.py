@@ -21,14 +21,20 @@ class PlaybackContinuityDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
             "Temporary Tesla playback diagnostics reached their retirement date; remove the API, client probe, store, and this test before releasing.",
         )
 
-    def test_retirement_and_non_persistence_are_source_contracts(self):
+    def test_retirement_relay_and_non_persistence_are_source_contracts(self):
         api_source = (ROOT / "app/api/v1/playback_continuity_diagnostics.py").read_text(encoding="utf-8")
+        relay_source = (ROOT / "app/api/internal_playback_diagnostics.py").read_text(encoding="utf-8")
+        cluster_source = (ROOT / "app/api/internal_cluster_update.py").read_text(encoding="utf-8")
         store_source = (ROOT / "app/services/playback_continuity_diagnostics.py").read_text(encoding="utf-8")
         client_source = (ROOT / "static/js/playback-continuity-diagnostics.js").read_text(encoding="utf-8")
         loader_source = (ROOT / "static/js/network-observation.js").read_text(encoding="utf-8")
         retirement = "2026-10-15T00:00:00Z"
 
         self.assertIn("runtime.call(upstream, RELAY_PATH, payload)", api_source)
+        self.assertIn('RELAY_PATH = "/internal/v1/playback-continuity-diagnostics"', api_source)
+        self.assertIn('prefix="/internal/v1/playback-continuity-diagnostics"', relay_source)
+        self.assertIn('return {"status": "accepted"}', relay_source)
+        self.assertIn("router.include_router(playback_diagnostics_router)", cluster_source)
         self.assertNotIn("state.database", api_source)
         self.assertNotIn("sqlalchemy", store_source.lower())
         self.assertNotIn("redis", store_source.lower())
