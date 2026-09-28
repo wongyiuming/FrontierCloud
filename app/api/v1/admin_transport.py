@@ -9,10 +9,14 @@ def secure_admin_transport(request: Request) -> bool:
     identity = resolve_client_identity(request.scope)
     if request.url.scheme.lower() == "https":
         return True
-    if identity.peer_ip in {"127.0.0.1", "::1"}:
-        return True
     forwarded_proto = request.headers.get("x-forwarded-proto", "").strip().lower()
-    return identity.from_trusted_proxy and forwarded_proto == "https"
+    if identity.from_trusted_proxy:
+        return forwarded_proto == "https"
+    # The recovery exception is for direct loopback, not a local reverse proxy.
+    return (identity.peer_ip in {"127.0.0.1", "::1"}
+            and not identity.trusted_proxy_header_missing
+            and not any(name in request.headers for name in
+                        ("forwarded", "x-forwarded-for", "x-forwarded-proto", "x-real-ip")))
 
 
 async def require_secure_admin_transport(request: Request) -> None:

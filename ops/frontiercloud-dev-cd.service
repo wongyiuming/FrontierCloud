@@ -1,0 +1,12 @@
+[Unit]
+Description=Reconcile FrontierCloud development cluster through Admin upgrade-and-distribute
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/frontiercloud-dev
+ExecStart=/root/frontiercloud-dev/venv/bin/python /root/frontiercloud-dev/dev_control.py reconcile
+TimeoutStartSec=45min
+UMask=0077

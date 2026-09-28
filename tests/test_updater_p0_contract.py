@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -19,6 +22,7 @@ RUNTIME_SHA = "d" * 40
 def load_updater_module():
     fake_docker = types.ModuleType("docker")
     fake_docker.DockerClient = lambda *args, **kwargs: None
+    fake_docker.errors = SimpleNamespace(NotFound=type("NotFound", (Exception,), {}))
     previous = sys.modules.get("docker")
     sys.modules["docker"] = fake_docker
     try:
@@ -79,6 +83,113 @@ class ReleaseImageRetentionTests(unittest.TestCase):
 
 
 class UpdaterRuntimeRestartTests(unittest.TestCase):
+    def test_recovery_can_recreate_container_removed_before_process_crash(self):
+        updater = load_updater_module()
+        engine = MagicMock()
+        engine.containers.get.side_effect = updater.docker.errors.NotFound()
+        snap = {"Name": "/web", "Image": "original-image"}
+        with patch.object(updater, "create_from_snapshot") as create:
+            result = updater.replace(engine, snap, "original-image")
+        self.assertIs(result, create.return_value)
+        create.assert_called_once_with(engine, snap, "original-image")
+
+    def test_interrupted_build_restores_source_and_releases_busy_state(self):
+        updater = load_updater_module()
+        with (tempfile.TemporaryDirectory() as directory,
+            patch.object(updater, "FORCE_OPEN_FLAG", Path(directory) / "force-open"),
+            patch.object(updater, "read_status", return_value={"state": "running", "phase": "building",
+                "current_sha": PREVIOUS_SHA, "target_sha": CURRENT_SHA}),
+            patch.object(updater, "maintenance") as maintenance,
+            patch.object(updater, "git") as git,
+            patch.object(updater, "write_status") as write,
+        ):
+            self.assertTrue(updater.recover_interrupted_release())
+        git.assert_called_once_with("reset", "--hard", PREVIOUS_SHA, timeout=60)
+        maintenance.assert_called_once_with(True, CURRENT_SHA)
+        self.assertEqual(write.call_args.kwargs["state"], "failed")
+        self.assertEqual(write.call_args.kwargs["phase"], "interrupted")
+
+    def test_interrupted_replacement_uses_matching_durable_snapshots(self):
+        updater = load_updater_module()
+        snapshots = {"web": {"Image": "sha256:original", "Name": "/web"}}
+        with (tempfile.TemporaryDirectory() as directory,
+            patch.object(updater, "CONTROL_DIR", Path(directory)),
+            patch.object(updater, "REPLACEMENT_PATH", Path(directory) / "replacement.json"),
+            patch.object(updater, "FORCE_OPEN_FLAG", Path(directory) / "force-open"),
+            patch.object(updater, "read_status", return_value={"state": "running", "phase": "replacing",
+                "current_sha": PREVIOUS_SHA, "target_sha": CURRENT_SHA}),
+            patch.object(updater, "maintenance"),
+            patch.object(updater, "client") as client,
+            patch.object(updater, "restore_local") as restore,
+            patch.object(updater, "write_status"),
+        ):
+            updater.persist_replacement(snapshots, PREVIOUS_SHA, CURRENT_SHA)
+            self.assertTrue(updater.recover_interrupted_release())
+            restore.assert_called_once_with(client.return_value, snapshots, PREVIOUS_SHA)
+            client.return_value.close.assert_called_once()
+
+    def test_interrupted_distribution_keeps_converged_local_generation(self):
+        updater = load_updater_module()
+        with (tempfile.TemporaryDirectory() as directory,
+            patch.object(updater, "FORCE_OPEN_FLAG", Path(directory) / "force-open"),
+            patch.object(updater, "read_status", return_value={"state": "distributing",
+                "current_sha": CURRENT_SHA, "target_sha": CURRENT_SHA}),
+            patch.object(updater, "maintenance") as maintenance,
+            patch.object(updater, "restore_local") as restore,
+            patch.object(updater, "write_status") as write,
+        ):
+            self.assertTrue(updater.recover_interrupted_release())
+        restore.assert_not_called()
+        maintenance.assert_called_once_with(True, CURRENT_SHA)
+        self.assertEqual(write.call_args.kwargs["state"], "failed")
+
+    def test_interrupted_replacing_after_commit_keeps_target_generation(self):
+        updater = load_updater_module()
+        with (tempfile.TemporaryDirectory() as directory,
+            patch.object(updater, "REPLACEMENT_PATH", Path(directory) / "replacement.json"),
+            patch.object(updater, "FORCE_OPEN_FLAG", Path(directory) / "force-open"),
+            patch.object(updater, "read_status", return_value={"state": "running", "phase": "replacing",
+                "current_sha": CURRENT_SHA, "target_sha": CURRENT_SHA}),
+            patch.object(updater, "maintenance"),
+            patch.object(updater, "restore_local") as restore,
+            patch.object(updater, "write_status") as write,
+        ):
+            self.assertTrue(updater.recover_interrupted_release())
+        restore.assert_not_called()
+        self.assertEqual(write.call_args.kwargs["state"], "failed")
+
+    def test_worker_running_state_cannot_be_overwritten_by_queued_response(self):
+        updater = load_updater_module()
+        status = {"state": "idle"}
+        tasks = MagicMock()
+        tasks.full.return_value = False
+        tasks.put_nowait.side_effect = lambda value: status.update(state="running")
+        handler = updater.Handler.__new__(updater.Handler)
+        handler.rfile = io.BytesIO((json.dumps({"action": "start", "target_sha": CURRENT_SHA}) + "\n").encode())
+        handler.wfile = io.BytesIO()
+        with (patch.object(updater, "TASKS", tasks),
+              patch.object(updater, "read_status", side_effect=lambda: dict(status)),
+              patch.object(updater, "write_status", side_effect=lambda **changes: status.update(changes))):
+            handler.handle()
+        self.assertTrue(json.loads(handler.wfile.getvalue())["accepted"])
+        self.assertEqual(status["state"], "running")
+
+    def test_build_failure_restores_checkout_even_before_container_snapshots(self):
+        updater = load_updater_module()
+        engine = MagicMock()
+        git = MagicMock()
+        with (patch.object(updater, "read_status", return_value={"current_sha": PREVIOUS_SHA}),
+              patch.object(updater, "write_status", return_value={}),
+              patch.object(updater, "maintenance"),
+              patch.object(updater, "FORCE_OPEN_FLAG", MagicMock()),
+              patch.object(updater, "validate_target"),
+              patch.object(updater, "client", return_value=engine),
+              patch.object(updater, "git", git),
+              patch.object(updater, "build", side_effect=RuntimeError("injected failed build"))):
+            updater.perform(CURRENT_SHA, "upgrade", True)
+        self.assertEqual([call.args for call in git.call_args_list], [
+            ("reset", "--hard", CURRENT_SHA), ("reset", "--hard", PREVIOUS_SHA)])
+
     def test_updater_container_is_restart_always_and_is_not_replaced(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         updater_block = compose.split("  updater:\n", 1)[1].split("\n  web:\n", 1)[0]

@@ -43,7 +43,7 @@ async def start(request: Request):
     })
     if not response.get("ok"):
         current = response.get("status") if isinstance(response.get("status"), dict) else {}
-        if current.get("target_sha") == target and current.get("state") in {"queued", "running", "distributing", "success"}:
+        if current.get("target_sha") == target and current.get("state") in {"queued", "running", "distributing", "restarting", "success"}:
             return {"accepted": True, "status": current}
         raise HTTPException(409, str(response.get("reason") or "Follower updater rejected release"))
     return {"accepted": True, "target_sha": target, "mode": mode}

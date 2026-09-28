@@ -8,7 +8,7 @@ from app.services import release_control
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
 MANUAL_MAINTENANCE = DATA_ROOT / ".frontiercloud-maintenance"
 FORCE_OPEN = DATA_ROOT / ".frontiercloud-force-open"
-BUSY_STATES = {"queued", "running", "distributing"}
+BUSY_STATES = {"queued", "running", "distributing", "restarting"}
 
 
 def _touch(path: Path, value: str) -> None:
