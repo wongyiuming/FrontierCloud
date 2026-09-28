@@ -82,8 +82,8 @@ The core loader has no retirement date. The diagnostic endpoint, memory ring, an
 The following regressions are release gates:
 
 - `tests/playback_handoff_smoke.mjs` verifies T-200 ms warm standby behavior, standby-first ordering, main-deck takeover, system-event deduplication, and early-failure fallback.
-- `tests/network_observation_smoke.mjs` imports that smoke test, so the existing frontend CI gate executes it.
-- `tests/test_playback_continuity_core_contract.py` protects the permanent loader, the 200 ms threshold, source deduplication, fallback behavior, and documentation.
-- the normal runtime test discovery executes the Python contract in CI.
+- `tests/network_observation_smoke.mjs` imports the handoff smoke and validates this MD, the Wiki page, and the Wiki sidebar directly from the GitHub checkout before the runtime image is built.
+- `tests/test_playback_continuity_core_contract.py` protects the permanent loader, the 200 ms threshold, source deduplication, fallback behavior, and standby-first ordering inside the runtime image.
+- the normal Chromium, cluster, Compose, source, and runtime release gates remain mandatory.
 
 A change to these semantics is an architecture change and must update implementation, regression coverage, this document, and the Wiki in the same `dev` cycle.
