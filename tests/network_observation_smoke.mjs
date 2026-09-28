@@ -4,7 +4,9 @@ import vm from 'node:vm';
 
 const script = fs.readFileSync(new URL('../static/js/network-observation.js', import.meta.url), 'utf8');
 const diagnosticsScript = fs.readFileSync(new URL('../static/js/playback-continuity-diagnostics.js', import.meta.url), 'utf8');
+const handoffScript = fs.readFileSync(new URL('../static/js/playback-continuity-handoff.js', import.meta.url), 'utf8');
 new vm.Script(diagnosticsScript);
+new vm.Script(handoffScript);
 for (const embedded of [true, false]) {
     const configurations = [];
     let interval;
@@ -28,4 +30,6 @@ for (const embedded of [true, false]) {
     assert.equal(configurations[0].iceServers[0].urls, urls[0]);
     assert.equal(interval, 45000);
 }
+
+await import('./playback_handoff_smoke.mjs');
 console.log('network-observation-smoke-ok');
