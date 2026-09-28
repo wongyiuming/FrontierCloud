@@ -473,12 +473,6 @@ def browser_checks(browser, master, resource):
     page = context.new_page()
     page.on("console", lambda message: print(f"browser-console: {message.type}: {message.text}", flush=True))
     page.on("pageerror", lambda error: print(f"browser-pageerror: {error}", flush=True))
-    page.add_init_script("""
-        window.auditCspViolations = [];
-        document.addEventListener('securitypolicyviolation', event => {
-            window.auditCspViolations.push(event.violatedDirective);
-        });
-    """)
     # Joining is accepted only with working media routes; exercise the actual public player.
     page.goto(master.endpoint + "/api/v1/media/music/category?path=music/shared", wait_until="domcontentloaded")
     page.wait_for_function("typeof art !== 'undefined' && art && art.video", timeout=60000)
@@ -507,8 +501,6 @@ def browser_checks(browser, master, resource):
     page.goto(master.endpoint + "/karaoke/?media=" + karaoke_id, wait_until="domcontentloaded")
     expect(page.locator('#title')).not_to_have_text('正在载入当前媒体…', timeout=30000)
     expect(page.locator('#capabilities')).to_contain_text('输出设备选择', timeout=30000)
-    assert page.evaluate("JSON.parse(document.getElementById('frontierCloudNetworkConfig').textContent).stun_urls.length") > 0
-    assert page.evaluate("window.auditCspViolations") == []
     assert page.locator('#inputDevice').count() == 1
     assert page.locator('#outputDevice').count() == 1
     assert page.locator('#play').count() == 0

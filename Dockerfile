@@ -4,12 +4,6 @@ FROM python:3.14.7-slim
 # Set the application working directory.
 WORKDIR /app
 
-# FFmpeg supplies the audio decoder/encoder compatibility layer used only when
-# a video's embedded audio codec is not browser-native. Video is stream-copied.
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
-    rm -rf /var/lib/apt/lists/*
-
 # Install locked dependencies before copying application sources. Code and test
 # changes must not invalidate the dependency layer on every deployment.
 # Keep this Dockerfile compatible with the legacy Docker builder used by the

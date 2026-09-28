@@ -9,9 +9,9 @@ CORE = (ROOT / "static/js/karaoke.js").read_text(encoding="utf-8")
 
 
 def test_karaoke_defaults_keep_recording_near_unity_and_monitor_loud():
-    assert 'id="voiceValue">30%</output>' in HTML
+    assert 'id="voiceValue">100%</output>' in HTML
     assert re.search(r'id="voiceGain"[^>]*max="200"[^>]*value="100"', HTML)
-    assert 'id="monitorValue">150%</output>' in HTML
+    assert 'id="monitorValue">100%</output>' in HTML
     assert re.search(r'id="monitorGain"[^>]*value="100"', HTML)
     assert re.search(r'id="monitor" type="checkbox" checked', HTML)
     assert not re.search(r'id="aec" type="checkbox" checked', HTML)

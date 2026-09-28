@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
@@ -20,19 +18,12 @@ async def action(session_hash: str, action_name: str, request: Request, *,
     )
     try:
         yield
-    except (Exception, asyncio.CancelledError) as exc:
+    except Exception as exc:
         failure_detail = f"{detail}; error={type(exc).__name__}" if detail else f"error={type(exc).__name__}"
-        result = "interrupted" if isinstance(exc, asyncio.CancelledError) else "failed"
-        try:
-            await admin_service.audit(
-                session_hash, action_name, target_count, source_summary,
-                result, failure_detail, request,
-            )
-        except Exception:
-            logging.getLogger("frontiercloud.audit").exception(
-                "control_action_outcome_audit_failed",
-                extra={"context": {"action": action_name, "outcome": result}},
-            )
+        await admin_service.audit(
+            session_hash, action_name, target_count, source_summary,
+            "failed", failure_detail, request,
+        )
         raise
     else:
         await admin_service.audit(

@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import asyncio
 import json
-import math
 import os
 import time
 from pathlib import Path
@@ -56,10 +55,7 @@ def parse_trailer(path: Path) -> dict:
         if length > MAX_METADATA_BYTES or length + len(TRAILER_MAGIC) + 8 > size:
             return {}
         source.seek(-(len(TRAILER_MAGIC) + 8 + length), os.SEEK_END)
-        try:
-            value = json.loads(source.read(length))
-        except (ValueError, UnicodeError, RecursionError):
-            return {}
+        value = json.loads(source.read(length))
     if not isinstance(value, dict) or value.get("version") != 1:
         return {}
     lyrics = value.get("lyrics")
@@ -70,13 +66,7 @@ def parse_trailer(path: Path) -> dict:
         if (not isinstance(entry, dict) or not isinstance(entry.get("text"), str)
                 or len(entry["text"]) > 4000 or not isinstance(entry.get("time"), (int, float))):
             return {}
-        try:
-            timestamp = float(entry["time"])
-        except (ValueError, OverflowError):
-            return {}
-        if isinstance(entry["time"], bool) or not math.isfinite(timestamp):
-            return {}
-        cleaned.append({"time": max(0, timestamp), "text": entry["text"]})
+        cleaned.append({"time": max(0, float(entry["time"])), "text": entry["text"]})
     return {"title": str(value.get("title") or "")[:255], "lyrics": cleaned}
 
 
@@ -211,7 +201,7 @@ def remove(relationship: str, user_id: str, recording_id: str) -> int:
     target = _path(relationship, user_id, recording_id)
     size = target.stat().st_size if target.is_file() else 0
     target.unlink(missing_ok=True)
-    _usage_cache.pop(relationship, None)
+    _usage_cache[relationship] = max(0, storage_usage(relationship) - size)
     return size
 
 
@@ -228,7 +218,7 @@ def remove_user(relationship: str, user_id: str) -> int:
             removed += item.stat().st_size
             item.unlink()
         root.rmdir()
-    _usage_cache.pop(relationship, None)
+    _usage_cache[relationship] = max(0, storage_usage(relationship) - removed)
     return removed
 
 

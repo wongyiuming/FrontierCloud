@@ -28,7 +28,6 @@ from app.core.metrics import MetricsMiddleware
 from app.core.static_assets import static_asset_url
 from app.core.upload_lifecycle import install_upload_lifecycle_guard
 from app.middleware.ip_security import IPSecurityMiddleware
-from app.middleware.admin_upload import AdminUploadMiddleware
 from app.middleware.node_role import NodeRoleMiddleware
 from app.services import admin_service, lyrics
 from app.services.health import live_status, readiness_response
@@ -230,7 +229,6 @@ def render_query_log(target: str) -> str:
         return sanitize_log_value(target, 4000)
 
 
-app.add_middleware(AdminUploadMiddleware)
 app.add_middleware(IPSecurityMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RealIPLogMiddleware)

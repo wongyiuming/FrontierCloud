@@ -193,8 +193,7 @@ async def register_follower(relation: dict, *, conn=None) -> None:
             reserved_bytes=int(current["reserved_bytes"] if current else 0),
             physical_free_bytes=int(storage_report.get("physical_free_bytes") or summary.get("storage_free") or 0),
             health="online" if relation["status"] == "online" else "offline",
-            writable=int(bool(current and current["storage_enabled"] and relation["status"] == "online")),
-            updated_at=now)
+            writable=int(bool(current and current["writable"])), updated_at=now)
         await _upsert(conn, s.storage_members, values, ("member_id",))
         for table, defaults in (
             (s.compute_members, dict(enabled=0, worker_slots=0, available_slots=0, cpu_percent=0,
