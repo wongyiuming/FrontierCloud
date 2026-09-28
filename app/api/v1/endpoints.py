@@ -26,6 +26,10 @@ from app.api.v1.karaoke_integrity import router as karaoke_integrity_router
 from app.api.v1.karaoke_users import router as karaoke_users_router
 from app.api.v1.admin_nodes import router as nodes_router
 from app.api.v1.admin_karaoke_users import router as admin_karaoke_users_router
+from app.api.v1.playback_continuity_diagnostics import (
+    admin_router as playback_continuity_admin_router,
+    router as playback_continuity_router,
+)
 from app.api.internal_storage_integrity import install as install_internal_storage_integrity
 from app.services.federation_mode_integrity import install as install_federation_mode_integrity
 from app.services.health import readiness_response
@@ -103,6 +107,7 @@ def _include_admin(source: APIRouter, *, prefix: str = "/media/admin") -> None:
 router = APIRouter()
 router.include_router(brand_public_router, prefix="/media/brand", tags=["Brand"])
 router.include_router(media_router, prefix="/media", tags=["MediaCenter"])
+router.include_router(playback_continuity_router, prefix="/media", tags=["MediaCenter"])
 router.include_router(karaoke_router, prefix="/karaoke", tags=["Karaoke"])
 router.include_router(karaoke_integrity_router, prefix="/karaoke", tags=["KaraokeUsers"])
 router.include_router(_without_paths(karaoke_users_router, _KARAOKE_OVERRIDE_PATHS), prefix="/karaoke", tags=["KaraokeUsers"])
@@ -119,6 +124,7 @@ _include_admin(_without_paths(cluster_admin_router, _CLUSTER_OVERRIDE_PATHS))
 _include_admin(_without_paths(admin_router, _ADMIN_OVERRIDE_PATHS))
 _include_admin(_without_paths(nodes_router, _NODE_OVERRIDE_PATHS))
 _include_admin(node_observability_router)
+_include_admin(playback_continuity_admin_router)
 _include_admin(admin_karaoke_integrity_router)
 _include_admin(_without_paths(admin_karaoke_users_router, _ADMIN_KARAOKE_OVERRIDE_PATHS))
 

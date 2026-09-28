@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+INLINE_CODE = re.compile(r"`+[^`]*`+")
 HASH_COMMENT_SUFFIXES = {
     ".conf",
     ".hcl",
@@ -63,15 +64,29 @@ def comment_markers(path: Path) -> tuple[tuple[str, ...], tuple[tuple[str, str],
     return (), ()
 
 
+def markdown_violations(path: Path) -> list[tuple[int, str]]:
+    violations: list[tuple[int, str]] = []
+    fence: str | None = None
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        stripped = line.lstrip()
+        marker = next((value for value in ("```", "~~~") if stripped.startswith(value)), None)
+        if marker is not None:
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        explanatory = INLINE_CODE.sub("", line)
+        if CJK.search(explanatory):
+            violations.append((line_number, line.strip()))
+    return violations
+
+
 def text_violations(path: Path) -> list[tuple[int, str]]:
     if path.suffix in EXPLANATORY_SUFFIXES:
-        return [
-            (line_number, line.strip())
-            for line_number, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), 1
-            )
-            if CJK.search(line)
-        ]
+        return markdown_violations(path)
     line_markers, block_markers = comment_markers(path)
     if not line_markers and not block_markers:
         return []

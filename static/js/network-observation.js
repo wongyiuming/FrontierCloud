@@ -63,3 +63,14 @@
     probe();
     setInterval(probe, interval);
 })();
+
+(function loadTemporaryPlaybackContinuityDiagnostics() {
+    const retireAt = Date.parse('2026-10-15T00:00:00Z');
+    if (Date.now() >= retireAt || typeof PLAYER_KIND === 'undefined' || PLAYER_KIND !== 'audio') return;
+    if (document.getElementById('frontierCloudPlaybackContinuityDiagnostics')) return;
+    const script = document.createElement('script');
+    script.id = 'frontierCloudPlaybackContinuityDiagnostics';
+    script.src = '/static/js/playback-continuity-diagnostics.js';
+    script.async = true;
+    document.head.appendChild(script);
+})();

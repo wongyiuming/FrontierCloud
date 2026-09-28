@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const script = fs.readFileSync(new URL('../static/js/network-observation.js', import.meta.url), 'utf8');
+const diagnosticsScript = fs.readFileSync(new URL('../static/js/playback-continuity-diagnostics.js', import.meta.url), 'utf8');
+new vm.Script(diagnosticsScript);
 for (const embedded of [true, false]) {
     const configurations = [];
     let interval;
