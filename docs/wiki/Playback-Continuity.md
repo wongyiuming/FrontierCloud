@@ -41,7 +41,8 @@ MSE continuity is a production business path, so continuity must not trade away 
 P0 contracts are:
 
 - the visible duration belongs to the current song and must not grow as more MSE bytes are buffered;
-- the stream derives a stable duration hint from MP3 metadata/response length and replaces it once with the final completed segment duration;
+- the current song owns a write-once presentation duration: once a valid MP3 duration estimate is available it is latched and later MSE timeline growth cannot replace it;
+- if no early estimate is available, the UI waits for one completed-segment fallback value rather than reading the active `HTMLMediaElement.duration` or `MediaSource.duration`;
 - fetch chunks are coalesced into bounded SourceBuffer writes instead of one append/update cycle per network chunk;
 - startup uses a small first append, while later appends use larger batches to reduce main-thread churn;
 - compatible MP3 playback does not force `cache: no-store`;
@@ -87,7 +88,7 @@ CI protects the following core rules:
 - one audio MediaSource and one sequence SourceBuffer implement compatible continuity;
 - no normal `endOfStream()` boundary is created between songs;
 - continuous playback is MP3-only in the first profile;
-- active-song duration never derives from the growing buffered range;
+- active-song presentation duration is write-once and never derives from the growing MSE/native duration timeline;
 - SourceBuffer writes are batched instead of one append per fetch chunk;
 - all-MP3 catalogs skip the warning-decoration DOM pass;
 - incompatible audio is visibly skipped for auto-next but remains manually playable;
