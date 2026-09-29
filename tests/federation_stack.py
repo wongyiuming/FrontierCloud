@@ -239,9 +239,10 @@ print(json.dumps(asyncio.run(read())))
         })
 
     def upload_media(self, blob, filename, *, site_type):
+        target_dir = "music/relay-shared" if site_type == "relay" else "music/shared"
         reservation = self.api("/api/v1/media/admin/upload/session", {
             "site_type": site_type,
-            "target_dir": "music/shared",
+            "target_dir": target_dir,
             "relative_path": None,
             "filename": filename,
             "size_bytes": len(blob),
@@ -504,32 +505,6 @@ def browser_checks(browser, master, resource):
     assert page.url == player_url
     page.evaluate("async () => { await art.video.play(); art.video.pause(); art.video.currentTime=1; await art.video.play(); }")
     page.wait_for_function("art.video.currentTime > 1", timeout=10000)
-    page.wait_for_function("window.frontierCloudPlaybackContinuityHandoff?.installed", timeout=10000)
-    continuity_start = page.evaluate("""
-        () => {
-            window.__frontierContinuityRequests = [];
-            window.addEventListener('frontiercloud:track-change-request', event => {
-                window.__frontierContinuityRequests.push(event.detail);
-            });
-            art.video.playbackRate = 2;
-            art.video.currentTime = Math.min(6, Math.max(1, art.video.duration / 2));
-            return currentIndex;
-        }
-    """)
-    page.wait_for_function(
-        "window.frontierCloudPlaybackContinuityHandoff.status().standby_ready",
-        timeout=15000,
-    )
-    page.evaluate("art.video.currentTime = Math.max(0, art.video.duration - 1)")
-    page.wait_for_function(
-        "start => currentIndex !== start && !window.frontierCloudPlaybackContinuityHandoff.status().bridge_active && art.video.currentTime > 0.05",
-        arg=continuity_start,
-        timeout=10000,
-    )
-    continuity_requests = page.evaluate("window.__frontierContinuityRequests")
-    assert any(item.get("source") == "pre-end-200ms" and item.get("accepted")
-               for item in continuity_requests)
-    page.evaluate("art.video.playbackRate = 1")
     karaoke_id = page.evaluate(
         "id => currentMediaList.find(item => item.resource_id === id).karaoke_id",
         resource["resource_id"],
@@ -598,7 +573,7 @@ def main():
             a, b, c = nodes
             # Master Local content is imported once during promotion. A Follower
             # must join empty and receives files only through Storage Pool jobs.
-            wav(a.data / "media/music/shared/master.wav", seconds=20, tone=500)
+            wav(a.data / "media/music/master-shared/master.wav", seconds=20, tone=500)
             upload_source = directory / "upload-source.wav"
             wav(upload_source, seconds=20, tone=700)
             source = upload_source.read_bytes()
@@ -707,7 +682,7 @@ print(asyncio.run(read_enabled()))
                                      headers={"If-Range": '"different"', "Range": "bytes=0-3"})
                 assert stale.status_code == 200 and stale.content == source
                 assert (urlsplit_origin(full.url) == a.endpoint) == (mode == "Relay")
-            report["checks"].append("Relay/Direct media supports HEAD, Range, ETag, CORS and continuity")
+            report["checks"].append("Relay/Direct media supports HEAD, Range, ETag and CORS")
 
             baseline_used = sum(row["used_bytes"] for row in a.nodes()["storage_pool"]["members"]
                                 if row["member_id"] in {follower_id, relay_id})

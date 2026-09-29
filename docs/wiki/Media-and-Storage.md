@@ -105,7 +105,7 @@ Playback and download resolve the current placement and use Local, Direct, or Re
 
 ## 5. Admin upload site types
 
-Admin no longer asks the user to pick a concrete Storage Follower. The site selector starts empty and the operator explicitly chooses:
+Admin does not ask the user to pick a concrete Storage Follower. The site selector starts empty and the operator explicitly chooses:
 
 ```text
 primary
@@ -119,17 +119,17 @@ Master Local, Local transport.
 
 ### direct
 
-Any eligible Direct Follower.
+An eligible Direct Follower.
 
 ### relay
 
-Any eligible Relay Follower.
+An eligible Relay Follower.
 
-For Direct/Relay, the actual member is selected by FrontierCloud.
+For Direct/Relay, the physical member is selected by FrontierCloud according to the media-folder affinity contract below.
 
-## 6. Placement requirements
+## 6. Placement requirements and media-folder affinity
 
-A candidate must be:
+A candidate member must be:
 
 - in the requested site type;
 - storage-enabled;
@@ -139,6 +139,10 @@ A candidate must be:
 - large enough after current reservations;
 - physically able to hold the incoming object.
 
+### Empty media folder
+
+The immediate parent of a media file is the placement-affinity unit. When that folder has no active/pending media and no live upload reservation, the first reservation uses normal fair placement.
+
 Selection prefers lower:
 
 ```text
@@ -147,7 +151,43 @@ Selection prefers lower:
 
 and then more available bytes.
 
-Selection and durable upload reservation run under the storage write lock so concurrent Admin sessions do not all consume the same apparent free capacity.
+Selection and durable upload reservation run under the same storage write lock so concurrent Admin sessions cannot place sibling files onto different members before the first reservation becomes visible.
+
+### Bound media folder
+
+Once a direct child media object or a live reservation exists, the folder is bound to that storage member. Later direct-child uploads stay on the same physical member even if another same-type member is less loaded.
+
+Example:
+
+```text
+music/Artist/Disc-1/01.mp3
+music/Artist/Disc-1/02.mp3
+```
+
+Both files must share one storage member.
+
+The binding is derived from existing `global_media_objects` and unexpired upload reservations. FrontierCloud does not add a separate folder-to-node mapping table.
+
+A bound folder never silently spills to another member. If the owner is offline, missing, read-only, or lacks capacity, the new upload fails. If the operator chooses a different site type from the existing folder owner, the upload also fails rather than moving data or ignoring the selected type.
+
+### Nested child folder
+
+A child media folder is an independent affinity unit and is allowed to make a fresh fair-placement choice on its first reservation.
+
+For example:
+
+```text
+music/Artist/Disc-1/* -> Direct Follower A
+music/Artist/Disc-2/* -> Direct Follower B
+```
+
+The common ancestor does not force both child folders onto one member.
+
+### Historical split folder
+
+Older data may predate this rule. If the same immediate media folder is already spread across more than one storage member, FrontierCloud does not migrate those files automatically. New uploads into that split folder fail closed so the inconsistency cannot grow.
+
+This is an upload-placement constraint. It does not change the per-object ownership model and does not introduce Follower-to-Follower storage transfer.
 
 ## 7. Capacity semantics
 
@@ -190,6 +230,8 @@ transport
 remain the authoritative facts.
 
 A missing transport for local/Standalone historical content is treated as primary/local presentation rather than forcing a migration.
+
+The media-folder affinity rule also does not migrate historical split folders. It only prevents future reservations from silently extending a split placement.
 
 ## 9. Directory priority
 

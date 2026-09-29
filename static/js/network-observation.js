@@ -64,16 +64,6 @@
     setInterval(probe, interval);
 })();
 
-(function loadPlaybackContinuityCore() {
-    if (typeof PLAYER_KIND === 'undefined' || PLAYER_KIND !== 'audio') return;
-    if (document.getElementById('frontierCloudPlaybackContinuityHandoff')) return;
-    const script = document.createElement('script');
-    script.id = 'frontierCloudPlaybackContinuityHandoff';
-    script.src = '/static/js/playback-continuity-handoff.js';
-    script.async = true;
-    document.head.appendChild(script);
-})();
-
 (function loadTemporaryPlaybackContinuityDiagnostics() {
     const retireAt = Date.parse('2026-10-15T00:00:00Z');
     if (Date.now() >= retireAt || typeof PLAYER_KIND === 'undefined' || PLAYER_KIND !== 'audio') return;

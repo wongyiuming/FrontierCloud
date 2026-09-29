@@ -147,7 +147,7 @@ Accepted lyric upload is complete only after both the file and its managed-objec
 - Audio playback provides synchronized lyrics and fullscreen lyrics.
 - Player sidebars show the current media directory relative path rather than a legacy fixed label.
 - Playback scores and lyric links bind to stable media object IDs.
-- Next-track preloading uses the player queue; offline switching requires a completed preload. Speculative downloads are capped at 128 MiB per track. Audio continuity warms a standby media pipeline and starts it 200 ms of wall time before natural end; the old Deck pauses only after standby playback succeeds, and the bridge remains audible until the main media clock shows measured progress.
+- Next-track preloading uses the player queue; offline switching requires a completed preload. Speculative downloads are capped at 128 MiB per track.
 - Audio/video can enter Karaoke from the player button or a three-finger 1.5-second press. Guests can sing and preview in memory. Registered users receive recording quota, and the Master places recordings in the Storage Pool.
 
 ## Cluster, heartbeat, and Backup

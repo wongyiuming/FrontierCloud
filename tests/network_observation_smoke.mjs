@@ -4,19 +4,22 @@ import vm from 'node:vm';
 
 const script = fs.readFileSync(new URL('../static/js/network-observation.js', import.meta.url), 'utf8');
 const diagnosticsScript = fs.readFileSync(new URL('../static/js/playback-continuity-diagnostics.js', import.meta.url), 'utf8');
-const handoffScript = fs.readFileSync(new URL('../static/js/playback-continuity-handoff.js', import.meta.url), 'utf8');
-const continuityDesign = fs.readFileSync(new URL('../docs/playback-continuity.md', import.meta.url), 'utf8');
+const continuityDesign = fs.readFileSync(new URL('../docs/audio-continuous-stream.md', import.meta.url), 'utf8');
 const continuityWiki = fs.readFileSync(new URL('../docs/wiki/Playback-Continuity.md', import.meta.url), 'utf8');
 const wikiSidebar = fs.readFileSync(new URL('../docs/wiki/_Sidebar.md', import.meta.url), 'utf8');
 new vm.Script(diagnosticsScript);
-new vm.Script(handoffScript);
+assert.doesNotMatch(script, /playback-continuity-handoff|PlaybackContinuityHandoff|loadPlaybackContinuityCore/);
+
 for (const document of [continuityDesign, continuityWiki]) {
-    assert.match(document, /200 ms/);
-    assert.match(document, /standby/i);
-    assert.match(document, /ended fallback/i);
-    assert.match(document, /core/i);
-    assert.match(document, /temporary/i);
+    assert.match(document, /audio\/mpeg/);
+    assert.match(document, /sequence/i);
+    assert.match(document, /MP3/i);
+    assert.match(document, /video/i);
+    assert.match(document, /affinity|placement-affinity/i);
+    assert.doesNotMatch(document, /T-200 ms warm-standby.*permanent/i);
 }
+assert.match(continuityDesign, /no T-200 ms timer/i);
+assert.match(continuityDesign, /no second standby media element/i);
 assert.match(wikiSidebar, /\[Playback Continuity\]\(Playback-Continuity\)/);
 
 for (const embedded of [true, false]) {
@@ -43,5 +46,5 @@ for (const embedded of [true, false]) {
     assert.equal(interval, 45000);
 }
 
-await import('./playback_handoff_smoke.mjs');
+await import('./audio_continuous_stream_smoke.mjs');
 console.log('network-observation-smoke-ok');

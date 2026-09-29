@@ -48,6 +48,26 @@ class UploadSiteRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(upload_site_routing.site_type_for_transport("Relay"), "relay")
         self.assertEqual(upload_site_routing.site_type_for_transport(None), "primary")
 
+    def test_media_folder_affinity_uses_immediate_parent_only(self):
+        rows = [
+            {"storage_member_id": "direct-a", "media_path": "music/live/disc-1/01.mp3"},
+            {"storage_member_id": "direct-a", "media_path": "music/live/disc-1/02.mp3"},
+            {"storage_member_id": "direct-b", "media_path": "music/live/disc-2/01.mp3"},
+        ]
+        self.assertEqual(
+            upload_site_routing._folder_member_ids("music/live/disc-1", rows),
+            {"direct-a"},
+        )
+        self.assertEqual(
+            upload_site_routing._folder_member_ids("music/live/disc-2", rows),
+            {"direct-b"},
+        )
+        self.assertEqual(upload_site_routing._folder_member_ids("music/live", rows), set())
+        self.assertEqual(
+            upload_site_routing.media_folder_path("music/live/disc-1/01.mp3"),
+            "music/live/disc-1",
+        )
+
     async def test_direct_selection_only_uses_ready_direct_members(self):
         members = [
             member("direct-busy", transport="Direct", used=800, available=200),
@@ -76,6 +96,59 @@ class UploadSiteRoutingTests(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(return_value=members),
         ):
             selected = await upload_site_routing.choose_member("direct", 50, object())
+        self.assertEqual(selected["member_id"], "direct-b")
+
+    async def test_existing_folder_owner_beats_fair_load_for_sibling_uploads(self):
+        members = [
+            member("direct-a", transport="Direct", allocated=1000, used=800, available=200),
+            member("direct-b", transport="Direct", allocated=1000, used=0, available=1000),
+        ]
+        with (
+            patch.object(upload_site_routing.resource_pool, "list_members", new=AsyncMock(return_value=members)),
+            patch.object(upload_site_routing, "folder_affinity_member", new=AsyncMock(return_value="direct-a")),
+        ):
+            selected = await upload_site_routing.choose_member(
+                "direct", 50, object(), folder_path="music/live/disc-1"
+            )
+        self.assertEqual(selected["member_id"], "direct-a")
+
+    async def test_bound_folder_never_spills_when_owner_is_unavailable(self):
+        members = [
+            member("direct-a", transport="Direct", health="offline", available=1000),
+            member("direct-b", transport="Direct", available=1000),
+        ]
+        with (
+            patch.object(upload_site_routing.resource_pool, "list_members", new=AsyncMock(return_value=members)),
+            patch.object(upload_site_routing, "folder_affinity_member", new=AsyncMock(return_value="direct-a")),
+        ):
+            with self.assertRaisesRegex(p.ProtocolError, "绑定的存储节点"):
+                await upload_site_routing.choose_member(
+                    "direct", 50, object(), folder_path="music/live/disc-1"
+                )
+
+    async def test_bound_folder_rejects_site_type_change(self):
+        members = [member("direct-a", transport="Direct", available=1000)]
+        with (
+            patch.object(upload_site_routing.resource_pool, "list_members", new=AsyncMock(return_value=members)),
+            patch.object(upload_site_routing, "folder_affinity_member", new=AsyncMock(return_value="direct-a")),
+        ):
+            with self.assertRaisesRegex(p.ProtocolError, "已归属直连站点"):
+                await upload_site_routing.choose_member(
+                    "relay", 50, object(), folder_path="music/live/disc-1"
+                )
+
+    async def test_empty_child_folder_still_uses_fair_load(self):
+        members = [
+            member("direct-a", transport="Direct", used=800, available=200),
+            member("direct-b", transport="Direct", used=0, available=1000),
+        ]
+        with (
+            patch.object(upload_site_routing.resource_pool, "list_members", new=AsyncMock(return_value=members)),
+            patch.object(upload_site_routing, "folder_affinity_member", new=AsyncMock(return_value=None)),
+        ):
+            selected = await upload_site_routing.choose_member(
+                "direct", 50, object(), folder_path="music/live/disc-2"
+            )
         self.assertEqual(selected["member_id"], "direct-b")
 
     async def test_site_type_without_ready_member_fails_closed(self):
@@ -114,7 +187,7 @@ class _SharedLock:
 
 
 class MasterUploadSiteRouteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_route_resolves_type_to_member_before_existing_reservation_pipeline(self):
+    async def test_route_resolves_folder_affinity_before_existing_reservation_pipeline(self):
         payload = master_mutation.SiteTypeUploadReservation(
             site_type="relay",
             target_dir="music/artist",
@@ -129,16 +202,19 @@ class MasterUploadSiteRouteTests(unittest.IsolatedAsyncioTestCase):
             "member_id": "relay-2",
             "upload_url": "/upload",
         })
+        logical = AsyncMock(return_value="music/artist/song.mp3")
         with (
             patch.object(master_mutation, "media_mutation_lock", _SharedLock()),
             patch.object(master_mutation, "ensure_media_mutations_ready"),
             patch.object(master_mutation, "node_state", SimpleNamespace(node={"role": "Master"}, database=object())),
+            patch.object(master_mutation.cluster, "_upload_logical_path", new=logical),
             patch.object(master_mutation.upload_site_routing, "choose_member", new=choose),
             patch.object(master_mutation.masterlocal, "create_upload_session", new=reserve),
         ):
             result = await master_mutation.create_upload_session(payload, object(), "actor")
 
         choose.assert_awaited_once()
+        self.assertEqual(choose.await_args.kwargs["folder_path"], "music/artist")
         legacy_payload = reserve.await_args.args[0]
         self.assertEqual(legacy_payload.storage_member_id, "relay-2")
         self.assertEqual(result["site_type"], "relay")

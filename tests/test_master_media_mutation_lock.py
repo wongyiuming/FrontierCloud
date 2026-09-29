@@ -79,6 +79,11 @@ class MasterMutationFenceTests(unittest.IsolatedAsyncioTestCase):
                 SimpleNamespace(node={"role": "Master"}, database=database),
             ),
             patch.object(integrity, "ensure_media_mutations_ready"),
+            patch.object(
+                integrity.cluster,
+                "_upload_logical_path",
+                new=AsyncMock(return_value="music/artist/song.mp3"),
+            ),
             patch.object(integrity.upload_site_routing, "choose_member", new=choose_member),
             patch.object(integrity.masterlocal, "create_upload_session", new=AsyncMock(side_effect=delegate)),
             patch.object(integrity.cluster, "create_upload_session", new=direct_cluster),
@@ -89,7 +94,9 @@ class MasterMutationFenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["site_type"], "primary")
         self.assertEqual(lock.shared_count, 0)
         self.assertFalse(storage_lock.locked())
-        choose_member.assert_awaited_once_with("primary", 3, database)
+        choose_member.assert_awaited_once_with(
+            "primary", 3, database, folder_path="music/artist"
+        )
         direct_cluster.assert_not_awaited()
 
     async def test_master_delete_and_visibility_mutations_use_shared_fence(self):
