@@ -46,5 +46,6 @@ for (const embedded of [true, false]) {
     assert.equal(interval, 45000);
 }
 
+await import('./audio_continuous_fetch_retry_smoke.mjs');
 await import('./audio_continuous_stream_smoke.mjs');
 console.log('network-observation-smoke-ok');
