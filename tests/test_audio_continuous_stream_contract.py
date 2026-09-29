@@ -45,6 +45,28 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.assertNotIn("document.createElement('audio')", self.core)
         self.assertNotIn('document.createElement("audio")', self.core)
 
+    def test_track_duration_is_stable_and_never_uses_growing_buffer_as_total(self):
+        self.assertIn("duration: null, durationHint: 0", self.core)
+        self.assertIn("return this.activeSegment.duration;", self.core)
+        self.assertIn("return this.activeSegment.durationHint;", self.core)
+        self.assertIn("segment.duration = Math.max(0, end - start);", self.core)
+        self.assertIn("estimateMp3Duration(merged, declared)", self.core)
+        self.assertNotIn("Math.max(this.activeSegment.start, this.bufferedEnd())", self.core)
+
+    def test_mse_append_is_batched_instead_of_one_update_per_network_chunk(self):
+        self.assertIn("const FIRST_APPEND_BYTES = 64 * 1024;", self.core)
+        self.assertIn("const APPEND_BATCH_BYTES = 512 * 1024;", self.core)
+        self.assertIn("pending.push(value)", self.core)
+        self.assertIn("if (pendingBytes >= threshold) await flush();", self.core)
+        self.assertNotIn("await this.appendBytes(value);", self.core)
+        self.assertNotIn("cache: 'no-store'", self.core)
+
+    def test_all_mp3_catalog_avoids_redundant_playlist_dom_scan(self):
+        self.assertIn("const hasWarning = entries.some", self.core)
+        self.assertIn("if (!hasWarning && !existing) return;", self.core)
+        self.assertNotIn("renderPlaylist = function renderContinuousAudioPlaylist", self.core)
+        self.assertEqual(self.core.count("decoratePlaylist();"), 2)
+
     def test_only_mp3_is_auto_continuous_and_other_audio_is_visible_as_skipped(self):
         self.assertIn("mediaPath(media).endsWith('.mp3')", self.core)
         self.assertIn("连续流不兼容 · 自动续播跳过", self.core)

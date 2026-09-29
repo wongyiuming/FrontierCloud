@@ -52,7 +52,7 @@ If an administrator later normalizes an incompatible file with an external tool 
 
 The Web service does not create a physical concatenated media file and does not create a server-side derived-media cache.
 
-The browser fetches each existing media URL and streams response chunks into the same SourceBuffer. The continuous-stream core must not add:
+The browser fetches each existing media URL and streams response bytes into the same SourceBuffer. The continuous-stream core must not add:
 
 - FFmpeg to the production Web image;
 - runtime transcoding;
@@ -63,6 +63,22 @@ The browser fetches each existing media URL and streams response chunks into the
 The first implementation keeps a bounded playback window with two logical tracks: the current compatible track and one look-ahead compatible track. Old SourceBuffer ranges are removed after playback has crossed into the new active track.
 
 A per-track byte guard remains in place so one malformed or unexpectedly large response cannot cause unbounded JavaScript buffering work.
+
+## Playback performance invariants
+
+MSE is the production playback path for compatible MP3 and must preserve the old player's responsiveness.
+
+The following are P0 release contracts:
+
+- the visible duration for the active business track is stable; it must never use the currently buffered MSE range as the track's total duration;
+- MP3 duration is estimated from the stream header and response length while the segment is still downloading, then replaced once by the completed segment duration;
+- network chunks are accumulated into bounded append batches instead of issuing one `SourceBuffer.appendBuffer()` / `updateend` cycle for every fetch chunk;
+- the first append is intentionally small enough for fast startup, while later appends are larger to reduce main-thread and SourceBuffer churn;
+- normal MSE fetches may use the browser HTTP cache and must not force `cache: no-store`;
+- an all-compatible MP3 catalog must not perform a second per-row DOM decoration scan after the normal playlist render;
+- compatibility warning DOM work is performed only when an incompatible/runtime-skipped item actually exists.
+
+The current first-append target is 64 KiB and the regular append batch target is 512 KiB. These are implementation constants and may be tuned only together with browser regression tests.
 
 ## Track boundary semantics
 
@@ -151,6 +167,9 @@ The release must protect at least the following:
 - the SourceBuffer uses `sequence` mode;
 - normal continuous playback does not call `endOfStream()`;
 - no second audio media element is created by the continuity core;
+- active-track duration is stable and never grows with `bufferedEnd()`;
+- MSE writes are batched rather than one append per fetch chunk;
+- all-MP3 playlists take the no-extra-decoration fast path;
 - incompatible formats are visibly marked and skipped by automatic continuation;
 - manual single-track fallback remains available;
 - media-folder affinity uses the immediate parent only;

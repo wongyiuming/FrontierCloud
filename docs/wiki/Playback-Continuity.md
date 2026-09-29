@@ -34,6 +34,22 @@ The initial implementation keeps only a small logical window: the active compati
 
 No FFmpeg, runtime transcoder, new derived-media volume, or continuous-media database is part of this feature.
 
+## Playback performance guardrails
+
+MSE continuity is a production business path, so continuity must not trade away normal player usability.
+
+P0 contracts are:
+
+- the visible duration belongs to the current song and must not grow as more MSE bytes are buffered;
+- the stream derives a stable duration hint from MP3 metadata/response length and replaces it once with the final completed segment duration;
+- fetch chunks are coalesced into bounded SourceBuffer writes instead of one append/update cycle per network chunk;
+- startup uses a small first append, while later appends use larger batches to reduce main-thread churn;
+- compatible MP3 playback does not force `cache: no-store`;
+- an all-MP3 playlist must use the normal single render path without a second per-row warning-decoration scan;
+- incompatible-item warning DOM work happens only when a warning actually exists.
+
+Current batch targets are 64 KiB for the first append and 512 KiB thereafter.
+
 ## Media-folder placement affinity
 
 Admin still asks only for `primary`, `direct`, or `relay`; it never asks for a concrete storage member.
@@ -71,6 +87,9 @@ CI protects the following core rules:
 - one audio MediaSource and one sequence SourceBuffer implement compatible continuity;
 - no normal `endOfStream()` boundary is created between songs;
 - continuous playback is MP3-only in the first profile;
+- active-song duration never derives from the growing buffered range;
+- SourceBuffer writes are batched instead of one append per fetch chunk;
+- all-MP3 catalogs skip the warning-decoration DOM pass;
 - incompatible audio is visibly skipped for auto-next but remains manually playable;
 - video does not load the audio continuity module;
 - immediate-parent folder affinity is enforced for new uploads;
