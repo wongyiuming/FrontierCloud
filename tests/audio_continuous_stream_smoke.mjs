@@ -79,9 +79,11 @@ assert.equal(api.compatible({type: 'audio', media_path: 'music/a/track.mp3'}), t
 assert.equal(api.compatible({type: 'audio', media_path: 'music/a/track.flac'}), false);
 assert.equal(api.compatible({type: 'video', media_path: 'vido/a/track.mp3'}), false);
 
-const cbrHeader = new Uint8Array(64 * 1024);
-cbrHeader.set([0xff, 0xfb, 0x90, 0x00], 0); // MPEG1 Layer III, 128 kbps, 44.1 kHz stereo.
-const estimated = windowObject.__estimateMp3Duration(cbrHeader, 1_600_000);
+const estimated = vm.runInContext(`(() => {
+    const cbrHeader = new Uint8Array(64 * 1024);
+    cbrHeader.set([0xff, 0xfb, 0x90, 0x00], 0);
+    return window.__estimateMp3Duration(cbrHeader, 1_600_000);
+})()`, context);
 assert.ok(Math.abs(estimated - 100) < 0.01, `expected stable 100 second estimate, got ${estimated}`);
 
 const mp3Only = [
