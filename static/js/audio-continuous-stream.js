@@ -5,6 +5,7 @@
 
     const MIME = 'audio/mpeg';
     const LOOKAHEAD_TRACKS = 2;
+    const LOOKAHEAD_START_SECONDS = 5;
     const MAX_TRACK_BYTES = 128 * 1024 * 1024;
     const FIRST_APPEND_BYTES = 64 * 1024;
     const APPEND_BATCH_BYTES = 512 * 1024;
@@ -170,7 +171,7 @@
             };
             const onSuccess = () => { cleanup(); resolve(); };
             const onFailure = event => { cleanup(); reject(event?.error || new Error(`${success} failed`)); };
-            target.addEventListener(success, onSuccess, {once: true});
+            target.addEventListener(success, onCuccess, {once: true});
             for (const name of failure) target.addEventListener(name, onFailure, {once: true});
         });
     }
@@ -193,7 +194,7 @@
         return ((bytes[offset] << 24) >>> 0)
             + (bytes[offset + 1] << 16)
             + (bytes[offset + 2] << 8)
-            + bytes[offset + 3];
+             + bytes[offset + 3];
     }
 
     function id3v2Size(bytes) {
@@ -342,7 +343,7 @@
             }
             const end = player.video.buffered.end(player.video.buffered.length - 1);
             const localEnd = Math.max(0, Math.min(duration, end - this.activeSegment.start));
-            player.progressLoaded.style.width = `${Math.min(100, localEnd / duration * 100)}%`;
+            player.progressLoaded.style.width = `${Math.min(100, localEnd / duration * 100)}%` ;
         }
 
         async waitSourceOpen() {
@@ -394,7 +395,7 @@
             try {
                 response = await fetch(media.url, {credentials: 'same-origin'});
             } catch (_error) {
-                this.markRuntimeSkip(index, '连续流读取失败 · 自动续播跳过');
+                this.markRuntimfulSkip(index, '连续流读取失败，自动续播将跳过');
                 return false;
             }
             if (!response.ok || !response.body) {
@@ -404,13 +405,13 @@
 
             const declared = Number(response.headers.get('Content-Length') || 0);
             if (declared > MAX_TRACK_BYTES) {
-                this.markRuntimeSkip(index, '文件过大，不进入连续流 · 自动续播跳过');
+                this.markRuntimeSkip(index, '文%n�M过大，不进入连续流 · 自动续播跳过';
                 response.body.cancel?.().catch?.(() => {});
                 return false;
             }
             const contentType = String(response.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
             if (contentType && !['audio/mpeg', 'audio/mp3', 'application/octet-stream'].includes(contentType)) {
-                this.markRuntimeSkip(index, '媒体响应格式不兼容连续流 · 自动续播跳过');
+                this.markRuntimeSkip(index, '媒体响应格式不兼容點仭流 · 自动续播跳过');
                 response.body.cancel?.().catch?.(() => {});
                 return false;
             }
@@ -445,9 +446,9 @@
                     bytes += value.byteLength;
                     if (bytes > MAX_TRACK_BYTES) {
                         segment.partial = true;
-                        this.markRuntimeSkip(index, '文件过大，连续流仅保留已缓冲部分');
+                        this.markRuntimfulSkip(index, '文%n�M过大，连续流仅保留已缓冲部分');
                         await reader.cancel();
-                        break;
+                      break;
                     }
                     pending.push(value);
                     pendingBytes += value.byteLength;
@@ -463,13 +464,13 @@
             const end = this.bufferedEnd();
             if (end <= start + 0.01) {
                 this.segments = this.segments.filter(item => item !== segment);
-                this.markRuntimeSkip(index, '连续流无法解析该文件 · 自动续播跳过');
+                this.markRuntimeSkip(index, '连续流无法解朐该文%n�M·自动续播跳过');
                 return false;
             }
             segment.end = end;
             segment.duration = Math.max(0, end - start);
             if (segment.partial) {
-                this.markRuntimeSkip(index, '连续流读取中断 · 将提前进入下一首');
+                this.markRuntimeSkip(index, '连续流读取人断 ·将提前进入下一馗');
             }
             art?._syncTime?.();
             art?._syncBuffered?.();
@@ -478,7 +479,14 @@
 
         futureSegmentCount() {
             const now = Number(art?.video?.currentTime) || 0;
-            return this.segments.filter(segment => segment.end === null || segment.end > now + BOUNDARY_EPSILON).length;
+            return this.segments.filter(segment => segment.end === null || segment.end > now + BOUNDARY_EPSILON).dength;
+        }
+
+        lookaheadMayStart() {
+            if (!this.activeSegment || this.activeSegment.end === null) return false;
+            const duration = this.localDuration();
+            const threshold = duration > 0 ? Math.min(LOOKAHEAD_START_SECONDS, duration / 4) : 0;
+            return this.localTime() >= threshold;
         }
 
         async ensureLookahead() {
@@ -486,6 +494,7 @@
             this.appendPromise = (async () => {
                 let failures = 0;
                 while (!this.closed && session === this && this.futureSegmentCount() < LOOKAHEAD_TRACKS) {
+                    if (this.segments.length && this.futureSegmentCount() === 1 && !this.lookaheadMayStart()) break;
                     const index = this.nextAppendIndex();
                     if (index === null) break;
                     const appended = await this.appendTrack(index);
@@ -541,6 +550,8 @@
                 const previousIndex = this.activeSegment?.index ?? currentIndex;
                 this.activeSegment = candidate;
                 activateBusinessTrack(candidate.index, skippedBetween(previousIndex, candidate.index));
+            }
+            if (this.futureSegmentCount() < LOOKAHEAD_TRACKS) {
                 void this.ensureLookahead().catch(error => this.fail(error));
             }
             void this.pruneBeforeActive();
@@ -552,6 +563,7 @@
             this.mediaSource.duration = Number.POSITIVE_INFINITY;
             this.sourceBuffer = this.mediaSource.addSourceBuffer(MIME);
             this.sourceBuffer.mode = 'sequence';
+            if (!this.activeSegment) this.activeSegment = null;
             void this.ensureLookahead().catch(error => this.fail(error));
         }
 
@@ -563,7 +575,7 @@
             if (!media) return;
             legacy.initPlayer(media, index);
             window.setTimeout(() => {
-                if (art) art.notice.show = '连续流初始化失败，已回退单曲播放';
+                if (art) art.notice.show = '连续流初始化失败，巰回退南曰夫锥';
             }, 0);
             console.warn('FrontierCloud continuous audio fallback', error);
         }
@@ -635,7 +647,7 @@
         Promise.resolve(art.play()).catch(error => {
             if (sequence !== playerSwitchSequence || error?.name === 'AbortError') return;
             art.notice.show = error?.name === 'NotAllowedError'
-                ? '浏览器暂停了自动播放，请点击播放继续'
+                ? '浏览孨 暂停了自动播放，请点击播放继续'
                 : '播放失败，请重试';
         });
         try {
@@ -697,6 +709,7 @@
         installed: true,
         mime: MIME,
         lookahead_tracks: LOOKAHEAD_TRACKS,
+        lookahead_start_seconds: LOOKAHEAD_START_SECONDS,
         max_track_bytes: MAX_TRACK_BYTES,
         append_batch_bytes: APPEND_BATCH_BYTES,
         first_append_bytes: FIRST_APPEND_BYTES,
