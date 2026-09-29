@@ -209,6 +209,8 @@ Admin supports:
 - 15 / 30 / 60 / 120 minute sliding temporary sessions;
 - persistent sessions with a default 180 minute inactivity window.
 
+The inactivity window follows trusted pointer, keyboard, touch, or wheel activity in the Admin page. Automatic storage, node, security, and release-status polling is passive: it may validate the current session, but it does not renew the Redis TTL or browser cookies. Leaving an Admin tab open therefore cannot keep a session alive indefinitely.
+
 Replacing the long-term key invalidates other Admin sessions and unused temporary keys.
 
 ## 10. Role initialization

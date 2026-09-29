@@ -140,7 +140,7 @@ class RealIPLogMiddleware:
                 audit_trace = (scope.get("media_audit") or {}).get("trace_id") or trace_id
                 if audit_trace and not any(name.lower() == b"x-audit-trace-id" for name, _value in message["headers"]):
                     message["headers"].append((b"x-audit-trace-id", audit_trace.encode("ascii")))
-                if scope.get("admin_authenticated"):
+                if scope.get("admin_authenticated") and scope.get("admin_session_refresh", True):
                     session_ttl = int(scope.get("admin_session_ttl") or settings.ADMIN_SESSION_TTL)
                     cookie_response = Response()
                     cookie_response.set_cookie(

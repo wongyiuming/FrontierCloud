@@ -5,12 +5,14 @@ import main
 
 
 class RequestLoggingTests(unittest.IsolatedAsyncioTestCase):
-    async def _run(self, scope, status=200, authenticated=False, session_ttl=None):
+    async def _run(self, scope, status=200, authenticated=False, session_ttl=None, refresh_session=None):
         async def app(request_scope, _receive, send):
             if authenticated:
                 request_scope.update(admin_authenticated=True, admin_session_cookie="session-value")
                 if session_ttl is not None:
                     request_scope["admin_session_ttl"] = session_ttl
+                if refresh_session is not None:
+                    request_scope["admin_session_refresh"] = refresh_session
             await send({"type": "http.response.start", "status": status, "headers": []})
             await send({"type": "http.response.body", "body": b"{}"})
         messages = []
@@ -67,6 +69,12 @@ class RequestLoggingTests(unittest.IsolatedAsyncioTestCase):
         messages, _logged = await self._run(scope, authenticated=True, session_ttl=900)
         cookies = [value.decode() for name, value in messages[0]["headers"] if name == b"set-cookie"]
         self.assertTrue(all("Max-Age=900" in value for value in cookies))
+
+    async def test_passive_admin_poll_does_not_refresh_idle_cookies(self):
+        scope = {"type": "http", "method": "GET", "path": "/admin/status", "headers": [], "client": ("127.0.0.1", 1)}
+        messages, _logged = await self._run(scope, authenticated=True, refresh_session=False)
+        cookies = [value for name, value in messages[0]["headers"] if name == b"set-cookie"]
+        self.assertEqual(cookies, [])
 
     async def test_request_log_contains_safe_structured_context(self):
         async def app(scope, _receive, send):

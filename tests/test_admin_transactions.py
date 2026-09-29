@@ -208,6 +208,39 @@ class AdminRedisTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.scope["admin_session_ttl"], 1800)
         self.assertEqual(request.scope["admin_credential_kind"], "temporary")
 
+    async def test_passive_admin_poll_validates_without_refreshing_idle_window(self):
+        session = "persistent-session"
+        key = "stable-admin-key-123456789"
+        redis = AsyncMock()
+        redis.hgetall.return_value = {
+            "key_hash": hashlib.sha256(key.encode()).hexdigest(),
+            "idle_ttl": str(admin_service.settings.ADMIN_SESSION_TTL),
+            "credential_kind": "persistent",
+        }
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/media/admin/status",
+            "headers": [
+                (b"cookie", f"{admin_service.settings.ADMIN_COOKIE_NAME}={session}".encode()),
+                (b"x-admin-activity", b"passive"),
+            ],
+            "client": ("203.0.113.8", 12345),
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "admin_key"
+            key_file.write_text(key + "\n", encoding="utf-8")
+            with (
+                patch.object(admin_service, "ADMIN_KEY_FILE", key_file),
+                patch.object(admin_service, "redis_client", redis),
+            ):
+                returned_hash = await admin_service.require_admin(request)
+
+        self.assertEqual(returned_hash, hashlib.sha256(session.encode()).hexdigest())
+        redis.expire.assert_not_awaited()
+        self.assertTrue(request.scope["admin_authenticated"])
+        self.assertFalse(request.scope["admin_session_refresh"])
+
     async def test_rotation_returns_published_key_when_redis_reconciliation_fails(self):
         fake = _Redis()
         with tempfile.TemporaryDirectory() as directory:

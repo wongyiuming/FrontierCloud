@@ -25,6 +25,8 @@ let lyricTargets = new Set();
 let lyricTrackAnchor = null;
 let lyricScopes = {track: 'music', lyric: 'lyrics'};
 let lyricSearchTimer = null;
+const ADMIN_ACTIVITY_GRACE_MS = 60 * 1000;
+let adminLastActivityAt = Date.now();
 let uploadLimits = {
     max_upload_file_size: 800 * 1024 * 1024,
     max_upload_task_files: 5000,
@@ -32,6 +34,23 @@ let uploadLimits = {
 };
 
 const $ = id => document.getElementById(id);
+
+for (const eventName of ['pointermove', 'pointerdown', 'keydown', 'touchstart', 'wheel']) {
+    document.addEventListener(eventName, event => {
+        if (event.isTrusted) adminLastActivityAt = Date.now();
+    }, {capture: true, passive: true});
+}
+
+function activityRequestOptions(options = {}) {
+    const headers = {...(options.headers || {})};
+    const alreadyMarked = Object.keys(headers).some(name => name.toLowerCase() === 'x-admin-activity');
+    if (!alreadyMarked) {
+        headers['X-Admin-Activity'] = Date.now() - adminLastActivityAt <= ADMIN_ACTIVITY_GRACE_MS
+            ? 'active'
+            : 'passive';
+    }
+    return {...options, headers};
+}
 
 function expandAdminModule(target) {
     const shouldExpand = !target.classList.contains('expanded');
@@ -83,7 +102,12 @@ function csrf() {
 }
 
 function requestHeaders(json = true) {
-    const result = {'X-CSRF-Token': csrf()};
+    const result = {
+        'X-CSRF-Token': csrf(),
+        'X-Admin-Activity': Date.now() - adminLastActivityAt <= ADMIN_ACTIVITY_GRACE_MS
+            ? 'active'
+            : 'passive',
+    };
     if (json) result['Content-Type'] = 'application/json';
     return result;
 }
@@ -103,7 +127,7 @@ function formatErrorDetail(detail) {
 }
 
 async function api(url, options = {}) {
-    const response = await fetch(url, options);
+    const response = await fetch(url, activityRequestOptions(options));
     if (response.status === 401) {
         if (securityTimer) clearInterval(securityTimer);
         if (storagePoolTimer) clearInterval(storagePoolTimer);

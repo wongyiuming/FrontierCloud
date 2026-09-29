@@ -26,6 +26,7 @@ from app.core.redis import redis_client
 from app.core.logging_config import request_id_context, trace_id_context
 
 SESSION_PREFIX = "admin:session:"
+ADMIN_ACTIVITY_HEADER = "X-Admin-Activity"
 FAIL_PREFIX = "admin:fail:"
 TEMPORARY_KEY_PREFIX = "admin:temporary-key:"
 TEMPORARY_KEY_MINUTES = {15, 30, 60, 120}
@@ -327,9 +328,11 @@ async def require_admin(request: Request) -> str:
     else:
         credential_kind = "persistent"
         idle_ttl = settings.ADMIN_SESSION_TTL
-    if not await redis_client.expire(redis_key, idle_ttl):
+    refresh_session = request.headers.get(ADMIN_ACTIVITY_HEADER, "active").strip().lower() != "passive"
+    if refresh_session and not await redis_client.expire(redis_key, idle_ttl):
         raise HTTPException(status_code=401, detail="特权模式已失效，请重新登录")
     request.scope["admin_authenticated"] = True
+    request.scope["admin_session_refresh"] = refresh_session
     request.scope["admin_session_cookie"] = session
     request.scope["admin_session_ttl"] = idle_ttl
     request.scope["admin_credential_kind"] = credential_kind
