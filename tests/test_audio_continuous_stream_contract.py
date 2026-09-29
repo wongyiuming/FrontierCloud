@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class AudioContinuousStreamContractTests(unittest.TestCase):
     def setUp(self):
         self.core = (ROOT / "static/js/audio-continuous-stream.js").read_text(encoding="utf-8")
+        self.runtime = (ROOT / "static/js/player-directory-label.js").read_text(encoding="utf-8")
         self.audio_page = (ROOT / "static/media/audio-player.html").read_text(encoding="utf-8")
         self.video_page = (ROOT / "static/media/video-player.html").read_text(encoding="utf-8")
         self.network = (ROOT / "static/js/network-observation.js").read_text(encoding="utf-8")
@@ -71,6 +72,17 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.assertIn("if (pendingBytes >= threshold) await flush();", self.core)
         self.assertNotIn("await this.appendBytes(value);", self.core)
         self.assertNotIn("cache: 'no-store'", self.core)
+
+    def test_transient_media_reads_retry_and_resume_without_changing_playlist_semantics(self):
+        self.assertIn("installContinuousAudioFetchRetry", self.runtime)
+        self.assertIn("url.pathname === '/api/v1/media/stream'", self.runtime)
+        self.assertIn("headers.set('Range', `bytes=${offset}-`)", self.runtime)
+        self.assertIn("response.status === 206 && range?.start === offset", self.runtime)
+        self.assertIn("while (generationIsCurrent(generation)", self.runtime)
+        self.assertIn("RETRY_MAX_MS = 3000", self.runtime)
+        self.assertIn("resume_count", self.runtime)
+        self.assertNotIn("连续流读取失败", self.runtime)
+        self.assertNotIn("自动续播跳过", self.runtime)
 
     def test_all_mp3_catalog_avoids_redundant_playlist_dom_scan(self):
         self.assertIn("const hasWarning = entries.some", self.core)
