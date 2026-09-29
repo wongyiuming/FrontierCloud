@@ -310,22 +310,22 @@ class DeploymentContractTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_readme_documents_runtime_secret_recovery_after_web_recreation(self):
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Startup logs list newly created secret names without printing values", readme)
+    def test_deployment_guide_documents_runtime_secret_recovery_after_web_recreation(self):
+        guide = (ROOT / "docs/wiki/Deployment-and-Configuration.md").read_text(encoding="utf-8")
+        self.assertIn("Startup logs list newly created secret names without printing values", guide)
         self.assertIn(
             "docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key'",
-            readme,
+            guide,
         )
         self.assertIn(
             "docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token'",
-            readme,
+            guide,
         )
         runtime = (ROOT / "app" / "services" / "runtime_secrets.py").read_text(encoding="utf-8")
         self.assertNotIn('"admin_key": secrets.admin_key', runtime)
         self.assertNotIn('"metrics_token": secrets.metrics_token', runtime)
-        self.assertIn("persistent `runtime_secrets` volume", readme)
-        self.assertIn("Rapidly click the second half of the home logo five times", readme)
+        self.assertIn("persistent `runtime_secrets` volume", guide)
+        self.assertIn("Rapidly click the second half of the home logo five times", guide)
 
     def test_web_release_control_is_isolated_and_never_uses_compose(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")

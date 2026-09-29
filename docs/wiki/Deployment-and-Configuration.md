@@ -85,6 +85,8 @@ Initializes persistent runtime secrets:
 
 Secrets live in the persistent `runtime_secrets` volume and are not ordinary `.env` settings.
 
+Startup logs list newly created secret names without printing values. Restarts reuse the persistent values instead of rotating them.
+
 ### media-init
 
 Initializes the managed host data tree under `./data` and grants the unprivileged Web process the required permissions.
