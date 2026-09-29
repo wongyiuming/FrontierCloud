@@ -83,6 +83,12 @@
             };
         }
 
+        function requestedRangeOffset(init) {
+            const raw = String(new Headers(init?.headers || {}).get('Range') || '');
+            const match = /^bytes=(\d+)-$/i.exec(raw);
+            return match ? Number(match[1]) : 0;
+        }
+
         async function requestUntilReadable(input, init, offset, generation) {
             let attempt = 0;
             while (generationIsCurrent(generation) && !init?.signal?.aborted) {
@@ -115,14 +121,15 @@
             if (!mediaStreamRequest(input, init)) return nativeFetch(input, init);
 
             const generation = currentPlaybackGeneration();
-            const first = await requestUntilReadable(input, init, 0, generation);
+            const initialOffset = requestedRangeOffset(init);
+            const first = await requestUntilReadable(input, init, initialOffset, generation);
             const exposedHeaders = new Headers(first.headers);
             const initialRange = contentRange(first.headers);
             let totalBytes = initialRange?.total || Number(first.headers.get('Content-Length') || 0);
-            if (totalBytes > 0) exposedHeaders.set('Content-Length', String(totalBytes));
+            if (totalBytes > 0) exposedHeaders.set('Content-Length', String(Math.max(0, totalBytes - initialOffset)));
 
             let reader = first.body.getReader();
-            let offset = 0;
+            let offset = initialOffset;
             let closed = false;
 
             const body = new ReadableStream({

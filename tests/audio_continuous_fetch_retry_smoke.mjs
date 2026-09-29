@@ -19,6 +19,36 @@ async function nativeFetch(input, init = {}) {
         });
     }
 
+    if (url.searchParams.get('probe') === 'seek') {
+        const seekRequests = requests.filter(request => new URL(request.input).searchParams.get('probe') === 'seek');
+        if (seekRequests.length === 1) {
+            assert.equal(range, 'bytes=100-', 'an explicit seek Range must reach the origin request');
+            let pulls = 0;
+            return new Response(new ReadableStream({
+                pull(controller) {
+                    if (pulls++ === 0) controller.enqueue(new Uint8Array([5, 6]));
+                    else controller.error(new Error('seek transfer interrupted'));
+                },
+            }), {
+                status: 206,
+                headers: {
+                    'Content-Type': 'audio/mpeg',
+                    'Content-Length': '4',
+                    'Content-Range': 'bytes 100-103/104',
+                },
+            });
+        }
+        assert.equal(range, 'bytes=102-', 'seek retry must include the initial Range base offset');
+        return new Response(new Uint8Array([7, 8]), {
+            status: 206,
+            headers: {
+                'Content-Type': 'audio/mpeg',
+                'Content-Length': '2',
+                'Content-Range': 'bytes 102-103/104',
+            },
+        });
+    }
+
     const mediaRequests = requests.filter(request => new URL(request.input).pathname === '/api/v1/media/stream');
     if (mediaRequests.length === 1) {
         const body = new ReadableStream({
@@ -90,6 +120,14 @@ assert.deepEqual(bytes, [1, 2, 3, 4]);
 const mediaRequests = requests.filter(request => new URL(request.input).pathname === '/api/v1/media/stream');
 assert.equal(mediaRequests.length, 2, 'one broken transfer must be resumed instead of exposed as a failure');
 assert.equal(context.frontierCloudContinuousFetchRetry.status().resume_count, 1);
+
+const seekResponse = await context.fetch(
+    '/api/v1/media/stream?file_path=music%2Ffixture%2Fa.mp3&probe=seek',
+    {credentials: 'same-origin', headers: {Range: 'bytes=100-'}},
+);
+assert.equal(seekResponse.headers.get('Content-Length'), '4');
+assert.deepEqual([...new Uint8Array(await seekResponse.arrayBuffer())], [5, 6, 7, 8]);
+assert.equal(context.frontierCloudContinuousFetchRetry.status().resume_count, 2);
 
 const before = requests.length;
 await context.fetch('/api/v1/media/catalog/categories', {credentials: 'same-origin'});

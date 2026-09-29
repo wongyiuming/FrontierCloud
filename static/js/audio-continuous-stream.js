@@ -10,6 +10,8 @@
     const APPEND_BATCH_BYTES = 512 * 1024;
     const DURATION_PROBE_BYTES = 128 * 1024;
     const MAX_BUFFER_AHEAD_SECONDS = 30;
+    const SEEK_RANGE_ALIGNMENT_BYTES = 64 * 1024;
+    const SEEK_RESTART_DELAY_MS = 120;
     const BOUNDARY_EPSILON = 0.08;
     const PRUNE_AFTER_SECONDS = 2;
     const NOTICE_MS = 3500;
@@ -291,8 +293,36 @@
         return next;
     }
 
+    function responseContentRange(headers) {
+        const raw = String(headers?.get?.('Content-Range') || '');
+        const match = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(raw);
+        if (!match) return null;
+        return {
+            start: Number(match[1]),
+            end: Number(match[2]),
+            total: match[3] === '*' ? 0 : Number(match[3]),
+        };
+    }
+
+    function seekRangePlan(seekSeconds, totalBytes, duration) {
+        const target = Math.min(Math.max(0, Number(seekSeconds) || 0), duration);
+        const rawOffset = Math.floor(totalBytes * target / duration);
+        const rangeStart = Math.min(
+            totalBytes - 1,
+            Math.max(0, Math.floor(rawOffset / SEEK_RANGE_ALIGNMENT_BYTES) * SEEK_RANGE_ALIGNMENT_BYTES
+                - SEEK_RANGE_ALIGNMENT_BYTES),
+        );
+        return {
+            seekSeconds: target,
+            totalBytes,
+            duration,
+            rangeStart,
+            localOffset: duration * rangeStart / totalBytes,
+        };
+    }
+
     class ContinuousAudioSession {
-        constructor(startIndex) {
+        constructor(startIndex, options = {}) {
             this.generation = ++sessionGeneration;
             this.order = cyclicOrder(startIndex);
             this.orderPosition = 0;
@@ -306,6 +336,17 @@
             this.startIndex = startIndex;
             this.lastPrunedBefore = 0;
             this.quotaWaitCount = 0;
+            this.seekTimer = null;
+            const seekSeconds = Number(options.seekSeconds);
+            const totalBytes = Number(options.totalBytes);
+            const duration = Number(options.duration);
+            this.initialSeek = Number.isFinite(seekSeconds) && seekSeconds >= 0
+                && Number.isFinite(totalBytes) && totalBytes > 0
+                && Number.isFinite(duration) && duration > 0
+                ? {seekSeconds: Math.min(seekSeconds, duration), totalBytes, duration}
+                : null;
+            this.initialSeekConsumed = false;
+            this.resumeAfterSeek = Boolean(options.resumeAfterSeek);
         }
 
         owns(player) {
@@ -320,7 +361,9 @@
 
         localTime() {
             if (!this.activeSegment || !art?.video) return Number(art?.video?.currentTime) || 0;
-            return Math.max(0, (Number(art.video.currentTime) || 0) - this.activeSegment.start);
+            if (Number.isFinite(this.activeSegment.pendingSeekLocal)) return this.activeSegment.pendingSeekLocal;
+            const origin = Number(this.activeSegment.localOffset) || 0;
+            return Math.max(0, origin + (Number(art.video.currentTime) || 0) - this.activeSegment.start);
         }
 
         localDuration() {
@@ -348,15 +391,36 @@
             if (!Number.isFinite(next)) return;
             const duration = this.localDuration();
             const local = duration > 0 ? Math.min(duration, Math.max(0, next)) : Math.max(0, next);
-            const target = this.activeSegment.start + local;
+            const origin = Number(this.activeSegment.localOffset) || 0;
+            const target = this.activeSegment.start + local - origin;
             const ranges = art.video.buffered;
             if (ranges?.length) {
-                const low = ranges.start(0);
-                const high = ranges.end(ranges.length - 1);
-                art.video.currentTime = Math.min(high - 0.01, Math.max(low, target));
-            } else {
-                art.video.currentTime = target;
+                for (let index = 0; index < ranges.length; index += 1) {
+                    const low = ranges.start(index);
+                    const high = ranges.end(index);
+                    if (target >= low && target < high) {
+                        art.video.currentTime = Math.min(high - 0.01, Math.max(low, target));
+                        return;
+                    }
+                }
             }
+            const totalBytes = Number(this.activeSegment.totalBytes) || 0;
+            if (!duration || !totalBytes) {
+                art.video.currentTime = target;
+                return;
+            }
+            const restart = {
+                seekSeconds: local,
+                totalBytes,
+                duration,
+                resumeAfterSeek: Boolean(art.playing),
+                preserveBusinessState: true,
+            };
+            window.clearTimeout(this.seekTimer);
+            this.seekTimer = window.setTimeout(() => {
+                if (this.closed || session !== this) return;
+                void startContinuous(this.activeSegment.index, restart);
+            }, SEEK_RESTART_DELAY_MS);
         }
 
         syncBufferedUi(player) {
@@ -366,7 +430,8 @@
                 return;
             }
             const end = player.video.buffered.end(player.video.buffered.length - 1);
-            const localEnd = Math.max(0, Math.min(duration, end - this.activeSegment.start));
+            const origin = Number(this.activeSegment.localOffset) || 0;
+            const localEnd = Math.max(0, Math.min(duration, origin + end - this.activeSegment.start));
             player.progressLoaded.style.width = `${Math.min(100, localEnd / duration * 100)}%`;
         }
 
@@ -481,9 +546,20 @@
             const media = currentMediaList?.[index];
             if (!media || !streamCompatible(media)) return false;
 
+            let seek = null;
+            if (index === this.startIndex && this.initialSeek && !this.initialSeekConsumed) {
+                this.initialSeekConsumed = true;
+                seek = seekRangePlan(
+                    this.initialSeek.seekSeconds,
+                    this.initialSeek.totalBytes,
+                    this.initialSeek.duration,
+                );
+            }
+
             let response;
             try {
-                response = await fetch(media.url, {credentials: 'same-origin'});
+                const headers = seek?.rangeStart > 0 ? {Range: `bytes=${seek.rangeStart}-`} : undefined;
+                response = await fetch(media.url, {credentials: 'same-origin', headers});
             } catch (_error) {
                 this.markRuntimeSkip(index, '连续流读取失败 · 自动续播跳过');
                 return false;
@@ -493,8 +569,10 @@
                 return false;
             }
 
-            const declared = Number(response.headers.get('Content-Length') || 0);
-            if (declared > MAX_TRACK_BYTES) {
+            const responseLength = Number(response.headers.get('Content-Length') || 0);
+            const range = responseContentRange(response.headers);
+            const totalBytes = range?.total || seek?.totalBytes || responseLength;
+            if (totalBytes > MAX_TRACK_BYTES) {
                 this.markRuntimeSkip(index, '文件过大，不进入连续流 · 自动续播跳过');
                 response.body.cancel?.().catch?.(() => {});
                 return false;
@@ -514,8 +592,17 @@
                 duration: null,
                 durationHint: 0,
                 presentationDuration: 0,
+                totalBytes,
+                rangeStart: range?.start || seek?.rangeStart || 0,
+                localOffset: seek?.localOffset || 0,
+                pendingSeekLocal: seek?.seekSeconds,
+                pendingSeekGlobal: seek ? start + seek.seekSeconds - seek.localOffset : null,
                 partial: false,
             };
+            if (seek?.duration) {
+                segment.durationHint = seek.duration;
+                latchPresentationDuration(segment, seek.duration);
+            }
             this.segments.push(segment);
             if (!this.activeSegment) this.activeSegment = segment;
             const reader = response.body.getReader();
@@ -530,7 +617,7 @@
                 pending = [];
                 pendingBytes = 0;
                 if (!presentationDuration(segment)) {
-                    const estimate = estimateMp3Duration(merged, declared);
+                    const estimate = estimateMp3Duration(merged, totalBytes);
                     if (estimate > 0) {
                         segment.durationHint = estimate;
                         latchPresentationDuration(segment, estimate);
@@ -540,6 +627,28 @@
                     }
                 }
                 await this.appendBytes(merged);
+                if (Number.isFinite(segment.pendingSeekGlobal) && art?.video?.buffered?.length) {
+                    const target = segment.pendingSeekGlobal;
+                    for (let index = 0; index < art.video.buffered.length; index += 1) {
+                        const low = art.video.buffered.start(index);
+                        const high = art.video.buffered.end(index);
+                        if (target < low || target >= high) continue;
+                        art.video.currentTime = Math.min(high - 0.01, Math.max(low, target));
+                        segment.pendingSeekGlobal = null;
+                        segment.pendingSeekLocal = null;
+                        art._syncTime?.();
+                        art._syncBuffered?.();
+                        if (this.resumeAfterSeek) {
+                            Promise.resolve(art.play()).catch(error => {
+                                if (this.closed || session !== this || error?.name === 'AbortError') return;
+                                art.notice.show = error?.name === 'NotAllowedError'
+                                    ? '浏览器暂停了自动播放，请点击播放继续'
+                                    : '播放失败，请重试';
+                            });
+                        }
+                        break;
+                    }
+                }
                 firstAppend = false;
             };
 
@@ -677,6 +786,7 @@
         stop() {
             if (this.closed) return;
             this.closed = true;
+            window.clearTimeout(this.seekTimer);
             if (session === this) session = null;
             if (activeObjectUrl === this.objectUrl) activeObjectUrl = null;
             try { URL.revokeObjectURL(this.objectUrl); } catch (_error) { /* already released */ }
@@ -713,7 +823,7 @@
         else baseSyncBuffered.call(this);
     };
 
-    async function startContinuous(index) {
+    async function startContinuous(index, options = {}) {
         session?.stop();
         discardNextPreload();
         if (activeObjectUrl) {
@@ -721,7 +831,7 @@
             activeObjectUrl = null;
         }
 
-        const next = new ContinuousAudioSession(index);
+        const next = new ContinuousAudioSession(index, options);
         session = next;
         const media = currentMediaList[index];
         const sequence = ++playerSwitchSequence;
@@ -741,14 +851,16 @@
         }
         activeObjectUrl = next.objectUrl;
         next.player = art;
-        activateBusinessTrack(index);
+        if (!options.preserveBusinessState) activateBusinessTrack(index);
 
-        Promise.resolve(art.play()).catch(error => {
-            if (sequence !== playerSwitchSequence || error?.name === 'AbortError') return;
-            art.notice.show = error?.name === 'NotAllowedError'
-                ? '浏览器暂停了自动播放，请点击播放继续'
-                : '播放失败，请重试';
-        });
+        if (!next.initialSeek) {
+            Promise.resolve(art.play()).catch(error => {
+                if (sequence !== playerSwitchSequence || error?.name === 'AbortError') return;
+                art.notice.show = error?.name === 'NotAllowedError'
+                    ? '浏览器暂停了自动播放，请点击播放继续'
+                    : '播放失败，请重试';
+            });
+        }
         try {
             await next.start();
         } catch (error) {

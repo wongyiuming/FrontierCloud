@@ -82,6 +82,15 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.assertIn("quota_wait_count", self.core)
         self.assertNotIn("QuotaExceededError') this.markRuntimeSkip", self.core)
 
+    def test_unbuffered_seek_restarts_from_a_range_instead_of_clamping(self):
+        self.assertIn("const SEEK_RANGE_ALIGNMENT_BYTES = 64 * 1024;", self.core)
+        self.assertIn("Range: `bytes=${seek.rangeStart}-`", self.core)
+        self.assertIn("pendingSeekGlobal", self.core)
+        self.assertIn("void startContinuous(this.activeSegment.index, restart)", self.core)
+        self.assertIn("preserveBusinessState: true", self.core)
+        self.assertIn("const initialOffset = requestedRangeOffset(init)", self.runtime)
+        self.assertIn("let offset = initialOffset", self.runtime)
+
     def test_transient_media_reads_retry_and_resume_without_changing_playlist_semantics(self):
         self.assertIn("installContinuousAudioFetchRetry", self.runtime)
         self.assertIn("url.pathname === '/api/v1/media/stream'", self.runtime)

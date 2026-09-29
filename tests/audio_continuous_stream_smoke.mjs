@@ -15,6 +15,10 @@ assert.match(source, /const LOOKAHEAD_TRACKS = 2/);
 assert.match(source, /const FIRST_APPEND_BYTES = 64 \* 1024/);
 assert.match(source, /const APPEND_BATCH_BYTES = 512 \* 1024/);
 assert.match(source, /const MAX_BUFFER_AHEAD_SECONDS = 30/);
+assert.match(source, /const SEEK_RANGE_ALIGNMENT_BYTES = 64 \* 1024/);
+assert.match(source, /Range: `bytes=\$\{seek\.rangeStart\}-`/);
+assert.match(source, /void startContinuous\(this\.activeSegment\.index, restart\)/);
+assert.match(source, /pendingSeekGlobal/);
 assert.match(source, /error\?\.name !== 'QuotaExceededError'/);
 assert.match(source, /await this\.waitForAppendCapacity\(true\)/);
 assert.match(source, /await this\.appendBufferOnce\(chunk\)/);
@@ -75,6 +79,7 @@ const instrumented = source.replace(
     'window.__estimateMp3Duration = estimateMp3Duration;\n'
         + '    window.__presentationDuration = presentationDuration;\n'
         + '    window.__latchPresentationDuration = latchPresentationDuration;\n'
+        + '    window.__seekRangePlan = seekRangePlan;\n'
         + '    window.__ContinuousAudioSession = ContinuousAudioSession;\n'
         + '    window.__setContinuousSessionForTest = value => { session = value; sessionGeneration = value.generation; };\n'
         + '    window.frontierCloudContinuousAudio = {',
@@ -107,6 +112,15 @@ const latchResult = vm.runInContext(`(() => {
     return JSON.stringify([first, second, segment.presentationDuration, window.__presentationDuration(segment)]);
 })()`, context);
 assert.equal(latchResult, '[100,100,100,100]', 'presentation duration must be write-once even if later MSE duration grows');
+
+const seekPlan = JSON.parse(vm.runInContext(
+    'JSON.stringify(window.__seekRangePlan(75, 10 * 1024 * 1024, 100))',
+    context,
+));
+assert.equal(seekPlan.seekSeconds, 75);
+assert.equal(seekPlan.rangeStart, 7_798_784);
+assert.ok(seekPlan.localOffset < 75, 'Range must begin before the requested time so the decoder can resynchronize');
+assert.ok(75 - seekPlan.localOffset < 2, 'the prefetched decode lead should remain tightly bounded');
 
 const quotaRetryResult = await vm.runInContext(`(async () => {
     const listeners = new Map();

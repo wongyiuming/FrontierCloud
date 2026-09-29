@@ -80,6 +80,12 @@ If the browser does not support the MP3 MSE profile, or a continuous session can
 
 If an individual candidate track cannot enter the continuous buffer, that track is marked/skipped and the user receives a visible notice.
 
+## Unbuffered seeking
+
+A seek inside the buffered range moves the media clock directly. A seek beyond that range must not be clamped to the current buffered edge: FrontierCloud restarts the same logical track and requests an open-ended byte range near the requested time. The estimated byte position is aligned backward with a short MP3 decode lead, then the player moves to the exact requested local time as soon as that point enters the new buffer.
+
+The playing/paused state and business-track identity are preserved during this restart. Transient transfer failures remain silent; retries continue from the explicit Range base plus bytes already received.
+
 ## Release gates
 
 CI protects the following core rules:
@@ -87,6 +93,8 @@ CI protects the following core rules:
 - no T-200 ms handoff, standby Deck, or bridge remains;
 - one audio MediaSource and one sequence SourceBuffer implement compatible continuity;
 - no normal `endOfStream()` boundary is created between songs;
+- seeking outside the current buffer issues an HTTP Range request instead of clamping to the buffered edge;
+- retrying a ranged seek retains its initial byte offset;
 - continuous playback is MP3-only in the first profile;
 - active-song presentation duration is write-once and never derives from the growing MSE/native duration timeline;
 - SourceBuffer writes are batched instead of one append per fetch chunk;
