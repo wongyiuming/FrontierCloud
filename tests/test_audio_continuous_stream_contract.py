@@ -12,7 +12,6 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.core = (ROOT / "static/js/audio-continuous-stream.js").read_text(encoding="utf-8")
         self.audio_page = (ROOT / "static/media/audio-player.html").read_text(encoding="utf-8")
         self.video_page = (ROOT / "static/media/video-player.html").read_text(encoding="utf-8")
-        self.media_api = (ROOT / "app/api/v1/media.py").read_text(encoding="utf-8")
         self.network = (ROOT / "static/js/network-observation.js").read_text(encoding="utf-8")
         self.routing = (ROOT / "app/services/upload_site_routing.py").read_text(encoding="utf-8")
         self.upload = (ROOT / "app/api/v1/admin_master_mutation_integrity.py").read_text(encoding="utf-8")
@@ -31,10 +30,9 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
             self.assertNotIn(token, self.network)
             self.assertNotIn(token, self.audio_page)
 
-    def test_continuous_stream_is_audio_only_and_versioned(self):
-        self.assertIn("{{AUDIO_CONTINUOUS_STREAM_JS_URL}}", self.audio_page)
-        self.assertNotIn("{{AUDIO_CONTINUOUS_STREAM_JS_URL}}", self.video_page)
-        self.assertIn('static_asset_url("js/audio-continuous-stream.js")', self.media_api)
+    def test_continuous_stream_is_audio_only(self):
+        self.assertIn('/static/js/audio-continuous-stream.js', self.audio_page)
+        self.assertNotIn('/static/js/audio-continuous-stream.js', self.video_page)
         self.assertIn("PLAYER_KIND !== 'audio'", self.core)
 
     def test_mse_contract_is_one_mpeg_sequence_without_end_of_stream(self):

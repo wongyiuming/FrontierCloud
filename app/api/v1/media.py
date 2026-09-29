@@ -71,7 +71,6 @@ def inject_page_runtime(html: str) -> str:
         "{{WEBRTC_INTERVAL_MS}}": str(settings.WEBRTC_REPORT_COOLDOWN * 1000),
         "{{NETWORK_OBSERVATION_JS_URL}}": html_escape.escape(static_asset_url("js/network-observation.js"), quote=True),
         "{{PLAYER_JS_URL}}": html_escape.escape(static_asset_url("js/player.js"), quote=True),
-        "{{AUDIO_CONTINUOUS_STREAM_JS_URL}}": html_escape.escape(static_asset_url("js/audio-continuous-stream.js"), quote=True),
         "{{PLAYER_CSS_URL}}": html_escape.escape(static_asset_url("css/player.css"), quote=True),
         "{{LYRICS_JS_URL}}": html_escape.escape(static_asset_url("js/lyrics.js"), quote=True),
         "{{LYRICS_CSS_URL}}": html_escape.escape(static_asset_url("css/lyrics.css"), quote=True),
@@ -119,70 +118,68 @@ def _direct_media_files(directory: Path, valid_exts) -> list[Path]:
     """Return supported media directly inside one directory."""
     return [
         path
-        for path in sorted(directory.iterdir(), key=lambda item: item.name.casefold())
+        for path in directory.iterdir()
         if path.is_file() and not path.is_symlink() and path.suffix.lower() in valid_exts
     ]
 
 
+def _category_url(media_type: str, relative_path: str, *, include_hidden: bool = False) -> str:
+    query = {"path": relative_path}
+    if include_hidden:
+        query["include_hidden"] = "true"
+    return f"/api/v1/media/{media_type}/category?{urllib.parse.urlencode(query)}"
+
+
 def _has_visible_direct_media(directory: Path, valid_exts, hidden: set[str]) -> bool:
-    for path in _direct_media_files(directory, valid_exts):
-        rel = path.relative_to(MEDIA_ROOT).as_posix()
-        if not _is_publicly_hidden(rel, hidden):
-            return True
-    return False
+    return any(
+        not _is_publicly_hidden(path.relative_to(MEDIA_ROOT).as_posix(), hidden)
+        for path in _direct_media_files(directory, valid_exts)
+    )
 
 
-def _category_url(media_type: str, path: str, *, include_hidden: bool = False) -> str:
-    suffix = "&include_hidden=true" if include_hidden else ""
-    return f"/api/v1/media/{media_type}/category?path={urllib.parse.quote(path)}{suffix}"
-
-
-def _get_media_categories_sync(media_type, valid_exts, hidden, include_hidden=False):
-    media_root = _typed_media_root(media_type)
+def _get_media_categories_sync(media_type, valid_exts, hidden: set[str], include_hidden=False):
     categories = []
-    for child in sorted(media_root.iterdir(), key=lambda path: path.name.casefold()):
-        if not child.is_dir() or child.is_symlink():
+    type_root = _typed_media_root(media_type)
+    if not type_root.exists():
+        return categories
+    for entry in sorted(type_root.iterdir(), key=lambda p: p.name.casefold()):
+        if not entry.is_dir() or entry.is_symlink():
             continue
-        rel_child = child.relative_to(MEDIA_ROOT).as_posix()
-        if _is_publicly_hidden(rel_child, hidden):
+        rel_entry = entry.relative_to(MEDIA_ROOT).as_posix()
+        if _is_publicly_hidden(rel_entry, hidden):
             continue
-        direct = _has_visible_direct_media(child, valid_exts, hidden)
-        subcategories = any(
-            grandchild.is_dir() and not grandchild.is_symlink()
-            and not _is_publicly_hidden(grandchild.relative_to(MEDIA_ROOT).as_posix(), hidden)
-            and _has_visible_direct_media(grandchild, valid_exts, hidden)
-            for grandchild in child.iterdir()
+        has_direct_media = _has_visible_direct_media(entry, valid_exts, hidden)
+        has_child_media = any(
+            not _is_publicly_hidden(child.relative_to(MEDIA_ROOT).as_posix(), hidden)
+            and _has_visible_direct_media(child, valid_exts, hidden)
+            for child in entry.iterdir()
+            if child.is_dir() and not child.is_symlink()
         )
-        if direct or subcategories:
-            categories.append({
-                "name": child.name,
-                "url": _category_url(media_type, rel_child, include_hidden=include_hidden),
-            })
+        if has_direct_media or has_child_media:
+            categories.append({"name": entry.name, "url": _category_url(media_type, rel_entry, include_hidden=include_hidden)})
     return categories
 
 
 async def get_media_categories(media_type, valid_exts, *, include_hidden: bool = False):
-    identity = f"{media_type}:{'all' if include_hidden else 'public'}"
+    identity = f"{media_type}:all" if include_hidden else media_type
     generation, cached = await load_media_catalog("categories", identity)
     if cached is not None:
         return cached
     hidden = set() if include_hidden else await _hidden_set()
     if node_state.node["role"] == "Master":
         merged = {}
-        for entry in await node_catalog.resources(root=media_type):
+        for entry in await node_catalog.resources(root=_typed_media_root(media_type).name):
             if _is_publicly_hidden(entry["path"], hidden):
                 continue
-            parts = entry["path"].split("/")
-            if len(parts) >= 3:
-                name = parts[1]
-                merged.setdefault(name, {
-                    "name": name,
-                    "url": _category_url(
-                        media_type,
-                        "/".join(parts[:2]),
-                        include_hidden=include_hidden,
-                    ),
-                })
+            name = entry["path"].split("/")[1]
+            merged.setdefault(name, {
+                "name": name,
+                "url": _category_url(
+                    media_type,
+                    _typed_media_root(media_type).name + "/" + name,
+                    include_hidden=include_hidden,
+                ),
+            })
         categories = sorted(merged.values(), key=lambda entry: entry["name"].casefold())
     else:
         categories = await asyncio.to_thread(
