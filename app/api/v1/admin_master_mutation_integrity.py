@@ -3,7 +3,8 @@
 A rename is one exclusive path transaction. Other Master operations establish a
 short shared fence while they validate and publish durable state. Media uploads
 select a site type, never a concrete storage member; placement inside that type
-is automatic.
+is automatic for an empty media folder, then pinned to that folder's existing
+storage member so every direct child media object stays colocated.
 """
 from __future__ import annotations
 
@@ -54,26 +55,33 @@ async def create_upload_session(
         raise HTTPException(409, "站点类型上传需要 Master")
     async with media_mutation_lock.shared():
         ensure_media_mutations_ready()
-        # Multiple Admin sessions may reserve concurrently. Keep placement
-        # selection and durable reservation in one short lock so every chooser
-        # sees the latest reserved_bytes and load spreads across ready members.
+        # Multiple Admin sessions may reserve concurrently. Keep logical-path
+        # validation, folder-affinity selection, and durable reservation in one
+        # short lock so the first live reservation pins an empty media folder
+        # before another chooser can place a sibling file elsewhere.
         async with resource_pool.storage_write_lock:
-            try:
-                member = await upload_site_routing.choose_member(
-                    payload.site_type,
-                    payload.size_bytes,
-                    node_state.database,
-                )
-            except p.ProtocolError as exc:
-                raise HTTPException(409, str(exc)) from exc
-
-            legacy_payload = cluster.ClusterUploadReservation(
-                storage_member_id=str(member["member_id"]),
+            base_payload = cluster.ClusterUploadReservation(
+                storage_member_id=None,
                 target_dir=payload.target_dir,
                 relative_path=payload.relative_path,
                 filename=payload.filename,
                 size_bytes=payload.size_bytes,
             )
+            logical_path = await cluster._upload_logical_path(base_payload)
+            folder_path = upload_site_routing.media_folder_path(logical_path)
+            try:
+                member = await upload_site_routing.choose_member(
+                    payload.site_type,
+                    payload.size_bytes,
+                    node_state.database,
+                    folder_path=folder_path,
+                )
+            except p.ProtocolError as exc:
+                raise HTTPException(409, str(exc)) from exc
+
+            legacy_payload = base_payload.model_copy(update={
+                "storage_member_id": str(member["member_id"]),
+            })
             # Preserve the existing MasterLocal recovery/reconciliation layer.
             result = await masterlocal.create_upload_session(legacy_payload, request, session_hash)
         result["site_type"] = payload.site_type
