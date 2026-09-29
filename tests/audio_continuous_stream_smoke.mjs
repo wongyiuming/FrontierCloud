@@ -14,6 +14,10 @@ assert.match(source, /sourceBuffer\.mode = 'sequence'/);
 assert.match(source, /const LOOKAHEAD_TRACKS = 2/);
 assert.match(source, /const FIRST_APPEND_BYTES = 64 \* 1024/);
 assert.match(source, /const APPEND_BATCH_BYTES = 512 \* 1024/);
+assert.match(source, /const MAX_BUFFER_AHEAD_SECONDS = 30/);
+assert.match(source, /error\?\.name !== 'QuotaExceededError'/);
+assert.match(source, /await this\.waitForAppendCapacity\(true\)/);
+assert.match(source, /await this\.appendBufferOnce\(chunk\)/);
 assert.match(source, /presentationDuration:\s*0/);
 assert.match(source, /latchPresentationDuration\(segment, estimate\)/);
 assert.match(source, /latchPresentationDuration\(segment, segment\.duration\)/);
@@ -71,6 +75,8 @@ const instrumented = source.replace(
     'window.__estimateMp3Duration = estimateMp3Duration;\n'
         + '    window.__presentationDuration = presentationDuration;\n'
         + '    window.__latchPresentationDuration = latchPresentationDuration;\n'
+        + '    window.__ContinuousAudioSession = ContinuousAudioSession;\n'
+        + '    window.__setContinuousSessionForTest = value => { session = value; sessionGeneration = value.generation; };\n'
         + '    window.frontierCloudContinuousAudio = {',
 );
 vm.runInContext(instrumented, context);
@@ -81,6 +87,7 @@ assert.equal(api.mime, 'audio/mpeg');
 assert.equal(api.lookahead_tracks, 2);
 assert.equal(api.append_batch_bytes, 512 * 1024);
 assert.equal(api.first_append_bytes, 64 * 1024);
+assert.equal(api.max_buffer_ahead_seconds, 30);
 assert.equal(api.supported(), true);
 assert.equal(api.compatible({type: 'audio', media_path: 'music/a/track.mp3'}), true);
 assert.equal(api.compatible({type: 'audio', media_path: 'music/a/track.flac'}), false);
@@ -100,6 +107,40 @@ const latchResult = vm.runInContext(`(() => {
     return JSON.stringify([first, second, segment.presentationDuration, window.__presentationDuration(segment)]);
 })()`, context);
 assert.equal(latchResult, '[100,100,100,100]', 'presentation duration must be write-once even if later MSE duration grows');
+
+const quotaRetryResult = await vm.runInContext(`(async () => {
+    const listeners = new Map();
+    let appendCalls = 0;
+    const sourceBuffer = {
+        updating: false,
+        addEventListener(name, callback) { listeners.set(name, callback); },
+        removeEventListener(name, callback) {
+            if (listeners.get(name) === callback) listeners.delete(name);
+        },
+        appendBuffer() {
+            appendCalls += 1;
+            if (appendCalls === 1) {
+                const error = new Error('full');
+                error.name = 'QuotaExceededError';
+                throw error;
+            }
+            Promise.resolve().then(() => listeners.get('updateend')?.());
+        },
+    };
+    const candidate = Object.create(window.__ContinuousAudioSession.prototype);
+    Object.assign(candidate, {closed: false, generation: 7, sourceBuffer, quotaWaitCount: 0});
+    const capacityCalls = [];
+    candidate.waitUpdateEnd = async () => {};
+    candidate.waitForAppendCapacity = async forced => { capacityCalls.push(Boolean(forced)); };
+    window.__setContinuousSessionForTest(candidate);
+    await candidate.appendBytes(new Uint8Array([1, 2, 3]));
+    return JSON.stringify({appendCalls, capacityCalls, quotaWaitCount: candidate.quotaWaitCount});
+})()`, context);
+assert.equal(
+    quotaRetryResult,
+    '{"appendCalls":2,"capacityCalls":[false,true,false],"quotaWaitCount":1}',
+    'quota pressure must retry the same append after silent capacity backpressure',
+);
 
 const mp3Only = [
     {type: 'audio', media_path: 'music/a/one.mp3'},

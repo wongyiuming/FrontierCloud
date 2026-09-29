@@ -9,6 +9,7 @@
     const FIRST_APPEND_BYTES = 64 * 1024;
     const APPEND_BATCH_BYTES = 512 * 1024;
     const DURATION_PROBE_BYTES = 128 * 1024;
+    const MAX_BUFFER_AHEAD_SECONDS = 30;
     const BOUNDARY_EPSILON = 0.08;
     const PRUNE_AFTER_SECONDS = 2;
     const NOTICE_MS = 3500;
@@ -304,6 +305,7 @@
             this.closed = false;
             this.startIndex = startIndex;
             this.lastPrunedBefore = 0;
+            this.quotaWaitCount = 0;
         }
 
         owns(player) {
@@ -378,15 +380,81 @@
             await waitForEvent(this.sourceBuffer, 'updateend', ['error', 'abort']);
         }
 
+        bufferedAhead() {
+            if (!art?.video) return 0;
+            return Math.max(0, this.bufferedEnd() - (Number(art.video.currentTime) || 0));
+        }
+
+        async waitForPlaybackProgress() {
+            if (this.closed || session !== this || this.generation !== sessionGeneration) throw new Error('stale session');
+            const video = art?.video;
+            if (!video) return;
+            await new Promise(resolve => {
+                let settled = false;
+                const finish = () => {
+                    if (settled) return;
+                    settled = true;
+                    window.clearTimeout(timer);
+                    video.removeEventListener('timeupdate', finish);
+                    resolve();
+                };
+                const timer = window.setTimeout(finish, 500);
+                video.addEventListener('timeupdate', finish, {once: true});
+            });
+        }
+
+        async waitForAppendCapacity(quotaExceeded = false) {
+            const initialTime = Number(art?.video?.currentTime) || 0;
+            let waitForAdvance = quotaExceeded;
+            while (!this.closed && session === this && this.generation === sessionGeneration) {
+                await this.pruneBeforeActive();
+                const currentTime = Number(art?.video?.currentTime) || 0;
+                if (waitForAdvance && currentTime > initialTime + BOUNDARY_EPSILON) waitForAdvance = false;
+                if (!waitForAdvance && this.bufferedAhead() < MAX_BUFFER_AHEAD_SECONDS) return;
+                await this.waitForPlaybackProgress();
+            }
+            throw new Error('stale session');
+        }
+
+        appendBufferOnce(chunk) {
+            return new Promise((resolve, reject) => {
+                const cleanup = () => {
+                    this.sourceBuffer.removeEventListener('updateend', onUpdateEnd);
+                    this.sourceBuffer.removeEventListener('error', onFailure);
+                    this.sourceBuffer.removeEventListener('abort', onFailure);
+                };
+                const onUpdateEnd = () => { cleanup(); resolve(); };
+                const onFailure = event => { cleanup(); reject(event?.error || new Error('appendBuffer failed')); };
+                this.sourceBuffer.addEventListener('updateend', onUpdateEnd, {once: true});
+                this.sourceBuffer.addEventListener('error', onFailure, {once: true});
+                this.sourceBuffer.addEventListener('abort', onFailure, {once: true});
+                try {
+                    this.sourceBuffer.appendBuffer(chunk);
+                } catch (error) {
+                    cleanup();
+                    reject(error);
+                }
+            });
+        }
+
         async appendBytes(value) {
             if (this.closed || session !== this || this.generation !== sessionGeneration) throw new Error('stale session');
-            await this.waitUpdateEnd();
             const chunk = value.byteOffset === 0 && value.byteLength === value.buffer.byteLength
                 ? value.buffer
                 : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-            const done = waitForEvent(this.sourceBuffer, 'updateend', ['error', 'abort']);
-            this.sourceBuffer.appendBuffer(chunk);
-            await done;
+            while (!this.closed && session === this && this.generation === sessionGeneration) {
+                await this.waitUpdateEnd();
+                await this.waitForAppendCapacity();
+                try {
+                    await this.appendBufferOnce(chunk);
+                    return;
+                } catch (error) {
+                    if (error?.name !== 'QuotaExceededError') throw error;
+                    this.quotaWaitCount += 1;
+                    await this.waitForAppendCapacity(true);
+                }
+            }
+            throw new Error('stale session');
         }
 
         markRuntimeSkip(index, reason) {
@@ -743,6 +811,7 @@
         max_track_bytes: MAX_TRACK_BYTES,
         append_batch_bytes: APPEND_BATCH_BYTES,
         first_append_bytes: FIRST_APPEND_BYTES,
+        max_buffer_ahead_seconds: MAX_BUFFER_AHEAD_SECONDS,
         supported: browserSupportsContinuousAudio,
         compatible: streamCompatible,
         status: () => ({
@@ -751,6 +820,8 @@
             presentation_duration: session?.localDuration() || 0,
             active_segment: session?.activeSegment ? {...session.activeSegment} : null,
             buffered_tracks: session?.segments?.length || 0,
+            buffered_ahead_seconds: session?.bufferedAhead() || 0,
+            quota_wait_count: session?.quotaWaitCount || 0,
         }),
     };
 })();

@@ -68,10 +68,19 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
     def test_mse_append_is_batched_instead_of_one_update_per_network_chunk(self):
         self.assertIn("const FIRST_APPEND_BYTES = 64 * 1024;", self.core)
         self.assertIn("const APPEND_BATCH_BYTES = 512 * 1024;", self.core)
+        self.assertIn("const MAX_BUFFER_AHEAD_SECONDS = 30;", self.core)
         self.assertIn("pending.push(value)", self.core)
         self.assertIn("if (pendingBytes >= threshold) await flush();", self.core)
         self.assertNotIn("await this.appendBytes(value);", self.core)
         self.assertNotIn("cache: 'no-store'", self.core)
+
+    def test_source_buffer_quota_is_backpressured_and_retried_silently(self):
+        self.assertIn("this.bufferedAhead() < MAX_BUFFER_AHEAD_SECONDS", self.core)
+        self.assertIn("error?.name !== 'QuotaExceededError'", self.core)
+        self.assertIn("await this.waitForAppendCapacity(true)", self.core)
+        self.assertIn("await this.appendBufferOnce(chunk)", self.core)
+        self.assertIn("quota_wait_count", self.core)
+        self.assertNotIn("QuotaExceededError') this.markRuntimeSkip", self.core)
 
     def test_transient_media_reads_retry_and_resume_without_changing_playlist_semantics(self):
         self.assertIn("installContinuousAudioFetchRetry", self.runtime)
