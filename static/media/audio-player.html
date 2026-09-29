@@ -56,6 +56,14 @@
             border-left: none;
             border-right: 4px solid #3498db;
         }
+        .audio-player-page .media-item.continuous-stream-incompatible {
+            opacity: .72;
+        }
+        .audio-player-page .continuous-stream-warning {
+            color: #f0b96a;
+            font-size: 11px;
+            line-height: 1.3;
+        }
         .sidebar-toggle {
             position: absolute;
             top: 12px;
@@ -169,6 +177,7 @@
     <script src="{{NETWORK_OBSERVATION_JS_URL}}"></script>
     <script src="{{MEDIA_BROWSER_JS_URL}}"></script>
     <script src="{{PLAYER_JS_URL}}"></script>
+    <script src="/static/js/audio-continuous-stream.js"></script>
     <script src="/static/js/lyrics-window.js"></script>
     <script>
         (() => {

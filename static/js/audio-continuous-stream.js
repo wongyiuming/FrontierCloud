@@ -6,6 +6,9 @@
     const MIME = 'audio/mpeg';
     const LOOKAHEAD_TRACKS = 2;
     const MAX_TRACK_BYTES = 128 * 1024 * 1024;
+    const FIRST_APPEND_BYTES = 64 * 1024;
+    const APPEND_BATCH_BYTES = 512 * 1024;
+    const DURATION_PROBE_BYTES = 128 * 1024;
     const BOUNDARY_EPSILON = 0.08;
     const PRUNE_AFTER_SECONDS = 2;
     const NOTICE_MS = 3500;
@@ -21,15 +24,18 @@
 
     let session = null;
     let sessionGeneration = 0;
+    let mseSupport = null;
 
     function mediaPath(media) {
         return String(media?.media_path || '').split('?', 1)[0].toLowerCase();
     }
 
     function browserSupportsContinuousAudio() {
-        return typeof MediaSource === 'function'
+        if (mseSupport !== null) return mseSupport;
+        mseSupport = typeof MediaSource === 'function'
             && typeof MediaSource.isTypeSupported === 'function'
             && MediaSource.isTypeSupported(MIME);
+        return mseSupport;
     }
 
     function streamCompatible(media) {
@@ -42,8 +48,9 @@
         if (!Array.isArray(entries)) return entries;
         const supported = browserSupportsContinuousAudio();
         for (const media of entries) {
-            media.continuous_stream_compatible = Boolean(supported && streamCompatible(media));
-            media.continuous_stream_skip_reason = supported && media?.type === 'audio' && !streamCompatible(media)
+            const compatible = Boolean(supported && media?.type === 'audio' && mediaPath(media).endsWith('.mp3'));
+            media.continuous_stream_compatible = compatible;
+            media.continuous_stream_skip_reason = supported && media?.type === 'audio' && !compatible
                 ? '连续流不兼容 · 自动续播跳过'
                 : '';
         }
@@ -106,7 +113,11 @@
     }
 
     function decoratePlaylist() {
-        for (const [index, media] of (currentMediaList || []).entries()) {
+        const entries = currentMediaList || [];
+        const hasWarning = entries.some(media => Boolean(media.continuous_stream_skip_reason));
+        const existing = document.querySelector('.continuous-stream-warning');
+        if (!hasWarning && !existing) return;
+        for (const [index, media] of entries.entries()) {
             const row = document.querySelector(`.media-item[data-index="${index}"]`);
             if (!row) continue;
             row.querySelector('.continuous-stream-warning')?.remove();
@@ -164,6 +175,106 @@
         });
     }
 
+    function concatChunks(chunks, totalBytes) {
+        if (chunks.length === 1 && chunks[0].byteOffset === 0 && chunks[0].byteLength === chunks[0].buffer.byteLength) {
+            return chunks[0];
+        }
+        const merged = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const chunk of chunks) {
+            merged.set(chunk, offset);
+            offset += chunk.byteLength;
+        }
+        return merged;
+    }
+
+    function readUint32(bytes, offset) {
+        if (offset < 0 || offset + 4 > bytes.length) return 0;
+        return ((bytes[offset] << 24) >>> 0)
+            + (bytes[offset + 1] << 16)
+            + (bytes[offset + 2] << 8)
+            + bytes[offset + 3];
+    }
+
+    function id3v2Size(bytes) {
+        if (bytes.length < 10 || bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) return 0;
+        const size = ((bytes[6] & 0x7f) << 21)
+            | ((bytes[7] & 0x7f) << 14)
+            | ((bytes[8] & 0x7f) << 7)
+            | (bytes[9] & 0x7f);
+        return 10 + size + ((bytes[5] & 0x10) ? 10 : 0);
+    }
+
+    function asciiAt(bytes, offset, text) {
+        if (offset < 0 || offset + text.length > bytes.length) return false;
+        for (let index = 0; index < text.length; index += 1) {
+            if (bytes[offset + index] !== text.charCodeAt(index)) return false;
+        }
+        return true;
+    }
+
+    function estimateMp3Duration(bytes, contentLength) {
+        if (!(bytes instanceof Uint8Array) || bytes.length < 4) return 0;
+        const start = Math.min(id3v2Size(bytes), bytes.length - 4);
+        const limit = Math.min(bytes.length - 4, start + DURATION_PROBE_BYTES);
+        let frame = -1;
+        for (let offset = start; offset <= limit; offset += 1) {
+            if (bytes[offset] === 0xff && (bytes[offset + 1] & 0xe0) === 0xe0) {
+                const version = (bytes[offset + 1] >> 3) & 0x03;
+                const layer = (bytes[offset + 1] >> 1) & 0x03;
+                const bitrateIndex = (bytes[offset + 2] >> 4) & 0x0f;
+                const sampleIndex = (bytes[offset + 2] >> 2) & 0x03;
+                if (version !== 1 && layer === 1 && bitrateIndex > 0 && bitrateIndex < 15 && sampleIndex < 3) {
+                    frame = offset;
+                    break;
+                }
+            }
+        }
+        if (frame < 0) return 0;
+
+        const byte1 = bytes[frame + 1];
+        const byte2 = bytes[frame + 2];
+        const byte3 = bytes[frame + 3];
+        const version = (byte1 >> 3) & 0x03;
+        const bitrateIndex = (byte2 >> 4) & 0x0f;
+        const sampleIndex = (byte2 >> 2) & 0x03;
+        const mono = ((byte3 >> 6) & 0x03) === 3;
+        const hasCrc = (byte1 & 0x01) === 0;
+        const mpeg1 = version === 3;
+        const bitrateTable = mpeg1
+            ? [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0]
+            : [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0];
+        const baseRates = [44100, 48000, 32000];
+        const sampleRate = version === 3 ? baseRates[sampleIndex]
+            : version === 2 ? baseRates[sampleIndex] / 2
+                : baseRates[sampleIndex] / 4;
+        const samplesPerFrame = mpeg1 ? 1152 : 576;
+        const sideInfo = mpeg1 ? (mono ? 17 : 32) : (mono ? 9 : 17);
+        const xing = frame + 4 + (hasCrc ? 2 : 0) + sideInfo;
+        if ((asciiAt(bytes, xing, 'Xing') || asciiAt(bytes, xing, 'Info')) && xing + 12 <= bytes.length) {
+            const flags = readUint32(bytes, xing + 4);
+            if (flags & 0x01) {
+                const frames = readUint32(bytes, xing + 8);
+                const duration = frames * samplesPerFrame / sampleRate;
+                if (Number.isFinite(duration) && duration > 0) return duration;
+            }
+        }
+
+        const vbri = frame + 4 + 32;
+        if (asciiAt(bytes, vbri, 'VBRI') && vbri + 18 <= bytes.length) {
+            const frames = readUint32(bytes, vbri + 14);
+            const duration = frames * samplesPerFrame / sampleRate;
+            if (Number.isFinite(duration) && duration > 0) return duration;
+        }
+
+        const bitrate = bitrateTable[bitrateIndex] * 1000;
+        if (bitrate > 0 && Number(contentLength) > 0) {
+            const duration = Math.max(0, (Number(contentLength) - start) * 8 / bitrate);
+            if (Number.isFinite(duration) && duration > 0) return duration;
+        }
+        return 0;
+    }
+
     class ContinuousAudioSession {
         constructor(startIndex) {
             this.generation = ++sessionGeneration;
@@ -197,10 +308,13 @@
 
         localDuration() {
             if (!this.activeSegment) return 0;
-            const end = Number.isFinite(this.activeSegment.end)
-                ? this.activeSegment.end
-                : Math.max(this.activeSegment.start, this.bufferedEnd());
-            return Math.max(0, end - this.activeSegment.start);
+            if (Number.isFinite(this.activeSegment.duration) && this.activeSegment.duration > 0) {
+                return this.activeSegment.duration;
+            }
+            if (Number.isFinite(this.activeSegment.durationHint) && this.activeSegment.durationHint > 0) {
+                return this.activeSegment.durationHint;
+            }
+            return 0;
         }
 
         seekLocal(value) {
@@ -278,7 +392,7 @@
 
             let response;
             try {
-                response = await fetch(media.url, {cache: 'no-store', credentials: 'same-origin'});
+                response = await fetch(media.url, {credentials: 'same-origin'});
             } catch (_error) {
                 this.markRuntimeSkip(index, '连续流读取失败 · 自动续播跳过');
                 return false;
@@ -302,10 +416,28 @@
             }
 
             const start = this.bufferedEnd();
-            const segment = {index, start, end: null, partial: false};
+            const segment = {index, start, end: null, duration: null, durationHint: 0, partial: false};
             this.segments.push(segment);
+            if (!this.activeSegment) this.activeSegment = segment;
             const reader = response.body.getReader();
             let bytes = 0;
+            let pending = [];
+            let pendingBytes = 0;
+            let firstAppend = true;
+
+            const flush = async () => {
+                if (!pendingBytes) return;
+                const merged = concatChunks(pending, pendingBytes);
+                pending = [];
+                pendingBytes = 0;
+                if (!segment.durationHint) {
+                    segment.durationHint = estimateMp3Duration(merged, declared);
+                    if (segment === this.activeSegment || (!this.activeSegment && this.segments[0] === segment)) art?._syncTime?.();
+                }
+                await this.appendBytes(merged);
+                firstAppend = false;
+            };
+
             try {
                 while (!this.closed && session === this) {
                     const {done, value} = await reader.read();
@@ -317,8 +449,12 @@
                         await reader.cancel();
                         break;
                     }
-                    await this.appendBytes(value);
+                    pending.push(value);
+                    pendingBytes += value.byteLength;
+                    const threshold = firstAppend ? FIRST_APPEND_BYTES : APPEND_BATCH_BYTES;
+                    if (pendingBytes >= threshold) await flush();
                 }
+                await flush();
             } catch (error) {
                 if (this.closed || session !== this) throw error;
                 segment.partial = true;
@@ -331,6 +467,7 @@
                 return false;
             }
             segment.end = end;
+            segment.duration = Math.max(0, end - start);
             if (segment.partial) {
                 this.markRuntimeSkip(index, '连续流读取中断 · 将提前进入下一首');
             }
@@ -415,11 +552,7 @@
             this.mediaSource.duration = Number.POSITIVE_INFINITY;
             this.sourceBuffer = this.mediaSource.addSourceBuffer(MIME);
             this.sourceBuffer.mode = 'sequence';
-            await this.ensureLookahead();
-            if (!this.activeSegment) this.activeSegment = this.segments[0];
-            if (this.activeSegment) activateBusinessTrack(this.activeSegment.index);
-            art?._syncTime?.();
-            art?._syncBuffered?.();
+            void this.ensureLookahead().catch(error => this.fail(error));
         }
 
         fail(error) {
@@ -518,11 +651,6 @@
         decoratePlaylist();
     };
 
-    renderPlaylist = function renderContinuousAudioPlaylist() {
-        legacy.renderPlaylist();
-        decoratePlaylist();
-    };
-
     initPlayer = function initContinuousAwarePlayer(media, index) {
         if (!streamCompatible(media)) {
             session?.stop();
@@ -570,6 +698,8 @@
         mime: MIME,
         lookahead_tracks: LOOKAHEAD_TRACKS,
         max_track_bytes: MAX_TRACK_BYTES,
+        append_batch_bytes: APPEND_BATCH_BYTES,
+        first_append_bytes: FIRST_APPEND_BYTES,
         supported: browserSupportsContinuousAudio,
         compatible: streamCompatible,
         status: () => ({
