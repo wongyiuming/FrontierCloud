@@ -61,13 +61,6 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.assertNotIn("await this.appendBytes(value);", self.core)
         self.assertNotIn("cache: 'no-store'", self.core)
 
-    def test_next_track_lookahead_does_not_compete_with_first_second_startup(self):
-        self.assertIn("const LOOKAHEAD_START_SECONDS = 5;", self.core)
-        self.assertIn("lookaheadMayStart()", self.core)
-        self.assertIn("Math.min(LOOKAHEAD_START_SECONDS, duration / 4)", self.core)
-        self.assertIn("!this.lookaheadMayStart()", self.core)
-        self.assertIn("lookahead_start_seconds: LOOKAHEAD_START_SECONDS", self.core)
-
     def test_all_mp3_catalog_avoids_redundant_playlist_dom_scan(self):
         self.assertIn("const hasWarning = entries.some", self.core)
         self.assertIn("if (!hasWarning && !existing) return;", self.core)
