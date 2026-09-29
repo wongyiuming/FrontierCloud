@@ -275,6 +275,21 @@
         return 0;
     }
 
+    function presentationDuration(segment) {
+        const value = Number(segment?.presentationDuration || 0);
+        return Number.isFinite(value) && value > 0 ? value : 0;
+    }
+
+    function latchPresentationDuration(segment, value) {
+        if (!segment) return 0;
+        const current = presentationDuration(segment);
+        if (current > 0) return current;
+        const next = Number(value);
+        if (!Number.isFinite(next) || next <= 0) return 0;
+        segment.presentationDuration = next;
+        return next;
+    }
+
     class ContinuousAudioSession {
         constructor(startIndex) {
             this.generation = ++sessionGeneration;
@@ -307,14 +322,22 @@
         }
 
         localDuration() {
-            if (!this.activeSegment) return 0;
-            if (Number.isFinite(this.activeSegment.duration) && this.activeSegment.duration > 0) {
-                return this.activeSegment.duration;
-            }
-            if (Number.isFinite(this.activeSegment.durationHint) && this.activeSegment.durationHint > 0) {
-                return this.activeSegment.durationHint;
-            }
-            return 0;
+            return presentationDuration(this.activeSegment);
+        }
+
+        syncTimeUi(player) {
+            const duration = this.localDuration();
+            const local = Math.max(0, this.localTime());
+            const current = duration > 0 ? Math.min(local, duration) : local;
+            player.currentElement.textContent = formatTime(current);
+            player.durationElement.textContent = formatTime(duration);
+            const ratio = duration > 0 ? Math.min(1, Math.max(0, current / duration)) : 0;
+            const percent = `${ratio * 100}%`;
+            player.progressPlayed.style.width = percent;
+            player.progressIndicator.style.left = percent;
+            player.progressControl.setAttribute('aria-valuemin', '0');
+            player.progressControl.setAttribute('aria-valuemax', String(duration || 0));
+            player.progressControl.setAttribute('aria-valuenow', String(current || 0));
         }
 
         seekLocal(value) {
@@ -416,7 +439,15 @@
             }
 
             const start = this.bufferedEnd();
-            const segment = {index, start, end: null, duration: null, durationHint: 0, partial: false};
+            const segment = {
+                index,
+                start,
+                end: null,
+                duration: null,
+                durationHint: 0,
+                presentationDuration: 0,
+                partial: false,
+            };
             this.segments.push(segment);
             if (!this.activeSegment) this.activeSegment = segment;
             const reader = response.body.getReader();
@@ -430,9 +461,15 @@
                 const merged = concatChunks(pending, pendingBytes);
                 pending = [];
                 pendingBytes = 0;
-                if (!segment.durationHint) {
-                    segment.durationHint = estimateMp3Duration(merged, declared);
-                    if (segment === this.activeSegment || (!this.activeSegment && this.segments[0] === segment)) art?._syncTime?.();
+                if (!presentationDuration(segment)) {
+                    const estimate = estimateMp3Duration(merged, declared);
+                    if (estimate > 0) {
+                        segment.durationHint = estimate;
+                        latchPresentationDuration(segment, estimate);
+                        if (segment === this.activeSegment || (!this.activeSegment && this.segments[0] === segment)) {
+                            art?._syncTime?.();
+                        }
+                    }
                 }
                 await this.appendBytes(merged);
                 firstAppend = false;
@@ -468,6 +505,7 @@
             }
             segment.end = end;
             segment.duration = Math.max(0, end - start);
+            latchPresentationDuration(segment, segment.duration);
             if (segment.partial) {
                 this.markRuntimeSkip(index, '连续流读取中断 · 将提前进入下一首');
             }
@@ -579,6 +617,7 @@
 
     const baseCurrentTime = Object.getOwnPropertyDescriptor(FrontierMediaPlayer.prototype, 'currentTime');
     const baseDuration = Object.getOwnPropertyDescriptor(FrontierMediaPlayer.prototype, 'duration');
+    const baseSyncTime = FrontierMediaPlayer.prototype._syncTime;
     const baseSyncBuffered = FrontierMediaPlayer.prototype._syncBuffered;
 
     Object.defineProperty(FrontierAudioPlayer.prototype, 'currentTime', {
@@ -597,6 +636,10 @@
             return session?.owns(this) ? session.localDuration() : baseDuration.get.call(this);
         },
     });
+    FrontierAudioPlayer.prototype._syncTime = function continuousSyncTime() {
+        if (session?.owns(this)) session.syncTimeUi(this);
+        else baseSyncTime.call(this);
+    };
     FrontierAudioPlayer.prototype._syncBuffered = function continuousSyncBuffered() {
         if (session?.owns(this)) session.syncBufferedUi(this);
         else baseSyncBuffered.call(this);
@@ -705,6 +748,7 @@
         status: () => ({
             active: Boolean(session?.owns(art)),
             current_index: currentIndex,
+            presentation_duration: session?.localDuration() || 0,
             active_segment: session?.activeSegment ? {...session.activeSegment} : null,
             buffered_tracks: session?.segments?.length || 0,
         }),

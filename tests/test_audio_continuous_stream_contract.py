@@ -45,12 +45,16 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.assertNotIn("document.createElement('audio')", self.core)
         self.assertNotIn('document.createElement("audio")', self.core)
 
-    def test_track_duration_is_stable_and_never_uses_growing_buffer_as_total(self):
-        self.assertIn("duration: null, durationHint: 0", self.core)
-        self.assertIn("return this.activeSegment.duration;", self.core)
-        self.assertIn("return this.activeSegment.durationHint;", self.core)
-        self.assertIn("segment.duration = Math.max(0, end - start);", self.core)
-        self.assertIn("estimateMp3Duration(merged, declared)", self.core)
+    def test_track_duration_is_latched_and_never_reads_mse_timeline_for_ui(self):
+        self.assertIn("presentationDuration: 0", self.core)
+        self.assertIn("function latchPresentationDuration(segment, value)", self.core)
+        self.assertIn("if (current > 0) return current;", self.core)
+        self.assertIn("return presentationDuration(this.activeSegment);", self.core)
+        self.assertIn("latchPresentationDuration(segment, estimate)", self.core)
+        self.assertIn("latchPresentationDuration(segment, segment.duration)", self.core)
+        self.assertIn("FrontierAudioPlayer.prototype._syncTime = function continuousSyncTime()", self.core)
+        self.assertIn("session.syncTimeUi(this)", self.core)
+        self.assertIn("presentation_duration: session?.localDuration() || 0", self.core)
         self.assertNotIn("Math.max(this.activeSegment.start, this.bufferedEnd())", self.core)
 
     def test_mse_append_is_batched_instead_of_one_update_per_network_chunk(self):

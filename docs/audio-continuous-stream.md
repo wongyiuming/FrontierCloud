@@ -71,7 +71,8 @@ MSE is the production playback path for compatible MP3 and must preserve the old
 The following are P0 release contracts:
 
 - the visible duration for the active business track is stable; it must never use the currently buffered MSE range as the track's total duration;
-- MP3 duration is estimated from the stream header and response length while the segment is still downloading, then replaced once by the completed segment duration;
+- the visible duration is a write-once presentation value: once MP3 metadata/response length yields a valid estimate it is latched for that track and later SourceBuffer growth or completed-segment duration must not overwrite it;
+- if no valid early estimate is available, the presentation duration remains unknown until the completed segment can provide the one allowed fallback value; the UI must never fall back to `HTMLMediaElement.duration` or `MediaSource.duration` while an MSE session is active;
 - network chunks are accumulated into bounded append batches instead of issuing one `SourceBuffer.appendBuffer()` / `updateend` cycle for every fetch chunk;
 - the first append is intentionally small enough for fast startup, while later appends are larger to reduce main-thread and SourceBuffer churn;
 - normal MSE fetches may use the browser HTTP cache and must not force `cache: no-store`;
@@ -167,7 +168,7 @@ The release must protect at least the following:
 - the SourceBuffer uses `sequence` mode;
 - normal continuous playback does not call `endOfStream()`;
 - no second audio media element is created by the continuity core;
-- active-track duration is stable and never grows with `bufferedEnd()`;
+- active-track presentation duration is write-once and never grows with `bufferedEnd()`, `HTMLMediaElement.duration`, or `MediaSource.duration`;
 - MSE writes are batched rather than one append per fetch chunk;
 - all-MP3 playlists take the no-extra-decoration fast path;
 - incompatible formats are visibly marked and skipped by automatic continuation;
