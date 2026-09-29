@@ -60,7 +60,7 @@ The browser fetches each existing media URL and streams response bytes into the 
 - a continuous-media database table;
 - a server-side concatenation endpoint.
 
-The first implementation keeps a bounded playback window with two logical tracks: the current compatible track and one look-ahead compatible track. Old SourceBuffer ranges are removed after playback has crossed into the new active track.
+The implementation keeps a bounded playback window with two logical tracks: the current compatible track and one look-ahead compatible track. Appends are backpressured to at most 30 seconds ahead of the media clock, and old SourceBuffer ranges are removed after playback has crossed into the new active track. A browser `QuotaExceededError` pauses the append pipeline until playback frees capacity, then retries the same bytes silently; it must never mark the track as interrupted or skip it.
 
 A per-track byte guard remains in place so one malformed or unexpectedly large response cannot cause unbounded JavaScript buffering work.
 
@@ -74,6 +74,7 @@ The following are P0 release contracts:
 - the visible duration is a write-once presentation value: once MP3 metadata/response length yields a valid estimate it is latched for that track and later SourceBuffer growth or completed-segment duration must not overwrite it;
 - if no valid early estimate is available, the presentation duration remains unknown until the completed segment can provide the one allowed fallback value; the UI must never fall back to `HTMLMediaElement.duration` or `MediaSource.duration` while an MSE session is active;
 - network chunks are accumulated into bounded append batches instead of issuing one `SourceBuffer.appendBuffer()` / `updateend` cycle for every fetch chunk;
+- SourceBuffer capacity is bounded by playback-clock backpressure, and quota pressure retries the same append without changing playlist state or displaying a warning;
 - the first append is intentionally small enough for fast startup, while later appends are larger to reduce main-thread and SourceBuffer churn;
 - normal MSE fetches may use the browser HTTP cache and must not force `cache: no-store`;
 - an all-compatible MP3 catalog must not perform a second per-row DOM decoration scan after the normal playlist render;
