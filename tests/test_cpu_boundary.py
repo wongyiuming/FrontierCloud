@@ -39,6 +39,15 @@ async def copy(reader, writer):
         self.assertTrue(check_cpu_quiescence.wait_for_quiescence("web", timeout=30))
 
     @patch.object(check_cpu_quiescence.time, "sleep")
+    @patch.object(
+        check_cpu_quiescence,
+        "cpu_percent",
+        side_effect=[0.53, 0.24, 0.23, 27.06, 0.25, 0.25, 0.25, 0.25, 0.25],
+    )
+    def test_late_transient_spike_still_allows_five_sample_recovery(self, _cpu, _sleep):
+        self.assertTrue(check_cpu_quiescence.wait_for_quiescence("web", timeout=30))
+
+    @patch.object(check_cpu_quiescence.time, "sleep")
     @patch.object(check_cpu_quiescence.time, "monotonic", side_effect=[0, 0, 1, 2, 3, 4, 5, 6])
     @patch.object(check_cpu_quiescence, "cpu_percent", return_value=90)
     def test_continuous_cpu_never_counts_as_recovered(self, _cpu, _clock, _sleep):
