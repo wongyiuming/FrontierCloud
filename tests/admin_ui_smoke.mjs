@@ -42,6 +42,8 @@ function makeElement() {
 
 
 const elements = new Map();
+const documentListeners = new Map();
+const fetchCalls = [];
 const element = id => {
     if (!elements.has(id)) elements.set(id, makeElement());
     return elements.get(id);
@@ -59,10 +61,13 @@ const context = {
         getElementById: element,
         createElement: makeElement,
         querySelectorAll: () => [],
+        addEventListener: (name, callback) => documentListeners.set(name, callback),
     },
     location: {href: '', protocol: 'http:'},
     alert: message => { throw new Error(`Unexpected alert: ${message}`); },
-    fetch: async url => ({
+    fetch: async (url, options = {}) => {
+        fetchCalls.push({url: String(url), options});
+        return ({
         status: 200,
         ok: true,
         json: async () => {
@@ -77,7 +82,8 @@ const context = {
             return {};
         },
         blob: async () => new Blob(),
-    }),
+    });
+    },
     FormData: TestFormData,
     URL,
     Blob,
@@ -89,6 +95,18 @@ const context = {
 vm.createContext(context);
 vm.runInContext(fs.readFileSync('static/js/admin.js', 'utf8'), context);
 await new Promise(resolve => setTimeout(resolve, 0));
+
+await vm.runInContext(`
+    adminLastActivityAt = Date.now() - ADMIN_ACTIVITY_GRACE_MS - 1;
+    api('/passive-probe');
+`, context);
+const passiveProbe = fetchCalls.find(call => call.url === '/passive-probe');
+assert.equal(passiveProbe.options.headers['X-Admin-Activity'], 'passive');
+
+documentListeners.get('pointerdown')({isTrusted: true});
+await vm.runInContext(`api('/active-probe')`, context);
+const activeProbe = fetchCalls.find(call => call.url === '/active-probe');
+assert.equal(activeProbe.options.headers['X-Admin-Activity'], 'active');
 
 const formatted = vm.runInContext(
     `formatErrorDetail([{loc: ['body', 'files'], msg: 'Field required'}])`,
@@ -252,6 +270,9 @@ assert(!nodesJs.includes('nodeTest'));
 
 assert(adminJs.includes('async function refreshStoragePool()'));
 assert(adminJs.includes('storagePoolTimer = setInterval'));
+assert(adminJs.includes("'X-Admin-Activity'"));
+assert(adminJs.includes("? 'active'"));
+assert(adminJs.includes(": 'passive'"));
 assert(!adminHtml.includes('storage-capacity-refresh.js'));
 
 const adminCss = fs.readFileSync('static/css/admin.css', 'utf8');
