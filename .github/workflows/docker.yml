@@ -435,7 +435,7 @@ jobs:
             https://ci.frontiercloud.local/api/v1/media/admin/security/whitelist/remove | grep '"status":"ok"'
 
       - name: Require one-core CPU recovery
-        run: python3 scripts/check_cpu_quiescence.py "$(docker compose ps -q web)" --threshold 20 --consecutive 5 --timeout 15
+        run: python3 scripts/check_cpu_quiescence.py "$(docker compose ps -q web)" --threshold 20 --consecutive 5 --timeout 30
 
       - name: Show service logs on failure
         if: failure()

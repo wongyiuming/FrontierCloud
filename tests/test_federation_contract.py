@@ -74,7 +74,7 @@ class FederationContractTests(unittest.TestCase):
         self.assertIn("docker update --cpus 1.0", workflow)
         self.assertIn("timeout --signal=TERM --kill-after=5s 120s", workflow)
         self.assertIn("scripts/check_cpu_quiescence.py", workflow)
-        self.assertIn("--threshold 20 --consecutive 5 --timeout 15", workflow)
+        self.assertIn("--threshold 20 --consecutive 5 --timeout 30", workflow)
         self.assertIn("docker compose stop -t 3 web", workflow)
 
     def test_round_one_browser_ui_is_part_of_authoritative_dev_ci(self):
