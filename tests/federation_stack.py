@@ -239,9 +239,10 @@ print(json.dumps(asyncio.run(read())))
         })
 
     def upload_media(self, blob, filename, *, site_type):
+        target_dir = "music/relay-shared" if site_type == "relay" else "music/shared"
         reservation = self.api("/api/v1/media/admin/upload/session", {
             "site_type": site_type,
-            "target_dir": "music/shared",
+            "target_dir": target_dir,
             "relative_path": None,
             "filename": filename,
             "size_bytes": len(blob),
@@ -572,7 +573,7 @@ def main():
             a, b, c = nodes
             # Master Local content is imported once during promotion. A Follower
             # must join empty and receives files only through Storage Pool jobs.
-            wav(a.data / "media/music/shared/master.wav", seconds=20, tone=500)
+            wav(a.data / "media/music/master-shared/master.wav", seconds=20, tone=500)
             upload_source = directory / "upload-source.wav"
             wav(upload_source, seconds=20, tone=700)
             source = upload_source.read_bytes()
