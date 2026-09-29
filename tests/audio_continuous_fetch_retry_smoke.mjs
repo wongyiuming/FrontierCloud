@@ -8,10 +8,19 @@ const requests = [];
 let firstPulls = 0;
 
 async function nativeFetch(input, init = {}) {
+    const url = new URL(String(input), 'https://520mall.cc');
     const range = new Headers(init.headers || {}).get('Range');
-    requests.push({input: String(input), range});
+    requests.push({input: url.href, range});
 
-    if (requests.length === 1) {
+    if (url.pathname !== '/api/v1/media/stream') {
+        return new Response('{}', {
+            status: 200,
+            headers: {'Content-Type': 'application/json'},
+        });
+    }
+
+    const mediaRequests = requests.filter(request => new URL(request.input).pathname === '/api/v1/media/stream');
+    if (mediaRequests.length === 1) {
         const body = new ReadableStream({
             pull(controller) {
                 if (firstPulls === 0) {
@@ -78,11 +87,13 @@ const response = await context.fetch(
 );
 const bytes = [...new Uint8Array(await response.arrayBuffer())];
 assert.deepEqual(bytes, [1, 2, 3, 4]);
-assert.equal(requests.length, 2, 'one broken transfer must be resumed instead of exposed as a failure');
+const mediaRequests = requests.filter(request => new URL(request.input).pathname === '/api/v1/media/stream');
+assert.equal(mediaRequests.length, 2, 'one broken transfer must be resumed instead of exposed as a failure');
 assert.equal(context.frontierCloudContinuousFetchRetry.status().resume_count, 1);
 
 const before = requests.length;
 await context.fetch('/api/v1/media/catalog/categories', {credentials: 'same-origin'});
 assert.equal(requests.length, before + 1, 'non-media fetches must pass straight through the wrapper');
+assert.equal(requests.at(-1).range, null, 'non-media fetches must never receive Range retry headers');
 
 console.log('audio-continuous-fetch-retry-smoke-ok');
