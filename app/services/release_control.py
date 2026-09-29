@@ -22,6 +22,7 @@ CI_URL = f"{REPOSITORY_API}/actions/workflows/docker.yml/runs"
 BRANCH_URL = f"{REPOSITORY_API}/branches/{RELEASE_BRANCH}"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CI_CACHE_SECONDS = 300
+CI_FORCE_REFRESH_FLOOR_SECONDS = 60
 GITHUB_FAILURE_BACKOFF_SECONDS = 30
 _ci_cache: tuple[float, dict] = (0.0, {})
 _ci_last_verified: dict = {}
@@ -226,7 +227,8 @@ async def ci_status(*, force: bool = False) -> dict:
         value = _backoff_value(now_epoch)
         _ci_cache = (now, value)
         return value
-    if not force and _ci_cache[1] and now - _ci_cache[0] < CI_CACHE_SECONDS:
+    cache_age_limit = CI_FORCE_REFRESH_FLOOR_SECONDS if force else CI_CACHE_SECONDS
+    if _ci_cache[1] and now - _ci_cache[0] < cache_age_limit:
         return _ci_cache[1]
     async with _ci_lock:
         now = time.monotonic()
@@ -235,7 +237,8 @@ async def ci_status(*, force: bool = False) -> dict:
             value = _backoff_value(now_epoch)
             _ci_cache = (now, value)
             return value
-        if not force and _ci_cache[1] and now - _ci_cache[0] < CI_CACHE_SECONDS:
+        cache_age_limit = CI_FORCE_REFRESH_FLOOR_SECONDS if force else CI_CACHE_SECONDS
+        if _ci_cache[1] and now - _ci_cache[0] < cache_age_limit:
             return _ci_cache[1]
         try:
             async with httpx.AsyncClient(
@@ -466,7 +469,10 @@ async def release_status(*, refresh_ci: bool = False) -> dict:
 async def start_upgrade() -> dict:
     if state.node.get("role") != "Master":
         raise RuntimeError("Only Master can start a cluster release")
-    ci = await ci_status(force=True)
+    # The status page has normally verified the exact immutable target already.
+    # Reuse that evidence inside the normal cache window instead of spending a
+    # second four-request GitHub verification immediately before the upgrade.
+    ci = await ci_status(force=False)
     target = str(ci.get("sha") or "")
     if not ci.get("publishable") or not SHA_RE.fullmatch(target):
         raise RuntimeError("Current main HEAD does not match a successful dev CI tree")

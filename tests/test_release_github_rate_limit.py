@@ -131,6 +131,51 @@ class GitHubReleaseVerificationTests(unittest.IsolatedAsyncioTestCase):
         headers = factory.call_args.kwargs["headers"]
         self.assertEqual(headers["Authorization"], "Bearer github-read-token")
 
+    async def test_forced_refresh_burst_is_capped_at_twenty_percent_of_previous_queries(self):
+        client = StubClient(branch=StubResponse(branch_payload()))
+        factory = MagicMock(return_value=client)
+        with (
+            patch.object(release_control.settings, "GITHUB_API_TOKEN", ""),
+            patch.object(release_control.httpx, "AsyncClient", factory),
+        ):
+            results = [await release_control.ci_status(force=True) for _ in range(5)]
+
+        self.assertTrue(all(item["publishable"] for item in results))
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(len(client.requests), 4)
+        self.assertEqual(
+            len(client.requests),
+            20 // 5,
+            "five forced checks previously issued 20 GitHub requests; the burst budget is 20%",
+        )
+
+    async def test_upgrade_reuses_recent_exact_release_evidence(self):
+        cached = {
+            "available": True,
+            "publishable": True,
+            "sha": MAIN_SHA,
+            "tree_sha": TREE_SHA,
+            "ci_sha": SOURCE_SHA,
+        }
+        release_control._ci_cache = (time.monotonic(), cached)
+        with (
+            patch.dict(release_control.state.node, {"role": "Master"}),
+            patch.object(release_control, "agent_status", return_value={"release_branch": "main", "current_sha": "d" * 40}),
+            patch.object(release_control, "follower_release_statuses", return_value=[]),
+            patch.object(release_control, "agent_request", return_value={"ok": True}) as request,
+            patch.object(release_control.httpx, "AsyncClient") as factory,
+        ):
+            result = await release_control.start_upgrade()
+
+        self.assertEqual(result, {"ok": True})
+        factory.assert_not_called()
+        request.assert_awaited_once_with({
+            "action": "start",
+            "target_sha": MAIN_SHA,
+            "mode": "upgrade",
+            "hold_maintenance": True,
+        })
+
     async def test_primary_rate_limit_enters_backoff_and_force_refresh_does_not_hammer(self):
         reset_at = int(time.time()) + 300
         response = StubResponse(
