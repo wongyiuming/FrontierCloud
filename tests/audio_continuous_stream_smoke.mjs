@@ -14,14 +14,18 @@ assert.match(source, /sourceBuffer\.mode = 'sequence'/);
 assert.match(source, /const LOOKAHEAD_TRACKS = 2/);
 assert.match(source, /const FIRST_APPEND_BYTES = 64 \* 1024/);
 assert.match(source, /const APPEND_BATCH_BYTES = 512 \* 1024/);
-assert.match(source, /duration:\s*null, durationHint:\s*0/);
-assert.match(source, /estimateMp3Duration\(merged, declared\)/);
+assert.match(source, /presentationDuration:\s*0/);
+assert.match(source, /latchPresentationDuration\(segment, estimate\)/);
+assert.match(source, /latchPresentationDuration\(segment, segment\.duration\)/);
+assert.match(source, /FrontierAudioPlayer\.prototype\._syncTime = function continuousSyncTime/);
+assert.match(source, /session\.syncTimeUi\(this\)/);
 assert.match(source, /if \(!hasWarning && !existing\) return/);
 
 class BasePlayer {
     get currentTime() { return 0; }
     set currentTime(_value) {}
     get duration() { return 0; }
+    _syncTime() {}
     _syncBuffered() {}
 }
 class AudioPlayer extends BasePlayer {}
@@ -64,7 +68,10 @@ const context = {
 vm.createContext(context);
 const instrumented = source.replace(
     'window.frontierCloudContinuousAudio = {',
-    'window.__estimateMp3Duration = estimateMp3Duration;\n    window.frontierCloudContinuousAudio = {',
+    'window.__estimateMp3Duration = estimateMp3Duration;\n'
+        + '    window.__presentationDuration = presentationDuration;\n'
+        + '    window.__latchPresentationDuration = latchPresentationDuration;\n'
+        + '    window.frontierCloudContinuousAudio = {',
 );
 vm.runInContext(instrumented, context);
 
@@ -85,6 +92,14 @@ const estimated = vm.runInContext(`(() => {
     return window.__estimateMp3Duration(cbrHeader, 1_600_000);
 })()`, context);
 assert.ok(Math.abs(estimated - 100) < 0.01, `expected stable 100 second estimate, got ${estimated}`);
+
+const latchResult = vm.runInContext(`(() => {
+    const segment = {presentationDuration: 0};
+    const first = window.__latchPresentationDuration(segment, 100);
+    const second = window.__latchPresentationDuration(segment, 120);
+    return JSON.stringify([first, second, segment.presentationDuration, window.__presentationDuration(segment)]);
+})()`, context);
+assert.equal(latchResult, '[100,100,100,100]', 'presentation duration must be write-once even if later MSE duration grows');
 
 const mp3Only = [
     {type: 'audio', media_path: 'music/a/one.mp3'},
