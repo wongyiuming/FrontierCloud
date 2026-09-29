@@ -127,7 +127,19 @@ Redis catalog generations cache expensive scans/sorts. Browser/API cache headers
 
 For mutable catalog APIs, the HTTP client revalidates while the server-side Redis generation remains the expensive-work cache. Mutations that change paths, visibility, priority, or catalog membership invalidate the generation. Cache invalidation is fail-soft after a durable business commit: a Redis failure is logged and TTL recovery remains available; it must not turn a committed mutation into a false client-visible failure.
 
-## 9. Admin GUI contract
+## 9. Playback continuity
+
+Compatible MP3 playback is one continuous browser media session: one audio element, one `MediaSource`, and one `audio/mpeg` `SourceBuffer` in sequence mode. A track boundary updates business metadata and accounting; it must not recreate the player, switch `src`, call `load()`, or introduce a second standby element.
+
+The browser keeps a bounded playback window rather than downloading an album into an unbounded SourceBuffer. Appends are backpressured by the playback clock, old ranges are pruned after a boundary, and `QuotaExceededError` retries the same bytes silently without marking a track as failed.
+
+The player exposes stable track-local duration and time over the global MSE timeline. A seek inside the current buffer moves that timeline directly. A seek outside it restarts the same logical track with an open-ended HTTP Range request near the requested byte position, preserves playing/paused state, and resumes a transiently interrupted range from the explicit base plus delivered bytes. It must not clamp the request to the buffered edge or show a playlist failure notice for a recoverable read.
+
+The initial continuous profile is MP3-only. Other accepted audio formats remain manually playable through the single-track fallback and are visibly skipped by automatic continuation. Video remains outside this architecture.
+
+The complete browser and release contract is documented in [`docs/audio-continuous-stream.md`](docs/audio-continuous-stream.md) and [`docs/wiki/Playback-Continuity.md`](docs/wiki/Playback-Continuity.md).
+
+## 10. Admin GUI contract
 
 The Admin console order is an intentional product contract and is tested in both source and real Chromium layout:
 
@@ -145,7 +157,7 @@ The Admin console order is an intentional product contract and is tested in both
 
 Dynamic modules must join this same final DOM/visual order. Reordering code must be idempotent; DOM mutation observers must not create self-triggering reorder loops.
 
-## 10. Release topology
+## 11. Release topology
 
 The repository has two canonical branches:
 
@@ -162,7 +174,7 @@ Absolute repository policy:
 
 GitHub-side ref creation cannot be fully prevented by a unit test. The repository-policy workflow detects non-canonical branch creation after the event, while true pre-creation prevention requires GitHub repository ruleset/administrative enforcement. The no-new-branch invariant must remain documented here, in `CONTRIBUTING.md`, and in the Wiki/ruleset configuration.
 
-## 11. Regression rule
+## 12. Regression rule
 
 When an invariant can be encoded as a test, encode it. When it cannot be reliably observed from repository code (for example, who is allowed to create a Git ref), document it explicitly and enforce it with GitHub repository settings where available.
 
