@@ -101,6 +101,10 @@ Normal compatible-track transitions do not call `MediaSource.endOfStream()` and 
 
 Manual selection of a compatible MP3 starts a continuous session from that track.
 
+Seeking inside the active buffered range moves the media clock directly. Seeking outside it restarts the same business track with an open-ended HTTP Range request instead of clamping the requested time to the buffered edge. The byte offset is estimated from the stable track duration and total response size, aligned to a 64 KiB boundary, and moved back by one alignment block so the MP3 decoder has a short resynchronization lead. The player keeps the requested local time visible while the new range is buffered and resumes only if it was playing before the seek.
+
+The media-fetch retry layer treats that explicit Range start as its base offset. If the ranged response is interrupted, the next silent retry starts at `range start + bytes already delivered`; it must not restart at byte zero or display a playlist failure notice.
+
 Manual selection of an incompatible audio file remains available and uses the existing single-track player. Automatic next/previous selection skips incompatible tracks while continuous audio is supported by the browser.
 
 If the MSE session itself cannot initialize, FrontierCloud fails soft to the existing single-track player rather than making all audio unavailable.
@@ -169,6 +173,8 @@ The release must protect at least the following:
 - the SourceBuffer uses `sequence` mode;
 - normal continuous playback does not call `endOfStream()`;
 - no second audio media element is created by the continuity core;
+- an unbuffered seek issues a Range request and retains the requested local time instead of clamping to the buffered edge;
+- a retry after an explicit seek Range resumes from the ranged base offset plus delivered bytes;
 - active-track presentation duration is write-once and never grows with `bufferedEnd()`, `HTMLMediaElement.duration`, or `MediaSource.duration`;
 - MSE writes are batched rather than one append per fetch chunk;
 - all-MP3 playlists take the no-extra-decoration fast path;
