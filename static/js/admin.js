@@ -524,6 +524,10 @@ function lyricRelationSet(kind, path) {
         .map(relation => kind === 'track' ? relation.lyric : relation.track));
 }
 
+function unlinkedLyricTracks(tracks) {
+    return (tracks || []).filter(track => !track.lyric_path);
+}
+
 function lyricUsageMatches(item, kind) {
     const filter = $(kind === 'track' ? 'lyricsTrackUsage' : 'lyricsFileUsage').value;
     const used = kind === 'track' ? Boolean(item.lyric_path) : Number(item.linked_count || 0) > 0;
@@ -619,11 +623,13 @@ function lyricObjectButton(item, kind) {
             if (lyricOrigin?.path !== path) activateLyric(path);
             const filename = path.split('/').pop() || item.name;
             $('lyricsTrackFilter').value = filename.replace(/\.lrc$/i, '');
+            $('lyricsTrackUsage').value = 'unused';
             try {
                 await loadLyricCatalog();
-                lyricTargets = new Set((lyricCatalog.tracks || []).map(track => track.path));
-                lyricTrackAnchor = lyricCatalog.tracks?.length ? lyricCatalog.tracks.length - 1 : null;
-                $('lyricsModeStatus').textContent = `已选择歌词并全选 ${lyricTargets.size} 条搜索结果；请确认后保存`;
+                const unlinkedTracks = unlinkedLyricTracks(lyricCatalog.tracks);
+                lyricTargets = new Set(unlinkedTracks.map(track => track.path));
+                lyricTrackAnchor = unlinkedTracks.length ? unlinkedTracks.length - 1 : null;
+                $('lyricsModeStatus').textContent = `已选择歌词，并选中 ${lyricTargets.size} 条未关联搜索结果；请确认后保存`;
                 renderLyricObjects();
                 renderLyricRelationJson();
             } catch (error) {

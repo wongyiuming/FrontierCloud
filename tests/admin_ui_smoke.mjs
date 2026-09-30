@@ -268,7 +268,16 @@ assert(!adminJs.includes('delta}'));
 assert(adminJs.includes("event.key === 'Escape'"));
 assert(adminJs.includes('button.ondblclick = async'));
 assert(adminJs.includes("replace(/\\.lrc$/i, '')"));
-assert(adminJs.includes('lyricTargets = new Set((lyricCatalog.tracks || [])'));
+assert(adminJs.includes("$('lyricsTrackUsage').value = 'unused'"));
+assert.deepEqual(
+    [...vm.runInContext(`unlinkedLyricTracks([
+        {path: 'music/a.mp3', lyric_path: null},
+        {path: 'music/b.mp3', lyric_path: 'lyrics/b.lrc'},
+        {path: 'music/c.mp3'},
+    ]).map(track => track.path)`, context)],
+    ['music/a.mp3', 'music/c.mp3'],
+);
+assert(adminJs.includes('lyricTargets = new Set(unlinkedTracks.map(track => track.path))'));
 assert(adminJs.includes('function middleEllipsis'));
 assert(adminJs.includes('结果按所在目录分类'));
 assert(adminJs.includes('N=${relationCount}'));
