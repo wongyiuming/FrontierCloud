@@ -673,8 +673,11 @@ async def lyric_relations(
 @router.post("/lyrics/auto-relate")
 async def lyric_auto_relate(
     request: Request,
+    payload: dict,
     session_hash: str = Depends(require_session),
 ):
+    if payload.get("manual") is not True:
+        raise HTTPException(status_code=400, detail="一键歌词关联只能由管理员手动确认触发")
     result = await lyrics.auto_relate_matching_names(
         audit=_mutation_audit(session_hash, "lyric_auto_relate", [], request),
     )

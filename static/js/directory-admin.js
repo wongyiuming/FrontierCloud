@@ -47,8 +47,7 @@
                 headers: requestHeaders(),
                 body: JSON.stringify({path, new_name: newName.trim()}),
             });
-            selected.clear();
-            selectionKind = null;
+            clearMediaSelection();
             await renderTree();
             updateToolbar();
             if (priorityScope === path || priorityScope.startsWith(`${path}/`)) {

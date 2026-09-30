@@ -48,6 +48,26 @@ class ClusterUploadReservation(BaseModel):
     size_bytes: int = Field(gt=0, le=10 * 1024 ** 3)
 
 
+async def _category_layout_conflict(category: str, depth: int) -> bool:
+    """Check only for one incompatible path instead of hydrating a catalog.
+
+    The old upload preflight loaded every object in the category and also
+    joined playback/lyric metadata. Repeating that scan for every file made the
+    pause between batch items grow with the category size.
+    """
+    path = s.global_media.c.media_path
+    path_depth = func.length(path) - func.length(func.replace(path, "/", "")) + 1
+    async with node_state.database.connect() as conn:
+        conflict = await conn.scalar(
+            select(s.global_media.c.media_id).where(
+                s.global_media.c.state == "active",
+                path.startswith(category.rstrip("/") + "/", autoescape=True),
+                path_depth != depth,
+            ).limit(1)
+        )
+    return conflict is not None
+
+
 def _preferred_member(value: str | None) -> str | None:
     value = str(value or "").strip().lower()
     if value in {"", "auto"}:
@@ -73,9 +93,8 @@ async def _upload_logical_path(payload: ClusterUploadReservation) -> str:
         raise HTTPException(400, str(exc)) from exc
 
     category = "/".join(logical.split("/")[:2])
-    existing = await node_catalog.resources(root=category)
     depth = len(logical.split("/"))
-    if any(len(str(row["path"]).split("/")) != depth for row in existing):
+    if await _category_layout_conflict(category, depth):
         detail = ("该分类已使用子目录，禁止在分类目录直接上传媒体" if depth == 3
                   else "该分类已有直接媒体，禁止再使用子目录存放媒体")
         raise HTTPException(409, detail)

@@ -153,6 +153,32 @@ assert.equal(context.selectionRenderCalls, 0);
 assert.equal(context.selectedAfterClick, true);
 
 vm.runInContext(`
+    const selectionItems = [
+        {name: 'one.wav', path: 'folder/one.wav', kind: 'file'},
+        {name: 'album', path: 'folder/album', kind: 'directory'},
+        {name: 'three.wav', path: 'folder/three.wav', kind: 'file'},
+    ];
+    visibleMediaItems = selectionItems;
+    clearMediaSelection();
+    toggleSelection(selectionItems[0], {});
+    toggleSelection(selectionItems[1], {ctrlKey: true});
+    globalThis.ctrlSelection = [...selected];
+    globalThis.ctrlSelectionKind = selectionKind;
+    toggleSelection(selectionItems[2], {});
+    globalThis.plainSelection = [...selected];
+    toggleSelection(selectionItems[0], {});
+    toggleSelection(selectionItems[2], {shiftKey: true});
+    globalThis.shiftSelection = [...selected];
+`, context);
+assert.deepEqual([...context.ctrlSelection], ['folder/one.wav', 'folder/album']);
+assert.equal(context.ctrlSelectionKind, 'mixed');
+assert.deepEqual([...context.plainSelection], ['folder/three.wav']);
+assert.deepEqual(
+    [...context.shiftSelection],
+    ['folder/one.wav', 'folder/album', 'folder/three.wav'],
+);
+
+vm.runInContext(`
     renderSecurityList({
         legal_api_count: 21,
         active_ban_count: 1,

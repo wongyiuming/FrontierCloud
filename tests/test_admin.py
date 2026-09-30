@@ -479,5 +479,22 @@ class AdminAuthenticationCoverageTests(unittest.TestCase):
         self.assertEqual(missing, [])
 
 
+class AdminLyricAutoLinkTriggerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_auto_link_requires_explicit_manual_confirmation(self):
+        auto_link = AsyncMock(return_value={
+            "linked": 1, "preserved": 0, "ambiguous": 0, "unmatched": 0,
+        })
+        with patch.object(admin.lyrics, "auto_relate_matching_names", new=auto_link):
+            with self.assertRaises(HTTPException) as raised:
+                await admin.lyric_auto_relate(object(), {}, "session")
+            self.assertEqual(raised.exception.status_code, 400)
+            auto_link.assert_not_awaited()
+
+            result = await admin.lyric_auto_relate(object(), {"manual": True}, "session")
+
+        self.assertEqual(result["linked"], 1)
+        auto_link.assert_awaited_once()
+
+
 if __name__ == "__main__":
     unittest.main()

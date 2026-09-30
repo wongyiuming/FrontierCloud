@@ -61,7 +61,7 @@ Never weaken an existing regression merely to make a new implementation pass. If
 - Folder rename is a rename inside the same parent, not a general move API. Cross-member rename must remain rollback-capable. Master rename is the exclusive path mutation; upload reservation, delete, hide/unhide, and priority changes must participate in the same mutation-fence protocol.
 - Lyrics support at most two directory levels below `lyrics`: `lyrics/<category>/<subdir>/<file>.lrc`. Every upload, catalog, tree, search, download, and delete surface must enforce the same boundary.
 - `lyrics/default.lrc` is an internal playback fallback. It is not user content and must not appear in Admin lists/counts/search or be exposed as a normal mutable object.
-- Same-name lyric auto-link is fallback automation: it may replace missing/default fallback state but **must never overwrite an explicit user-managed lyric relation**, even if that selected lyric file is temporarily unavailable.
+- Same-name lyric auto-link is manual fallback automation: only the explicit Admin control may trigger it. Upload/refresh paths must not invoke it; it may replace missing/default fallback state but **must never overwrite an explicit user-managed lyric relation**, even if that selected lyric file is temporarily unavailable.
 - Admin module order is intentional and protected by regression tests. Do not reorder modules incidentally while changing a module.
 
 ## Release evidence
