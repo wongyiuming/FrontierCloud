@@ -170,6 +170,42 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
     let completedUnits = 0;
     let successCount = 0;
     let failedCount = 0;
+    const reservationOutcomes = new Map();
+    const heldReservations = new Set();
+
+    const prepareReservation = index => {
+        if (!clusterUpload || lyricUpload || index >= files.length) return null;
+        if (reservationOutcomes.has(index)) return reservationOutcomes.get(index);
+        const file = files[index];
+        if (file.size > uploadLimits.max_upload_file_size) return null;
+        const outcome = api('/api/v1/media/admin/upload/session', {
+            method: 'POST', headers: requestHeaders(), body: JSON.stringify({
+                site_type: selectedSiteType,
+                target_dir: currentPath,
+                relative_path: relativePaths ? relativePaths[index] : null,
+                filename: file.name,
+                size_bytes: file.size,
+            }),
+        }).then(reservation => {
+            heldReservations.add(reservation);
+            return {reservation};
+        }, error => ({error}));
+        reservationOutcomes.set(index, outcome);
+        return outcome;
+    };
+
+    const takeReservation = async index => {
+        const outcome = await prepareReservation(index);
+        if (!outcome) return null;
+        if (outcome.error) throw outcome.error;
+        heldReservations.delete(outcome.reservation);
+        return outcome.reservation;
+    };
+
+    // Reserve the next file while the current file is transferring/finalizing.
+    // The first durable reservation already pins folder affinity before the
+    // following reservation starts, so pipelining does not change placement.
+    prepareReservation(0);
 
     try {
         for (let index = 0; index < files.length; index += 1) {
@@ -187,6 +223,7 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
                 completedUnits += fileUnits;
                 addUploadResult(displayName, 'error', `超过 ${formatSize(fileLimit)} 限制`);
                 setProgress('totalProgress', 'totalPercent', completedUnits / totalUnits * 100);
+                prepareReservation(index + 1);
                 continue;
             }
 
@@ -202,15 +239,8 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
                 };
                 let result;
                 if (clusterUpload && !lyricUpload) {
-                    reservation = await api('/api/v1/media/admin/upload/session', {
-                        method: 'POST', headers: requestHeaders(), body: JSON.stringify({
-                            site_type: selectedSiteType,
-                            target_dir: currentPath,
-                            relative_path: relativePaths ? relativePaths[index] : null,
-                            filename: file.name,
-                            size_bytes: file.size,
-                        }),
-                    });
+                    reservation = await takeReservation(index);
+                    prepareReservation(index + 1);
                     try {
                         await uploadRaw(reservation.upload_url, file, progress, reservation.transport === 'Direct');
                         result = reservation.transport === 'Direct'
@@ -242,11 +272,19 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
                 addUploadResult(displayName, 'error', error.message);
             }
 
+            prepareReservation(index + 1);
             completedUnits += fileUnits;
             setProgress('currentProgress', 'currentPercent', 100);
             setProgress('totalProgress', 'totalPercent', completedUnits / totalUnits * 100);
         }
     } finally {
+        for (const outcomePromise of reservationOutcomes.values()) {
+            const outcome = await outcomePromise;
+            if (outcome.reservation && heldReservations.has(outcome.reservation)) {
+                heldReservations.delete(outcome.reservation);
+                await cancelClusterReservation(outcome.reservation);
+            }
+        }
         setUploadControlsDisabled(false);
         $('uploadSummary').textContent = `完成：成功 ${successCount}，失败 ${failedCount}`;
         $('currentFileLabel').textContent = '当前文件处理完成';
@@ -257,15 +295,17 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
 
 $('delete').onclick = () => {
     const paths = [...selected];
+    const objectLabel = selectionKind === 'directory'
+        ? '目录及其全部内容'
+        : (selectionKind === 'file' ? '文件' : '对象');
     showModal(
         '确认删除',
-        `将删除选中的 ${paths.length} 个${selectionKind === 'directory' ? '目录及其全部内容' : '文件'}。此操作不可恢复。`,
+        `将删除选中的 ${paths.length} 个${objectLabel}。此操作不可恢复。`,
         async () => {
             const result = await api('/api/v1/media/admin/delete', {
                 method: 'POST', headers: requestHeaders(), body: JSON.stringify({paths}),
             });
-            selected.clear();
-            selectionKind = null;
+            clearMediaSelection();
             await renderTree();
             if (result.pending_delete?.length) {
                 alert(`已有 ${result.deleted || 0} 个对象完成删除；仍有 ${result.pending_delete.length} 个对象等待存储节点确认删除。\n\n等待中的路径暂时不会允许同名重传，系统会自动重试。`);

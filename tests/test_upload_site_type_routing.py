@@ -232,6 +232,8 @@ class UploadSiteUiContractTests(unittest.TestCase):
         self.assertIn("counts.direct", source)
         self.assertIn("counts.relay", source)
         self.assertIn("available_bytes", source)
+        self.assertIn("prepareReservation(index + 1)", source)
+        self.assertIn("heldReservations", source)
 
     def test_historical_media_uses_transport_to_render_site_type(self):
         source = (ROOT / "static/js/admin-upload-integrity.js").read_text(encoding="utf-8")

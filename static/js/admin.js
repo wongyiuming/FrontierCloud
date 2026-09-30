@@ -1,5 +1,8 @@
 let selected = new Set();
 let selectionKind = null;
+let selectionAnchorPath = null;
+let visibleMediaItems = [];
+const selectedItemKinds = new Map();
 let currentPath = '';
 let csrfCookieName = '__Host-admin-csrf';
 let uploadRunning = false;
@@ -211,8 +214,11 @@ function showModal(title, body, onConfirm) {
 
 function updateToolbar() {
     const count = selected.size;
+    const selectionLabel = selectionKind === 'directory'
+        ? '目录'
+        : (selectionKind === 'file' ? '文件' : '对象');
     $('selection').textContent = count
-        ? `已选择 ${count} 个${selectionKind === 'directory' ? '目录' : '文件'}`
+        ? `已选择 ${count} 个${selectionLabel}`
         : '未选择';
     $('download').disabled = !count;
     $('delete').disabled = !count;
@@ -229,15 +235,54 @@ function updateToolbar() {
     }
 }
 
-function toggleSelection(item) {
-    if (selectionKind && selectionKind !== item.kind) {
+function refreshSelectionKind() {
+    const kinds = new Set(
+        [...selected].map(path => selectedItemKinds.get(path)).filter(Boolean),
+    );
+    selectionKind = !selected.size ? null : (kinds.size === 1 ? [...kinds][0] : 'mixed');
+}
+
+function selectMediaItem(item) {
+    selected.add(item.path);
+    selectedItemKinds.set(item.path, item.kind);
+}
+
+function clearMediaSelection() {
+    selected.clear();
+    selectedItemKinds.clear();
+    selectionKind = null;
+    selectionAnchorPath = null;
+}
+
+function toggleSelection(item, event = {}) {
+    const additive = Boolean(event.ctrlKey || event.metaKey);
+    const rangeEnd = visibleMediaItems.findIndex(candidate => candidate.path === item.path);
+    const rangeStart = visibleMediaItems.findIndex(candidate => candidate.path === selectionAnchorPath);
+
+    if (event.shiftKey && rangeStart >= 0 && rangeEnd >= 0) {
+        if (!additive) {
+            selected.clear();
+            selectedItemKinds.clear();
+        }
+        const start = Math.min(rangeStart, rangeEnd);
+        const end = Math.max(rangeStart, rangeEnd);
+        for (const candidate of visibleMediaItems.slice(start, end + 1)) selectMediaItem(candidate);
+    } else if (additive) {
+        if (selected.has(item.path)) {
+            selected.delete(item.path);
+            selectedItemKinds.delete(item.path);
+        } else {
+            selectMediaItem(item);
+        }
+        selectionAnchorPath = item.path;
+    } else {
         selected.clear();
-        selectionKind = null;
+        selectedItemKinds.clear();
+        selectMediaItem(item);
+        selectionAnchorPath = item.path;
     }
-    selectionKind = item.kind;
-    if (selected.has(item.path)) selected.delete(item.path);
-    else selected.add(item.path);
-    if (!selected.size) selectionKind = null;
+
+    refreshSelectionKind();
     for (const row of document.querySelectorAll('.tree-row[data-path]')) {
         row.classList.toggle('selected', selected.has(row.dataset.path));
     }
@@ -257,6 +302,7 @@ async function renderTree() {
         ? `/api/v1/media/admin/tree/search?q=${encodeURIComponent(activeQuery)}&path=${encodeURIComponent(currentPath)}`
         : `/api/v1/media/admin/tree?path=${encodeURIComponent(currentPath)}`;
     const data = await api(endpoint);
+    visibleMediaItems = data.items || [];
     $('mediaSearch').disabled = !currentPath;
     $('mediaSearch').placeholder = currentPath
         ? `仅搜索 /data/media/${currentPath} 及其子目录`
@@ -273,8 +319,7 @@ async function renderTree() {
         up.innerHTML = '<span class="kind">↩</span><span class="name">返回上级</span>';
         up.onclick = () => {
             currentPath = currentPath.split('/').slice(0, -1).join('/');
-            selected.clear();
-            selectionKind = null;
+            clearMediaSelection();
             renderTree();
         };
         tree.appendChild(up);
@@ -295,14 +340,13 @@ async function renderTree() {
         bindExpandableFilenames(row);
         row.onclick = event => {
             event.stopPropagation();
-            toggleSelection(item);
+            toggleSelection(item, event);
         };
         row.ondblclick = event => {
             event.stopPropagation();
             if (item.kind === 'directory') {
                 currentPath = item.path;
-                selected.clear();
-                selectionKind = null;
+                clearMediaSelection();
                 renderTree();
             }
         };
@@ -480,6 +524,10 @@ function lyricRelationSet(kind, path) {
         .map(relation => kind === 'track' ? relation.lyric : relation.track));
 }
 
+function unlinkedLyricTracks(tracks) {
+    return (tracks || []).filter(track => !track.lyric_path);
+}
+
 function lyricUsageMatches(item, kind) {
     const filter = $(kind === 'track' ? 'lyricsTrackUsage' : 'lyricsFileUsage').value;
     const used = kind === 'track' ? Boolean(item.lyric_path) : Number(item.linked_count || 0) > 0;
@@ -575,11 +623,13 @@ function lyricObjectButton(item, kind) {
             if (lyricOrigin?.path !== path) activateLyric(path);
             const filename = path.split('/').pop() || item.name;
             $('lyricsTrackFilter').value = filename.replace(/\.lrc$/i, '');
+            $('lyricsTrackUsage').value = 'unused';
             try {
                 await loadLyricCatalog();
-                lyricTargets = new Set((lyricCatalog.tracks || []).map(track => track.path));
-                lyricTrackAnchor = lyricCatalog.tracks?.length ? lyricCatalog.tracks.length - 1 : null;
-                $('lyricsModeStatus').textContent = `已选择歌词并全选 ${lyricTargets.size} 条搜索结果；请确认后保存`;
+                const unlinkedTracks = unlinkedLyricTracks(lyricCatalog.tracks);
+                lyricTargets = new Set(unlinkedTracks.map(track => track.path));
+                lyricTrackAnchor = unlinkedTracks.length ? unlinkedTracks.length - 1 : null;
+                $('lyricsModeStatus').textContent = `已选择歌词，并选中 ${lyricTargets.size} 条未关联搜索结果；请确认后保存`;
                 renderLyricObjects();
                 renderLyricRelationJson();
             } catch (error) {
@@ -681,7 +731,7 @@ $('lyricsAutoLink').onclick = async () => {
     button.disabled = true;
     try {
         const result = await api('/api/v1/media/admin/lyrics/auto-relate', {
-            method: 'POST', headers: requestHeaders(), body: '{}',
+            method: 'POST', headers: requestHeaders(), body: JSON.stringify({manual: true}),
         });
         await loadLyricCatalog();
         $('lyricsModeStatus').textContent = `同名关联完成：关联 ${result.linked}，无匹配 ${result.unmatched}，歧义 ${result.ambiguous}`;
@@ -706,8 +756,7 @@ for (const id of ['lyricsTrackUsage', 'lyricsFileUsage']) {
 }
 $('mediaSearch').oninput = () => {
     clearTimeout(mediaSearchTimer);
-    selected.clear();
-    selectionKind = null;
+    clearMediaSelection();
     mediaSearchTimer = setTimeout(() => renderTree().catch(error => alert(error.message)), 220);
 };
 
@@ -1358,15 +1407,17 @@ $('lyricsFolderInput').onchange = async event => {
 
 $('delete').onclick = () => {
     const paths = [...selected];
+    const objectLabel = selectionKind === 'directory'
+        ? '目录及其全部内容'
+        : (selectionKind === 'file' ? '文件' : '对象');
     showModal(
         '确认删除',
-        `将删除选中的 ${paths.length} 个${selectionKind === 'directory' ? '目录及其全部内容' : '文件'}。此操作不可恢复。`,
+        `将删除选中的 ${paths.length} 个${objectLabel}。此操作不可恢复。`,
         async () => {
             await api('/api/v1/media/admin/delete', {
                 method: 'POST', headers: requestHeaders(), body: JSON.stringify({paths}),
             });
-            selected.clear();
-            selectionKind = null;
+            clearMediaSelection();
             await renderTree();
         },
     );
@@ -1382,8 +1433,7 @@ $('hide').onclick = () => {
             await api('/api/v1/media/admin/hide', {
                 method: 'POST', headers: requestHeaders(), body: JSON.stringify({paths, hidden}),
             });
-            selected.clear();
-            selectionKind = null;
+            clearMediaSelection();
             await renderTree();
         },
     );

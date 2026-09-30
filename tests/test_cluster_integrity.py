@@ -27,7 +27,7 @@ class ClusterUploadPathTests(unittest.IsolatedAsyncioTestCase):
             filename="ignored.mp3",
             size_bytes=1024,
         )
-        with patch.object(cluster.node_catalog, "resources", new=AsyncMock(return_value=[])):
+        with patch.object(cluster, "_category_layout_conflict", new=AsyncMock(return_value=False)):
             self.assertEqual(
                 await cluster._upload_logical_path(payload),
                 "music/黄耀明/大型演出/达明一派_1996年万岁.mp3",
@@ -40,7 +40,7 @@ class ClusterUploadPathTests(unittest.IsolatedAsyncioTestCase):
             filename="ignored.mp3",
             size_bytes=1024,
         )
-        with patch.object(cluster.node_catalog, "resources", new=AsyncMock(return_value=[])):
+        with patch.object(cluster, "_category_layout_conflict", new=AsyncMock(return_value=False)):
             self.assertEqual(
                 await cluster._upload_logical_path(payload),
                 "music/黄耀明/大型演出/song.mp3",
@@ -50,7 +50,7 @@ class ClusterUploadPathTests(unittest.IsolatedAsyncioTestCase):
         payload = cluster.ClusterUploadReservation(
             target_dir="music", filename="song.mp3", size_bytes=1024,
         )
-        with patch.object(cluster.node_catalog, "resources", new=AsyncMock(return_value=[])):
+        with patch.object(cluster, "_category_layout_conflict", new=AsyncMock(return_value=False)):
             with self.assertRaises(HTTPException):
                 await cluster._upload_logical_path(payload)
 
@@ -61,9 +61,20 @@ class ClusterUploadPathTests(unittest.IsolatedAsyncioTestCase):
             filename="ignored.mp3",
             size_bytes=1024,
         )
-        with patch.object(cluster.node_catalog, "resources", new=AsyncMock(return_value=[])):
+        with patch.object(cluster, "_category_layout_conflict", new=AsyncMock(return_value=False)):
             with self.assertRaises(HTTPException):
                 await cluster._upload_logical_path(payload)
+
+    async def test_incompatible_existing_category_layout_is_rejected_by_bounded_query(self):
+        payload = cluster.ClusterUploadReservation(
+            target_dir="music/artist", filename="song.mp3", size_bytes=1024,
+        )
+        conflict = AsyncMock(return_value=True)
+        with patch.object(cluster, "_category_layout_conflict", new=conflict):
+            with self.assertRaises(HTTPException):
+                await cluster._upload_logical_path(payload)
+
+        conflict.assert_awaited_once_with("music/artist", 3)
 
     def test_auto_placement_is_not_a_real_member_id(self):
         self.assertIsNone(cluster._preferred_member(None))

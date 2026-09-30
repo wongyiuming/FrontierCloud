@@ -17,6 +17,8 @@ class LyricsFolderAdminUIContractTests(unittest.TestCase):
         self.assertIn('id="lyricsFolderInput"', html)
         self.assertIn('id="lyricsAutoLink"', html)
         self.assertIn("api('/api/v1/media/admin/lyrics/auto-relate'", admin)
+        self.assertEqual(admin.count("/api/v1/media/admin/lyrics/auto-relate"), 1)
+        self.assertIn("JSON.stringify({manual: true})", admin)
         self.assertIn("formData.append('relative_path', relativePaths[index])", admin)
         self.assertIn("formData.append('relative_path', relativePaths[index])", integrity)
 
