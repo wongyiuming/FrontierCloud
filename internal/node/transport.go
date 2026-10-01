@@ -97,6 +97,38 @@ type StorageClient interface {
 type RecordingClient interface {
 	RecordingUpload(context.Context, string, string, string, string, io.Reader, int64) (map[string]any, error)
 }
+
+type MediaReadClient interface {
+	MediaRead(context.Context, string, string, string, string, string, int64) (io.ReadCloser, error)
+}
+
+// MediaRead is data-plane streaming, never a JSON/control request. TLS, DNS,
+// redirect and proxy policy are identical to uploads, with caller cancellation.
+func (t *Transport) MediaRead(ctx context.Context, origin, objectID, resourceID, owner, token string, size int64) (io.ReadCloser, error) {
+	origin, err := Endpoint(origin)
+	if err != nil {
+		return nil, err
+	}
+	if !resourceIdentifier.MatchString(objectID) || !resourceIdentifier.MatchString(resourceID) || !nodeIdentifier.MatchString(owner) || token == "" || len(token) > 4096 || size < 0 {
+		return nil, ErrCapability
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", origin+"/internal/v1/media/"+objectID, nil)
+	if err != nil {
+		return nil, errors.New("invalid media download request")
+	}
+	req.Header.Set("X-Media-Capability", token)
+	req.Header.Set("Accept-Encoding", "identity")
+	resp, err := t.storage.Do(req)
+	if err != nil {
+		return nil, errors.New("verified media download unavailable")
+	}
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Encoding") != "" && resp.Header.Get("Content-Encoding") != "identity" || len(resp.Header.Values("X-Media-Object-ID")) != 1 || len(resp.Header.Values("X-Media-Resource-ID")) != 1 || len(resp.Header.Values("X-Media-Owner-ID")) != 1 || resp.Header.Get("X-Media-Object-ID") != objectID || resp.Header.Get("X-Media-Resource-ID") != resourceID || resp.Header.Get("X-Media-Owner-ID") != owner || resp.ContentLength >= 0 && resp.ContentLength != size {
+		resp.Body.Close()
+		return nil, errors.New("media download placement or response mismatch")
+	}
+	return resp.Body, nil
+}
+
 type Transport struct{ client, backup, storage *http.Client }
 
 func NewTransport() *Transport { return transportWithRoots(nil) }

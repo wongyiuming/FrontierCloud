@@ -1,7 +1,10 @@
 package httpapi
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,6 +63,41 @@ func TestGlobalRenameMixedOwnersOfflineRestartAndLegacyLostReplyConverge(t *test
 			t.Fatal(err)
 		}
 		tickets = append(tickets, ticket)
+	}
+	download, err := master.public.media.Download(ctx, []string{old, tickets[0].Path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err = download.ZIP(&output)
+	download.Close()
+	if err != nil {
+		t.Fatal("mixed node archive", err)
+	}
+	archive, err := zip.NewReader(bytes.NewReader(output.Bytes()), int64(output.Len()))
+	if err != nil || len(archive.File) != 3 {
+		t.Fatal("archive duplicates or missing objects", archive, err)
+	}
+	for _, file := range archive.File {
+		reader, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(reader)
+		reader.Close()
+		if err != nil || string(data) != "ID3payload" || file.Method != zip.Store {
+			t.Fatal("archive content", file.Name, err)
+		}
+	}
+	single, err := master.public.media.Download(ctx, []string{tickets[1].Path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	err = single.StreamRemoteSingle(&output)
+	single.Close()
+	if err != nil || output.String() != "ID3payload" {
+		t.Fatal("remote single attachment stream", err)
 	}
 	op, err := master.db.Pool().PrepareGlobalRename(ctx, old, target, store.AdminAudit{RequestID: "mixed-rename"})
 	if err != nil || len(op.Media) != 3 {

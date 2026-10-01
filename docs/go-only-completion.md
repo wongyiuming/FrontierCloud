@@ -179,6 +179,17 @@ and completed native rename manifests must be drained by native maintenance
 before a Python rollback. That maintenance/rollback workflow is still a gate;
 no original node or database has been switched to the new runtime.
 
+Master Admin attachments now stream remote Direct/Relay bytes through the
+authenticated Master instead of redirecting the browser or requiring a local
+copy. ZIP selection spans Primary/Direct/Relay placements, deduplicates overlaps
+and uses stored entries with bounded buffers. Each remote response is pinned to
+object/resource/owner IDs over the verified TLS data plane; byte length, EOF and
+available native SHA-256 proofs are checked before releasing the final block.
+Offline failures before bytes return retryable JSON, and interrupted archives
+never receive a successful ZIP footer. Real Redis Admin authentication and
+mixed-owner HTTP download tests, private-CA transport tests, full Go/vet checks,
+real MySQL regression and the complete Linux race suite passed (2026-10-02).
+
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.
 The default deployment and updater still contain Python and must be replaced

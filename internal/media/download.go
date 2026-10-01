@@ -21,6 +21,7 @@ type Download struct {
 	Items   []store.DeleteItem
 	release sync.Once
 	lease   func()
+	globals []store.GlobalMedia
 }
 
 func (d *Download) Close() { d.release.Do(d.lease) }
@@ -38,12 +39,47 @@ func (s *Service) Download(ctx context.Context, paths []string) (*Download, erro
 	if len(paths) == 0 {
 		return fail(ErrPath)
 	}
+	role, err := s.role(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	if role == "Follower" {
+		return fail(store.ErrNodeState)
+	}
+	globalSeen := map[string]bool{}
 	seen := map[string]bool{}
 	for _, name := range paths {
 		if err := ctx.Err(); err != nil {
 			return fail(err)
 		}
 		name = strings.TrimSpace(strings.ReplaceAll(name, "\\", "/"))
+		if role == "Master" && !strings.HasPrefix(name, "lyrics/") {
+			directory := !managedObject(name, false)
+			if !managedObject(name, directory) {
+				return fail(ErrPath)
+			}
+			rows, err := s.pool.Resources(ctx, name, !directory)
+			if err != nil {
+				return fail(err)
+			}
+			if len(rows) == 0 {
+				return fail(os.ErrNotExist)
+			}
+			for _, row := range rows {
+				if _, _, err := s.resolveGlobal(ctx, row.ID, row.Path); err != nil {
+					return fail(err)
+				}
+				if !globalSeen[row.ID] {
+					globalSeen[row.ID] = true
+					value.globals = append(value.globals, row)
+				}
+			}
+			if !seen[name] {
+				seen[name] = true
+				value.Items = append(value.Items, store.DeleteItem{Path: name, Directory: directory})
+			}
+			continue
+		}
 		info, err := s.safeInfo(name)
 		if err != nil {
 			return fail(err)
@@ -89,6 +125,12 @@ func (d *Download) ZIP(writer io.Writer) error {
 	z := zip.NewWriter(writer)
 	seen := map[string]bool{}
 	buffer := make([]byte, 64*1024)
+	for _, row := range d.globals {
+		if err := d.addGlobalZIP(z, row, buffer); err != nil {
+			return err
+		}
+		seen[row.Path] = true
+	}
 	add := func(name string) error {
 		if seen[name] {
 			return nil
@@ -160,6 +202,9 @@ func (d *Download) ZIP(writer io.Writer) error {
 		return nil
 	}
 	for _, item := range d.Items {
+		if len(d.globals) > 0 && !strings.HasPrefix(item.Path, "lyrics/") {
+			continue
+		}
 		if item.Directory {
 			if err := visit(item.Path); err != nil {
 				return err

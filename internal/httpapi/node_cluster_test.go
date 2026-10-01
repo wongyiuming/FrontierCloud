@@ -29,6 +29,21 @@ import (
 // transport socket/private CA/hostname checks have separate real TLS tests.
 type clusterHTTP struct{ routers map[string]*gin.Engine }
 
+func (t *clusterHTTP) MediaRead(ctx context.Context, origin, objectID, resourceID, owner, token string, size int64) (io.ReadCloser, error) {
+	router := t.routers[origin]
+	if router == nil {
+		return nil, errors.New("offline")
+	}
+	r := httptest.NewRequest("GET", origin+"/internal/v1/media/"+objectID, nil).WithContext(ctx)
+	r.Header.Set("X-Media-Capability", token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
+	if w.Code != 200 || w.Header().Get("X-Media-Object-ID") != objectID || w.Header().Get("X-Media-Resource-ID") != resourceID || w.Header().Get("X-Media-Owner-ID") != owner || int64(w.Body.Len()) != size {
+		return nil, errors.New("media placement mismatch")
+	}
+	return io.NopCloser(bytes.NewReader(w.Body.Bytes())), nil
+}
+
 func (t *clusterHTTP) RecordingUpload(ctx context.Context, origin, id, token, ct string, reader io.Reader, size int64) (map[string]any, error) {
 	router := t.routers[origin]
 	if router == nil {

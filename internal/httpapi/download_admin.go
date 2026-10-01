@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wongyiuming/FrontierCloud/internal/media"
@@ -33,6 +34,25 @@ func (a *Admin) download(c *gin.Context) {
 	c.Header("Cache-Control", "private, no-store")
 	if kind == "single_file" {
 		name := download.Items[0].Path
+		if row, ok := download.RemoteSingle(); ok {
+			c.Header("Referrer-Policy", "no-referrer")
+			c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+media.QuotePath(media.DownloadFilename(name)))
+			c.Header("Content-Type", "application/octet-stream")
+			c.Header("Content-Length", strconv.FormatInt(row.Bytes, 10))
+			c.Header("X-Accel-Buffering", "no")
+			if err := download.StreamRemoteSingle(c.Writer); err != nil {
+				if !c.Writer.Written() {
+					c.Header("Content-Length", "")
+					c.Header("Content-Disposition", "")
+					c.Header("Content-Type", "")
+					mediaAdminError(c, err)
+				} else {
+					slog.Error("remote media download interrupted", "request_id", c.GetString("request_id"), "error", err)
+					c.Abort()
+				}
+			}
+			return
+		}
 		f, info, err := download.Open(name)
 		if err != nil {
 			mediaAdminError(c, err)
@@ -54,7 +74,13 @@ func (a *Admin) download(c *gin.Context) {
 	c.Header("Content-Disposition", `attachment; filename="media-download.zip"`)
 	c.Header("X-Accel-Buffering", "no")
 	if err := download.ZIP(c.Writer); err != nil {
-		slog.Error("media archive stream interrupted", "request_id", c.GetString("request_id"), "error", err)
-		c.Abort()
+		if !c.Writer.Written() {
+			c.Header("Content-Disposition", "")
+			c.Header("Content-Type", "")
+			mediaAdminError(c, err)
+		} else {
+			slog.Error("media archive stream interrupted", "request_id", c.GetString("request_id"), "error", err)
+			c.Abort()
+		}
 	}
 }

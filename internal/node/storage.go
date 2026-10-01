@@ -9,6 +9,25 @@ import (
 
 var storageRenameID = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
+func (s *Service) ReadGlobalMedia(ctx context.Context, v store.GlobalMedia) (io.ReadCloser, error) {
+	if v.RelationshipID == nil {
+		return nil, store.ErrNodeState
+	}
+	token, err := s.MediaCapability(ctx, *v.RelationshipID, v.MemberID, v.ObjectID, v.ID, "archive-download", "")
+	if err != nil {
+		return nil, err
+	}
+	rel, err := s.repo.Relationship(ctx, *v.RelationshipID)
+	if err != nil {
+		return nil, err
+	}
+	client, ok := s.transport.(MediaReadClient)
+	if !ok {
+		return nil, store.ErrNodeState
+	}
+	return client.MediaRead(ctx, rel.Endpoint, v.ObjectID, v.ID, v.MemberID, token, v.Bytes)
+}
+
 func (s *Service) RenameStorage(ctx context.Context, relationship, old, target, operation string) error {
 	if !storageRenameID.MatchString(relationship) || !storageRenameID.MatchString(operation) || !store.ValidDirectoryRename(old, target) {
 		return store.ErrNodeState
