@@ -11,6 +11,8 @@ import (
 	"time"
 
 	driver "github.com/go-sql-driver/mysql"
+	"github.com/wongyiuming/FrontierCloud/internal/store"
+	"github.com/wongyiuming/FrontierCloud/internal/store/business"
 	"github.com/wongyiuming/FrontierCloud/internal/store/schema"
 )
 
@@ -79,3 +81,7 @@ func (store *Store) Ping(ctx context.Context) error {
 func (store *Store) Close() error {
 	return store.database.Close()
 }
+
+func (s *Store) Media() store.MediaRepository { return business.New(s.database, s.Backend()) }
+func (s *Store) Nodes() store.NodeRepository  { return business.New(s.database, s.Backend()) }
+func (s *Store) Admin() store.AdminRepository { return business.New(s.database, s.Backend()) }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/wongyiuming/FrontierCloud/internal/network"
 )
 
 const dependencyTimeout = 2 * time.Second
@@ -17,9 +18,17 @@ type Check func(context.Context) error
 // New returns the initial Gin runtime surface. Public and Admin routes will be
 // added only with matching contract tests against the Python implementation.
 func New(database, redis Check) *gin.Engine {
+	resolver, _ := network.New([]string{"172.16.0.0/12"})
+	return NewWithResolver(database, redis, resolver)
+}
+
+func NewWithResolver(database, redis Check, resolver *network.Resolver) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-	router.Use(gin.Recovery())
+	router.Use(requests(resolver), gin.Recovery())
+	router.HandleMethodNotAllowed = true
+	router.NoRoute(func(c *gin.Context) { detail(c, 404, "Not Found") })
+	router.NoMethod(func(c *gin.Context) { detail(c, 405, "Method Not Allowed") })
 	router.GET("/health/live", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{
 			"status":    "healthy",
@@ -44,9 +53,15 @@ func readiness(database, redis Check) gin.HandlerFunc {
 		results := make(chan result, 2)
 		go func() { results <- result{name: "database", err: database(requestContext)} }()
 		go func() { results <- result{name: "redis", err: redis(requestContext)} }()
-		checks := map[string]string{}
+		checks := map[string]string{"database": "unavailable", "redis": "unavailable"}
+	collect:
 		for range 2 {
-			value := <-results
+			var value result
+			select {
+			case value = <-results:
+			case <-requestContext.Done():
+				break collect
+			}
 			if value.err == nil {
 				checks[value.name] = "ready"
 			} else {

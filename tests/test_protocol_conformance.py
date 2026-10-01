@@ -19,6 +19,11 @@ def vector(name: str) -> dict:
 
 
 class ProtocolConformanceTests(unittest.TestCase):
+    def test_fernet_persistent_vault_vector(self):
+        from cryptography.fernet import Fernet
+        value = vector("fernet.json")
+        self.assertEqual(Fernet(value["key"].encode()).decrypt(value["token"].encode()).decode(), value["plaintext"])
+
     def test_protocol_assets_are_valid_json_and_versioned(self):
         for path in sorted((*VECTOR_ROOT.glob("*.json"), *SCHEMA_ROOT.glob("*.json"))):
             value = json.loads(path.read_text(encoding="utf-8"))

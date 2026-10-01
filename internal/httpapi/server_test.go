@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func pass(context.Context) error { return nil }
@@ -47,5 +48,17 @@ func TestAllHealthPathsAreAvailable(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("%s returned %d", path, response.Code)
 		}
+	}
+}
+
+func TestReadinessBoundsUncooperativeCheck(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	blocked := func(context.Context) error { <-release; return nil }
+	start := time.Now()
+	w := httptest.NewRecorder()
+	New(blocked, pass).ServeHTTP(w, httptest.NewRequest("GET", "/health/ready", nil))
+	if w.Code != 503 || time.Since(start) > dependencyTimeout+500*time.Millisecond {
+		t.Fatalf("probe not bounded: %d %v", w.Code, time.Since(start))
 	}
 }

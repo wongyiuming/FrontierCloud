@@ -1,0 +1,896 @@
+[
+  {
+    "path": "/internal/v1/identity",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.internal_nodes.identity"
+  },
+  {
+    "path": "/internal/v1/pair",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_nodes.pair"
+  },
+  {
+    "path": "/internal/v1/confirm",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_nodes.confirm"
+  },
+  {
+    "path": "/internal/v1/revoke",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_nodes.revoke"
+  },
+  {
+    "path": "/internal/v1/heartbeat",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_nodes.heartbeat"
+  },
+  {
+    "path": "/internal/v1/backup/begin",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_nodes.backup_begin"
+  },
+  {
+    "path": "/internal/v1/backup/chunk",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_nodes.backup_chunk"
+  },
+  {
+    "path": "/internal/v1/backup/commit",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_nodes.backup_commit"
+  },
+  {
+    "path": "/internal/v1/storage/{original}",
+    "methods": [
+      "OPTIONS"
+    ],
+    "handler": "app.api.internal_nodes.storage_preflight"
+  },
+  {
+    "path": "/internal/v1/storage/{original}/delete",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_nodes.storage_delete"
+  },
+  {
+    "path": "/internal/v1/media/{original}",
+    "methods": [
+      "GET",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "handler": "app.api.internal_nodes.owned_media"
+  },
+  {
+    "path": "/internal/v1/recordings/{recording_id}",
+    "methods": [
+      "OPTIONS"
+    ],
+    "handler": "app.api.internal_nodes.recording_preflight"
+  },
+  {
+    "path": "/internal/v1/recordings/{recording_id}",
+    "methods": [
+      "GET",
+      "HEAD",
+      "PUT"
+    ],
+    "handler": "app.api.internal_nodes.recording_bytes"
+  },
+  {
+    "path": "/internal/v1/recordings/{recording_id}/stat",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_nodes.recording_stat"
+  },
+  {
+    "path": "/internal/v1/recordings/{recording_id}/delete",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_nodes.recording_delete"
+  },
+  {
+    "path": "/internal/v1/recordings/users/{user_id}/delete",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_nodes.recording_user_delete"
+  },
+  {
+    "path": "/internal/v1/storage/{original}",
+    "methods": [
+      "PUT"
+    ],
+    "handler": "app.api.internal_storage_integrity.storage_upload"
+  },
+  {
+    "path": "/internal/v1/storage/{original}/stat",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_storage_integrity.storage_stat"
+  },
+  {
+    "path": "/internal/v1/cluster-update/start",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_cluster_update.start"
+  },
+  {
+    "path": "/internal/v1/cluster-update/status",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_cluster_update.status"
+  },
+  {
+    "path": "/internal/v1/backup/abort",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_backup_control.abort"
+  },
+  {
+    "path": "/internal/v1/storage-control/directory-rename",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_media_control.directory_rename"
+  },
+  {
+    "path": "/internal/v1/playback-continuity-diagnostics",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.internal_playback_diagnostics.relay"
+  },
+  {
+    "path": "/api/v1/media/brand/logo/{kind}",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.brand.public_logo"
+  },
+  {
+    "path": "/api/v1/media/catalog/categories",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.get_media_categories_data"
+  },
+  {
+    "path": "/api/v1/media/catalog/media",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.get_media_catalog_data"
+  },
+  {
+    "path": "/api/v1/media/stream",
+    "methods": [
+      "HEAD"
+    ],
+    "handler": "app.api.v1.media.stream_media_file"
+  },
+  {
+    "path": "/api/v1/media/stream",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.stream_media_file"
+  },
+  {
+    "path": "/api/v1/media",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.get_media_index_page"
+  },
+  {
+    "path": "/api/v1/media/",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.get_media_index_page"
+  },
+  {
+    "path": "/api/v1/media/refresh",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.refresh_media_interface"
+  },
+  {
+    "path": "/api/v1/media/music",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.get_music_categories_page"
+  },
+  {
+    "path": "/api/v1/media/video",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.get_video_categories_page"
+  },
+  {
+    "path": "/api/v1/media/music/category",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.get_music_player_page"
+  },
+  {
+    "path": "/api/v1/media/video/category",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.get_video_player_page"
+  },
+  {
+    "path": "/api/v1/media/lyrics",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.get_lyrics_page"
+  },
+  {
+    "path": "/api/v1/media/lyrics/content",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.media.get_lyrics_content"
+  },
+  {
+    "path": "/api/v1/media/playback",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.media.report_playback"
+  },
+  {
+    "path": "/api/v1/media/network-observation",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.media.report_network_observation"
+  },
+  {
+    "path": "/api/v1/media/playback-continuity-diagnostics",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.playback_continuity_diagnostics.submit"
+  },
+  {
+    "path": "/api/v1/karaoke/context",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.karaoke.context"
+  },
+  {
+    "path": "/api/v1/karaoke/stream",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "handler": "app.api.v1.karaoke.stream"
+  },
+  {
+    "path": "/api/v1/karaoke/lyrics",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.karaoke.lyric_entries"
+  },
+  {
+    "path": "/api/v1/karaoke/account/status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.karaoke_integrity.status"
+  },
+  {
+    "path": "/api/v1/karaoke/account/recordings",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.karaoke_integrity.recordings"
+  },
+  {
+    "path": "/api/v1/karaoke/account/recordings/ticket",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.karaoke_integrity.create_ticket"
+  },
+  {
+    "path": "/api/v1/karaoke/account/recordings/{recording_id}/pending",
+    "methods": [
+      "DELETE"
+    ],
+    "handler": "app.api.v1.karaoke_integrity.cancel_pending"
+  },
+  {
+    "path": "/api/v1/karaoke/account/recordings/{recording_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "handler": "app.api.v1.karaoke_integrity.delete_recording"
+  },
+  {
+    "path": "/api/v1/karaoke/account",
+    "methods": [
+      "DELETE"
+    ],
+    "handler": "app.api.v1.karaoke_integrity.delete_account"
+  },
+  {
+    "path": "/api/v1/karaoke/account/captcha",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.karaoke_users.captcha"
+  },
+  {
+    "path": "/api/v1/karaoke/account/captcha/{challenge}",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.karaoke_users.captcha_image"
+  },
+  {
+    "path": "/api/v1/karaoke/account/register",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.karaoke_users.register"
+  },
+  {
+    "path": "/api/v1/karaoke/account/login",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.karaoke_users.login"
+  },
+  {
+    "path": "/api/v1/karaoke/account/logout",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.karaoke_users.logout"
+  },
+  {
+    "path": "/api/v1/karaoke/account/password",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.karaoke_users.change_password"
+  },
+  {
+    "path": "/api/v1/karaoke/account/recordings/{recording_id}/content",
+    "methods": [
+      "PUT"
+    ],
+    "handler": "app.api.v1.karaoke_users.relay_upload"
+  },
+  {
+    "path": "/api/v1/karaoke/account/recordings/{recording_id}/finalize",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.karaoke_users.finalize"
+  },
+  {
+    "path": "/api/v1/karaoke/account/recordings/{recording_id}/stream",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.karaoke_users.recording_stream"
+  },
+  {
+    "path": "/api/v1/karaoke/account/recordings/{recording_id}/download",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.karaoke_users.recording_download"
+  },
+  {
+    "path": "/api/v1/media/admin/upload/brand/{kind}",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.brand.upload_logo"
+  },
+  {
+    "path": "/api/v1/media/admin/brand/",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.brand.logo_status"
+  },
+  {
+    "path": "/api/v1/media/admin/brand",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.brand.logo_status"
+  },
+  {
+    "path": "/api/v1/media/admin/brand/{kind}/download",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.brand.download_logo"
+  },
+  {
+    "path": "/api/v1/media/admin/brand/{kind}",
+    "methods": [
+      "DELETE"
+    ],
+    "handler": "app.api.v1.brand.delete_logo"
+  },
+  {
+    "path": "/api/v1/media/admin/site/maintenance",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_site.maintenance_status"
+  },
+  {
+    "path": "/api/v1/media/admin/site/maintenance",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_site.maintenance_change"
+  },
+  {
+    "path": "/api/v1/media/admin/upload/item",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_upload_guard.upload_item"
+  },
+  {
+    "path": "/api/v1/media/admin/upload/lyric",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_upload_guard.upload_lyric"
+  },
+  {
+    "path": "/api/v1/media/admin/upload/session",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_master_mutation_integrity.create_upload_session"
+  },
+  {
+    "path": "/api/v1/media/admin/hide",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_master_mutation_integrity.hide_objects"
+  },
+  {
+    "path": "/api/v1/media/admin/delete",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_master_mutation_integrity.delete_objects"
+  },
+  {
+    "path": "/api/v1/media/admin/storage-pool",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_masterlocal_recovery.storage_pool"
+  },
+  {
+    "path": "/api/v1/media/admin/upload/session/{upload_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "handler": "app.api.v1.admin_delete_integrity.cancel_upload_session"
+  },
+  {
+    "path": "/api/v1/media/admin/",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_page_integrity.admin_page"
+  },
+  {
+    "path": "/api/v1/media/admin",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_page_integrity.admin_page"
+  },
+  {
+    "path": "/api/v1/media/admin/directory-priorities",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_directories.directory_priorities"
+  },
+  {
+    "path": "/api/v1/media/admin/directory-priority",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_directories.directory_priority"
+  },
+  {
+    "path": "/api/v1/media/admin/directory/rename",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_directories.rename_directory"
+  },
+  {
+    "path": "/api/v1/media/admin/tree",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_cluster_integrity.admin_tree"
+  },
+  {
+    "path": "/api/v1/media/admin/tree/search",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_cluster_integrity.admin_tree_search"
+  },
+  {
+    "path": "/api/v1/media/admin/upload/session/{upload_id}/bytes",
+    "methods": [
+      "PUT"
+    ],
+    "handler": "app.api.v1.admin_cluster_integrity.upload_session_bytes"
+  },
+  {
+    "path": "/api/v1/media/admin/upload/session/{upload_id}/finalize",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_cluster_integrity.finalize_direct_upload"
+  },
+  {
+    "path": "/api/v1/media/admin/download",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_cluster_integrity.download_objects"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes/{identifier}/revoke",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_cluster_integrity.revoke_node"
+  },
+  {
+    "path": "/api/v1/media/admin/elevate",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.elevate"
+  },
+  {
+    "path": "/api/v1/media/admin/status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin.admin_status"
+  },
+  {
+    "path": "/api/v1/media/admin/media-priority",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin.media_priority"
+  },
+  {
+    "path": "/api/v1/media/admin/media-priority",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.update_media_priority"
+  },
+  {
+    "path": "/api/v1/media/admin/lyrics/catalog",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin.lyric_catalog"
+  },
+  {
+    "path": "/api/v1/media/admin/lyrics/relations",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.lyric_relations"
+  },
+  {
+    "path": "/api/v1/media/admin/lyrics/auto-relate",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.lyric_auto_relate"
+  },
+  {
+    "path": "/api/v1/media/admin/key/rotate",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.admin_key_rotate"
+  },
+  {
+    "path": "/api/v1/media/admin/key/temporary",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.admin_temporary_key"
+  },
+  {
+    "path": "/api/v1/media/admin/security/blocks",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin.security_blocks"
+  },
+  {
+    "path": "/api/v1/media/admin/security/unban",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.security_unban"
+  },
+  {
+    "path": "/api/v1/media/admin/security/reban",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.security_reban"
+  },
+  {
+    "path": "/api/v1/media/admin/security/permanent-ban",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.security_permanent_ban"
+  },
+  {
+    "path": "/api/v1/media/admin/security/whitelist",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.security_whitelist"
+  },
+  {
+    "path": "/api/v1/media/admin/security/whitelist/remove",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.security_whitelist_remove"
+  },
+  {
+    "path": "/api/v1/media/admin/network/observations",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin.network_observations"
+  },
+  {
+    "path": "/api/v1/media/admin/logout",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin.logout"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_nodes.status"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes/release",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_nodes.release_status"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes/release/upgrade",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_nodes.release_upgrade"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes/release/rollback",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_nodes.release_rollback"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes/promote",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_nodes.promote"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes/reinitialize",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_nodes.reinitialize"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes/pair-package",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_nodes.pairing_package"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes/pair",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_nodes.import_package"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes/{identifier}/mode",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_nodes.change_mode"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes/{identifier}/resources",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_nodes.resource_settings"
+  },
+  {
+    "path": "/api/v1/media/admin/nodes/observability",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_node_observability.observability"
+  },
+  {
+    "path": "/api/v1/media/admin/playback-continuity-diagnostics",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.playback_continuity_diagnostics.snapshot"
+  },
+  {
+    "path": "/api/v1/media/admin/playback-continuity-diagnostics",
+    "methods": [
+      "DELETE"
+    ],
+    "handler": "app.api.v1.playback_continuity_diagnostics.clear"
+  },
+  {
+    "path": "/api/v1/media/admin/users",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.admin_karaoke_integrity.list_users"
+  },
+  {
+    "path": "/api/v1/media/admin/users/{user_id}",
+    "methods": [
+      "POST"
+    ],
+    "handler": "app.api.v1.admin_karaoke_integrity.mutate_user"
+  },
+  {
+    "path": "/api/v1/health",
+    "methods": [
+      "GET"
+    ],
+    "handler": "app.api.v1.endpoints.health_check"
+  },
+  {
+    "path": "/metrics",
+    "methods": [
+      "GET"
+    ],
+    "handler": "main.metrics"
+  },
+  {
+    "path": "/health/live",
+    "methods": [
+      "GET"
+    ],
+    "handler": "main.health_live"
+  },
+  {
+    "path": "/health",
+    "methods": [
+      "GET"
+    ],
+    "handler": "main.health_ready"
+  },
+  {
+    "path": "/health/ready",
+    "methods": [
+      "GET"
+    ],
+    "handler": "main.health_ready"
+  },
+  {
+    "path": "/openapi.json",
+    "methods": [
+      "GET"
+    ],
+    "handler": "main.protected_openapi"
+  },
+  {
+    "path": "/docs",
+    "methods": [
+      "GET"
+    ],
+    "handler": "main.protected_docs"
+  },
+  {
+    "path": "/redoc",
+    "methods": [
+      "GET"
+    ],
+    "handler": "main.protected_redoc"
+  },
+  {
+    "path": "/favicon.ico",
+    "methods": [
+      "GET"
+    ],
+    "handler": "main.get_favicon"
+  },
+  {
+    "path": "/",
+    "methods": [
+      "GET"
+    ],
+    "handler": "main.root"
+  },
+  {
+    "path": "/karaoke/",
+    "methods": [
+      "GET"
+    ],
+    "handler": "main.karaoke_page"
+  }
+]

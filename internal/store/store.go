@@ -11,4 +11,7 @@ type Store interface {
 	Ping(context.Context) error
 	Initialize(context.Context) error
 	Close() error
+	Media() MediaRepository
+	Nodes() NodeRepository
+	Admin() AdminRepository
 }

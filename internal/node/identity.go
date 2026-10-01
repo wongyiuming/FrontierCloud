@@ -1,0 +1,71 @@
+package node
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/wongyiuming/FrontierCloud/internal/protocol"
+	"github.com/wongyiuming/FrontierCloud/internal/store"
+	"github.com/wongyiuming/FrontierCloud/internal/vault"
+)
+
+type Identity struct {
+	store.NodeIdentity
+	private ed25519.PrivateKey
+	vault   *vault.Vault
+}
+
+func Initialize(ctx context.Context, repo store.NodeRepository, secrets string) (*Identity, error) {
+	v, err := vault.Open(secrets)
+	if err != nil {
+		return nil, err
+	}
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	encrypted, err := v.Seal(protocol.Encode(private.Seed()))
+	if err != nil {
+		return nil, err
+	}
+	id := make([]byte, 16)
+	if _, err = rand.Read(id); err != nil {
+		return nil, err
+	}
+	row, err := repo.InitializeIdentity(ctx, store.NodeIdentity{ID: hex.EncodeToString(id), Role: "Standalone", PrivateKey: encrypted, CreatedAt: time.Now().Unix()})
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := v.Unseal(row.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt persistent node identity: %w", err)
+	}
+	seed, err := protocol.Decode(encoded)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("invalid node private key")
+	}
+	return &Identity{row, ed25519.NewKeyFromSeed(seed), v}, nil
+}
+
+func (n *Identity) KaraokeHandle(id string, global bool) (string, error) {
+	kind := "standalone"
+	if global {
+		kind = "global"
+	}
+	encoded, err := json.Marshal(map[string]any{"v": 1, "kind": kind, "id": id})
+	if err != nil {
+		return "", err
+	}
+	return n.vault.Seal(string(encoded))
+}
+
+func ResourceID(owner, id string) string {
+	sum := sha256.Sum256([]byte(owner + ":" + id))
+	return hex.EncodeToString(sum[:])
+}

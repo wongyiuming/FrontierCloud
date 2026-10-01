@@ -9,7 +9,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/wongyiuming/FrontierCloud/internal/store"
+	"github.com/wongyiuming/FrontierCloud/internal/store/business"
 	"github.com/wongyiuming/FrontierCloud/internal/store/schema"
 
 	_ "modernc.org/sqlite"
@@ -33,7 +36,12 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(absolute), 0o750); err != nil {
 		return nil, fmt.Errorf("create SQLite directory: %w", err)
 	}
-	databaseURL := &url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
+	uriPath := filepath.ToSlash(absolute)
+	// A Windows volume needs file:///C:/..., not file://C:/... (authority).
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	databaseURL := &url.URL{Scheme: "file", Path: uriPath}
 	query := databaseURL.Query()
 	query.Set("_busy_timeout", "5000")
 	query.Set("_defensive", "1")
@@ -74,6 +82,10 @@ func (store *Store) Ping(ctx context.Context) error {
 func (store *Store) Close() error {
 	return store.database.Close()
 }
+
+func (s *Store) Media() store.MediaRepository { return business.New(s.database, s.Backend()) }
+func (s *Store) Nodes() store.NodeRepository  { return business.New(s.database, s.Backend()) }
+func (s *Store) Admin() store.AdminRepository { return business.New(s.database, s.Backend()) }
 
 // Database is intentionally package-local infrastructure access. Handlers must
 // depend on domain store interfaces rather than this connection pool.

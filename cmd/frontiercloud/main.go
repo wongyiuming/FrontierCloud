@@ -12,12 +12,17 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/wongyiuming/FrontierCloud/internal/admin"
 	"github.com/wongyiuming/FrontierCloud/internal/bootstrap"
 	"github.com/wongyiuming/FrontierCloud/internal/config"
 	"github.com/wongyiuming/FrontierCloud/internal/httpapi"
+	"github.com/wongyiuming/FrontierCloud/internal/media"
+	"github.com/wongyiuming/FrontierCloud/internal/network"
+	"github.com/wongyiuming/FrontierCloud/internal/node"
 	storecontract "github.com/wongyiuming/FrontierCloud/internal/store"
 	mysqlstore "github.com/wongyiuming/FrontierCloud/internal/store/mysql"
 	sqlitestore "github.com/wongyiuming/FrontierCloud/internal/store/sqlite"
+	"path/filepath"
 )
 
 func main() {
@@ -49,9 +54,17 @@ func command(arguments []string) error {
 		defer cancel()
 		return database.Initialize(ctx)
 	case "init-secrets":
-		return bootstrap.InitializeSecrets("/run/frontiercloud-secrets")
+		settings, err := config.Load()
+		if err != nil {
+			return err
+		}
+		return bootstrap.InitializeSecrets(settings.SecretsDirectory)
 	case "init-media":
-		return bootstrap.InitializeMedia("/app/data")
+		settings, err := config.Load()
+		if err != nil {
+			return err
+		}
+		return bootstrap.InitializeMedia(settings.DataRoot)
 	case "healthcheck":
 		return healthcheck()
 	default:
@@ -74,6 +87,20 @@ func serve() error {
 	if err := database.Initialize(initialization); err != nil {
 		return err
 	}
+	identity, err := node.Initialize(initialization, database.Nodes(), settings.SecretsDirectory)
+	if err != nil {
+		return err
+	}
+	// Refuse existing cluster roles until their full control/storage implementation
+	// is available. A partial runtime must never silently take over a Master.
+	if identity.Role != "Standalone" {
+		return fmt.Errorf("Go cluster runtime is not yet complete for existing %s nodes", identity.Role)
+	}
+	mediaService, err := media.New(filepath.Join(settings.DataRoot, "media"), database.Media(), identity)
+	if err != nil {
+		return err
+	}
+	defer mediaService.Close()
 
 	redisOptions, err := redis.ParseURL(settings.RedisURL)
 	if err != nil {
@@ -82,9 +109,25 @@ func serve() error {
 	redisClient := redis.NewClient(redisOptions)
 	defer redisClient.Close()
 
-	handler := httpapi.New(database.Ping, func(ctx context.Context) error {
+	resolver, err := network.New(settings.TrustedProxyNetworks)
+	if err != nil {
+		return err
+	}
+	handler := httpapi.NewWithResolver(database.Ping, func(ctx context.Context) error {
 		return redisClient.Ping(ctx).Err()
-	})
+	}, resolver)
+	public, err := httpapi.RegisterPublic(handler, settings, mediaService)
+	if err != nil {
+		return err
+	}
+	defer public.Close()
+	adminService, err := admin.New(settings, admin.NewRedisCache(redisClient), database.Admin())
+	if err != nil {
+		return err
+	}
+	if _, err := httpapi.RegisterAdmin(handler, settings, adminService, public, identity); err != nil {
+		return err
+	}
 	server := &http.Server{
 		Addr:              settings.HTTPAddress,
 		Handler:           handler,
