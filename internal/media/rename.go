@@ -140,7 +140,7 @@ func (s *Service) Rename(ctx context.Context, old, newName string, audit store.A
 	if roleErr != nil {
 		return RenameResult{}, roleErr
 	}
-	if role == "Follower" || role == "Master" && !strings.HasPrefix(old, "lyrics/") {
+	if role == "Follower" {
 		return RenameResult{}, store.ErrNodeState
 	}
 	old = strings.TrimSpace(strings.ReplaceAll(old, "\\", "/"))
@@ -151,6 +151,19 @@ func (s *Service) Rename(ctx context.Context, old, newName string, audit store.A
 	target := path.Dir(old) + "/" + newName
 	if !renameDirectoryPath(target) {
 		return RenameResult{}, ErrPath
+	}
+	if role == "Master" {
+		if old == target {
+			rows, err := s.pool.Resources(ctx, old, false)
+			if err != nil {
+				return RenameResult{}, err
+			}
+			if len(rows) == 0 {
+				return RenameResult{}, os.ErrNotExist
+			}
+			return RenameResult{Status: "unchanged", Old: old, New: target}, nil
+		}
+		return s.RenameGlobal(ctx, old, target, audit)
 	}
 	return s.renameDirectory(ctx, old, target, "", "", audit, store.NodeAudit{})
 }
@@ -176,6 +189,18 @@ func (s *Service) renameDirectory(ctx context.Context, old, target, id, relation
 	defer release()
 	if err := s.ready(); err != nil {
 		return RenameResult{}, err
+	}
+	if relationship == "" {
+		// Promotion shares this volume lease. Recheck after acquiring it so an
+		// Admin request that began as Standalone cannot mutate Master/Follower
+		// paths outside their quota-aware workflows after a concurrent promotion.
+		role, err := s.role(ctx)
+		if err != nil {
+			return RenameResult{}, err
+		}
+		if role != "Standalone" {
+			return RenameResult{}, store.ErrNodeState
+		}
 	}
 	if relationship != "" {
 		if id != "" {

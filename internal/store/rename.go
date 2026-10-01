@@ -6,6 +6,18 @@ import (
 	"unicode/utf8"
 )
 
+type GlobalRenameOperation struct {
+	Format   string        `json:"format"`
+	Version  int           `json:"version"`
+	ID       string        `json:"id"`
+	MasterID string        `json:"master_id"`
+	Old      string        `json:"old_path"`
+	New      string        `json:"new_path"`
+	State    string        `json:"-"`
+	Media    []GlobalMedia `json:"media"`
+	Audit    AdminAudit    `json:"audit"`
+}
+
 // Directory rename keeps the parent/category unchanged. Both the HTTP boundary
 // and repository use this contract; a journal is never an authorization bypass.
 func ValidDirectoryRename(old, target string) bool {

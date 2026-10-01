@@ -138,6 +138,9 @@ func (r *Repository) ReserveUpload(ctx context.Context, name, site string, size,
 		if node.Role != "Master" {
 			return nodeConflict("Storage Pool uploads require a Master")
 		}
+		if err := r.checkGlobalRenameScopes(ctx, q, []store.DeleteItem{{Path: name}}); err != nil {
+			return err
+		}
 		var count int
 		if err = q.QueryRowContext(ctx, "SELECT COUNT(*) FROM global_media_objects WHERE path_locator=?", locator(name)).Scan(&count); err != nil {
 			return err
@@ -155,7 +158,7 @@ func (r *Repository) ReserveUpload(ctx context.Context, name, site string, size,
 		// layout fence. Expiry alone never proves that physical bytes are gone.
 		category := strings.Join(strings.Split(name, "/")[:2], "/")
 		where, args := r.pathScope("media_path", category, true)
-		query := "SELECT media_path,storage_member_id FROM global_media_objects WHERE state IN ('active','pending_delete') AND " + where + " UNION ALL SELECT media_path,storage_member_id FROM cluster_upload_sessions WHERE state='reserved' AND " + where
+		query := "SELECT media_path,storage_member_id FROM global_media_objects WHERE state IN ('active','pending_delete','renaming') AND " + where + " UNION ALL SELECT media_path,storage_member_id FROM cluster_upload_sessions WHERE state='reserved' AND " + where
 		rows, err := q.QueryContext(ctx, query, append(args, args...)...)
 		if err != nil {
 			return err

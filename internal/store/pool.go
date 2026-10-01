@@ -81,6 +81,12 @@ type PoolRepository interface {
 	CompleteGlobalDelete(context.Context, string, AdminAudit) error
 	PrepareMasterDelete(context.Context, DeleteOperation, AdminAudit) error
 	CommitMasterDelete(context.Context, string, AdminAudit) error
+	PrepareGlobalRename(context.Context, string, string, AdminAudit) (GlobalRenameOperation, error)
+	GlobalRename(context.Context, string) (*GlobalRenameOperation, error)
+	PendingGlobalRenames(context.Context, int) ([]GlobalRenameOperation, error)
+	CompleteGlobalRename(context.Context, string) error
+	CompleteGlobalRenameCleanup(context.Context, string) error
+	DeferGlobalRename(context.Context, string) error
 }
 
 type OwnedStorageRepository interface {

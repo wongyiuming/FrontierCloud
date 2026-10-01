@@ -282,7 +282,7 @@ func (r *Repository) RevokeRelationship(ctx context.Context, id string, confirme
 		if node.Role == "Follower" {
 			query = "SELECT COUNT(*) FROM media_objects WHERE object_kind IN ('audio','video')"
 		} else {
-			query = "SELECT COUNT(*) FROM global_media_objects WHERE storage_member_id=? AND state IN ('active','pending_delete')"
+			query = "SELECT COUNT(*) FROM global_media_objects WHERE storage_member_id=? AND state IN ('active','pending_delete','renaming')"
 			args = []any{v.PeerID}
 		}
 		if err := q.QueryRowContext(ctx, query, args...).Scan(&files); err != nil {

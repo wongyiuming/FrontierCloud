@@ -39,6 +39,9 @@ func (r *Repository) PrepareGlobalDelete(ctx context.Context, scopes []store.Del
 		if n.Role != "Master" {
 			return nodeConflict("only Master deletes global media")
 		}
+		if err := r.checkGlobalRenameScopes(ctx, q, scopes); err != nil {
+			return err
+		}
 		rows, err := q.QueryContext(ctx, "SELECT "+globalColumns+globalTables+" WHERE g.state IN ('active','pending_delete') AND ("+strings.Join(clauses, " OR ")+") ORDER BY g.media_id"+r.lock(), args...)
 		if err != nil {
 			return err

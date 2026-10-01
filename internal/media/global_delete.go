@@ -208,6 +208,9 @@ func (s *Service) RunGlobalDeletes(ctx context.Context) {
 	timer := time.NewTicker(30 * time.Second)
 	defer timer.Stop()
 	for {
+		if err := s.RetryGlobalRenames(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("global directory rename retry failed", "error", err)
+		}
 		if err := s.RetryGlobalDeletes(ctx); err != nil && ctx.Err() == nil {
 			slog.Warn("global media deletion retry failed", "error", err)
 		}

@@ -54,6 +54,7 @@ func TestMasterSessionHTTPPrimaryDirectRelayFinalizeCancelAndPool(t *testing.T) 
 	g.POST("/upload/item", func(c *gin.Context) { a.upload(c, false) })
 	g.GET("/storage-pool", a.storagePool)
 	g.POST("/delete", a.delete)
+	g.POST("/directory/rename", a.renameDirectory)
 	perform := func(method, url, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "https://master.test"+url, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
@@ -173,7 +174,11 @@ func TestMasterSessionHTTPPrimaryDirectRelayFinalizeCancelAndPool(t *testing.T) 
 	if err := fdb.Database().QueryRow("SELECT used_bytes FROM cluster_storage_members").Scan(&used); err != nil || used != 10 {
 		t.Fatal("Follower cleanup quota", used, err)
 	}
-	w = perform("POST", "/api/v1/media/admin/delete", `{"paths":["music/Upload-primary","music/Upload-relay"]}`)
+	w = perform("POST", "/api/v1/media/admin/directory/rename", `{"path":"music/Upload-relay","new_name":"Renamed-relay"}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"renamed"`) {
+		t.Fatal("Master Admin rename", w.Code, w.Body.String())
+	}
+	w = perform("POST", "/api/v1/media/admin/delete", `{"paths":["music/Upload-primary","music/Renamed-relay"]}`)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"deleted":2`) || !strings.Contains(w.Body.String(), `"pending_delete":[]`) {
 		t.Fatal("mixed placement deletion", w.Code, w.Body.String())
 	}

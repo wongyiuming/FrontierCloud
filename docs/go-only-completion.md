@@ -158,8 +158,26 @@ statistics, visibility and completed upload accounting paths without changing
 capacity. Live reservations and unresolved deletes block rename. A Python
 Master's body without operation_id remains accepted. Native HTTP, audit rollback,
 lost-acknowledgement recovery and post-rename deletion/refund checks passed local
-tests, real MySQL, Redis integration and the complete Linux race suite. Master
-multi-owner directory rename remains gated until its durable coordinator is ready.
+tests, real MySQL, Redis integration and the complete Linux race suite.
+
+Master directory rename now uses a durable multi-owner coordinator. Both old
+and new namespaces are fenced before physical moves; affected placements are
+hidden until all exact object destinations are verified. Offline/uncertain
+owners retain their paths and capacity, and bounded background retry rolls
+forward. Local ownership markers survive interruption; a separate SQL cleanup
+phase remains discoverable after a committed-but-unacknowledged reply. Catalog,
+metadata, completed upload paths and success audit commit atomically without
+changing quota. Mixed Primary/Direct/Relay HTTP, simulated legacy lost replies,
+restart, audit rollback, interrupted source markers, promotion races and
+post-rename deletion/refund tests passed local Go/vet checks, real MySQL/Redis
+integration and the full Linux race suite (2026-10-02).
+
+The coordinator reuses the mutation ledger with explicitly typed native rename
+states/manifests, preserving the shared logical table set. The old Python delete
+recovery reader cannot interpret those records: pending operations must finish
+and completed native rename manifests must be drained by native maintenance
+before a Python rollback. That maintenance/rollback workflow is still a gate;
+no original node or database has been switched to the new runtime.
 
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.

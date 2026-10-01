@@ -66,7 +66,7 @@ func (r *Repository) DeleteOperation(ctx context.Context, id string) (*store.Del
 func (r *Repository) deleteOperation(ctx context.Context, q queryer, id string, lock bool) (*store.DeleteOperation, error) {
 	value := store.DeleteOperation{ID: id}
 	var manifest []byte
-	query := "SELECT state,manifest FROM media_delete_operations WHERE operation_id=?"
+	query := "SELECT state,manifest FROM media_delete_operations WHERE operation_id=? AND state NOT IN ('rename_pending','rename_cleanup','rename_done')"
 	if lock {
 		query += r.lock()
 	}
@@ -83,7 +83,7 @@ func (r *Repository) deleteOperation(ctx context.Context, q queryer, id string, 
 	return &value, nil
 }
 func (r *Repository) DeleteOperations(ctx context.Context) ([]store.DeleteOperation, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT operation_id,state,manifest FROM media_delete_operations ORDER BY created_at,operation_id")
+	rows, err := r.db.QueryContext(ctx, "SELECT operation_id,state,manifest FROM media_delete_operations WHERE state NOT IN ('rename_pending','rename_cleanup','rename_done') ORDER BY created_at,operation_id")
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func (r *Repository) DeleteOperations(ctx context.Context) ([]store.DeleteOperat
 }
 func (r *Repository) ForgetDelete(ctx context.Context, id string) error {
 	return r.write(ctx, func(q queryer) error {
-		_, err := q.ExecContext(ctx, "DELETE FROM media_delete_operations WHERE operation_id=?", id)
+		_, err := q.ExecContext(ctx, "DELETE FROM media_delete_operations WHERE operation_id=? AND state IN ('pending','committed')", id)
 		return err
 	})
 }

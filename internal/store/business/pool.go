@@ -85,7 +85,7 @@ func (r *Repository) registerFollower(ctx context.Context, q queryer, v store.Re
 		return err
 	}
 	var mediaUsed, recordingUsed int64
-	if err = q.QueryRowContext(ctx, "SELECT COALESCE(SUM(size_bytes),0) FROM global_media_objects WHERE storage_member_id=? AND state IN ('active','pending_delete')", v.PeerID).Scan(&mediaUsed); err != nil {
+	if err = q.QueryRowContext(ctx, "SELECT COALESCE(SUM(size_bytes),0) FROM global_media_objects WHERE storage_member_id=? AND state IN ('active','pending_delete','renaming')", v.PeerID).Scan(&mediaUsed); err != nil {
 		return err
 	}
 	if err = q.QueryRowContext(ctx, "SELECT COALESCE(SUM(size_bytes),0) FROM karaoke_recordings WHERE storage_member_id=? AND state='ready'", v.PeerID).Scan(&recordingUsed); err != nil {
@@ -151,7 +151,7 @@ func (r *Repository) adoptLocal(ctx context.Context, q queryer, node store.NodeI
 		}
 	}
 	var mediaUsed, recordingUsed int64
-	if err := q.QueryRowContext(ctx, "SELECT COALESCE(SUM(size_bytes),0) FROM global_media_objects WHERE storage_member_id=? AND state IN ('active','pending_delete')", node.ID).Scan(&mediaUsed); err != nil {
+	if err := q.QueryRowContext(ctx, "SELECT COALESCE(SUM(size_bytes),0) FROM global_media_objects WHERE storage_member_id=? AND state IN ('active','pending_delete','renaming')", node.ID).Scan(&mediaUsed); err != nil {
 		return err
 	}
 	if err := q.QueryRowContext(ctx, "SELECT COALESCE(SUM(size_bytes),0) FROM karaoke_recordings WHERE storage_member_id=? AND state='ready'", node.ID).Scan(&recordingUsed); err != nil {
