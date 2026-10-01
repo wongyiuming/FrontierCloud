@@ -36,6 +36,28 @@ func (f fixtureSource) WithBusinessBackup(ctx context.Context, emit func(*os.Roo
 	return emit(f.root)
 }
 
+func TestArtifactOversizedRecordCannotBecomeSendable(t *testing.T) {
+	directory := t.TempDir()
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	cache := t.TempDir()
+	repo := fixtureRepository{export: func(emit func(string, map[string]any) error) error {
+		return emit("node_audit", map[string]any{"detail": strings.Repeat("x", MaxRecordBytes)})
+	}}
+	builder, err := New(repo, fixtureSource{root}, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer builder.Close()
+	if artifact, err := builder.Build(context.Background()); !errors.Is(err, store.ErrBackupState) || artifact != nil {
+		t.Fatal("oversize became sendable", err)
+	}
+	checkScratchEmpty(t, cache)
+}
+
 func TestArtifactPrivateStreamingChecksumFooterLyricAndFailureCleanup(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "lyrics"), 0700); err != nil {

@@ -107,12 +107,14 @@ func (b *Builder) Build(ctx context.Context) (_ *Artifact, resultErr error) {
 	}()
 	digest := sha256.New()
 	output := bufio.NewWriterSize(io.MultiWriter(f, digest), 64*1024)
-	encoder := json.NewEncoder(output)
+	bounded := &recordOutput{writer: output}
+	encoder := json.NewEncoder(bounded)
 	encoder.SetEscapeHTML(false)
 	write := func(value any) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		bounded.remaining = MaxRecordBytes
 		return encoder.Encode(value)
 	}
 	err = b.source.WithBusinessBackup(ctx, func(root *os.Root) error {
@@ -153,6 +155,20 @@ func (b *Builder) Build(ctx context.Context) (_ *Artifact, resultErr error) {
 	}
 	artifact.Bytes, artifact.Checksum = info.Size(), hex.EncodeToString(digest.Sum(nil))
 	return artifact, nil
+}
+
+type recordOutput struct {
+	writer    io.Writer
+	remaining int
+}
+
+func (w *recordOutput) Write(p []byte) (int, error) {
+	if len(p) > w.remaining {
+		return 0, store.ErrBackupState
+	}
+	n, err := w.writer.Write(p)
+	w.remaining -= n
+	return n, err
 }
 
 func walkLyrics(ctx context.Context, root *os.Root, directory string, depth int, emit func(string) error) error {

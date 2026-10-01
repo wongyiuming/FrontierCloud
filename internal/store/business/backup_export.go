@@ -19,16 +19,6 @@ import (
 // The v2 compatibility artifact excludes identity/private keys, relationship
 // credentials, cold backups and runtime mutation journals. Never SELECT caller
 // supplied table names or substitute this artifact for the online database.
-var businessBackupTables = []string{
-	"media_visibility", "media_objects", "media_playback_stats", "media_playback_events",
-	"media_lyric_links", "global_media_objects", "cluster_storage_members",
-	"cluster_compute_members", "cluster_worker_jobs", "cluster_backup_members",
-	"karaoke_users", "karaoke_recordings", "karaoke_registration_daily", "karaoke_audit_log",
-	"admin_audit_log", "webrtc_observation_events", "webrtc_observation_summary",
-	"ip_security_audit_log", "ip_security_summary", "ip_security_projection",
-	"ip_auto_ban_events", "ip_permanent_whitelist", "node_audit",
-}
-
 func (r *Repository) ExportBusinessSnapshot(ctx context.Context, emit func(string, map[string]any) error) error {
 	if emit == nil {
 		return store.ErrBackupState
@@ -74,7 +64,7 @@ func (r *Repository) ExportBusinessSnapshot(ctx context.Context, emit func(strin
 			return store.ErrBackupBusy
 		}
 	}
-	for _, table := range businessBackupTables {
+	for _, table := range store.BusinessBackupTables() {
 		if err := exportBackupTable(ctx, tx, table, emit); err != nil {
 			return err
 		}

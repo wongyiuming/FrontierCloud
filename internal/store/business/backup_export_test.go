@@ -1,13 +1,17 @@
 package business_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
+	"github.com/wongyiuming/FrontierCloud/internal/backup"
 	"github.com/wongyiuming/FrontierCloud/internal/store"
 )
 
@@ -41,8 +45,17 @@ func TestBusinessBackupExportRepeatableSnapshotDatesAndPrivateTableExclusion(t *
 		t.Fatal(err)
 	}
 	var changed, scoreSeen, dateSeen bool
+	var artifact bytes.Buffer
+	encoder := json.NewEncoder(&artifact)
+	const backupGeneration int64 = 1790000000000000123
+	if err := encoder.Encode(map[string]any{"kind": "header", "version": 2, "generation": backupGeneration}); err != nil {
+		t.Fatal(err)
+	}
 	allowed := map[string]bool{}
 	err = db.Backups().ExportBusinessSnapshot(ctx, func(table string, row map[string]any) error {
+		if err := encoder.Encode(map[string]any{"kind": "row", "table": table, "value": row}); err != nil {
+			return err
+		}
 		allowed[table] = true
 		if strings.Contains(table, "identity") || strings.Contains(table, "relationship") || strings.Contains(table, "business_backup") || table == "media_delete_operations" || table == "cluster_upload_sessions" {
 			t.Fatal("private/runtime table leaked", table)
@@ -80,6 +93,14 @@ func TestBusinessBackupExportRepeatableSnapshotDatesAndPrivateTableExclusion(t *
 	})
 	if err != nil || !changed || !scoreSeen || !dateSeen || !allowed["ip_security_projection"] {
 		t.Fatal("snapshot export", err, changed, scoreSeen, dateSeen, allowed)
+	}
+	if err := encoder.Encode(map[string]any{"kind": "end"}); err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(artifact.Bytes())
+	report, err := backup.Preflight(ctx, bytes.NewReader(artifact.Bytes()), backup.Expectation{Generation: backupGeneration, Checksum: hex.EncodeToString(hash[:]), Bytes: int64(artifact.Len())}, t.TempDir())
+	if err != nil || !report.LogicalValid || report.RestoreReady {
+		t.Fatal("real driver exported artifact preflight", report, err)
 	}
 	var score int
 	if err := raw.QueryRow("SELECT play_score FROM media_playback_stats WHERE media_id=?", ids[name]).Scan(&score); err != nil || score != 2 {

@@ -107,6 +107,10 @@ func TestBusinessBackupDeliveryNativeSignedChunksAndVerifiedMasterReceipt(t *tes
 	if err := follower.db.Database().QueryRow("SELECT generation,checksum,size_bytes,chunk_count,state FROM cluster_business_backups WHERE master_id=?", master.id).Scan(&generation, &checksum, &size, &count, &state); err != nil || state != "ready" || count < 2 {
 		t.Fatal("remote manifest", generation, size, count, state, err)
 	}
+	report, err := backup.InspectReady(ctx, follower.db.Backups(), master.id, generation, t.TempDir())
+	if err != nil || !report.LogicalValid || report.RestoreReady || report.Lyrics < 1 {
+		t.Fatal("native delivery recovery preflight", report, err)
+	}
 	rows, err := follower.db.Database().Query("SELECT payload FROM cluster_business_backup_chunks WHERE master_id=? AND generation=? ORDER BY chunk_index", master.id, generation)
 	if err != nil {
 		t.Fatal(err)

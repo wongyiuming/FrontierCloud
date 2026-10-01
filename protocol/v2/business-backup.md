@@ -45,6 +45,11 @@ directory batches and at most 2 MiB per file. Private dot files and symlinks are
 not archived; encountering an unsafe visible symlink fails the export. Media
 and recording audio/video bytes are not in this logical artifact.
 
+Native export and preflight bound each complete JSONL record, including its
+newline, to 16 MiB. Text cells are at most 4 MiB, and preflight JSON nesting is
+bounded to 32. Larger legacy artifacts require explicit migration; they are not
+silently truncated or accepted as safe recovery input.
+
 ## Native consistency and scheduling
 
 All business tables are read from one repeatable database snapshot. Lyric bytes
@@ -82,3 +87,64 @@ be invented from these metadata rows, and an old relationship identifier is not
 authorization to read another node. Safe restore/promotion, legacy ownership
 adoption, crash-cache cleanup and actual mixed-runtime backup interoperability
 are not established merely by producing or receiving this artifact.
+
+## Native read-only preflight
+
+`frontiercloud verify-backup` can inspect a file with an explicit generation and
+expected SHA-256, or an exact historical Master/generation in the configured
+cold backup store. The latter uses one read-only repeatable SQLite/MySQL
+snapshot, including during concurrent two-generation retention. It independently
+checks ready state, exact contiguous chunks, byte totals and checksum at EOF.
+Even an out-of-band oversized SQL BLOB is bounded before driver allocation.
+Partial reads, ignored stream errors, missing chunks and corrupt manifests never
+produce a successful result. No public or internal HTTP read endpoint is added;
+historical local inspection does not require a current pairing credential.
+
+Examples (the generation, checksum and IDs must be the operator's actual values):
+
+```sh
+frontiercloud verify-backup --file /private/business.jsonl \
+  --generation 1790000000000000123 --sha256 EXPECTED_SHA256 \
+  --scratch-dir /private/backup-checks
+frontiercloud verify-backup --master-id HISTORICAL_MASTER_ID \
+  --generation 1790000000000000123 --scratch-dir /private/backup-checks
+```
+
+Preflight never initializes, restores or promotes the authoritative database.
+It creates an isolated native SQLite scratch database in an exact random private
+child of the specified scratch directory, using the embedded shared schema.
+Cross-row state is disk-backed rather than a payload-sized in-memory map; row
+values use parameters and table names come only from the fixed v2 allowlist.
+Ordinary success, rejection and cancellation remove that child's database and
+sidecars. It does not chmod or recursively delete the supplied parent directory.
+POSIX child directories/files are 0700/0600. The directory must not be a symlink.
+Interrupted-process scratch cleanup is still part of the maintenance gate.
+
+Validation includes exact header generation/version and footer/EOF; UTF-8,
+duplicate keys at every JSON level, table/column allowlists, required/null/type
+checks, exact signed 64-bit integers, portable microsecond datetime values,
+varchar lengths, textual JSON validity, unique keys and shared SQL constraints.
+Generated ban columns are recomputed and compared, never directly inserted.
+Ownership/reference IDs and path locators are checked; lyric names cannot escape
+the root or target private paths, and duplicate/oversized/malformed payloads fail.
+The existing plain SQLite datetime and wrapped UTC datetime representations are
+accepted without a runtime-name branch.
+
+Logical checks cover media/statistics/lyric identity consistency, lyric payload
+presence, placement owners, recording owners/users, exact personal recording
+accounting and storage usage lower bounds. Storage may also contain uncatalogued
+physical bytes: preflight does not fabricate accounting equality or refund them.
+Reserved capacity, non-active placements, non-ready recordings and deleting
+accounts are rejected. Username normalization and fixed-cost password-hash
+encoding are checked without running scrypt on untrusted input. Audit/history
+references are not incorrectly treated as live ownership links.
+
+Only after all integrity and logical checks succeed is a count-only report
+emitted, with `logical_valid=true` and always `restore_ready=false`. The report
+contains no row contents, passwords, credentials or private identities. Explicit
+remaining gates are maintenance fencing, identity/relationship remapping,
+physical ownership proofs, and atomic publication/rollback. A caller-supplied
+checksum proves byte integrity, not authenticity. Empty tables have no records
+in v2, so preflight cannot independently prove a table's historical completeness.
+Safe restore must not infer authority from old relationship IDs or reconstruct
+omitted upload/ownership journals without authenticated physical proofs.

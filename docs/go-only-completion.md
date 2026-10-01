@@ -235,6 +235,34 @@ limits are documented in `protocol/v2/business-backup.md`. Safe restore/promotio
 legacy ownership adoption, interrupted-process cache maintenance and actual
 mixed-runtime backup interoperability remain acceptance gates.
 
+Native read-only recovery preflight now inspects exact ready cold generations
+from a repeatable SQLite/MySQL snapshot, surviving concurrent retention without
+mixing manifests or chunks. It rechecks sequence, bounded chunk bytes, totals
+and SHA-256 at EOF; prefix reads, ignored stream errors and out-of-band corrupt
+SQL payloads cannot produce proof. This is local maintenance infrastructure,
+not an online cold-backup read endpoint or restored relationship authority.
+
+The native `verify-backup` command checks a file with an explicit expected hash
+or a configured cold Master/generation without initializing the authoritative
+store. Untrusted rows are staged in a private disk-backed SQLite scratch child
+using the embedded shared schema. Strict framing/duplicate-key/schema/type,
+integer/datetime, generated-column and unique/SQL-constraint checks precede
+cross-row media/lyric/recording ownership and capacity validation. Unsafe lyric
+paths, malformed hash encodings, unresolved reservations and inconsistent
+references fail closed; ordinary failure/cancellation removes the exact scratch
+child. Reports never expose row data and always state `restore_ready=false`.
+This does not establish portable restore, physical ledger adoption or authority
+to overwrite, remap relationships or promote a node.
+
+Cold snapshot retention races and corruption checks passed on real MySQL and
+SQLite; real-driver export and native signed delivery artifacts passed the new
+preflight. Strict malformed-input/capacity/reference tests, read-only CLI role
+preservation, scratch cleanup, full Go/vet checks, real Redis HTTP regression
+and the complete Linux race suite passed (2026-10-02). The Python contract
+oracle also passed 567 tests (4 skipped). All original ten development nodes
+remain running unchanged; neither this report nor those tests establish final
+mixed-runtime recovery or an only-Go deployment.
+
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.
 The default deployment and updater still contain Python and must be replaced

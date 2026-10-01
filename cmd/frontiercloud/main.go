@@ -73,6 +73,8 @@ func command(arguments []string) error {
 		return bootstrap.InitializeMedia(settings.DataRoot)
 	case "healthcheck":
 		return healthcheck()
+	case "verify-backup":
+		return verifyBackupCommand(arguments[1:], os.Stdout)
 	default:
 		return fmt.Errorf("unknown command %q", name)
 	}
