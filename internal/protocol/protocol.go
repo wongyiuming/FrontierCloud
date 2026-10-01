@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -113,7 +114,7 @@ func VerifyAuth(credential string, headers map[string]string, method, path strin
 		return "", errors.New("invalid relationship authentication")
 	}
 	timestamp, err := strconv.ParseInt(stamp, 10, 64)
-	if err != nil || absolute(now-timestamp) > AuthSkewSeconds {
+	if err != nil || timestamp < now-AuthSkewSeconds || timestamp > now+AuthSkewSeconds {
 		return "", errors.New("invalid relationship authentication")
 	}
 	key, err := Decode(credential)
@@ -138,11 +139,22 @@ func VerifyAuth(credential string, headers map[string]string, method, path strin
 	return nonce, nil
 }
 
-func absolute(value int64) int64 {
-	if value < 0 {
-		return -value
+// AuthHeaders creates the bounded, body-bound control-plane authentication.
+func AuthHeaders(credential, relationship, method, path string, body []byte, now int64) (map[string]string, error) {
+	key, err := Decode(credential)
+	if err != nil || len(key) != 48 || !identifier.MatchString(relationship) {
+		return nil, errors.New("invalid relationship credentials")
 	}
-	return value
+	random := make([]byte, 16)
+	if _, err = rand.Read(random); err != nil {
+		return nil, err
+	}
+	stamp, nonce := strconv.FormatInt(now, 10), hex.EncodeToString(random)
+	digest := sha256.Sum256(body)
+	message := strings.Join([]string{relationship, stamp, nonce, strings.ToUpper(method), path, hex.EncodeToString(digest[:])}, "\n")
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(message))
+	return map[string]string{"X-Node-Relationship": relationship, "X-Node-Time": stamp, "X-Node-Nonce": nonce, "X-Node-Signature": hex.EncodeToString(mac.Sum(nil))}, nil
 }
 
 // MediaToken creates a media capability compatible with the Python runtime.

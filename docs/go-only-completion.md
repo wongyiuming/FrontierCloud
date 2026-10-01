@@ -68,6 +68,21 @@ Redis, exact-case metadata deletion, ZIP content and recovery fault injection.
 Remote source hashes were checked against the local files. The Python reference
 suite passes 567 tests (4 skipped), including shared search vectors.
 
+The next verified domain slice includes TLS-verified, pinned Ed25519 node
+challenges, canonical control HMACs, bounded non-redirecting HTTPS transport,
+one-use pairing packages, encrypted relationships, durable replay rejection,
+confirmation/revocation/re-pair, and outbound-only heartbeat reachability.
+Master promotion/adoption is atomic with storage allocation and audit, retaining
+local media IDs. Follower configuration preserves reservations and backup state;
+the retired remote Compute Worker remains disabled.
+
+Real MySQL checks also pass for site-type upload reservations, same-folder
+placement affinity, category layout fences, physical/logical capacity limits,
+and idempotent global publication. Unknown expired physical placements retain
+their reservations until confirmed cleanup. These are domain implementations,
+not yet a complete public/Admin cluster API or media data plane. Production
+currently exposes only the signed node identity endpoint from this slice.
+
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.
 The default deployment and updater still contain Python and must be replaced

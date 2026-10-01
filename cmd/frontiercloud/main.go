@@ -138,6 +138,9 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	controlTransport := node.NewTransport()
+	defer controlTransport.Close()
+	controlService := node.NewService(database.Nodes(), identity, controlTransport)
 	securityService, err := security.New(settings, database.Security())
 	if err != nil {
 		return err
@@ -174,6 +177,7 @@ func serve() error {
 		return err
 	}
 	httpapi.RegisterSecurityAdmin(handler, adminHTTP, securityService)
+	httpapi.RegisterNodeIdentity(handler, settings, resolver, controlService)
 	httpapi.RegisterObservations(handler, adminHTTP, observation.New(database.Observations(), redisClient, settings.WebRTCCooldown), resolver)
 	server := &http.Server{
 		Addr:              settings.HTTPAddress,

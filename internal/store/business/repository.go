@@ -288,57 +288,61 @@ func (r *Repository) RecordPlayback(ctx context.Context, o store.MediaObject, se
 		if err != nil {
 			return err
 		}
-		result.MediaID = id
-		now := time.Now().UTC()
-		stamp := timestamp(now)
-		query := "INSERT INTO media_playback_stats (media_id,media_path,play_score,preference,created_at,updated_at) VALUES (?,?,0,0,?,?)"
-		if r.backend == "sqlite" {
-			query += " ON CONFLICT(media_id) DO UPDATE SET media_path=excluded.media_path"
-		} else {
-			query += " ON DUPLICATE KEY UPDATE media_path=VALUES(media_path)"
-		}
-		if _, err = q.ExecContext(ctx, query, id, o.Path, stamp, stamp); err != nil {
-			return err
-		}
-		insert := r.ignoreInsert() + " INTO media_playback_events (playback_session_id,media_id,counted_at,expires_at) VALUES (?,?,?,?)"
-		args := []any{session, id, stamp, timestamp(now.Add(7 * 24 * time.Hour))}
-		res, err := q.ExecContext(ctx, insert, args...)
-		if err != nil {
-			return err
-		}
-		count, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if count != 1 {
-			deleted, err := q.ExecContext(ctx, "DELETE FROM media_playback_events WHERE playback_session_id=? AND media_id=? AND expires_at<=?", session, id, stamp)
-			if err != nil {
-				return err
-			}
-			removed, err := deleted.RowsAffected()
-			if err != nil {
-				return err
-			}
-			if removed == 1 {
-				res, err = q.ExecContext(ctx, insert, args...)
-				if err != nil {
-					return err
-				}
-				count, err = res.RowsAffected()
-				if err != nil {
-					return err
-				}
-			}
-		}
-		if count == 1 {
-			result.Counted = true
-			if _, err = q.ExecContext(ctx, "UPDATE media_playback_stats SET play_score=play_score+1, updated_at=? WHERE media_id=?", stamp, id); err != nil {
-				return err
-			}
-		}
-		return q.QueryRowContext(ctx, "SELECT play_score,preference FROM media_playback_stats WHERE media_id=?"+r.lock(), id).Scan(&result.PlayScore, &result.Preference)
+		return r.recordPlayback(ctx, q, id, o.Path, session, &result)
 	})
 	return
+}
+
+func (r *Repository) recordPlayback(ctx context.Context, q queryer, id, mediaPath, session string, result *store.PlaybackResult) error {
+	*result = store.PlaybackResult{MediaID: id}
+	now := time.Now().UTC()
+	stamp := timestamp(now)
+	query := "INSERT INTO media_playback_stats (media_id,media_path,play_score,preference,created_at,updated_at) VALUES (?,?,0,0,?,?)"
+	if r.backend == "sqlite" {
+		query += " ON CONFLICT(media_id) DO UPDATE SET media_path=excluded.media_path"
+	} else {
+		query += " ON DUPLICATE KEY UPDATE media_path=VALUES(media_path)"
+	}
+	if _, err := q.ExecContext(ctx, query, id, mediaPath, stamp, stamp); err != nil {
+		return err
+	}
+	insert := r.ignoreInsert() + " INTO media_playback_events (playback_session_id,media_id,counted_at,expires_at) VALUES (?,?,?,?)"
+	args := []any{session, id, stamp, timestamp(now.Add(7 * 24 * time.Hour))}
+	res, err := q.ExecContext(ctx, insert, args...)
+	if err != nil {
+		return err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		deleted, err := q.ExecContext(ctx, "DELETE FROM media_playback_events WHERE playback_session_id=? AND media_id=? AND expires_at<=?", session, id, stamp)
+		if err != nil {
+			return err
+		}
+		removed, err := deleted.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if removed == 1 {
+			res, err = q.ExecContext(ctx, insert, args...)
+			if err != nil {
+				return err
+			}
+			count, err = res.RowsAffected()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if count == 1 {
+		result.Counted = true
+		if _, err = q.ExecContext(ctx, "UPDATE media_playback_stats SET play_score=play_score+1, updated_at=? WHERE media_id=?", stamp, id); err != nil {
+			return err
+		}
+	}
+	return q.QueryRowContext(ctx, "SELECT play_score,preference FROM media_playback_stats WHERE media_id=?"+r.lock(), id).Scan(&result.PlayScore, &result.Preference)
 }
 
 func (r *Repository) LyricPath(ctx context.Context, id string) (string, error) {

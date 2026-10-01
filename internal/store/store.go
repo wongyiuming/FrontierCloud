@@ -16,4 +16,5 @@ type Store interface {
 	Admin() AdminRepository
 	Security() SecurityRepository
 	Observations() ObservationRepository
+	Pool() PoolRepository
 }

@@ -65,7 +65,3 @@ type NodeIdentity struct {
 	PrivateKey string // encrypted with the persistent node vault
 	CreatedAt  int64
 }
-
-type NodeRepository interface {
-	InitializeIdentity(context.Context, NodeIdentity) (NodeIdentity, error)
-}

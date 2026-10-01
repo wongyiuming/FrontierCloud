@@ -21,6 +21,21 @@ type Identity struct {
 	vault   *vault.Vault
 }
 
+func randomNodeID() (string, error) {
+	value := make([]byte, 16)
+	_, err := rand.Read(value)
+	return hex.EncodeToString(value), err
+}
+
+func (n *Identity) signed(row store.NodeIdentity, payload map[string]any) (Envelope, error) {
+	private, err := n.vault.Unseal(row.PrivateKey)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("decrypt persistent node identity: %w", err)
+	}
+	signature, err := protocol.Sign(private, payload)
+	return Envelope{payload, signature}, err
+}
+
 func Initialize(ctx context.Context, repo store.NodeRepository, secrets string) (*Identity, error) {
 	v, err := vault.Open(secrets)
 	if err != nil {
