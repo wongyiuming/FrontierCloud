@@ -79,6 +79,33 @@ func (n *Identity) KaraokeHandle(id string, global bool) (string, error) {
 	}
 	return n.vault.Seal(string(encoded))
 }
+func (n *Identity) ResolveKaraoke(token string) (string, string, error) {
+	if len(token) < 80 || len(token) > 512 {
+		return "", "", ErrCapability
+	}
+	raw, e := n.vault.Unseal(token)
+	if e != nil {
+		return "", "", ErrCapability
+	}
+	var v struct {
+		Version int    `json:"v"`
+		Kind    string `json:"kind"`
+		ID      string `json:"id"`
+	}
+	if json.Unmarshal([]byte(raw), &v) != nil || v.Version != 1 || !resourceIdentifier.MatchString(v.ID) {
+		return "", "", ErrCapability
+	}
+	if v.Kind == "local" {
+		v.Kind = "standalone"
+	}
+	if v.Kind == "remote" {
+		v.Kind = "global"
+	}
+	if v.Kind != "standalone" && v.Kind != "global" {
+		return "", "", ErrCapability
+	}
+	return v.Kind, v.ID, nil
+}
 
 func ResourceID(owner, id string) string {
 	sum := sha256.Sum256([]byte(owner + ":" + id))

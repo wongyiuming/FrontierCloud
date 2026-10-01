@@ -18,4 +18,5 @@ type Store interface {
 	Observations() ObservationRepository
 	Pool() PoolRepository
 	Karaoke() KaraokeRepository
+	Recordings() RecordingRepository
 }

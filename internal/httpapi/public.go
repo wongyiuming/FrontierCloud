@@ -206,6 +206,9 @@ func (p *Public) stream(c *gin.Context) {
 		detail(c, 422, "file_path or resource_id is required")
 		return
 	}
+	p.deliver(c, name, id)
+}
+func (p *Public) deliver(c *gin.Context, name, id string) {
 	delivery, err := p.media.Delivery(c.Request.Context(), name, id, c.GetString("request_id"), c.GetString("trace_id"), p.settings.NginxMedia)
 	if err != nil {
 		if errors.Is(err, media.ErrUnavailable) {
@@ -238,7 +241,11 @@ func (p *Public) stream(c *gin.Context) {
 	}
 	stream := delivery.Stream
 	defer stream.File.Close()
-	c.Header("Cache-Control", "public, max-age=86400")
+	if c.GetBool("karaoke_no_store") {
+		noStore(c)
+	} else {
+		c.Header("Cache-Control", "public, max-age=86400")
+	}
 	contentType := mime.TypeByExtension(path.Ext(stream.Path))
 	if contentType == "" {
 		contentType = "application/octet-stream"

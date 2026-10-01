@@ -127,9 +127,29 @@ vectors; NFKC/casefold usernames and default quota retain the existing contract.
 Daily registration limits and account audits are atomic on SQLite/MySQL. Native
 Redis sessions use CSRF plus password fingerprints/revocation generations, so
 password changes or ban/unban never revive old sessions. Legacy sessions require
-re-login. Empty accounts can be fully deleted; accounts with recordings stay
-durably deleting until the remaining native recording cleanup is implemented.
-Local tests pass; the account slice awaits real Redis/MySQL integration.
+re-login. The account slice passed real Redis/MySQL and Linux race integration.
+
+Native recording tickets reserve personal and member capacity atomically;
+Primary, Direct and Relay uploads use bounded private storage and a separate
+TLS-verified data-plane pool. Server-side stat/finalize preserves exact-once
+quota accounting, validated Python-compatible recording footers and private
+listing/Range/HEAD/download contracts. Opaque Karaoke context/stream/lyrics are
+native too. CSRF and authenticated owner checks run before body streaming.
+
+Local recording publication/deletion journals survive interrupted requests,
+restart and lost commit responses. OS leases preserve another worker's live
+stage; unresolved or busy intents retain the readiness fence. Remote cleanup
+retains capacity until an authenticated physical receipt, with bounded native
+retry and durable account deletion completion. Follower recording/owner
+tombstones reject still-valid old upload capabilities after cleanup, including
+never-uploaded cancelled tickets. Unknown historical physical recordings need
+explicit ownership-ledger adoption before native deletion; they are not silently
+erased or charged against unrelated objects.
+
+The recording slice, including owner/ticket tombstones, TLS transport and
+recovery-fence hardening, passed real MySQL quota transactions, real Redis
+HTTP/CSRF/user deletion and the complete Linux race suite in the isolated
+development checkout. The original ten-node topology is unchanged.
 
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.

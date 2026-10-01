@@ -29,6 +29,24 @@ import (
 // transport socket/private CA/hostname checks have separate real TLS tests.
 type clusterHTTP struct{ routers map[string]*gin.Engine }
 
+func (t *clusterHTTP) RecordingUpload(ctx context.Context, origin, id, token, ct string, reader io.Reader, size int64) (map[string]any, error) {
+	router := t.routers[origin]
+	if router == nil {
+		return nil, errors.New("offline")
+	}
+	r := httptest.NewRequest("PUT", origin+"/internal/v1/recordings/"+id, reader).WithContext(ctx)
+	r.Header.Set("X-Recording-Capability", token)
+	r.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
+	if w.Code != 200 {
+		return nil, fmt.Errorf("recording HTTP %d: %s", w.Code, w.Body.String())
+	}
+	var result map[string]any
+	e := controlJSON(w.Body.Bytes(), &result)
+	return result, e
+}
+
 func (t *clusterHTTP) StorageUpload(ctx context.Context, origin, id, token string, reader io.Reader, size int64) (map[string]any, error) {
 	router := t.routers[origin]
 	if router == nil {

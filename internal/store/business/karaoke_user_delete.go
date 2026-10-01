@@ -62,7 +62,8 @@ func (r *Repository) FinishUserDeletion(ctx context.Context, id string, a store.
 			return err
 		}
 		if count != 0 {
-			return nil
+			_, err = q.ExecContext(ctx, "UPDATE karaoke_users SET updated_at=? WHERE user_id=?", time.Now().Unix(), id)
+			return err
 		}
 		if v.Used != 0 {
 			return store.ErrAccountConflict

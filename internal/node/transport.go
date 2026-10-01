@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/wongyiuming/FrontierCloud/internal/protocol"
+	"github.com/wongyiuming/FrontierCloud/internal/store"
 	"golang.org/x/net/idna"
 )
 
@@ -92,6 +93,9 @@ type ControlClient interface {
 }
 type StorageClient interface {
 	StorageUpload(context.Context, string, string, string, io.Reader, int64) (map[string]any, error)
+}
+type RecordingClient interface {
+	RecordingUpload(context.Context, string, string, string, string, io.Reader, int64) (map[string]any, error)
 }
 type Transport struct{ client, backup, storage *http.Client }
 
@@ -167,6 +171,33 @@ func (t *Transport) StorageUpload(ctx context.Context, origin, objectID, token s
 		return nil, fmt.Errorf("node storage HTTP %d", resp.StatusCode)
 	}
 	return readNodeResponse(resp.Body, MaxControlBytes)
+}
+func (t *Transport) RecordingUpload(ctx context.Context, origin, id, token, contentType string, reader io.Reader, size int64) (map[string]any, error) {
+	origin, e := Endpoint(origin)
+	if e != nil {
+		return nil, e
+	}
+	if !nodeIdentifier.MatchString(id) || token == "" || len(token) > 4096 || size <= 0 || size > 1024*1024*1024 || !store.RecordingContentType(contentType) {
+		return nil, ErrCapability
+	}
+	req, e := http.NewRequestWithContext(ctx, "PUT", origin+"/internal/v1/recordings/"+id, reader)
+	if e != nil {
+		return nil, errors.New("invalid recording upload request")
+	}
+	req.ContentLength = size
+	req.Header.Set("X-Recording-Capability", token)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("Accept", "application/json")
+	resp, e := t.storage.Do(req)
+	if e != nil {
+		return nil, errors.New("node recording HTTPS upload failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("node recording HTTP %d", resp.StatusCode)
+	}
+	return readNodeResponse(resp.Body, 5*1024*1024)
 }
 func (t *Transport) Request(ctx context.Context, origin, route, method string, value any, relationship, credential string) (map[string]any, error) {
 	origin, err := Endpoint(origin)

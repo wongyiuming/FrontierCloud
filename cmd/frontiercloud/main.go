@@ -22,6 +22,7 @@ import (
 	"github.com/wongyiuming/FrontierCloud/internal/network"
 	"github.com/wongyiuming/FrontierCloud/internal/node"
 	"github.com/wongyiuming/FrontierCloud/internal/observation"
+	"github.com/wongyiuming/FrontierCloud/internal/recording"
 	"github.com/wongyiuming/FrontierCloud/internal/security"
 	storecontract "github.com/wongyiuming/FrontierCloud/internal/store"
 	mysqlstore "github.com/wongyiuming/FrontierCloud/internal/store/mysql"
@@ -149,6 +150,11 @@ func serve() error {
 	}
 	defer recordingsRoot.Close()
 	controlService.ConfigureVolumes(database.Pool(), mediaService, recordingsRoot)
+	recordingStorage, err := recording.New(recordingsRoot, database.Recordings(), database.Nodes())
+	if err != nil {
+		return err
+	}
+	recordingManager := recording.NewManager(database.Recordings(), database.Karaoke(), database.Nodes(), database.Pool(), controlService, recordingStorage)
 	securityService, err := security.New(settings, database.Security())
 	if err != nil {
 		return err
@@ -165,6 +171,9 @@ func serve() error {
 			return err
 		}
 		if err := mediaService.Ready(ctx); err != nil {
+			return err
+		}
+		if err := recordingStorage.Ready(ctx); err != nil {
 			return err
 		}
 		return securityService.Ready(ctx)
@@ -185,7 +194,10 @@ func serve() error {
 		return err
 	}
 	httpapi.RegisterSecurityAdmin(handler, adminHTTP, securityService)
-	httpapi.RegisterKaraokeAccounts(handler, karaoke.New(database.Karaoke(), database.Nodes(), karaoke.NewRedisCache(redisClient)), public, adminHTTP, resolver)
+	accountsHTTP := httpapi.RegisterKaraokeAccounts(handler, karaoke.New(database.Karaoke(), database.Nodes(), karaoke.NewRedisCache(redisClient)), public, adminHTTP, resolver)
+	httpapi.RegisterKaraokeRecordings(handler, accountsHTTP, recordingManager, recordingStorage)
+	httpapi.RegisterKaraokeMedia(handler, public, resolver)
+	httpapi.RegisterNodeRecordings(handler, settings, resolver, controlService, recordingStorage)
 	httpapi.RegisterNodeIdentity(handler, settings, resolver, controlService)
 	httpapi.RegisterNodeControl(handler, settings, resolver, controlService)
 	httpapi.RegisterNodeMedia(handler, settings, resolver, controlService, mediaService)
@@ -203,7 +215,9 @@ func serve() error {
 	go func() { defer close(publisherDone); securityService.Run(shutdown) }()
 	deletionDone := make(chan struct{})
 	go func() { defer close(deletionDone); mediaService.RunGlobalDeletes(shutdown) }()
-	defer func() { stop(); <-publisherDone; <-deletionDone }()
+	recordingDone := make(chan struct{})
+	go func() { defer close(recordingDone); recordingManager.Run(shutdown) }()
+	defer func() { stop(); <-publisherDone; <-deletionDone; <-recordingDone }()
 	errorsChannel := make(chan error, 1)
 	go func() { errorsChannel <- server.ListenAndServe() }()
 	slog.Info("FrontierCloud Go runtime started", "address", settings.HTTPAddress, "database", database.Backend())
