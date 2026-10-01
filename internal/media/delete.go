@@ -106,6 +106,9 @@ func validateOperation(operation store.DeleteOperation) error {
 		if !slotID.MatchString(item.Slot) || seen[item.Slot] || names[item.Path] || !managedObject(item.Path, item.Directory) {
 			return ErrRecovery
 		}
+		if item.OwnedID != "" && (!ownedObjectID.MatchString(item.OwnedID) || item.Directory || item.Bytes < 0 || len(operation.Items) != 1) {
+			return ErrRecovery
+		}
 		seen[item.Slot] = true
 		names[item.Path] = true
 	}
@@ -319,33 +322,7 @@ func (s *Service) Delete(ctx context.Context, paths []string, audit store.AdminA
 		}
 		return 0, err
 	}
-	err := func() error {
-		quarantine := ".delete-" + operation.ID
-		if err := s.root.Mkdir(quarantine, 0700); err != nil {
-			return err
-		}
-		if err := s.syncDirectory("."); err != nil {
-			return err
-		}
-		for _, item := range operation.Items {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if _, err := s.safeInfo(item.Path); err != nil {
-				return err
-			}
-			if err := s.root.Rename(item.Path, quarantine+"/"+item.Slot); err != nil {
-				return err
-			}
-			if err := s.syncDirectory(path.Dir(item.Path)); err != nil {
-				return err
-			}
-			if err := s.syncDirectory(quarantine); err != nil {
-				return err
-			}
-		}
-		return s.repository.CommitDelete(ctx, operation.ID, audit)
-	}()
+	err := s.stageDelete(ctx, operation, func() error { return s.repository.CommitDelete(ctx, operation.ID, audit) })
 	verified, recoveryErr := s.reconcileDelete(operation.ID)
 	if recoveryErr != nil {
 		return 0, recoveryErr
@@ -358,4 +335,34 @@ func (s *Service) Delete(ctx context.Context, paths []string, audit store.AdminA
 		return 0, err
 	}
 	return len(selected), nil
+}
+
+// Only the filesystem phase is shared. Native owned deletion has its own
+// quota-aware SQL transaction, and cannot use standalone metadata deletion.
+func (s *Service) stageDelete(ctx context.Context, operation store.DeleteOperation, commit func() error) error {
+	quarantine := ".delete-" + operation.ID
+	if err := s.root.Mkdir(quarantine, 0700); err != nil {
+		return err
+	}
+	if err := s.syncDirectory("."); err != nil {
+		return err
+	}
+	for _, item := range operation.Items {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := s.safeInfo(item.Path); err != nil {
+			return err
+		}
+		if err := s.root.Rename(item.Path, quarantine+"/"+item.Slot); err != nil {
+			return err
+		}
+		if err := s.syncDirectory(path.Dir(item.Path)); err != nil {
+			return err
+		}
+		if err := s.syncDirectory(quarantine); err != nil {
+			return err
+		}
+	}
+	return commit()
 }

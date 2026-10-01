@@ -6,6 +6,8 @@ type DeleteItem struct {
 	Path      string `json:"relative_path"`
 	Slot      string `json:"slot"`
 	Directory bool   `json:"is_directory"`
+	OwnedID   string `json:"owned_object_id,omitempty"`
+	Bytes     int64  `json:"owned_bytes,omitempty"`
 }
 type DeleteOperation struct {
 	ID    string

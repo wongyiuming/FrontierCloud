@@ -65,6 +65,7 @@ func New(directory string, repo store.MediaRepository, identity *node.Identity) 
 	}
 	service := &Service{root: root, repository: repo, identity: identity}
 	service.owned, _ = repo.(store.OwnedStorageRepository)
+	service.pool, _ = repo.(store.PoolRepository)
 	service.search, err = search.New()
 	if err != nil {
 		root.Close()

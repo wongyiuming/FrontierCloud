@@ -29,6 +29,15 @@ func (r *uploadReader) Read(buffer []byte) (int, error) {
 }
 
 func (a *Admin) upload(c *gin.Context, lyric bool) {
+	role, err := a.public.media.BusinessRole(c.Request.Context())
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	if role == "Follower" || !lyric && role == "Master" {
+		detail(c, 409, "Master 媒体上传必须使用存储池会话；Follower 仅接受节点存储接口")
+		return
+	}
 	maximum := a.settings.AdminMaxUploadBytes
 	if lyric {
 		maximum = media.MaxLyricUploadBytes

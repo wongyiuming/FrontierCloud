@@ -30,6 +30,45 @@ func storageCORS(c *gin.Context, relation store.Relationship) bool {
 	return true
 }
 func RegisterNodeStorage(router *gin.Engine, settings config.Config, resolver *network.Resolver, control *node.Service, volume *media.Service) {
+	router.POST("/internal/v1/storage/:object/delete", func(c *gin.Context) {
+		if !nodeHTTPS(c, settings, resolver) {
+			return
+		}
+		token, ok := capabilityInput(c, "X-Storage-Capability")
+		if !ok {
+			detail(c, 401, "Storage capability invalid or expired")
+			return
+		}
+		relation, value, err := control.VerifyOwnedStorage(c.Request.Context(), token, c.Param("object"), "delete")
+		if err != nil {
+			if errors.Is(err, node.ErrCapability) {
+				detail(c, 401, "Storage capability invalid or expired")
+			} else {
+				internalError(c, err)
+			}
+			return
+		}
+		number, ok := value["size"].(json.Number)
+		size, sizeErr := number.Int64()
+		name, _ := value["path"].(string)
+		if _, err := media.ValidateStorageObject(c.Param("object"), name, max(1, size)); err != nil || !ok || sizeErr != nil || size < 0 {
+			detail(c, 401, "Storage capability invalid or expired")
+			return
+		}
+		if !storageCORS(c, relation) {
+			return
+		}
+		err = volume.OwnedDelete(c.Request.Context(), relation.ID, c.Param("object"), name, size, store.NodeAudit{Actor: relation.PeerID, RequestID: c.GetString("request_id"), TraceID: c.GetString("trace_id")})
+		if err != nil {
+			if errors.Is(err, store.ErrNodeState) {
+				detail(c, 409, "Storage deletion conflict")
+			} else {
+				mediaAdminError(c, err)
+			}
+			return
+		}
+		c.JSON(200, gin.H{"status": "deleted"})
+	})
 	router.OPTIONS("/internal/v1/storage/:object", func(c *gin.Context) {
 		if !nodeHTTPS(c, settings, resolver) {
 			return

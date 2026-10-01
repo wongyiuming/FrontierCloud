@@ -270,62 +270,66 @@ func (r *Repository) FinalizeUpload(ctx context.Context, id, objectID string, ac
 		return result, nodeConflict("invalid upload completion")
 	}
 	err = r.write(ctx, func(q queryer) error {
-		node, err := readNode(ctx, q, r.lock())
-		if err != nil {
-			return err
-		}
-		if node.Role != "Master" {
-			return nodeConflict("only Master finalizes business uploads")
-		}
-		v, err := scanUpload(q.QueryRowContext(ctx, "SELECT "+uploadColumns+" FROM cluster_upload_sessions WHERE upload_id=?"+r.lock(), id))
-		if errors.Is(err, sql.ErrNoRows) {
-			return nodeConflict("upload reservation not found")
-		}
-		if err != nil {
-			return err
-		}
-		if v.MediaID != objectID || v.ExpectedBytes != actualSize {
-			return nodeConflict("uploaded object identity or size does not match its reservation")
-		}
-		if v.State == "complete" {
-			result, err = scanGlobal(q.QueryRowContext(ctx, "SELECT "+globalColumns+globalTables+" WHERE g.media_id=?", v.MediaID))
-			if err != nil {
-				return err
-			}
-			if result.ObjectID != objectID || result.MemberID != v.MemberID || result.Path != v.Path || result.Bytes != actualSize || result.ETag != etag || result.State != "active" {
-				return nodeConflict("completed upload cannot be replaced")
-			}
-			return nil
-		}
-		if v.State != "reserved" || v.ExpiresAt <= time.Now().Unix() {
-			return nodeConflict("upload reservation missing or expired")
-		}
-		member, err := scanMember(q.QueryRowContext(ctx, "SELECT "+memberColumns+" FROM cluster_storage_members WHERE member_id=?"+r.lock(), v.MemberID))
-		if err != nil {
-			return err
-		}
-		if member.Reserved < v.ExpectedBytes || member.Allocation-member.Used < actualSize {
-			return nodeConflict("upload capacity reservation is inconsistent")
-		}
-		now := time.Now().Unix()
-		if _, err = q.ExecContext(ctx, "INSERT INTO global_media_objects(media_id,storage_member_id,object_id,media_path,path_locator,object_kind,size_bytes,etag,state,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'active',?,?)", v.MediaID, v.MemberID, objectID, v.Path, locator(v.Path), v.Kind, actualSize, etag, now, now); err != nil {
-			return err
-		}
-		if _, err = q.ExecContext(ctx, "UPDATE cluster_storage_members SET reserved_bytes=reserved_bytes-?,used_bytes=used_bytes+?,updated_at=? WHERE member_id=?", v.ExpectedBytes, actualSize, now, v.MemberID); err != nil {
-			return err
-		}
-		if _, err = q.ExecContext(ctx, "UPDATE cluster_upload_sessions SET state='complete',path_locator=NULL,updated_at=? WHERE upload_id=?", now, id); err != nil {
-			return err
-		}
-		result = store.GlobalMedia{ID: v.MediaID, MemberID: v.MemberID, ObjectID: objectID, Path: v.Path, Kind: v.Kind, Bytes: actualSize, ETag: etag, State: "active", CreatedAt: now, UpdatedAt: now, RelationshipID: member.RelationshipID, Health: member.Health, Transport: member.Transport}
-		detail, _ := json.Marshal(map[string]any{"upload_id": id, "media_id": v.MediaID, "member_id": v.MemberID, "size_bytes": actualSize})
-		a.Action = "upload-finalized"
-		a.Detail = string(detail)
-		a.Result = "success"
-		a.TargetCount = 1
-		return appendMutationAudit(ctx, q, a, []string{v.Path})
+		return r.finalizeUpload(ctx, q, id, objectID, actualSize, etag, a, false, &result)
 	})
 	return
+}
+
+func (r *Repository) finalizeUpload(ctx context.Context, q queryer, id, objectID string, actualSize int64, etag string, a store.AdminAudit, physicalProof bool, result *store.GlobalMedia) error {
+	node, err := readNode(ctx, q, r.lock())
+	if err != nil {
+		return err
+	}
+	if node.Role != "Master" {
+		return nodeConflict("only Master finalizes business uploads")
+	}
+	v, err := scanUpload(q.QueryRowContext(ctx, "SELECT "+uploadColumns+" FROM cluster_upload_sessions WHERE upload_id=?"+r.lock(), id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nodeConflict("upload reservation not found")
+	}
+	if err != nil {
+		return err
+	}
+	if v.MediaID != objectID || v.ExpectedBytes != actualSize {
+		return nodeConflict("uploaded object identity or size does not match its reservation")
+	}
+	if v.State == "complete" {
+		*result, err = scanGlobal(q.QueryRowContext(ctx, "SELECT "+globalColumns+globalTables+" WHERE g.media_id=?", v.MediaID))
+		if err != nil {
+			return err
+		}
+		if result.ObjectID != objectID || result.MemberID != v.MemberID || result.Path != v.Path || result.Bytes != actualSize || result.ETag != etag || result.State != "active" {
+			return nodeConflict("completed upload cannot be replaced")
+		}
+		return nil
+	}
+	if v.State != "reserved" || !physicalProof && v.ExpiresAt <= time.Now().Unix() {
+		return nodeConflict("upload reservation missing or expired")
+	}
+	member, err := scanMember(q.QueryRowContext(ctx, "SELECT "+memberColumns+" FROM cluster_storage_members WHERE member_id=?"+r.lock(), v.MemberID))
+	if err != nil {
+		return err
+	}
+	if member.Reserved < v.ExpectedBytes || member.Allocation-member.Used < actualSize {
+		return nodeConflict("upload capacity reservation is inconsistent")
+	}
+	now := time.Now().Unix()
+	if _, err = q.ExecContext(ctx, "INSERT INTO global_media_objects(media_id,storage_member_id,object_id,media_path,path_locator,object_kind,size_bytes,etag,state,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'active',?,?)", v.MediaID, v.MemberID, objectID, v.Path, locator(v.Path), v.Kind, actualSize, etag, now, now); err != nil {
+		return err
+	}
+	if _, err = q.ExecContext(ctx, "UPDATE cluster_storage_members SET reserved_bytes=reserved_bytes-?,used_bytes=used_bytes+?,updated_at=? WHERE member_id=?", v.ExpectedBytes, actualSize, now, v.MemberID); err != nil {
+		return err
+	}
+	if _, err = q.ExecContext(ctx, "UPDATE cluster_upload_sessions SET state='complete',path_locator=NULL,updated_at=? WHERE upload_id=?", now, id); err != nil {
+		return err
+	}
+	*result = store.GlobalMedia{ID: v.MediaID, MemberID: v.MemberID, ObjectID: objectID, Path: v.Path, Kind: v.Kind, Bytes: actualSize, ETag: etag, State: "active", CreatedAt: now, UpdatedAt: now, RelationshipID: member.RelationshipID, Health: member.Health, Transport: member.Transport}
+	detail, _ := json.Marshal(map[string]any{"upload_id": id, "media_id": v.MediaID, "member_id": v.MemberID, "size_bytes": actualSize})
+	a.Action = "upload-finalized"
+	a.Detail = string(detail)
+	a.Result = "success"
+	a.TargetCount = 1
+	return appendMutationAudit(ctx, q, a, []string{v.Path})
 }
 
 // ReleaseCleanedUpload requires the service to establish that its physical

@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"math/big"
@@ -35,6 +37,52 @@ func TestEndpointRejectsNonRootAndUnsafeAddresses(t *testing.T) {
 	}
 	if _, err := safeDial(context.Background(), "tcp", "127.0.0.1:443"); err == nil {
 		t.Fatal("dial permitted loopback DNS result")
+	}
+}
+
+func TestStorageUploadUsesSeparateStreamingPoolVerifiedTLSAndBoundedReceipt(t *testing.T) {
+	payload := "ID3" + strings.Repeat("x", 2*1024*1024)
+	id := strings.Repeat("a", 64)
+	token := "capability-do-not-log"
+	server, roots := privateCA(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PUT" || r.Header.Get("X-Storage-Capability") != token || r.ContentLength != int64(len(payload)) {
+			t.Error("storage request contract")
+			w.WriteHeader(400)
+			return
+		}
+		if r.URL.Path != "/internal/v1/storage/"+id {
+			w.WriteHeader(409)
+			w.Write([]byte(token))
+			return
+		}
+		hash := sha256.New()
+		n, err := io.CopyBuffer(hash, r.Body, make([]byte, 64*1024))
+		if err != nil || n != int64(len(payload)) {
+			t.Error(n, err)
+			w.WriteHeader(400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"object_id": id, "size_bytes": n, "sha256": hex.EncodeToString(hash.Sum(nil))})
+	}))
+	transport := testTransport(t, server, roots)
+	if transport.storage == transport.client || transport.storage.Transport == transport.client.Transport || transport.storage.Timeout != 0 {
+		t.Fatal("media uses control connection pool/timeout")
+	}
+	result, err := transport.StorageUpload(context.Background(), "https://node.test", id, token, strings.NewReader(payload), int64(len(payload)))
+	if err != nil || result["object_id"] != id {
+		t.Fatal(result, err)
+	}
+	for _, origin := range []string{"https://wrong-name.test", "http://node.test", "https://127.0.0.1"} {
+		if _, err := transport.StorageUpload(context.Background(), origin, id, token, strings.NewReader(payload), int64(len(payload))); err == nil || strings.Contains(err.Error(), token) {
+			t.Fatal("unsafe TLS or secret error", err)
+		}
+	}
+	if _, err := transport.StorageUpload(context.Background(), "https://node.test", strings.Repeat("b", 64), token, strings.NewReader(payload), int64(len(payload))); err == nil || strings.Contains(err.Error(), token) {
+		t.Fatal("unsafe error body", err)
+	}
+	untrusted := testTransport(t, server, x509.NewCertPool())
+	if _, err := untrusted.StorageUpload(context.Background(), "https://node.test", id, token, strings.NewReader(payload), int64(len(payload))); err == nil {
+		t.Fatal("untrusted storage CA accepted")
 	}
 }
 
@@ -73,7 +121,7 @@ func privateCA(t *testing.T, handler http.Handler) (*httptest.Server, *x509.Cert
 func testTransport(t *testing.T, server *httptest.Server, roots *x509.CertPool) *Transport {
 	t.Helper()
 	transport := transportWithRoots(roots)
-	for _, client := range []*http.Client{transport.client, transport.backup} {
+	for _, client := range []*http.Client{transport.client, transport.backup, transport.storage} {
 		client.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
 		}

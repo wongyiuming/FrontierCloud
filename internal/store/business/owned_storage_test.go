@@ -119,4 +119,26 @@ func TestOwnedStorageQuotaReservationConcurrentPublicationAndCleanup(t *testing.
 			t.Fatal("cleanup not idempotent", err)
 		}
 	}
+	deleteID := "f0" + strings.Repeat("8", 30)
+	deletion := store.DeleteOperation{ID: deleteID, State: "pending", Items: []store.DeleteItem{{Path: object.Path, Slot: "0", OwnedID: object.ID, Bytes: 3 * store.GiB}}}
+	if err = pool.PrepareOwnedDelete(ctx, relID, deletion, store.NodeAudit{}); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Media().CommitDelete(ctx, deleteID, store.AdminAudit{}); !errors.Is(err, store.ErrNodeState) {
+		t.Fatal("standalone deletion bypassed quota", err)
+	}
+	for range 16 {
+		group.Go(func() {
+			if err := pool.CommitOwnedDelete(ctx, deleteID, 5*store.GiB, store.NodeAudit{RequestID: "owned-quota-delete"}); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	group.Wait()
+	if err = sqlDB.QueryRow("SELECT used_bytes,reserved_bytes FROM cluster_storage_members WHERE member_id=?", row.ID).Scan(&used, &reserved); err != nil || used != 0 || reserved != 0 {
+		t.Fatal("owned deletion duplicate refund", used, reserved, err)
+	}
+	if err = db.Media().ForgetDelete(ctx, deleteID); err != nil {
+		t.Fatal(err)
+	}
 }

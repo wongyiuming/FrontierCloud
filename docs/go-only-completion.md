@@ -98,7 +98,16 @@ live OS lease. Real MySQL verifies concurrent owned upload reservations and
 idempotent publication; SQLite fault tests cover interrupted/lost commits.
 The HTTP pair → heartbeat/configuration → signed upload → authenticated stat →
 global finalize → Direct Range/HEAD chain passes; Relay remains Nginx delegated.
-This is not yet a complete Admin upload/delete or cluster deployment workflow.
+Master Admin session uploads now support Primary, Direct and Relay placement,
+authenticated Direct stat/finalize, private streaming data-plane connections,
+idempotent completion and confirmed-physical-cleanup cancellation. MasterLocal
+durable intents atomically publish local/global identities and quota even after
+expiry or lost commit responses. Concurrent cancellation cannot race a live
+transfer or unlink an unknown file. Follower deletion uses a replayable quarantine
+and atomic quota refund; pending crash intents restore bytes, committed intents
+clean them without resurrection. Native HTTP and SQLite recovery checks pass;
+the new slice is awaiting its disposable Linux/MySQL validation.
+This is not yet a complete global deletion or cluster deployment workflow.
 
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.

@@ -490,13 +490,6 @@ func (r *Repository) Members(ctx context.Context) ([]store.StorageMember, error)
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		if v.Health == "online" && v.Writable != 0 && v.Enabled != 0 {
-			v.Available = capacity(*v)
-		}
-		v.OnlineWritable = v.Available
-		if v.Health != "online" {
-			v.OfflineStored = v.Used
-		}
 		if v.RelationshipID != nil {
 			relation, err := r.Relationship(ctx, *v.RelationshipID)
 			if err != nil {
@@ -504,6 +497,14 @@ func (r *Repository) Members(ctx context.Context) ([]store.StorageMember, error)
 			}
 			storage, _ := relation.Summary["storage"].(map[string]any)
 			v.PhysicalTotal = peerInteger(storage, "physical_total_bytes")
+			if relation.State != "active" || relation.Status == "offline" || time.Now().Unix()-relation.LastHeartbeat >= 120 {
+				v.Health, v.Writable = "offline", 0
+			}
+		}
+		v.Available = capacity(*v)
+		v.OnlineWritable = v.Available
+		if v.Health != "online" {
+			v.OfflineStored = v.Used
 		}
 	}
 	return result, nil

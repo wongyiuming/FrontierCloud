@@ -40,6 +40,11 @@ func deletePaths(items []store.DeleteItem) []string {
 }
 
 func (r *Repository) PrepareDelete(ctx context.Context, operation store.DeleteOperation, audit store.AdminAudit) error {
+	for _, item := range operation.Items {
+		if item.OwnedID != "" {
+			return nodeConflict("owned deletion requires quota-aware preparation")
+		}
+	}
 	manifest, err := json.Marshal(operation.Items)
 	if err != nil {
 		return err
@@ -176,6 +181,9 @@ func (r *Repository) CommitDelete(ctx context.Context, id string, audit store.Ad
 			return errors.New("invalid delete operation state")
 		}
 		for _, item := range operation.Items {
+			if item.OwnedID != "" {
+				return nodeConflict("owned deletion requires quota-aware commit")
+			}
 			if err := r.deleteMetadata(ctx, q, item); err != nil {
 				return err
 			}

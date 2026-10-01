@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,6 +28,23 @@ import (
 // HTTP routing, raw body HMAC and UseNumber decoding are real. The node
 // transport socket/private CA/hostname checks have separate real TLS tests.
 type clusterHTTP struct{ routers map[string]*gin.Engine }
+
+func (t *clusterHTTP) StorageUpload(ctx context.Context, origin, id, token string, reader io.Reader, size int64) (map[string]any, error) {
+	router := t.routers[origin]
+	if router == nil {
+		return nil, errors.New("offline")
+	}
+	r := httptest.NewRequest("PUT", origin+"/internal/v1/storage/"+id, reader).WithContext(ctx)
+	r.Header.Set("X-Storage-Capability", token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
+	if w.Code != 200 {
+		return nil, fmt.Errorf("storage HTTP %d", w.Code)
+	}
+	var result map[string]any
+	err := controlJSON(w.Body.Bytes(), &result)
+	return result, err
+}
 
 func (t *clusterHTTP) Identity(ctx context.Context, origin, id, key, role string) (node.Peer, error) {
 	router := t.routers[origin]

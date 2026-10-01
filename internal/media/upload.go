@@ -186,6 +186,10 @@ func relativeUpload(value string) (string, error) {
 }
 
 func (s *Service) destination(filename, target, relative string, lyric bool, maxName int) (store.MediaObject, error) {
+	return s.uploadDestination(filename, target, relative, lyric, maxName, false)
+}
+
+func (s *Service) uploadDestination(filename, target, relative string, lyric bool, maxName int, virtual bool) (store.MediaObject, error) {
 	filename = path.Base(strings.ReplaceAll(filename, "\\", "/"))
 	if relative != "" {
 		normalized, err := relativeUpload(relative)
@@ -220,12 +224,14 @@ func (s *Service) destination(filename, target, relative string, lyric bool, max
 			if err != nil {
 				return store.MediaObject{}, err
 			}
-			info, err := s.safeInfo(base)
-			if err != nil {
-				return store.MediaObject{}, err
-			}
-			if !info.IsDir() {
-				return store.MediaObject{}, ErrPath
+			if !virtual {
+				info, err := s.safeInfo(base)
+				if err != nil {
+					return store.MediaObject{}, err
+				}
+				if !info.IsDir() {
+					return store.MediaObject{}, ErrPath
+				}
 			}
 		}
 		if relative != "" {
@@ -309,14 +315,15 @@ func (s *Service) makeParents(name string) error {
 }
 
 type uploadJournal struct {
-	Format    string            `json:"format"`
-	Version   int               `json:"version"`
-	ID        string            `json:"id"`
-	Object    store.MediaObject `json:"object"`
-	Bytes     int64             `json:"bytes"`
-	SHA256    string            `json:"sha256"`
-	Audit     store.AdminAudit  `json:"audit"`
-	NodeAudit store.NodeAudit   `json:"node_audit,omitempty"`
+	Format          string            `json:"format"`
+	Version         int               `json:"version"`
+	ID              string            `json:"id"`
+	Object          store.MediaObject `json:"object"`
+	Bytes           int64             `json:"bytes"`
+	SHA256          string            `json:"sha256"`
+	Audit           store.AdminAudit  `json:"audit"`
+	NodeAudit       store.NodeAudit   `json:"node_audit,omitempty"`
+	UploadSessionID string            `json:"upload_session_id,omitempty"`
 }
 
 func journalPath(id string) string { return ".upload-" + id + ".json" }
@@ -358,7 +365,8 @@ func (s *Service) writeUploadJournal(journal uploadJournal) error {
 
 func (s *Service) finishUpload(ctx context.Context, journal uploadJournal) error {
 	owned := journal.Format == "frontiercloud-owned-upload"
-	if (!owned && journal.Format != "frontiercloud-local-upload") || journal.Version != 1 || !operationID.MatchString(journal.ID) || !managedObject(journal.Object.Path, false) || journal.Bytes < 1 || len(journal.SHA256) != 64 {
+	master := journal.Format == "frontiercloud-master-upload"
+	if (!owned && !master && journal.Format != "frontiercloud-local-upload") || journal.Version != 1 || !operationID.MatchString(journal.ID) || !managedObject(journal.Object.Path, false) || journal.Bytes < 1 || len(journal.SHA256) != 64 {
 		return ErrRecovery
 	}
 	if _, err := hex.DecodeString(journal.SHA256); err != nil {
@@ -374,7 +382,7 @@ func (s *Service) finishUpload(ctx context.Context, journal uploadJournal) error
 		expected = "lyric"
 		action = "upload_lyric"
 	}
-	if journal.Object.Kind != expected || !owned && journal.Audit.Action != action || owned && (s.owned == nil || expected == "lyric" || !ownedObjectID.MatchString(journal.Object.ID)) {
+	if journal.Object.Kind != expected || !owned && !master && journal.Audit.Action != action || owned && (s.owned == nil || expected == "lyric" || !ownedObjectID.MatchString(journal.Object.ID)) || master && (s.pool == nil || expected == "lyric" || !ownedObjectID.MatchString(journal.Object.ID) || !operationID.MatchString(journal.UploadSessionID)) {
 		return ErrRecovery
 	}
 	stageName := ".upload-" + journal.ID + ".part"
@@ -422,12 +430,16 @@ func (s *Service) finishUpload(ctx context.Context, journal uploadJournal) error
 		}
 	}
 	var completion error
-	if owned {
+	if owned || master {
 		_, free, err := fsutil.DiskUsage(s.root)
 		if err != nil {
 			return err
 		}
-		completion = s.owned.CompleteOwnedUpload(ctx, journal.ID, journal.Object, journal.Bytes, `"`+journal.SHA256+`"`, free, journal.NodeAudit)
+		if master {
+			completion = s.pool.CompleteMasterUpload(ctx, journal.UploadSessionID, journal.Object, journal.Bytes, `"`+journal.SHA256+`"`, free, journal.Audit)
+		} else {
+			completion = s.owned.CompleteOwnedUpload(ctx, journal.ID, journal.Object, journal.Bytes, `"`+journal.SHA256+`"`, free, journal.NodeAudit)
+		}
 	} else {
 		completion = s.repository.CompleteUpload(ctx, journal.Object, journal.ID, journal.Audit)
 	}
@@ -601,7 +613,7 @@ func (s *Service) recoverUploads(ctx context.Context) error {
 		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 			return ErrRecovery
 		}
-		if journal.ID != uploadJournalName.FindStringSubmatch(name)[1] || (journal.Format != "frontiercloud-local-upload" && journal.Format != "frontiercloud-owned-upload") || journal.Version != 1 || !managedObject(journal.Object.Path, false) {
+		if journal.ID != uploadJournalName.FindStringSubmatch(name)[1] || (journal.Format != "frontiercloud-local-upload" && journal.Format != "frontiercloud-owned-upload" && journal.Format != "frontiercloud-master-upload") || journal.Version != 1 || !managedObject(journal.Object.Path, false) {
 			return ErrRecovery
 		}
 		if err := s.verifyUploadBytes(ctx, journal); err != nil {

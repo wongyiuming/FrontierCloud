@@ -27,6 +27,7 @@ const AppVersion = "2.0.0rc0"
 const MaxControlBytes = 512 * 1024
 
 var nodeIdentifier = regexp.MustCompile(`^[a-f0-9]{32}$`)
+var resourceIdentifier = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 func ValidIdentifier(value string) bool { return nodeIdentifier.MatchString(value) }
 
@@ -89,7 +90,10 @@ type ControlClient interface {
 	Request(context.Context, string, string, string, any, string, string) (map[string]any, error)
 	Identity(context.Context, string, string, string, string) (Peer, error)
 }
-type Transport struct{ client, backup *http.Client }
+type StorageClient interface {
+	StorageUpload(context.Context, string, string, string, io.Reader, int64) (map[string]any, error)
+}
+type Transport struct{ client, backup, storage *http.Client }
 
 func NewTransport() *Transport { return transportWithRoots(nil) }
 func transportWithRoots(roots *x509.CertPool) *Transport {
@@ -98,7 +102,9 @@ func transportWithRoots(roots *x509.CertPool) *Transport {
 		transport.DialContext = safeDial
 		return &http.Client{Transport: transport, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
-	return &Transport{makeClient(4, 10*time.Second), makeClient(1, 60*time.Second)}
+	storage := makeClient(4, 30*time.Second)
+	storage.Timeout = 0 // Large media uses a separate pool and caller cancellation.
+	return &Transport{makeClient(4, 10*time.Second), makeClient(1, 60*time.Second), storage}
 }
 func safeDial(ctx context.Context, network, address string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
@@ -130,7 +136,38 @@ func safeDial(ctx context.Context, network, address string) (net.Conn, error) {
 	}
 	return nil, err
 }
-func (t *Transport) Close() { t.client.CloseIdleConnections(); t.backup.CloseIdleConnections() }
+func (t *Transport) Close() {
+	t.client.CloseIdleConnections()
+	t.backup.CloseIdleConnections()
+	t.storage.CloseIdleConnections()
+}
+
+func (t *Transport) StorageUpload(ctx context.Context, origin, objectID, token string, reader io.Reader, size int64) (map[string]any, error) {
+	origin, err := Endpoint(origin)
+	if err != nil {
+		return nil, err
+	}
+	if !resourceIdentifier.MatchString(objectID) || len(token) > 4096 || token == "" || size <= 0 {
+		return nil, ErrCapability
+	}
+	req, err := http.NewRequestWithContext(ctx, "PUT", origin+"/internal/v1/storage/"+objectID, reader)
+	if err != nil {
+		return nil, errors.New("invalid storage upload request")
+	}
+	req.ContentLength = size
+	req.Header.Set("X-Storage-Capability", token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Accept", "application/json")
+	resp, err := t.storage.Do(req)
+	if err != nil {
+		return nil, errors.New("node storage HTTPS upload failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("node storage HTTP %d", resp.StatusCode)
+	}
+	return readNodeResponse(resp.Body, MaxControlBytes)
+}
 func (t *Transport) Request(ctx context.Context, origin, route, method string, value any, relationship, credential string) (map[string]any, error) {
 	origin, err := Endpoint(origin)
 	if err != nil {
@@ -182,7 +219,10 @@ func (t *Transport) Request(ctx context.Context, origin, route, method string, v
 	if strings.HasPrefix(u.Path, "/internal/v1/recordings/") && strings.HasSuffix(u.Path, "/stat") {
 		limit = 5 * 1024 * 1024
 	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	return readNodeResponse(response.Body, limit)
+}
+func readNodeResponse(body io.Reader, limit int64) (map[string]any, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, limit+1))
 	if err != nil {
 		return nil, errors.New("node control response interrupted")
 	}

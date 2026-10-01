@@ -68,6 +68,7 @@ type PoolRepository interface {
 	ReserveUpload(context.Context, string, string, int64, int64, AdminAudit) (UploadReservation, error)
 	Upload(context.Context, string) (UploadReservation, error)
 	FinalizeUpload(context.Context, string, string, int64, string, AdminAudit) (GlobalMedia, error)
+	CompleteMasterUpload(context.Context, string, MediaObject, int64, string, int64, AdminAudit) error
 	ReleaseCleanedUpload(context.Context, string, AdminAudit) error
 	ExpiredUploads(context.Context, int) ([]UploadReservation, error)
 	RecordGlobalPlayback(context.Context, string, string) (PlaybackResult, error)
@@ -80,6 +81,8 @@ type OwnedStorageRepository interface {
 	CompleteOwnedUpload(context.Context, string, MediaObject, int64, string, int64, NodeAudit) error
 	ReleaseOwnedUpload(context.Context, string, NodeAudit) error
 	OwnedPendingUploads(context.Context) ([]UploadReservation, error)
+	PrepareOwnedDelete(context.Context, string, DeleteOperation, NodeAudit) error
+	CommitOwnedDelete(context.Context, string, int64, NodeAudit) error
 }
 
 type GlobalMedia struct {

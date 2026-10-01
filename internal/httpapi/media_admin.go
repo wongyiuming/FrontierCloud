@@ -22,6 +22,10 @@ func (a *Admin) mutationAudit(c *gin.Context, action string, paths []string) sto
 
 func mediaAdminError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, store.ErrNodeState):
+		detail(c, 409, "节点状态或存储操作冲突")
+	case errors.Is(err, store.ErrStorageCapacity):
+		detail(c, 507, "存储空间不足")
 	case errors.Is(err, media.ErrUnavailable):
 		noStore(c)
 		c.Header("Retry-After", "30")
