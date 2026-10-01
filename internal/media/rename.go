@@ -122,6 +122,13 @@ func (s *Service) finishRename(ctx context.Context, j renameJournal) error {
 	return s.syncDirectory(j.New)
 }
 func (s *Service) Rename(ctx context.Context, old, newName string, audit store.AdminAudit) (RenameResult, error) {
+	role, roleErr := s.role(ctx)
+	if roleErr != nil {
+		return RenameResult{}, roleErr
+	}
+	if role == "Follower" || role == "Master" && !strings.HasPrefix(old, "lyrics/") {
+		return RenameResult{}, store.ErrNodeState
+	}
 	release, leaseErr := s.acquire(ctx, true)
 	if leaseErr != nil {
 		return RenameResult{}, leaseErr

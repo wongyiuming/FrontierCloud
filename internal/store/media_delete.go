@@ -7,7 +7,9 @@ type DeleteItem struct {
 	Slot      string `json:"slot"`
 	Directory bool   `json:"is_directory"`
 	OwnedID   string `json:"owned_object_id,omitempty"`
+	GlobalID  string `json:"global_media_id,omitempty"`
 	Bytes     int64  `json:"owned_bytes,omitempty"`
+	Absent    bool   `json:"physical_absent,omitempty"`
 }
 type DeleteOperation struct {
 	ID    string

@@ -53,6 +53,7 @@ func TestMasterSessionHTTPPrimaryDirectRelayFinalizeCancelAndPool(t *testing.T) 
 	g.DELETE("/upload/session/:upload", a.cancelUpload)
 	g.POST("/upload/item", func(c *gin.Context) { a.upload(c, false) })
 	g.GET("/storage-pool", a.storagePool)
+	g.POST("/delete", a.delete)
 	perform := func(method, url, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "https://master.test"+url, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
@@ -149,5 +150,34 @@ func TestMasterSessionHTTPPrimaryDirectRelayFinalizeCancelAndPool(t *testing.T) 
 	w = perform("POST", "/api/v1/media/admin/upload/item", "not-a-multipart-body")
 	if w.Code != 409 {
 		t.Fatal("Master legacy upload bypass", w.Code, w.Body.String())
+	}
+	delete(transport.routers, "https://follower.test")
+	w = perform("POST", "/api/v1/media/admin/delete", `{"paths":["music/Upload-direct"]}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"pending_delete":["music/Upload-direct/song.mp3"]`) {
+		t.Fatal("offline durable delete", w.Code, w.Body.String())
+	}
+	var masterUsed int64
+	if err := db.Database().QueryRow("SELECT used_bytes FROM cluster_storage_members WHERE member_kind='Follower'").Scan(&masterUsed); err != nil || masterUsed != 20 {
+		t.Fatal("uncertain bytes refunded", masterUsed, err)
+	}
+	if _, err := public.media.ReserveMasterUpload(ctx, "song.mp3", "music/Upload-direct", "", "relay", 10, 255, store.AdminAudit{}); err == nil {
+		t.Fatal("pending deletion path reused")
+	}
+	transport.routers["https://follower.test"] = fr
+	if err := public.media.RetryGlobalDeletes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Database().QueryRow("SELECT used_bytes FROM cluster_storage_members WHERE member_kind='Follower'").Scan(&masterUsed); err != nil || masterUsed != 10 {
+		t.Fatal("Master cleanup quota", masterUsed, err)
+	}
+	if err := fdb.Database().QueryRow("SELECT used_bytes FROM cluster_storage_members").Scan(&used); err != nil || used != 10 {
+		t.Fatal("Follower cleanup quota", used, err)
+	}
+	w = perform("POST", "/api/v1/media/admin/delete", `{"paths":["music/Upload-primary","music/Upload-relay"]}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"deleted":2`) || !strings.Contains(w.Body.String(), `"pending_delete":[]`) {
+		t.Fatal("mixed placement deletion", w.Code, w.Body.String())
+	}
+	if err := fdb.Database().QueryRow("SELECT used_bytes FROM cluster_storage_members").Scan(&used); err != nil || used != 0 {
+		t.Fatal("remaining Follower funds", used, err)
 	}
 }

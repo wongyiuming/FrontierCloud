@@ -109,6 +109,12 @@ func validateOperation(operation store.DeleteOperation) error {
 		if item.OwnedID != "" && (!ownedObjectID.MatchString(item.OwnedID) || item.Directory || item.Bytes < 0 || len(operation.Items) != 1) {
 			return ErrRecovery
 		}
+		if item.GlobalID != "" && (!ownedObjectID.MatchString(item.GlobalID) || item.OwnedID == "") {
+			return ErrRecovery
+		}
+		if item.Absent && (item.OwnedID == "" || item.Directory) {
+			return ErrRecovery
+		}
 		seen[item.Slot] = true
 		names[item.Path] = true
 	}
@@ -180,6 +186,12 @@ func (s *Service) finishDelete(ctx context.Context, operation store.DeleteOperat
 				return err
 			}
 			item := operation.Items[i]
+			if item.Absent {
+				if _, err := s.safeInfo(item.Path); !errors.Is(err, os.ErrNotExist) {
+					return ErrRecovery
+				}
+				continue
+			}
 			staged := quarantine + "/" + item.Slot
 			info, stagedErr := s.root.Lstat(staged)
 			if stagedErr != nil && !errors.Is(stagedErr, os.ErrNotExist) {
@@ -266,6 +278,20 @@ func (s *Service) reconcileDelete(id string) (*store.DeleteOperation, error) {
 }
 
 func (s *Service) Delete(ctx context.Context, paths []string, audit store.AdminAudit) (int, error) {
+	role, err := s.role(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if role == "Follower" {
+		return 0, store.ErrNodeState
+	}
+	if role == "Master" {
+		for _, p := range paths {
+			if !strings.HasPrefix(p, "lyrics/") {
+				return 0, store.ErrNodeState
+			}
+		}
+	}
 	release, leaseErr := s.acquire(ctx, true)
 	if leaseErr != nil {
 		return 0, leaseErr
@@ -322,7 +348,7 @@ func (s *Service) Delete(ctx context.Context, paths []string, audit store.AdminA
 		}
 		return 0, err
 	}
-	err := s.stageDelete(ctx, operation, func() error { return s.repository.CommitDelete(ctx, operation.ID, audit) })
+	err = s.stageDelete(ctx, operation, func() error { return s.repository.CommitDelete(ctx, operation.ID, audit) })
 	verified, recoveryErr := s.reconcileDelete(operation.ID)
 	if recoveryErr != nil {
 		return 0, recoveryErr
@@ -350,6 +376,12 @@ func (s *Service) stageDelete(ctx context.Context, operation store.DeleteOperati
 	for _, item := range operation.Items {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if item.Absent {
+			if _, err := s.safeInfo(item.Path); !errors.Is(err, os.ErrNotExist) {
+				return ErrRecovery
+			}
+			continue
 		}
 		if _, err := s.safeInfo(item.Path); err != nil {
 			return err

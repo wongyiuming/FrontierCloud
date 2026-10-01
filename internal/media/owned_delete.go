@@ -54,17 +54,18 @@ func (s *Service) OwnedDelete(ctx context.Context, relationship, id, name string
 		return ErrPath
 	}
 	info, err := s.safeInfo(name)
-	if err != nil {
+	absent := errors.Is(err, os.ErrNotExist)
+	if err != nil && !absent {
 		return err
 	}
-	if !info.Mode().IsRegular() || info.Size() != expected {
+	if !absent && (!info.Mode().IsRegular() || info.Size() != expected) {
 		return store.ErrNodeState
 	}
 	random := make([]byte, 16)
 	if _, err = rand.Read(random); err != nil {
 		return err
 	}
-	operation := store.DeleteOperation{ID: hex.EncodeToString(random), State: "pending", Items: []store.DeleteItem{{Path: name, Slot: "0", OwnedID: id, Bytes: expected}}}
+	operation := store.DeleteOperation{ID: hex.EncodeToString(random), State: "pending", Items: []store.DeleteItem{{Path: name, Slot: "0", OwnedID: id, Bytes: expected, Absent: absent}}}
 	if err = s.owned.PrepareOwnedDelete(ctx, relationship, operation, a); err != nil {
 		if _, recoverErr := s.reconcileDelete(operation.ID); recoverErr != nil {
 			return recoverErr

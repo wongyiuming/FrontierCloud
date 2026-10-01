@@ -160,6 +160,26 @@ func (a *Admin) delete(c *gin.Context) {
 		detail(c, 400, "请选择合法对象")
 		return
 	}
+	role, roleErr := a.public.media.BusinessRole(c.Request.Context())
+	if roleErr != nil {
+		internalError(c, roleErr)
+		return
+	}
+	global := role == "Master"
+	for _, p := range body.Paths {
+		if strings.HasPrefix(p, "lyrics/") {
+			global = false
+		}
+	}
+	if global {
+		result, err := a.public.media.DeleteGlobal(c.Request.Context(), body.Paths, a.mutationAudit(c, "global-media-delete", body.Paths))
+		if err != nil {
+			mediaAdminError(c, err)
+			return
+		}
+		c.JSON(200, result)
+		return
+	}
 	count, err := a.public.media.Delete(c.Request.Context(), body.Paths, a.mutationAudit(c, "delete", body.Paths))
 	if err != nil {
 		mediaAdminError(c, err)

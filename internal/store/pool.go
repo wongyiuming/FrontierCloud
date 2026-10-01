@@ -74,6 +74,13 @@ type PoolRepository interface {
 	RecordGlobalPlayback(context.Context, string, string) (PlaybackResult, error)
 	SetGlobalPreference(context.Context, string, int, AdminAudit) (PlaybackResult, error)
 	BindGlobalLyric(context.Context, string, MediaObject) error
+	PrepareGlobalDelete(context.Context, []DeleteItem, AdminAudit) ([]GlobalMedia, error)
+	PendingGlobalDeletes(context.Context, int) ([]GlobalMedia, error)
+	GlobalPlacement(context.Context, string) (*GlobalMedia, error)
+	DeferGlobalDelete(context.Context, string) error
+	CompleteGlobalDelete(context.Context, string, AdminAudit) error
+	PrepareMasterDelete(context.Context, DeleteOperation, AdminAudit) error
+	CommitMasterDelete(context.Context, string, AdminAudit) error
 }
 
 type OwnedStorageRepository interface {

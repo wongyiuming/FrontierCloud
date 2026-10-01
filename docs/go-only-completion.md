@@ -106,8 +106,18 @@ expiry or lost commit responses. Concurrent cancellation cannot race a live
 transfer or unlink an unknown file. Follower deletion uses a replayable quarantine
 and atomic quota refund; pending crash intents restore bytes, committed intents
 clean them without resurrection. Native HTTP and SQLite recovery checks pass;
-the new slice is awaiting its disposable Linux/MySQL validation.
-This is not yet a complete global deletion or cluster deployment workflow.
+the upload/session and Follower deletion slice also passed real MySQL, Redis
+HTTP integration and the complete Linux race suite.
+
+Global deletion now persists pending placements before any physical operation.
+Offline/uncertain remote bytes retain their path and capacity; a bounded native
+background retry converges confirmed cleanup. MasterLocal quarantine commits
+global metadata, playback/lyric cleanup, local identity and capacity atomically.
+Interrupted pending intents restore bytes; committed intents only clean up.
+Missing physical bytes converge against the accounted object identity/size.
+Exact-case scopes, SQL audit rollback, quota replay and mixed Primary/Relay HTTP
+deletion tests pass locally; this deletion slice awaits real MySQL validation.
+Master/Follower legacy mutation entry points reject quota-bypassing operations.
 
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.

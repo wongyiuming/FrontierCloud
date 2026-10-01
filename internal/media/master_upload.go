@@ -140,7 +140,9 @@ func (s *Service) uploadSessionLease(id string) (func(), error) {
 	if !operationID.MatchString(id) {
 		return nil, ErrPath
 	}
-	name := ".session-" + id + ".lease"
+	return s.privateLease(".session-" + id + ".lease")
+}
+func (s *Service) privateLease(name string) (func(), error) {
 	if info, err := s.root.Lstat(name); err == nil && !info.Mode().IsRegular() {
 		return nil, ErrPath
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {

@@ -461,6 +461,13 @@ func (s *Service) finishUpload(ctx context.Context, journal uploadJournal) error
 }
 
 func (s *Service) Publish(ctx context.Context, stage *Stage, filename, target, relative string, lyric bool, maxName int, audit store.AdminAudit) (string, error) {
+	role, roleErr := s.role(ctx)
+	if roleErr != nil {
+		return "", roleErr
+	}
+	if role == "Follower" || role == "Master" && !lyric {
+		return "", store.ErrNodeState
+	}
 	if stage == nil || stage.service != s || !uploadStageName.MatchString(stage.name) {
 		return "", ErrPath
 	}
