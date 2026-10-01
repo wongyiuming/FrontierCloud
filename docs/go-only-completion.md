@@ -190,6 +190,26 @@ never receive a successful ZIP footer. Real Redis Admin authentication and
 mixed-owner HTTP download tests, private-CA transport tests, full Go/vet checks,
 real MySQL regression and the complete Linux race suite passed (2026-10-02).
 
+Native Follower backup begin/chunk/commit/abort handlers now enforce verified
+HTTPS, exact-body HMAC/nonces and a fresh active-upstream/role check inside each
+SQL write. Standard-base64 chunks remain at most 192 KiB; commit streams ordered
+chunks through SHA-256 without a payload-sized buffer. Identical lost-response
+chunk/commit retries are safe, conflicting bytes are rejected, ready artifacts
+cannot be reset by begin, and the latest-generation pointer cannot regress.
+Retention keeps the newest two ready generations. Abort only cleans that paired
+Master's receiving generations; success state and audit are atomic. Nanosecond
+generation precision, binary/empty chunks, concurrent replay, sequence/checksum
+failures, role/revocation fences and audit rollback passed SQLite/MySQL, signed
+native HTTP, full Go/vet and the complete Linux race suite (2026-10-02).
+The MySQL fault injection uses a temporary CHECK in the disposable test database;
+no SUPER privilege or binary-log security relaxation is required.
+
+This slice is only cold-artifact reception. The native Master still needs
+consistent logical export, asynchronous backup scheduling, artifact validation
+and safe restore/promotion. The existing v2 transfer contract is documented in
+`protocol/v2/backup-transfer.md`; this does not silently introduce a new recovery
+format or prove Python/Go live backup interoperability.
+
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.
 The default deployment and updater still contain Python and must be replaced

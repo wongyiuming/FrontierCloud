@@ -19,4 +19,5 @@ type Store interface {
 	Pool() PoolRepository
 	Karaoke() KaraokeRepository
 	Recordings() RecordingRepository
+	Backups() BackupRepository
 }

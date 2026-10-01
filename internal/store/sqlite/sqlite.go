@@ -88,6 +88,7 @@ func (s *Store) Nodes() store.NodeRepository           { return business.New(s.d
 func (s *Store) Pool() store.PoolRepository            { return business.New(s.database, s.Backend()) }
 func (s *Store) Karaoke() store.KaraokeRepository      { return business.New(s.database, s.Backend()) }
 func (s *Store) Recordings() store.RecordingRepository { return business.New(s.database, s.Backend()) }
+func (s *Store) Backups() store.BackupRepository       { return business.New(s.database, s.Backend()) }
 func (s *Store) Admin() store.AdminRepository          { return business.New(s.database, s.Backend()) }
 
 func (s *Store) Observations() store.ObservationRepository {

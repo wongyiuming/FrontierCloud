@@ -200,6 +200,7 @@ func serve() error {
 	httpapi.RegisterNodeRecordings(handler, settings, resolver, controlService, recordingStorage)
 	httpapi.RegisterNodeIdentity(handler, settings, resolver, controlService)
 	httpapi.RegisterNodeControl(handler, settings, resolver, controlService)
+	httpapi.RegisterNodeBackups(handler, settings, resolver, controlService, database.Backups())
 	httpapi.RegisterNodeMedia(handler, settings, resolver, controlService, mediaService)
 	httpapi.RegisterNodeStorage(handler, settings, resolver, controlService, mediaService)
 	httpapi.RegisterObservations(handler, adminHTTP, observation.New(database.Observations(), redisClient, settings.WebRTCCooldown), resolver)

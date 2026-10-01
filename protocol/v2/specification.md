@@ -211,6 +211,10 @@ The current v2 compatibility surface includes:
 Endpoint-specific authorization always includes relationship direction, role,
 and resource ownership checks in addition to a valid MAC or capability token.
 
+The existing cold backup transfer messages and limits are described in
+[`backup-transfer.md`](backup-transfer.md). This does not define a new backup
+artifact format or permit online reads from a recovery artifact.
+
 ## 10. Conformance and evolution
 
 All maintained runtimes MUST consume the shared vectors directly in tests.

@@ -159,6 +159,7 @@ func clusterFixture(t *testing.T, origin string, transport *clusterHTTP, empty b
 	public.settings.TLSEnabled = true
 	RegisterNodeIdentity(router, public.settings, resolver, service)
 	RegisterNodeControl(router, public.settings, resolver, service)
+	RegisterNodeBackups(router, public.settings, resolver, service, db.Backups())
 	RegisterNodeMedia(router, public.settings, resolver, service, public.media)
 	RegisterNodeStorage(router, public.settings, resolver, service, public.media)
 	transport.routers[origin] = router
