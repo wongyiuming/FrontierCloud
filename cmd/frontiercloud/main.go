@@ -35,6 +35,19 @@ func command(arguments []string) error {
 	switch name {
 	case "serve":
 		return serve()
+	case "migrate":
+		settings, err := config.Load()
+		if err != nil {
+			return err
+		}
+		database, err := openStore(settings)
+		if err != nil {
+			return err
+		}
+		defer database.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		return database.Initialize(ctx)
 	case "init-secrets":
 		return bootstrap.InitializeSecrets("/run/frontiercloud-secrets")
 	case "init-media":
@@ -56,6 +69,11 @@ func serve() error {
 		return err
 	}
 	defer database.Close()
+	initialization, cancelInitialization := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancelInitialization()
+	if err := database.Initialize(initialization); err != nil {
+		return err
+	}
 
 	redisOptions, err := redis.ParseURL(settings.RedisURL)
 	if err != nil {

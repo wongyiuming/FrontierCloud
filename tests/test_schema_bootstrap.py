@@ -37,7 +37,7 @@ class SchemaBootstrapContractTests(unittest.TestCase):
         )
 
     def test_current_indexes_are_created_in_the_initial_schema(self):
-        source = (ROOT / "app/core/db.py").read_text(encoding="utf-8")
+        source = (ROOT / "migrations/mysql/0002-schema.json").read_text(encoding="utf-8")
         for index in (
             "idx_ip_security_violation_count",
             "idx_media_objects_path",

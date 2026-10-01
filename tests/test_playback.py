@@ -116,7 +116,7 @@ class PlaybackPolicyTests(unittest.TestCase):
             playback.normalize_session_id("not-a-session")
 
     def test_initial_schema_declares_current_preference_constraint(self):
-        source = (Path(__file__).resolve().parents[1] / "app" / "core" / "db.py").read_text(
+        source = (Path(__file__).resolve().parents[1] / "migrations" / "mysql" / "0002-schema.json").read_text(
             encoding="utf-8"
         )
 

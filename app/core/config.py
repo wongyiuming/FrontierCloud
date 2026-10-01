@@ -20,6 +20,11 @@ def _read_secret(path: Path, fallback: str) -> str:
 
 
 class Settings(BaseSettings):
+    # Keep existing Python deployments on MySQL during the parity rollout.
+    DB_TYPE: str = Field("mysql", validation_alias="DB_TYPE")
+    SQLITE_PATH: str = Field("/data/frontiercloud.db", validation_alias="SQLITE_PATH")
+    MYSQL_HOST: str = Field("mysql", validation_alias="MYSQL_HOST")
+    MYSQL_PORT: int = Field(3306, ge=1, le=65535, validation_alias="MYSQL_PORT")
     TLS_ENABLED: bool = Field(False, validation_alias="TLS_ENABLED")
     REDIS_URL: str = Field("redis://redis:6379/0", validation_alias="REDIS_URL")
     MYSQL_DATABASE: str = Field("office_automation", validation_alias="MYSQL_DATABASE")
@@ -70,6 +75,21 @@ class Settings(BaseSettings):
             raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
         return normalized
 
+    @field_validator("DB_TYPE")
+    @classmethod
+    def validate_database_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"mysql", "sqlite"}:
+            raise ValueError("DB_TYPE must be mysql or sqlite")
+        return normalized
+
+    @field_validator("SQLITE_PATH")
+    @classmethod
+    def validate_sqlite_path(cls, value: str) -> str:
+        if not value.strip() or value.strip() == ":memory:":
+            raise ValueError("SQLITE_PATH must name a persistent database file")
+        return value.strip()
+
     @field_validator("LOG_FORMAT")
     @classmethod
     def validate_log_format(cls, value: str) -> str:
@@ -95,7 +115,10 @@ class Settings(BaseSettings):
         user = quote(self.MYSQL_USER, safe="")
         password = quote(_read_secret(MYSQL_PASSWORD_FILE, "uninitialized"), safe="")
         database = quote(self.MYSQL_DATABASE, safe="")
-        return f"mysql+asyncmy://{user}:{password}@mysql:3306/{database}"
+        host = self.MYSQL_HOST
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        return f"mysql+asyncmy://{user}:{password}@{host}:{self.MYSQL_PORT}/{database}"
 
     @property
     def ADMIN_COOKIE_NAME(self) -> str:

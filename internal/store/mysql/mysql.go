@@ -11,6 +11,7 @@ import (
 	"time"
 
 	driver "github.com/go-sql-driver/mysql"
+	"github.com/wongyiuming/FrontierCloud/internal/store/schema"
 )
 
 // Config contains MySQL connection details without exposing them to protocol code.
@@ -32,17 +33,19 @@ func Open(value Config) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read MySQL password file: %w", err)
 	}
-	configuration := driver.Config{
-		User:      value.User,
-		Passwd:    strings.TrimSpace(string(password)),
-		Net:       "tcp",
-		Addr:      net.JoinHostPort(value.Host, fmt.Sprint(value.Port)),
-		DBName:    value.Database,
-		ParseTime: true,
-		Loc:       time.UTC,
-		Collation: "utf8mb4_unicode_ci",
-		Params:    map[string]string{"charset": "utf8mb4"},
-	}
+	configuration := driver.NewConfig()
+	configuration.User = value.User
+	configuration.Passwd = strings.TrimSpace(string(password))
+	configuration.Net = "tcp"
+	configuration.Addr = net.JoinHostPort(value.Host, fmt.Sprint(value.Port))
+	configuration.DBName = value.Database
+	configuration.ParseTime = true
+	configuration.Loc = time.UTC
+	configuration.Collation = "utf8mb4_unicode_ci"
+	configuration.Params = map[string]string{"charset": "utf8mb4"}
+	configuration.Timeout = 5 * time.Second
+	configuration.ReadTimeout = 5 * time.Second
+	configuration.WriteTimeout = 5 * time.Second
 	database, err := sql.Open("mysql", configuration.FormatDSN())
 	if err != nil {
 		return nil, fmt.Errorf("open MySQL: %w", err)
@@ -60,6 +63,10 @@ func Open(value Config) (*Store, error) {
 
 func (store *Store) Backend() string {
 	return "mysql"
+}
+
+func (store *Store) Initialize(ctx context.Context) error {
+	return schema.Initialize(ctx, store.database, store.Backend())
 }
 
 func (store *Store) Ping(ctx context.Context) error {

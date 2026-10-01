@@ -1,3 +1,6 @@
 # Linux container entrypoints must also work from Windows checkouts.
 *.sh text eol=lf
 *.awk text eol=lf
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf

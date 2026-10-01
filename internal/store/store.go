@@ -9,5 +9,6 @@ import "context"
 type Store interface {
 	Backend() string
 	Ping(context.Context) error
+	Initialize(context.Context) error
 	Close() error
 }

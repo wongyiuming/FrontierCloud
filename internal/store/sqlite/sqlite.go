@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/wongyiuming/FrontierCloud/internal/store/schema"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -56,6 +58,10 @@ func Open(path string) (*Store, error) {
 
 func (store *Store) Backend() string {
 	return "sqlite"
+}
+
+func (store *Store) Initialize(ctx context.Context) error {
+	return schema.Initialize(ctx, store.database, store.Backend())
 }
 
 func (store *Store) Ping(ctx context.Context) error {

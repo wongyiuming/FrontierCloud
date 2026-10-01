@@ -1,7 +1,6 @@
 """Real MySQL regression checks using isolated, uniquely named fixture tables."""
 import asyncio
 from contextlib import asynccontextmanager
-import inspect
 import re
 import time
 import uuid
@@ -11,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core import db
+from app.store.schema import schema_statements
 from app.services import ip_security as s
 
 
@@ -44,8 +44,8 @@ async def main():
         conn = FixtureConnection()
         try:
             for table in tables:
-                ddl = re.search(r'CREATE TABLE IF NOT EXISTS ' + table + r'\s*\(.*?"""',
-                                inspect.getsource(db.init_db), re.S).group(0)[:-3]
+                ddl = next(statement for statement in schema_statements("mysql", db.SCHEMA_GENERATION)
+                           if re.match(r"CREATE TABLE IF NOT EXISTS " + table + r"\s*\(", statement))
                 await conn.execute(text(ddl.replace("CREATE TABLE IF NOT EXISTS", "CREATE TABLE", 1)))
                 created.append(table)
                 await conn.commit()

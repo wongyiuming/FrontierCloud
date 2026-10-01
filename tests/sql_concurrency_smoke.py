@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
 import re
 import tempfile
 import time
@@ -19,6 +18,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.requests import Request
 
 from app.core import db
+from app.store.schema import schema_statements
 from app.core.config import settings
 from app.core.redis import redis_client
 from app.services import media_manager, media_objects, network_observation as observation, playback, resource_pool
@@ -55,9 +55,10 @@ async def main():
 
     try:
         async with database.connect() as conn:
-            source = inspect.getsource(db.init_db)
+            initial_schema = schema_statements("mysql", db.SCHEMA_GENERATION)
             for name in local_tables:
-                statement = re.search(r"CREATE TABLE IF NOT EXISTS " + name + r"\s*\(.*?\"\"\"", source, re.S).group(0)[:-3]
+                statement = next(ddl for ddl in initial_schema
+                                 if re.match(r"CREATE TABLE IF NOT EXISTS " + name + r"\s*\(", ddl))
                 await conn.execute(text(statement.replace("CREATE TABLE IF NOT EXISTS", "CREATE TABLE", 1)))
                 created.append(name)
                 await conn.commit()
