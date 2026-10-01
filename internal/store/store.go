@@ -17,4 +17,5 @@ type Store interface {
 	Security() SecurityRepository
 	Observations() ObservationRepository
 	Pool() PoolRepository
+	Karaoke() KaraokeRepository
 }

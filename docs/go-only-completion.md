@@ -116,8 +116,20 @@ global metadata, playback/lyric cleanup, local identity and capacity atomically.
 Interrupted pending intents restore bytes; committed intents only clean up.
 Missing physical bytes converge against the accounted object identity/size.
 Exact-case scopes, SQL audit rollback, quota replay and mixed Primary/Relay HTTP
-deletion tests pass locally; this deletion slice awaits real MySQL validation.
+deletion tests also passed real MySQL, Redis HTTP integration and Linux race
+validation in an isolated environment.
 Master/Follower legacy mutation entry points reject quota-bypassing operations.
+
+Native Karaoke account registration/login/status/logout, captcha images,
+password changes, Admin user search/ban/unban/quota and durable user deletion
+state now use the Go domain repository. Password hashes match Python scrypt
+vectors; NFKC/casefold usernames and default quota retain the existing contract.
+Daily registration limits and account audits are atomic on SQLite/MySQL. Native
+Redis sessions use CSRF plus password fingerprints/revocation generations, so
+password changes or ban/unban never revive old sessions. Legacy sessions require
+re-login. Empty accounts can be fully deleted; accounts with recordings stay
+durably deleting until the remaining native recording cleanup is implemented.
+Local tests pass; the account slice awaits real Redis/MySQL integration.
 
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.

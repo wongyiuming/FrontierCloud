@@ -83,10 +83,11 @@ func (store *Store) Close() error {
 	return store.database.Close()
 }
 
-func (s *Store) Media() store.MediaRepository { return business.New(s.database, s.Backend()) }
-func (s *Store) Nodes() store.NodeRepository  { return business.New(s.database, s.Backend()) }
-func (s *Store) Pool() store.PoolRepository   { return business.New(s.database, s.Backend()) }
-func (s *Store) Admin() store.AdminRepository { return business.New(s.database, s.Backend()) }
+func (s *Store) Media() store.MediaRepository     { return business.New(s.database, s.Backend()) }
+func (s *Store) Nodes() store.NodeRepository      { return business.New(s.database, s.Backend()) }
+func (s *Store) Pool() store.PoolRepository       { return business.New(s.database, s.Backend()) }
+func (s *Store) Karaoke() store.KaraokeRepository { return business.New(s.database, s.Backend()) }
+func (s *Store) Admin() store.AdminRepository     { return business.New(s.database, s.Backend()) }
 
 func (s *Store) Observations() store.ObservationRepository {
 	return business.New(s.database, s.Backend())

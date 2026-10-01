@@ -17,6 +17,7 @@ import (
 	"github.com/wongyiuming/FrontierCloud/internal/bootstrap"
 	"github.com/wongyiuming/FrontierCloud/internal/config"
 	"github.com/wongyiuming/FrontierCloud/internal/httpapi"
+	"github.com/wongyiuming/FrontierCloud/internal/karaoke"
 	"github.com/wongyiuming/FrontierCloud/internal/media"
 	"github.com/wongyiuming/FrontierCloud/internal/network"
 	"github.com/wongyiuming/FrontierCloud/internal/node"
@@ -184,6 +185,7 @@ func serve() error {
 		return err
 	}
 	httpapi.RegisterSecurityAdmin(handler, adminHTTP, securityService)
+	httpapi.RegisterKaraokeAccounts(handler, karaoke.New(database.Karaoke(), database.Nodes(), karaoke.NewRedisCache(redisClient)), public, adminHTTP, resolver)
 	httpapi.RegisterNodeIdentity(handler, settings, resolver, controlService)
 	httpapi.RegisterNodeControl(handler, settings, resolver, controlService)
 	httpapi.RegisterNodeMedia(handler, settings, resolver, controlService, mediaService)
