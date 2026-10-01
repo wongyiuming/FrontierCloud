@@ -114,10 +114,41 @@ func TestOwnedStorageQuotaReservationConcurrentPublicationAndCleanup(t *testing.
 	if err = pool.ReserveOwnedUpload(ctx, cleanup, relID, other, 10, 5*store.GiB, store.NodeAudit{}); err != nil {
 		t.Fatal(err)
 	}
+	old, target := "music/NativeOwnedQuota", "music/NativeOwnedQuotaRenamed"
+	if err := pool.CheckOwnedRename(ctx, relID, old, target); !errors.Is(err, store.ErrNodeState) {
+		t.Fatal("renamed directory with live upload", err)
+	}
 	for range 2 {
 		if err = pool.ReleaseOwnedUpload(ctx, cleanup, store.NodeAudit{}); err != nil {
 			t.Fatal("cleanup not idempotent", err)
 		}
+	}
+	renameID := "f0" + strings.Repeat("9", 30)
+	for range 16 {
+		group.Go(func() {
+			if err := pool.CompleteOwnedRename(ctx, relID, old, target, renameID, store.NodeAudit{RequestID: "owned-quota-rename"}); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	group.Wait()
+	if err := sqlDB.QueryRow("SELECT COUNT(*) FROM node_audit WHERE action='storage-directory-renamed' AND detail LIKE '%owned-quota-rename%'").Scan(&count); err != nil || count != 1 {
+		t.Fatal("rename duplicate audit", count, err)
+	}
+	actual, err := db.Media().ObjectByID(ctx, object.ID)
+	if err != nil || actual == nil || actual.Path != target+"/song.mp3" {
+		t.Fatal("rename lost identity", actual, err)
+	}
+	object.Path = actual.Path
+	var ledgerPath string
+	if err := sqlDB.QueryRow("SELECT media_path FROM cluster_upload_sessions WHERE upload_id=?", operation).Scan(&ledgerPath); err != nil || ledgerPath != object.Path {
+		t.Fatal("rename lost accounting ledger", ledgerPath, err)
+	}
+	if err := pool.CompleteOwnedRename(ctx, relID, target, "music/AnotherOwnedQuota", renameID, store.NodeAudit{}); !errors.Is(err, store.ErrNodeState) {
+		t.Fatal("operation reused for another move", err)
+	}
+	if err := sqlDB.QueryRow("SELECT used_bytes,reserved_bytes FROM cluster_storage_members WHERE member_id=?", row.ID).Scan(&used, &reserved); err != nil || used != 3*store.GiB || reserved != 0 {
+		t.Fatal("rename changed quota", used, reserved, err)
 	}
 	deleteID := "f0" + strings.Repeat("8", 30)
 	deletion := store.DeleteOperation{ID: deleteID, State: "pending", Items: []store.DeleteItem{{Path: object.Path, Slot: "0", OwnedID: object.ID, Bytes: 3 * store.GiB}}}

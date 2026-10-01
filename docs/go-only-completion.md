@@ -151,6 +151,16 @@ recovery-fence hardening, passed real MySQL quota transactions, real Redis
 HTTP/CSRF/user deletion and the complete Linux race suite in the isolated
 development checkout. The original ten-node topology is unchanged.
 
+The active upstream can now rename a native Follower directory through the
+authenticated storage-control endpoint. Durable ownership markers/journals
+recover filesystem moves and uncertain SQL commits; replay preserves IDs,
+statistics, visibility and completed upload accounting paths without changing
+capacity. Live reservations and unresolved deletes block rename. A Python
+Master's body without operation_id remains accepted. Native HTTP, audit rollback,
+lost-acknowledgement recovery and post-rename deletion/refund checks passed local
+tests, real MySQL, Redis integration and the complete Linux race suite. Master
+multi-owner directory rename remains gated until its durable coordinator is ready.
+
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.
 The default deployment and updater still contain Python and must be replaced

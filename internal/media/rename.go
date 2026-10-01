@@ -23,12 +23,14 @@ type RenameResult struct {
 	New    string `json:"new_path"`
 }
 type renameJournal struct {
-	Format  string           `json:"format"`
-	Version int              `json:"version"`
-	ID      string           `json:"id"`
-	Old     string           `json:"old_path"`
-	New     string           `json:"new_path"`
-	Audit   store.AdminAudit `json:"audit"`
+	Format       string           `json:"format"`
+	Version      int              `json:"version"`
+	ID           string           `json:"id"`
+	Old          string           `json:"old_path"`
+	New          string           `json:"new_path"`
+	Audit        store.AdminAudit `json:"audit"`
+	Relationship string           `json:"relationship_id,omitempty"`
+	NodeAudit    store.NodeAudit  `json:"node_audit,omitempty"`
 }
 
 var renameJournalName = regexp.MustCompile(`^\.rename-[0-9a-f]{32}\.json$`)
@@ -63,7 +65,8 @@ func (s *Service) writeRenameJournal(j renameJournal) error {
 	return s.syncDirectory(".")
 }
 func (s *Service) finishRename(ctx context.Context, j renameJournal) error {
-	if j.Format != "frontiercloud-local-rename" || j.Version != 1 || !operationID.MatchString(j.ID) || !renameDirectoryPath(j.Old) || !renameDirectoryPath(j.New) || j.Old == j.New || path.Dir(j.Old) != path.Dir(j.New) || j.Audit.Action != "directory_rename" {
+	owned := j.Format == "frontiercloud-owned-rename"
+	if j.Format != "frontiercloud-local-rename" && !owned || j.Version != 1 || !operationID.MatchString(j.ID) || !renameDirectoryPath(j.Old) || !renameDirectoryPath(j.New) || j.Old == j.New || path.Dir(j.Old) != path.Dir(j.New) || j.Audit.Action != "directory_rename" || !owned && j.Relationship != "" || owned && (s.owned == nil || !operationID.MatchString(j.Relationship) || !store.ValidDirectoryRename(j.Old, j.New)) {
 		return ErrRecovery
 	}
 	old, oldErr := s.safeInfo(j.Old)
@@ -96,7 +99,13 @@ func (s *Service) finishRename(ctx context.Context, j renameJournal) error {
 		return ErrRecovery
 	}
 	if oldErr == nil {
-		if err := s.repository.CheckRename(ctx, j.New); err != nil {
+		var err error
+		if owned {
+			err = s.owned.CheckOwnedRename(ctx, j.Relationship, j.Old, j.New)
+		} else {
+			err = s.repository.CheckRename(ctx, j.New)
+		}
+		if err != nil {
 			return err
 		}
 		if err := s.renameExclusive(j.Old, j.New); err != nil {
@@ -106,7 +115,12 @@ func (s *Service) finishRename(ctx context.Context, j renameJournal) error {
 			return err
 		}
 	}
-	if err := s.repository.CompleteRename(ctx, j.Old, j.New, j.ID, j.Audit); err != nil {
+	if owned {
+		err = s.owned.CompleteOwnedRename(ctx, j.Relationship, j.Old, j.New, j.ID, j.NodeAudit)
+	} else {
+		err = s.repository.CompleteRename(ctx, j.Old, j.New, j.ID, j.Audit)
+	}
+	if err != nil {
 		return err
 	}
 	// Clear the replay intent durably before removing its ownership marker.
@@ -129,14 +143,6 @@ func (s *Service) Rename(ctx context.Context, old, newName string, audit store.A
 	if role == "Follower" || role == "Master" && !strings.HasPrefix(old, "lyrics/") {
 		return RenameResult{}, store.ErrNodeState
 	}
-	release, leaseErr := s.acquire(ctx, true)
-	if leaseErr != nil {
-		return RenameResult{}, leaseErr
-	}
-	defer release()
-	if err := s.ready(); err != nil {
-		return RenameResult{}, err
-	}
 	old = strings.TrimSpace(strings.ReplaceAll(old, "\\", "/"))
 	newName = strings.TrimSpace(newName)
 	if !renameDirectoryPath(old) || newName == "" || strings.HasPrefix(newName, ".") || strings.ContainsAny(newName, "/\\:\x00") || !utf8.ValidString(newName) || len(newName) > 255 || utf8.RuneCountInString(newName) > 255 {
@@ -145,6 +151,45 @@ func (s *Service) Rename(ctx context.Context, old, newName string, audit store.A
 	target := path.Dir(old) + "/" + newName
 	if !renameDirectoryPath(target) {
 		return RenameResult{}, ErrPath
+	}
+	return s.renameDirectory(ctx, old, target, "", "", audit, store.NodeAudit{})
+}
+
+// OwnedRename is available only to the authenticated active upstream. Ordinary
+// Follower Admin mutations remain disabled. An operation ID permits a lost HTTP
+// reply to be retried without moving a different directory into its place.
+func (s *Service) OwnedRename(ctx context.Context, relationship, old, target, id string, a store.NodeAudit) (RenameResult, error) {
+	if s.owned == nil {
+		return RenameResult{}, ErrUnavailable
+	}
+	if !operationID.MatchString(relationship) || !store.ValidDirectoryRename(old, target) || id != "" && !operationID.MatchString(id) {
+		return RenameResult{}, ErrPath
+	}
+	return s.renameDirectory(ctx, old, target, id, relationship, store.AdminAudit{}, a)
+}
+
+func (s *Service) renameDirectory(ctx context.Context, old, target, id, relationship string, audit store.AdminAudit, a store.NodeAudit) (RenameResult, error) {
+	release, err := s.acquire(ctx, true)
+	if err != nil {
+		return RenameResult{}, err
+	}
+	defer release()
+	if err := s.ready(); err != nil {
+		return RenameResult{}, err
+	}
+	if relationship != "" {
+		if id != "" {
+			done, err := s.owned.OwnedRenameCompleted(ctx, relationship, old, target, id)
+			if err != nil {
+				return RenameResult{}, err
+			}
+			if done {
+				return RenameResult{Status: "renamed", Old: old, New: target}, nil
+			}
+		}
+		if err := s.owned.CheckOwnedRename(ctx, relationship, old, target); err != nil {
+			return RenameResult{}, err
+		}
 	}
 	info, err := s.safeInfo(old)
 	if err != nil {
@@ -169,11 +214,13 @@ func (s *Service) Rename(ctx context.Context, old, newName string, audit store.A
 	if err := ctx.Err(); err != nil {
 		return RenameResult{}, err
 	}
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return RenameResult{}, err
+	if id == "" {
+		bytes := make([]byte, 16)
+		if _, err := rand.Read(bytes); err != nil {
+			return RenameResult{}, err
+		}
+		id = hex.EncodeToString(bytes)
 	}
-	id := hex.EncodeToString(bytes)
 	marker := old + "/" + renameMarker(id)
 	f, err := s.root.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -199,6 +246,11 @@ func (s *Service) Rename(ctx context.Context, old, newName string, audit store.A
 	audit.Detail = ""
 	audit.UserAgent = limited(audit.UserAgent, 512)
 	j := renameJournal{Format: "frontiercloud-local-rename", Version: 1, ID: id, Old: old, New: target, Audit: audit}
+	if relationship != "" {
+		j.Format = "frontiercloud-owned-rename"
+		j.Relationship = relationship
+		j.NodeAudit = a
+	}
 	if err := s.writeRenameJournal(j); err != nil {
 		s.markRecovery()
 		return RenameResult{}, fmt.Errorf("%w: %v", ErrRecovery, err)

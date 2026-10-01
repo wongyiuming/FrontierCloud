@@ -4,7 +4,38 @@ import (
 	"context"
 	"github.com/wongyiuming/FrontierCloud/internal/store"
 	"io"
+	"regexp"
 )
+
+var storageRenameID = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+func (s *Service) RenameStorage(ctx context.Context, relationship, old, target, operation string) error {
+	if !storageRenameID.MatchString(relationship) || !storageRenameID.MatchString(operation) || !store.ValidDirectoryRename(old, target) {
+		return store.ErrNodeState
+	}
+	row, err := s.repo.ReadIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	if row.Role != "Master" {
+		return store.ErrNodeState
+	}
+	relation, err := s.repo.Relationship(ctx, relationship)
+	if err != nil {
+		return err
+	}
+	if relation.State != "active" || relation.Direction != "downstream" || relation.Protocol != 2 {
+		return store.ErrNodeState
+	}
+	value, err := s.Call(ctx, relation, "/internal/v1/storage-control/directory-rename", map[string]any{"old_path": old, "new_path": target, "operation_id": operation})
+	if err != nil {
+		return err
+	}
+	if textField(value, "status") != "renamed" || textField(value, "old_path") != old || textField(value, "new_path") != target {
+		return store.ErrNodeState
+	}
+	return nil
+}
 
 func (s *Service) storageRelation(ctx context.Context, v store.UploadReservation) (store.Relationship, error) {
 	if v.Member.RelationshipID == nil {

@@ -90,6 +90,9 @@ type OwnedStorageRepository interface {
 	OwnedPendingUploads(context.Context) ([]UploadReservation, error)
 	PrepareOwnedDelete(context.Context, string, DeleteOperation, NodeAudit) error
 	CommitOwnedDelete(context.Context, string, int64, NodeAudit) error
+	CheckOwnedRename(context.Context, string, string, string) error
+	OwnedRenameCompleted(context.Context, string, string, string, string) (bool, error)
+	CompleteOwnedRename(context.Context, string, string, string, string, NodeAudit) error
 }
 
 type GlobalMedia struct {

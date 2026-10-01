@@ -30,6 +30,58 @@ func storageCORS(c *gin.Context, relation store.Relationship) bool {
 	return true
 }
 func RegisterNodeStorage(router *gin.Engine, settings config.Config, resolver *network.Resolver, control *node.Service, volume *media.Service) {
+	router.POST("/internal/v1/storage-control/directory-rename", func(c *gin.Context) {
+		if !nodeHTTPS(c, settings, resolver) {
+			return
+		}
+		body, ok := nodeBody(c)
+		if !ok {
+			return
+		}
+		path := c.Request.URL.EscapedPath()
+		if c.Request.URL.RawQuery != "" {
+			path += "?" + c.Request.URL.RawQuery
+		}
+		relation, err := control.Authenticate(c.Request.Context(), c.Request.Header, c.Request.Method, path, body, false, false)
+		if err != nil {
+			if errors.Is(err, node.ErrAuthentication) {
+				detail(c, 401, "Invalid relationship authentication")
+			} else {
+				internalError(c, err)
+			}
+			return
+		}
+		if err := control.RequireFollower(c.Request.Context(), relation); err != nil {
+			if errors.Is(err, store.ErrNodeState) {
+				detail(c, 403, "Only the active upstream may rename Follower directories")
+			} else {
+				internalError(c, err)
+			}
+			return
+		}
+		var value struct {
+			Old       string `json:"old_path"`
+			New       string `json:"new_path"`
+			Operation string `json:"operation_id"`
+		}
+		if controlJSON(body, &value) != nil {
+			detail(c, 400, "Invalid directory rename request")
+			return
+		}
+		result, err := volume.OwnedRename(c.Request.Context(), relation.ID, value.Old, value.New, value.Operation, store.NodeAudit{Actor: relation.PeerID, RequestID: c.GetString("request_id"), TraceID: c.GetString("trace_id")})
+		if err != nil {
+			if errors.Is(err, store.ErrNodeState) {
+				detail(c, 409, "Directory rename conflicts with current storage state")
+			} else if errors.Is(err, media.ErrRecovery) {
+				c.Header("Retry-After", "30")
+				detail(c, 503, "Directory rename is awaiting durable recovery")
+			} else {
+				mediaAdminError(c, err)
+			}
+			return
+		}
+		c.JSON(200, result)
+	})
 	router.POST("/internal/v1/storage/:object/delete", func(c *gin.Context) {
 		if !nodeHTTPS(c, settings, resolver) {
 			return
