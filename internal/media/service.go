@@ -15,8 +15,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wongyiuming/FrontierCloud/internal/node"
+	"github.com/wongyiuming/FrontierCloud/internal/search"
 	"github.com/wongyiuming/FrontierCloud/internal/store"
 	"golang.org/x/text/cases"
 )
@@ -26,10 +28,12 @@ var ErrCategory = errors.New("Media category not found")
 var ErrLyrics = errors.New("Lyrics not found")
 
 type Service struct {
-	root       *os.Root
-	repository store.MediaRepository
-	identity   *node.Identity
-	mutation   sync.RWMutex
+	root             *os.Root
+	repository       store.MediaRepository
+	identity         *node.Identity
+	mutation         sync.RWMutex
+	search           *search.Engine
+	recoveryRequired bool
 }
 
 type Category struct {
@@ -55,7 +59,42 @@ func New(directory string, repo store.MediaRepository, identity *node.Identity) 
 		return nil, err
 	}
 	service := &Service{root: root, repository: repo, identity: identity}
+	service.search, err = search.New()
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	// Recovery may hash multi-GiB completed uploads. No HTTP traffic is accepted
+	// until durable publication/deletion intents have been reconciled.
+	recovery, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	release, err := service.acquire(recovery, true)
+	if err != nil {
+		cancel()
+		root.Close()
+		return nil, err
+	}
+	defer release()
+	err = service.recoverDeletes(recovery)
+	if err == nil {
+		err = service.recoverUploads(recovery)
+	}
+	if err == nil {
+		err = service.recoverRenames(recovery)
+	}
+	cancel()
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
 	if err := service.ensureDefaultLyric(); err != nil {
+		root.Close()
+		return nil, err
+	}
+	if err := service.root.Remove(".recovery-required"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		root.Close()
+		return nil, err
+	}
+	if err := service.syncDirectory("."); err != nil {
 		root.Close()
 		return nil, err
 	}
@@ -254,25 +293,43 @@ func (s *Service) Categories(ctx context.Context, kind string, include bool) ([]
 	if kind != "music" && kind != "video" {
 		return nil, ErrCategory
 	}
-	s.mutation.RLock()
-	defer s.mutation.RUnlock()
+	release, leaseErr := s.acquire(ctx, false)
+	if leaseErr != nil {
+		return nil, leaseErr
+	}
+	defer release()
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
 	return s.categories(ctx, kind, mediaRoot(kind), include)
 }
 func (s *Service) Subcategories(ctx context.Context, kind, name string, include bool) ([]Category, error) {
+	release, leaseErr := s.acquire(ctx, false)
+	if leaseErr != nil {
+		return nil, leaseErr
+	}
+	defer release()
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
 	if err := s.ValidateCategory(name, kind); err != nil {
 		return nil, err
 	}
 	if len(strings.Split(name, "/")) != 2 {
 		return []Category{}, nil
 	}
-	s.mutation.RLock()
-	defer s.mutation.RUnlock()
 	return s.categories(ctx, kind, name, include)
 }
 
 func (s *Service) Catalog(ctx context.Context, kind, name, session string, include bool) ([]Track, error) {
-	s.mutation.RLock()
-	defer s.mutation.RUnlock()
+	release, leaseErr := s.acquire(ctx, false)
+	if leaseErr != nil {
+		return nil, leaseErr
+	}
+	defer release()
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
 	if err := s.ValidateCategory(name, kind); err != nil {
 		return nil, err
 	}
@@ -362,8 +419,14 @@ type Stream struct {
 }
 
 func (s *Service) Stream(ctx context.Context, name string) (*Stream, error) {
-	s.mutation.RLock()
-	defer s.mutation.RUnlock()
+	release, leaseErr := s.acquire(ctx, false)
+	if leaseErr != nil {
+		return nil, leaseErr
+	}
+	defer release()
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
 	o, err := s.ValidateTrack(name)
 	if err != nil {
 		return nil, err
@@ -398,8 +461,14 @@ func (s *Service) Playback(ctx context.Context, name, session string, played, du
 	if played+0.05 < threshold {
 		return store.PlaybackResult{}, errors.New("Playback threshold not reached")
 	}
-	s.mutation.RLock()
-	defer s.mutation.RUnlock()
+	release, leaseErr := s.acquire(ctx, false)
+	if leaseErr != nil {
+		return store.PlaybackResult{}, leaseErr
+	}
+	defer release()
+	if err := s.ready(); err != nil {
+		return store.PlaybackResult{}, err
+	}
 	o, err := s.ValidateTrack(name)
 	if err != nil {
 		return store.PlaybackResult{}, err

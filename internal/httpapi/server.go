@@ -22,10 +22,11 @@ func New(database, redis Check) *gin.Engine {
 	return NewWithResolver(database, redis, resolver)
 }
 
-func NewWithResolver(database, redis Check, resolver *network.Resolver) *gin.Engine {
+func NewWithResolver(database, redis Check, resolver *network.Resolver, middleware ...gin.HandlerFunc) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(requests(resolver), gin.Recovery())
+	router.Use(middleware...)
 	router.HandleMethodNotAllowed = true
 	router.NoRoute(func(c *gin.Context) { detail(c, 404, "Not Found") })
 	router.NoMethod(func(c *gin.Context) { detail(c, 405, "Method Not Allowed") })

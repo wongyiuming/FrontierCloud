@@ -157,8 +157,14 @@ func (s *Service) lyricFor(ctx context.Context, track store.MediaObject) (string
 }
 
 func (s *Service) Lyrics(ctx context.Context, name string) ([]LyricEntry, error) {
-	s.mutation.RLock()
-	defer s.mutation.RUnlock()
+	release, leaseErr := s.acquire(ctx, false)
+	if leaseErr != nil {
+		return nil, leaseErr
+	}
+	defer release()
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
 	track, err := s.ValidateTrack(name)
 	if err != nil || track.Kind != "audio" {
 		return nil, ErrLyrics

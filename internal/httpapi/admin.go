@@ -42,6 +42,21 @@ func RegisterAdmin(router *gin.Engine, settings config.Config, auth *admin.Servi
 	protected.GET("/brand/:kind/download", a.brandDownload)
 	protected.DELETE("/brand/:kind", a.brandDelete)
 	protected.POST("/upload/brand/:kind", a.brandUpload)
+	protected.GET("/tree", a.tree)
+	protected.GET("/tree/search", a.treeSearch)
+	protected.POST("/hide", a.hide)
+	protected.POST("/delete", a.delete)
+	protected.GET("/download", a.download)
+	protected.POST("/upload/item", func(c *gin.Context) { a.upload(c, false) })
+	protected.POST("/upload/lyric", func(c *gin.Context) { a.upload(c, true) })
+	protected.GET("/directory-priorities", a.directoryPriorities)
+	protected.POST("/directory-priority", a.directoryPriority)
+	protected.POST("/directory/rename", a.renameDirectory)
+	protected.GET("/lyrics/catalog", a.lyricCatalog)
+	protected.POST("/lyrics/relations", a.lyricRelations)
+	protected.POST("/lyrics/auto-relate", a.lyricAuto)
+	protected.POST("/media-priority", a.mediaPriority)
+	protected.GET("/media-priority", a.mediaPriorities)
 	return a, nil
 }
 

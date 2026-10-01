@@ -47,3 +47,17 @@ func TestAdminTransportAndClientIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestIPNormalizationMatchesReference(t *testing.T) {
+	for raw, want := range map[string]string{" 2001:0DB8:0:0::1 ": "2001:db8::1", "::ffff:192.168.1.1": "::ffff:c0a8:101", "192.0.2.1": "192.0.2.1"} {
+		actual, err := Normalize(raw)
+		if err != nil || actual != want {
+			t.Fatalf("canonical IP %q: %s %v", raw, actual, err)
+		}
+	}
+	for _, raw := range []string{"192.168.001.1", "fe80::1%eth0", "127.0.0.1,192.0.2.1", ""} {
+		if _, err := Normalize(raw); err == nil {
+			t.Fatalf("invalid IP accepted %q", raw)
+		}
+	}
+}

@@ -87,6 +87,12 @@ func (s *Store) Media() store.MediaRepository { return business.New(s.database, 
 func (s *Store) Nodes() store.NodeRepository  { return business.New(s.database, s.Backend()) }
 func (s *Store) Admin() store.AdminRepository { return business.New(s.database, s.Backend()) }
 
+func (s *Store) Observations() store.ObservationRepository {
+	return business.New(s.database, s.Backend())
+}
+
+func (s *Store) Security() store.SecurityRepository { return business.New(s.database, s.Backend()) }
+
 // Database is intentionally package-local infrastructure access. Handlers must
 // depend on domain store interfaces rather than this connection pool.
 func (store *Store) Database() *sql.DB {

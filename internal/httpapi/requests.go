@@ -24,11 +24,11 @@ func requests(resolver *network.Resolver) gin.HandlerFunc {
 			return
 		}
 		id = strings.ReplaceAll(id, "-", "")
+		trace := id
 		if supplied := c.GetHeader("X-Request-ID"); identity.FromTrustedProxy && requestIDPattern.MatchString(supplied) {
 			id = supplied
 		}
-		trace := id
-		if match := tracePattern.FindStringSubmatch(c.GetHeader("Traceparent")); match != nil && match[1] != strings.Repeat("0", 32) && match[2] != strings.Repeat("0", 16) {
+		if match := tracePattern.FindStringSubmatch(c.GetHeader("Traceparent")); identity.FromTrustedProxy && match != nil && match[1] != strings.Repeat("0", 32) && match[2] != strings.Repeat("0", 16) {
 			trace = match[1]
 		}
 		c.Set("request_id", id)

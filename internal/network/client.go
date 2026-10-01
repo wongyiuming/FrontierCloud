@@ -37,7 +37,19 @@ func canonical(raw string) string {
 	if err != nil || address.Zone() != "" {
 		return ""
 	}
+	if address.Is4In6() {
+		bytes := address.As16()
+		return fmt.Sprintf("::ffff:%x:%x", uint16(bytes[12])<<8|uint16(bytes[13]), uint16(bytes[14])<<8|uint16(bytes[15]))
+	}
 	return address.String()
+}
+
+func Normalize(raw string) (string, error) {
+	value := canonical(raw)
+	if value == "" {
+		return "", fmt.Errorf("IP 地址无效")
+	}
+	return value, nil
 }
 func (r *Resolver) Resolve(request *http.Request) Identity {
 	peer, _, err := net.SplitHostPort(request.RemoteAddr)

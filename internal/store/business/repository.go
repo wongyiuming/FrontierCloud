@@ -26,6 +26,7 @@ type Repository struct {
 func New(db *sql.DB, backend string) *Repository { return &Repository{db, backend} }
 
 type queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
@@ -130,16 +131,20 @@ func normalize(path string) (string, error) {
 }
 
 func (r *Repository) ensure(ctx context.Context, q queryer, o store.MediaObject) (string, error) {
+	return r.ensureWithLock(ctx, q, o, "")
+}
+
+func (r *Repository) ensureWithLock(ctx context.Context, q queryer, o store.MediaObject, lock string) (string, error) {
 	path, err := normalize(o.Path)
 	if err != nil {
 		return "", err
 	}
-	if o.Kind != "audio" && o.Kind != "video" && o.Kind != "lyric" {
+	if o.Kind != "audio" && o.Kind != "video" && o.Kind != "lyric" && o.Kind != "directory" {
 		return "", errors.New("Invalid media object kind")
 	}
 	key := locator(path)
 	var id, existingPath, kind string
-	err = q.QueryRowContext(ctx, "SELECT media_id, media_path, object_kind FROM media_objects WHERE path_locator=?", key).Scan(&id, &existingPath, &kind)
+	err = q.QueryRowContext(ctx, "SELECT media_id, media_path, object_kind FROM media_objects WHERE path_locator=?"+lock, key).Scan(&id, &existingPath, &kind)
 	if err == nil {
 		if path != existingPath || kind != o.Kind {
 			return "", errors.New("media path identity conflict")
@@ -171,7 +176,10 @@ func (r *Repository) ensure(ctx context.Context, q queryer, o store.MediaObject)
 	if err != nil {
 		return "", err
 	}
-	err = q.QueryRowContext(ctx, "SELECT media_id,media_path,object_kind FROM media_objects WHERE path_locator=?"+r.shareLock(), key).Scan(&id, &existingPath, &kind)
+	if lock == "" {
+		lock = r.shareLock()
+	}
+	err = q.QueryRowContext(ctx, "SELECT media_id,media_path,object_kind FROM media_objects WHERE path_locator=?"+lock, key).Scan(&id, &existingPath, &kind)
 	if err == nil && (path != existingPath || kind != o.Kind) {
 		err = errors.New("media path identity conflict")
 	}
@@ -352,15 +360,7 @@ func (r *Repository) BindLyric(ctx context.Context, track, lyric store.MediaObje
 		if err != nil {
 			return err
 		}
-		now := timestamp(time.Now())
-		query := "INSERT INTO media_lyric_links (media_id,media_path,lyric_id,lyric_path,created_at,updated_at) VALUES (?,?,?,?,?,?)"
-		if r.backend == "sqlite" {
-			query += " ON CONFLICT(media_id) DO UPDATE SET media_path=excluded.media_path,lyric_id=excluded.lyric_id,lyric_path=excluded.lyric_path,updated_at=excluded.updated_at"
-		} else {
-			query += " ON DUPLICATE KEY UPDATE media_path=VALUES(media_path),lyric_id=VALUES(lyric_id),lyric_path=VALUES(lyric_path),updated_at=VALUES(updated_at)"
-		}
-		_, err = q.ExecContext(ctx, query, mediaID, track.Path, lyricID, lyric.Path, now, now)
-		return err
+		return r.upsertLyric(ctx, q, mediaID, track.Path, lyricID, lyric.Path)
 	})
 }
 

@@ -46,5 +46,7 @@ docker run --rm --network "$network" -e FRONTIERCLOUD_TEST_REDIS_URL=redis://red
     "$build_image" go test -count=1 -v ./internal/admin
 docker run --rm --network "$network" -e FRONTIERCLOUD_TEST_REDIS_URL=redis://redis:6379/2 \
     "$build_image" go test -count=1 -v ./internal/httpapi
+docker run --rm --network "$network" -e FRONTIERCLOUD_TEST_REDIS_URL=redis://redis:6379/3 \
+    "$build_image" go test -count=1 -v ./internal/observation
 docker run --rm "$build_image" go test -race ./...
 printf '%s\n' 'PASS: real MySQL media transactions, Redis Admin authentication and Go race checks'

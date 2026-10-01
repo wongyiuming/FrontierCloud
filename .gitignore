@@ -10,6 +10,9 @@ __pycache__/
 .Python
 build/
 data/
+# Embedded immutable search dictionaries are source assets, not user data.
+!internal/search/data/
+!internal/search/data/**
 develop-eggs/
 dist/
 downloads/

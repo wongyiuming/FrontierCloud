@@ -85,3 +85,13 @@ func (store *Store) Close() error {
 func (s *Store) Media() store.MediaRepository { return business.New(s.database, s.Backend()) }
 func (s *Store) Nodes() store.NodeRepository  { return business.New(s.database, s.Backend()) }
 func (s *Store) Admin() store.AdminRepository { return business.New(s.database, s.Backend()) }
+
+func (s *Store) Observations() store.ObservationRepository {
+	return business.New(s.database, s.Backend())
+}
+
+func (s *Store) Security() store.SecurityRepository { return business.New(s.database, s.Backend()) }
+
+// Infrastructure/test access only; deliberately absent from the Store contract
+// supplied to services and handlers.
+func (s *Store) Database() *sql.DB { return s.database }

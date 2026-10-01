@@ -18,31 +18,39 @@ const (
 // Config is the Go deployment contract. Defaults preserve frontend behavior
 // while selecting SQLite unless DB_TYPE explicitly requests MySQL.
 type Config struct {
-	DatabaseType         string
-	SQLitePath           string
-	MySQLHost            string
-	MySQLPort            int
-	MySQLDatabase        string
-	MySQLUser            string
-	MySQLPasswordFile    string
-	RedisURL             string
-	HTTPAddress          string
-	DataRoot             string
-	StaticRoot           string
-	SecretsDirectory     string
-	ServerName           string
-	TLSEnabled           bool
-	NginxMedia           bool
-	STUNPort             int
-	WebRTCCooldown       int
-	AdminSessionTTL      int
-	AdminFailedWindow    int
-	AdminMaxFailed       int
-	AdminCookieSameSite  string
-	AdminMaxUploadBytes  int64
-	AdminMaxTaskFiles    int
-	AdminMaxBatchFiles   int
-	TrustedProxyNetworks []string
+	DatabaseType           string
+	SQLitePath             string
+	MySQLHost              string
+	MySQLPort              int
+	MySQLDatabase          string
+	MySQLUser              string
+	MySQLPasswordFile      string
+	RedisURL               string
+	HTTPAddress            string
+	DataRoot               string
+	StaticRoot             string
+	SecretsDirectory       string
+	ServerName             string
+	TLSEnabled             bool
+	NginxMedia             bool
+	STUNPort               int
+	WebRTCCooldown         int
+	AdminSessionTTL        int
+	AdminFailedWindow      int
+	AdminMaxFailed         int
+	AdminCookieSameSite    string
+	AdminMaxUploadBytes    int64
+	AdminMaxTaskFiles      int
+	AdminMaxBatchFiles     int
+	AdminMaxDownloadItems  int
+	AdminMaxFilenameLength int
+	AdminUploadInactivity  int
+	TrustedProxyNetworks   []string
+	SecurityExemptNetworks []string
+	SecurityInvalidLimit   int
+	SecurityInvalidWindow  int
+	LogLevel               string
+	LogFormat              string
 }
 
 // Load reads configuration from the process environment.
@@ -79,6 +87,25 @@ func LoadFrom(getenv func(string) string) (Config, error) {
 		StaticRoot:        fallback(getenv("STATIC_ROOT"), "/app/static"),
 		SecretsDirectory:  fallback(getenv("SECRETS_DIR"), "/run/frontiercloud-secrets"),
 		ServerName:        fallback(getenv("SERVER_NAME"), "localhost"),
+	}
+	value.SecurityExemptNetworks = strings.Split(fallback(getenv("SECURITY_EXEMPT_NETWORKS"), "127.0.0.0/8,::1/128"), ",")
+	value.SecurityInvalidLimit, err = integer(getenv("SECURITY_INVALID_API_LIMIT"), 5)
+	if err != nil || value.SecurityInvalidLimit < 1 || value.SecurityInvalidLimit > 100000 {
+		return Config{}, errors.New("invalid SECURITY_INVALID_API_LIMIT")
+	}
+	value.SecurityInvalidWindow, err = integer(getenv("SECURITY_INVALID_API_WINDOW"), 3600)
+	if err != nil || value.SecurityInvalidWindow < 1 || value.SecurityInvalidWindow > 315360000 {
+		return Config{}, errors.New("invalid SECURITY_INVALID_API_WINDOW")
+	}
+	value.LogLevel = strings.ToUpper(fallback(getenv("LOG_LEVEL"), "INFO"))
+	switch value.LogLevel {
+	case "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL":
+	default:
+		return Config{}, errors.New("invalid LOG_LEVEL")
+	}
+	value.LogFormat = normalized(getenv("LOG_FORMAT"), "json")
+	if value.LogFormat != "json" && value.LogFormat != "text" {
+		return Config{}, errors.New("invalid LOG_FORMAT")
 	}
 	value.TLSEnabled, err = boolean(getenv("TLS_ENABLED"), false)
 	if err != nil {
@@ -132,6 +159,18 @@ func LoadFrom(getenv func(string) string) (Config, error) {
 	value.AdminMaxBatchFiles, err = integer(getenv("ADMIN_MAX_BATCH_FILES"), 200)
 	if err != nil || value.AdminMaxBatchFiles < 1 {
 		return Config{}, errors.New("invalid ADMIN_MAX_BATCH_FILES")
+	}
+	value.AdminMaxDownloadItems, err = integer(getenv("ADMIN_MAX_DOWNLOAD_ITEMS"), 100)
+	if err != nil || value.AdminMaxDownloadItems < 1 {
+		return Config{}, errors.New("invalid ADMIN_MAX_DOWNLOAD_ITEMS")
+	}
+	value.AdminMaxFilenameLength, err = integer(getenv("ADMIN_MAX_FILENAME_LENGTH"), 240)
+	if err != nil || value.AdminMaxFilenameLength < 1 {
+		return Config{}, errors.New("invalid ADMIN_MAX_FILENAME_LENGTH")
+	}
+	value.AdminUploadInactivity, err = integer(getenv("ADMIN_UPLOAD_INACTIVITY_TIMEOUT"), 300)
+	if err != nil || value.AdminUploadInactivity < 1 {
+		return Config{}, errors.New("invalid ADMIN_UPLOAD_INACTIVITY_TIMEOUT")
 	}
 	value.TrustedProxyNetworks = strings.Split(fallback(getenv("TRUSTED_PROXY_NETWORKS"), "172.16.0.0/12"), ",")
 	for _, p := range []*string{&value.DataRoot, &value.StaticRoot, &value.SecretsDirectory} {

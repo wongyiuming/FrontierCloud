@@ -7,6 +7,8 @@
 venv
 ENV
 data
+!internal/search/data/
+!internal/search/data/**
 scripts/auto_download
 
 # Exclude Python bytecode.

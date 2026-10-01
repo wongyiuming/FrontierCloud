@@ -14,4 +14,6 @@ type Store interface {
 	Media() MediaRepository
 	Nodes() NodeRepository
 	Admin() AdminRepository
+	Security() SecurityRepository
+	Observations() ObservationRepository
 }

@@ -39,10 +39,34 @@ accounting, lyrics, opaque karaoke handles, brand assets, Admin login/status/
 logout, temporary keys, key rotation, and the Admin shell. Environment loading
 supports `.env` with explicit process-environment precedence.
 
+The native Admin media implementation now includes managed hierarchy browsing,
+visibility, directory/media priority, phrase-aware Chinese/pinyin search,
+streaming media/lyric upload, single-file and streaming ZIP downloads, and
+journaled deletion. Upload/delete intents survive uncertain commits and restart;
+an unresolved intent blocks media traffic/readiness instead of claiming success.
+The embedded pronunciation data is immutable; Python is not invoked for search.
+Directory rename preserves stable media identities, play statistics, visibility
+and lyric links through a durable replayable intent. Explicit and automatic lyric
+relations are transactional, including reverse edits and concurrent matching.
+Cross-process volume leases prevent worker races; killed processes release their
+locks and new workers preserve live multipart uploads.
+
+IP bans, whitelist, attack accounting and policy generations are authoritative
+database state. A Go publisher produces the existing Nginx TSV snapshot; Redis
+outage cannot bypass a ban. Native network observations preserve verified client
+identity, have Redis cooldowns and transactional grouped summaries.
+
 Real disposable MySQL and Redis checks pass, including concurrent stable-ID
 registration, exact-once playback accounting, temporary-key redemption,
 session TTL, rotation, CSRF and Admin HTTP contracts. The full Go race suite
-passes on Linux. Windows Go tests pass as well.
+passes on Linux. Windows Go tests pass as well. The latest real MySQL/Redis run
+also verifies security policy concurrency, network observations and HTTP parity.
+
+The latest disposable Linux test run also verifies concurrent/idempotent upload
+publication on real MySQL, positive multipart/CSRF upload contracts on real
+Redis, exact-case metadata deletion, ZIP content and recovery fault injection.
+Remote source hashes were checked against the local files. The Python reference
+suite passes 567 tests (4 skipped), including shared search vectors.
 
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.

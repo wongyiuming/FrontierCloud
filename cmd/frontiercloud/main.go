@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,6 +20,8 @@ import (
 	"github.com/wongyiuming/FrontierCloud/internal/media"
 	"github.com/wongyiuming/FrontierCloud/internal/network"
 	"github.com/wongyiuming/FrontierCloud/internal/node"
+	"github.com/wongyiuming/FrontierCloud/internal/observation"
+	"github.com/wongyiuming/FrontierCloud/internal/security"
 	storecontract "github.com/wongyiuming/FrontierCloud/internal/store"
 	mysqlstore "github.com/wongyiuming/FrontierCloud/internal/store/mysql"
 	sqlitestore "github.com/wongyiuming/FrontierCloud/internal/store/sqlite"
@@ -77,6 +80,23 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	level := slog.LevelInfo
+	switch settings.LogLevel {
+	case "DEBUG":
+		level = slog.LevelDebug
+	case "WARNING":
+		level = slog.LevelWarn
+	case "ERROR":
+		level = slog.LevelError
+	case "CRITICAL":
+		level = slog.Level(12)
+	}
+	options := &slog.HandlerOptions{Level: level}
+	var logging slog.Handler = slog.NewJSONHandler(os.Stdout, options)
+	if settings.LogFormat == "text" {
+		logging = slog.NewTextHandler(os.Stdout, options)
+	}
+	slog.SetDefault(slog.New(logging))
 	database, err := openStore(settings)
 	if err != nil {
 		return err
@@ -106,6 +126,11 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	redisOptions.ContextTimeoutEnabled = true
+	redisOptions.MaxRetries = 1
+	redisOptions.DialTimeout = 2 * time.Second
+	redisOptions.ReadTimeout = 2 * time.Second
+	redisOptions.WriteTimeout = 2 * time.Second
 	redisClient := redis.NewClient(redisOptions)
 	defer redisClient.Close()
 
@@ -113,9 +138,28 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	handler := httpapi.NewWithResolver(database.Ping, func(ctx context.Context) error {
+	securityService, err := security.New(settings, database.Security())
+	if err != nil {
+		return err
+	}
+	defer securityService.Close()
+	edgeInit, edgeCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	err = securityService.Publish(edgeInit, true)
+	edgeCancel()
+	if err != nil {
+		return err
+	}
+	handler := httpapi.NewWithResolver(func(ctx context.Context) error {
+		if err := database.Ping(ctx); err != nil {
+			return err
+		}
+		if err := mediaService.Ready(ctx); err != nil {
+			return err
+		}
+		return securityService.Ready(ctx)
+	}, func(ctx context.Context) error {
 		return redisClient.Ping(ctx).Err()
-	}, resolver)
+	}, resolver, httpapi.SecurityMiddleware(securityService, resolver))
 	public, err := httpapi.RegisterPublic(handler, settings, mediaService)
 	if err != nil {
 		return err
@@ -125,9 +169,12 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	if _, err := httpapi.RegisterAdmin(handler, settings, adminService, public, identity); err != nil {
+	adminHTTP, err := httpapi.RegisterAdmin(handler, settings, adminService, public, identity)
+	if err != nil {
 		return err
 	}
+	httpapi.RegisterSecurityAdmin(handler, adminHTTP, securityService)
+	httpapi.RegisterObservations(handler, adminHTTP, observation.New(database.Observations(), redisClient, settings.WebRTCCooldown), resolver)
 	server := &http.Server{
 		Addr:              settings.HTTPAddress,
 		Handler:           handler,
@@ -136,7 +183,9 @@ func serve() error {
 	}
 
 	shutdown, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	publisherDone := make(chan struct{})
+	go func() { defer close(publisherDone); securityService.Run(shutdown) }()
+	defer func() { stop(); <-publisherDone }()
 	errorsChannel := make(chan error, 1)
 	go func() { errorsChannel <- server.ListenAndServe() }()
 	slog.Info("FrontierCloud Go runtime started", "address", settings.HTTPAddress, "database", database.Backend())
@@ -154,8 +203,16 @@ func serve() error {
 }
 
 func healthcheck() error {
+	settings, err := config.Load()
+	if err != nil {
+		return err
+	}
+	address, err := healthAddress(settings.HTTPAddress)
+	if err != nil {
+		return err
+	}
 	client := &http.Client{Timeout: 3 * time.Second}
-	response, err := client.Get("http://127.0.0.1:8000/health/ready")
+	response, err := client.Get("http://" + address + "/health/ready")
 	if err != nil {
 		return err
 	}
@@ -164,6 +221,20 @@ func healthcheck() error {
 		return fmt.Errorf("health endpoint returned %d", response.StatusCode)
 	}
 	return nil
+}
+
+func healthAddress(address string) (string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", fmt.Errorf("invalid HTTP_ADDR: %w", err)
+	}
+	if host == "" || host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
+	if host == "::" {
+		host = "::1"
+	}
+	return net.JoinHostPort(host, port), nil
 }
 
 func openStore(settings config.Config) (storecontract.Store, error) {

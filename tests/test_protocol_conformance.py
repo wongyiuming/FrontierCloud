@@ -19,6 +19,15 @@ def vector(name: str) -> dict:
 
 
 class ProtocolConformanceTests(unittest.TestCase):
+    def test_search_alias_vectors(self):
+        from app.services.media_search import compact_search_text, build_search_text
+        from pypinyin import lazy_pinyin
+        for case in vector("search.json")["cases"]:
+            with self.subTest(value=case["value"]):
+                self.assertEqual(compact_search_text(case["value"]), case["compact"])
+                self.assertEqual("".join(lazy_pinyin(case["value"])), case["pinyin"])
+                self.assertEqual(build_search_text(case["value"]), case["aliases"])
+
     def test_fernet_persistent_vault_vector(self):
         from cryptography.fernet import Fernet
         value = vector("fernet.json")

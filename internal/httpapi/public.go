@@ -100,6 +100,10 @@ func RegisterPublic(router *gin.Engine, settings config.Config, service *media.S
 func (p *Public) Close() error                          { return errors.Join(p.static.Close(), p.brand.Close()) }
 func detail(c *gin.Context, status int, message string) { c.JSON(status, gin.H{"detail": message}) }
 func internalError(c *gin.Context, err error) {
+	if errors.Is(err, media.ErrRecovery) {
+		detail(c, 503, "媒体事务等待恢复，请在数据库恢复后重启服务")
+		return
+	}
 	slog.Error("request failed", "path", c.Request.URL.Path, "error", err)
 	detail(c, 500, "Internal server error")
 }
