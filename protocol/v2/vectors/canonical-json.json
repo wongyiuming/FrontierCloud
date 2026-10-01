@@ -1,0 +1,37 @@
+{
+  "format": "frontiercloud-protocol-vector",
+  "version": 1,
+  "protocol": 2,
+  "cases": [
+    {
+      "name": "recursive-key-order-and-unicode",
+      "value": {
+        "nested": {
+          "z": false,
+          "a": null
+        },
+        "b": 1,
+        "a": "节点"
+      },
+      "canonical": "{\"a\":\"节点\",\"b\":1,\"nested\":{\"a\":null,\"z\":false}}"
+    },
+    {
+      "name": "no-html-escaping",
+      "value": {
+        "text": "<tag>&测试",
+        "array": [3, 2, 1]
+      },
+      "canonical": "{\"array\":[3,2,1],\"text\":\"<tag>&测试\"}"
+    },
+    {
+      "name": "required-json-escaping-only",
+      "value": {
+        "quote": "a\"b",
+        "slash": "a/b",
+        "control": "line1\nline2"
+      },
+      "canonical": "{\"control\":\"line1\\nline2\",\"quote\":\"a\\\"b\",\"slash\":\"a/b\"}"
+    }
+  ]
+}
+

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontiercloud.local/protocol/v2/schemas/pair.json",
+  "title": "FrontierCloud Protocol v2 pair request",
+  "type": "object",
+  "required": ["package", "relationship_id", "credential", "master"],
+  "properties": {
+    "package": {
+      "type": "object",
+      "required": ["payload", "signature"],
+      "properties": {
+        "payload": {
+          "type": "object",
+          "required": ["node_id", "endpoint", "public_key", "token", "nonce", "expires_at", "protocol"],
+          "properties": {
+            "node_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+            "endpoint": {"type": "string"},
+            "public_key": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+            "token": {"type": "string"},
+            "nonce": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+            "expires_at": {"type": "integer"},
+            "protocol": {"const": 2}
+          },
+          "additionalProperties": true
+        },
+        "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}
+      },
+      "additionalProperties": false
+    },
+    "relationship_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+    "credential": {"type": "string", "pattern": "^[A-Za-z0-9_-]{64}$"},
+    "master": {"$ref": "identity.json"}
+  },
+  "additionalProperties": true
+}
+

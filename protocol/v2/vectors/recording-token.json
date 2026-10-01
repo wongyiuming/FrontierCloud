@@ -1,0 +1,32 @@
+{
+  "format": "frontiercloud-protocol-vector",
+  "version": 1,
+  "protocol": 2,
+  "credential": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5v",
+  "issued_at": 1700000000,
+  "verify_at": 1700000001,
+  "arguments": {
+    "relationship": "11111111111111111111111111111111",
+    "master": "33333333333333333333333333333333",
+    "owner": "44444444444444444444444444444444",
+    "recording": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "operation": "upload",
+    "size": 654321,
+    "content_type": "audio/webm",
+    "filename": "测试.webm"
+  },
+  "payload": {
+    "ct": "audio/webm",
+    "e": 1700000300,
+    "i": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "m": "33333333333333333333333333333333",
+    "name": "测试.webm",
+    "op": "upload",
+    "r": "11111111111111111111111111111111",
+    "size": 654321,
+    "u": "44444444444444444444444444444444",
+    "v": 2
+  },
+  "token": "eyJjdCI6ImF1ZGlvL3dlYm0iLCJlIjoxNzAwMDAwMzAwLCJpIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJtIjoiMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJuYW1lIjoi5rWL6K-VLndlYm0iLCJvcCI6InVwbG9hZCIsInIiOiIxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMSIsInNpemUiOjY1NDMyMSwidSI6IjQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0IiwidiI6Mn0.YAZRRTW5WAxBfQALkme7jJHOrvm8a1uYLI7ScyIhNDQ"
+}
+

@@ -34,7 +34,9 @@ async def readiness_response() -> JSONResponse:
             checks[name] = "unavailable"
             DEPENDENCY_READY.labels(dependency=name).set(0)
 
-    await asyncio.gather(check("redis", redis_client.ping), check("mysql", database_ping))
+    # The public readiness contract is database-agnostic. The selected backend
+    # is an internal deployment detail and must not change this response shape.
+    await asyncio.gather(check("redis", redis_client.ping), check("database", database_ping))
 
     ready = all(value == "ready" for value in checks.values())
     return JSONResponse(

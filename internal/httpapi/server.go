@@ -1,0 +1,63 @@
+// Package httpapi exposes runtime-agnostic HTTP contracts through Gin.
+package httpapi
+
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
+)
+
+const dependencyTimeout = 2 * time.Second
+
+// Check performs one bounded readiness operation.
+type Check func(context.Context) error
+
+// New returns the initial Gin runtime surface. Public and Admin routes will be
+// added only with matching contract tests against the Python implementation.
+func New(database, redis Check) *gin.Engine {
+	gin.SetMode(gin.ReleaseMode)
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.GET("/health/live", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{
+			"status":    "healthy",
+			"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000000+00:00"),
+		})
+	})
+	ready := readiness(database, redis)
+	router.GET("/health", ready)
+	router.GET("/health/ready", ready)
+	router.GET("/api/v1/health", ready)
+	return router
+}
+
+func readiness(database, redis Check) gin.HandlerFunc {
+	type result struct {
+		name string
+		err  error
+	}
+	return func(ctx *gin.Context) {
+		requestContext, cancel := context.WithTimeout(ctx.Request.Context(), dependencyTimeout)
+		defer cancel()
+		results := make(chan result, 2)
+		go func() { results <- result{name: "database", err: database(requestContext)} }()
+		go func() { results <- result{name: "redis", err: redis(requestContext)} }()
+		checks := map[string]string{}
+		for range 2 {
+			value := <-results
+			if value.err == nil {
+				checks[value.name] = "ready"
+			} else {
+				checks[value.name] = "unavailable"
+			}
+		}
+		status, code := "ready", http.StatusOK
+		if checks["database"] != "ready" || checks["redis"] != "ready" {
+			status, code = "unavailable", http.StatusServiceUnavailable
+		}
+		ctx.Header("Cache-Control", "no-store")
+		ctx.JSON(code, gin.H{"status": status, "checks": checks})
+	}
+}

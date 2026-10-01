@@ -1,10 +1,39 @@
 import unittest
-from unittest.mock import AsyncMock
+import json
+from unittest.mock import AsyncMock, patch
 
-from app.services import health_probe
+from app.services import health, health_probe
+
+
+class _Connection:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def execute(self, _statement):
+        return None
+
+
+class _Engine:
+    def connect(self):
+        return _Connection()
 
 
 class HealthProbeCounterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_readiness_contract_does_not_leak_database_backend(self):
+        redis = AsyncMock()
+        with patch.object(health, "engine", _Engine()), patch.object(health, "redis_client", redis):
+            response = await health.readiness_response()
+        self.assertEqual(response.status_code, 200)
+        value = json.loads(response.body)
+        self.assertEqual(value, {
+            "status": "ready",
+            "checks": {"database": "ready", "redis": "ready"},
+        })
+        self.assertNotIn("mysql", value["checks"])
+
     async def test_success_and_failure_use_a_bounded_120_minute_ring(self):
         client = AsyncMock()
         timestamp = 10_000 * 60

@@ -1,0 +1,13 @@
+// Package store defines runtime-independent persistence boundaries.
+package store
+
+import "context"
+
+// Store is the common lifecycle contract for a selected authoritative backend.
+// Business repositories will extend this boundary by domain rather than expose
+// raw SQL or a generic ORM to handlers.
+type Store interface {
+	Backend() string
+	Ping(context.Context) error
+	Close() error
+}

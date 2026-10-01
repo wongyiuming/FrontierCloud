@@ -1,0 +1,32 @@
+# Build a statically linked Go runtime without Python or CGO.
+FROM golang:1.26.0-bookworm AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN /usr/local/go/bin/go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+COPY protocol ./protocol
+RUN CGO_ENABLED=0 /usr/local/go/bin/go test ./... && \
+    CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath -ldflags="-s -w" -o /out/frontiercloud ./cmd/frontiercloud
+
+FROM debian:13.3-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --system --gid 10001 appuser && \
+    useradd --system --uid 10001 --gid appuser --home-dir /app --shell /usr/sbin/nologin appuser && \
+    mkdir -p /app/data && \
+    chown 10001:10001 /app/data
+
+WORKDIR /app
+COPY --from=build /out/frontiercloud /app/frontiercloud
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+EXPOSE 8000
+USER 10001:10001
+ENTRYPOINT ["/app/frontiercloud"]
+CMD ["serve"]
+

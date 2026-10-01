@@ -1,0 +1,19 @@
+{
+  "format": "frontiercloud-protocol-vector",
+  "version": 1,
+  "protocol": 2,
+  "private_key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "public_key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+  "payload": {
+    "app_version": "2.0.0rc0",
+    "challenge": "ffffffffffffffffffffffffffffffff",
+    "endpoint": "https://node.example.com",
+    "node_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "protocol": 2,
+    "public_key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+    "role": "Follower"
+  },
+  "canonical": "{\"app_version\":\"2.0.0rc0\",\"challenge\":\"ffffffffffffffffffffffffffffffff\",\"endpoint\":\"https://node.example.com\",\"node_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"protocol\":2,\"public_key\":\"A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg\",\"role\":\"Follower\"}",
+  "signature": "W4C0XHi96SphPRpBFErTfhD4KPKEIeyUZHSVCBfRa4C6Q9dIcBoirokaes8yUh-nfr-u_A0_WKVzQprIOq9fAg"
+}
+

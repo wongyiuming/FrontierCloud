@@ -26,7 +26,7 @@ class ObservabilityTests(unittest.IsolatedAsyncioTestCase):
         ):
             response = await asyncio.wait_for(main.health_ready(), 0.5)
         self.assertEqual(response.status_code, 503)
-        self.assertEqual(json.loads(response.body)["checks"], {"redis": "unavailable", "mysql": "unavailable"})
+        self.assertEqual(json.loads(response.body)["checks"], {"redis": "unavailable", "database": "unavailable"})
         context.__aexit__.assert_awaited_once()
 
     async def test_attacker_defined_http_methods_share_one_metrics_label(self):
@@ -58,7 +58,7 @@ class ObservabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("frontiercloud_http_requests_total", body)
         self.assertIn("frontiercloud_dependency_ready", body)
 
-    async def test_readiness_checks_mysql_and_redis(self):
+    async def test_readiness_checks_database_and_redis(self):
         connection = AsyncMock()
         connection.execute = AsyncMock()
         context = AsyncMock()
@@ -69,7 +69,7 @@ class ObservabilityTests(unittest.IsolatedAsyncioTestCase):
         ):
             response = await main.health_ready()
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(json.loads(response.body)["checks"], {"redis": "ready", "mysql": "ready"})
+        self.assertEqual(json.loads(response.body)["checks"], {"redis": "ready", "database": "ready"})
 
     def test_no_consumer_specific_application_routes_exist(self):
         paths = {route.path for route in main.app.routes if hasattr(route, "path")}
