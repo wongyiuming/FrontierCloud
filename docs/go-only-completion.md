@@ -204,11 +204,36 @@ native HTTP, full Go/vet and the complete Linux race suite (2026-10-02).
 The MySQL fault injection uses a temporary CHECK in the disposable test database;
 no SUPER privilege or binary-log security relaxation is required.
 
-This slice is only cold-artifact reception. The native Master still needs
-consistent logical export, asynchronous backup scheduling, artifact validation
-and safe restore/promotion. The existing v2 transfer contract is documented in
+That reception slice does not establish safe recovery. The native Master still
+needs artifact validation and safe restore/promotion. The v2 transfer contract is documented in
 `protocol/v2/backup-transfer.md`; this does not silently introduce a new recovery
 format or prove Python/Go live backup interoperability.
+
+Native Master export now reads the fixed v2 business tables from one repeatable
+SQLite/MySQL snapshot and normalizes datetime/integer values at the persistence
+boundary. Lyric bytes are pinned by the cross-process shared mutation lease:
+public reads continue, but physical publication/rename/delete cannot race the
+copy. Unsupported pending intents/reservations defer export instead of silently
+dropping recovery state. Private bounded-memory JSONL artifacts have a complete
+footer and SHA-256 before transfer; ordinary success/failure/cancellation removes
+them. Identity keys, pairing credentials and cold backups are not exported.
+
+A separate OS-leased serial backup worker now builds and sends bounded signed
+chunks without holding the media lease or heartbeat connection pool. It uses
+the existing daily/five-minute retry intervals, rechecks the current enabled,
+active pinned downstream before messages, and joins shutdown. Only an exact
+ready byte receipt advances the Master's verified pointer and success audit.
+Lost begin/chunk replies clean receiving data; a lost commit reply preserves the
+remote ready generation without claiming a local acknowledgement.
+
+Cross-table snapshot consistency passed on real MySQL and SQLite. Native signed
+HTTP transfer, lost replies, live-reservation deferral, revocation, parallel
+heartbeat/media access, shared snapshot leases, worker shutdown and private
+artifact cleanup passed local Go/vet, real Redis regression and the complete
+Linux race suite (2026-10-02). The compatibility artifact and remaining recovery
+limits are documented in `protocol/v2/business-backup.md`. Safe restore/promotion,
+legacy ownership adoption, interrupted-process cache maintenance and actual
+mixed-runtime backup interoperability remain acceptance gates.
 
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.

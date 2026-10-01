@@ -14,6 +14,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/wongyiuming/FrontierCloud/internal/admin"
+	"github.com/wongyiuming/FrontierCloud/internal/backup"
 	"github.com/wongyiuming/FrontierCloud/internal/bootstrap"
 	"github.com/wongyiuming/FrontierCloud/internal/config"
 	"github.com/wongyiuming/FrontierCloud/internal/httpapi"
@@ -150,6 +151,12 @@ func serve() error {
 	}
 	defer recordingsRoot.Close()
 	controlService.ConfigureVolumes(database.Pool(), mediaService, recordingsRoot)
+	backupBuilder, err := backup.New(database.Backups(), mediaService, filepath.Join(settings.DataRoot, ".business-backups"))
+	if err != nil {
+		return err
+	}
+	defer backupBuilder.Close()
+	controlService.ConfigureBackups(database.Backups(), backupBuilder)
 	recordingStorage, err := recording.New(recordingsRoot, database.Recordings(), database.Nodes())
 	if err != nil {
 		return err
@@ -218,7 +225,9 @@ func serve() error {
 	go func() { defer close(deletionDone); mediaService.RunGlobalDeletes(shutdown) }()
 	recordingDone := make(chan struct{})
 	go func() { defer close(recordingDone); recordingManager.Run(shutdown) }()
-	defer func() { stop(); <-publisherDone; <-deletionDone; <-recordingDone }()
+	backupDone := make(chan struct{})
+	go func() { defer close(backupDone); controlService.RunBackups(shutdown) }()
+	defer func() { stop(); <-publisherDone; <-deletionDone; <-recordingDone; <-backupDone }()
 	errorsChannel := make(chan error, 1)
 	go func() { errorsChannel <- server.ListenAndServe() }()
 	slog.Info("FrontierCloud Go runtime started", "address", settings.HTTPAddress, "database", database.Backend())

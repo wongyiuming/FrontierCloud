@@ -11,18 +11,21 @@ import (
 	"os"
 	"time"
 
+	"github.com/wongyiuming/FrontierCloud/internal/backup"
 	"github.com/wongyiuming/FrontierCloud/internal/filelease"
 	"github.com/wongyiuming/FrontierCloud/internal/protocol"
 	"github.com/wongyiuming/FrontierCloud/internal/store"
 )
 
 type Service struct {
-	repo       store.NodeRepository
-	identity   *Identity
-	transport  ControlClient
-	pool       store.PoolRepository
-	volume     BusinessVolume
-	recordings *os.Root
+	repo          store.NodeRepository
+	identity      *Identity
+	transport     ControlClient
+	pool          store.PoolRepository
+	volume        BusinessVolume
+	recordings    *os.Root
+	backupBuilder *backup.Builder
+	backups       store.BackupRepository
 }
 
 var ErrAuthentication = errors.New("invalid relationship authentication")

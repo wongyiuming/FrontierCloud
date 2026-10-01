@@ -22,7 +22,7 @@ Responses contain no database identifiers, dialects or connection details.
 | `begin` | `generation` | `{"status":"receiving"}` |
 | `chunk` | `generation`, `chunk_index`, `chunk` | `{"status":"receiving","bytes":N}` |
 | `commit` | `generation`, `checksum` | `{"status":"ready","bytes":N}` |
-| `abort` | `generation` | `{"status":"failed" or "clean","generation":G,"aborted_generations":N}` |
+| `abort` | `generation` | `{"status":"failed","generation":G,"aborted_generations":N}` (or `"clean"`) |
 
 Each route is under `/internal/v1/backup/`. `chunk` is standard padded base64
 without whitespace, encoding at most 192 KiB. `chunk_index` is an integer from
@@ -54,6 +54,9 @@ as each write. Ready state, byte/chunk totals, retention and success audit commi
 atomically. A failed audit leaves the generation receiving with its chunks
 intact. Out-of-order completion cannot move the member's latest-generation
 pointer backwards. These safeguards do not add runtime-specific wire fields.
+
+The existing compatibility artifact and native export/scheduling boundaries are
+documented in [`business-backup.md`](business-backup.md).
 
 Invalid messages/checksums/sequences return 400; invalid authentication returns
 401; an authenticated request in the wrong role/direction returns 403. A role
