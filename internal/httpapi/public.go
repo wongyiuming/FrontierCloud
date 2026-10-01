@@ -21,6 +21,7 @@ import (
 	"github.com/wongyiuming/FrontierCloud/internal/brand"
 	"github.com/wongyiuming/FrontierCloud/internal/config"
 	"github.com/wongyiuming/FrontierCloud/internal/media"
+	"github.com/wongyiuming/FrontierCloud/internal/store"
 )
 
 type Public struct {
@@ -199,18 +200,19 @@ func (p *Public) catalog(c *gin.Context) {
 }
 
 func (p *Public) stream(c *gin.Context) {
-	if _, exists := c.GetQuery("resource_id"); exists {
-		detail(c, 503, "Federated media runtime is not enabled in this deployment")
-		return
-	}
 	name := c.Query("file_path")
-	if name == "" {
+	id := c.Query("resource_id")
+	if name == "" && id == "" {
 		detail(c, 422, "file_path or resource_id is required")
 		return
 	}
-	stream, err := p.media.Stream(c.Request.Context(), name)
+	delivery, err := p.media.Delivery(c.Request.Context(), name, id, c.GetString("request_id"), c.GetString("trace_id"), p.settings.NginxMedia)
 	if err != nil {
-		if errors.Is(err, media.ErrPath) {
+		if errors.Is(err, media.ErrUnavailable) {
+			noStore(c)
+			c.Header("Retry-After", "30")
+			detail(c, 503, err.Error())
+		} else if errors.Is(err, media.ErrPath) {
 			detail(c, 403, "Forbidden media path access")
 		} else if errors.Is(err, os.ErrNotExist) {
 			detail(c, 404, "Media file not found")
@@ -219,10 +221,23 @@ func (p *Public) stream(c *gin.Context) {
 		}
 		return
 	}
+	c.Header("X-Media-Resource-ID", delivery.ResourceID)
+	c.Header("X-Media-Owner-ID", delivery.OwnerID)
+	c.Header("X-Media-Object-ID", delivery.ObjectID)
+	if delivery.Redirect != "" {
+		noStore(c)
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Redirect(http.StatusTemporaryRedirect, delivery.Redirect)
+		return
+	}
+	if delivery.Relay != "" {
+		noStore(c)
+		c.Header("X-Accel-Redirect", delivery.Relay)
+		c.Status(200)
+		return
+	}
+	stream := delivery.Stream
 	defer stream.File.Close()
-	c.Header("X-Media-Resource-ID", stream.ResourceID)
-	c.Header("X-Media-Owner-ID", stream.OwnerID)
-	c.Header("X-Media-Object-ID", stream.ObjectID)
 	c.Header("Cache-Control", "public, max-age=86400")
 	contentType := mime.TypeByExtension(path.Ext(stream.Path))
 	if contentType == "" {
@@ -265,14 +280,20 @@ func (p *Public) playback(c *gin.Context) {
 		invalid(c, "body", "duration")
 		return
 	}
+	var result store.PlaybackResult
+	var err error
 	if body.ResourceID != nil {
-		detail(c, 503, "Federated media runtime is not enabled in this deployment")
-		return
+		result, err = p.media.GlobalPlayback(c.Request.Context(), body.MediaPath, *body.ResourceID, body.Session, body.Played, body.Duration)
+	} else {
+		result, err = p.media.Playback(c.Request.Context(), body.MediaPath, body.Session, body.Played, body.Duration)
 	}
-	result, err := p.media.Playback(c.Request.Context(), body.MediaPath, body.Session, body.Played, body.Duration)
 	if err != nil {
 		if errors.Is(err, media.ErrPath) || errors.Is(err, os.ErrNotExist) || err.Error() == "Invalid playback session" || err.Error() == "Playback threshold not reached" {
 			detail(c, 400, err.Error())
+		} else if errors.Is(err, media.ErrUnavailable) {
+			noStore(c)
+			c.Header("Retry-After", "30")
+			detail(c, 503, err.Error())
 		} else {
 			internalError(c, err)
 		}
@@ -286,14 +307,16 @@ func (p *Public) lyrics(c *gin.Context) ([]media.LyricEntry, bool) {
 	if !ok {
 		return nil, false
 	}
-	if _, exists := c.GetQuery("resource_id"); exists {
-		detail(c, 503, "Federated media runtime is not enabled in this deployment")
-		return nil, false
-	}
-	entries, err := p.media.Lyrics(c.Request.Context(), name)
+	entries, err := p.media.LyricsResource(c.Request.Context(), name, c.Query("resource_id"))
 	if err != nil {
 		if errors.Is(err, media.ErrLyrics) {
 			detail(c, 404, "Lyrics not found")
+		} else if errors.Is(err, os.ErrNotExist) {
+			detail(c, 404, "Media object not found")
+		} else if errors.Is(err, media.ErrUnavailable) {
+			noStore(c)
+			c.Header("Retry-After", "30")
+			detail(c, 503, err.Error())
 		} else {
 			internalError(c, err)
 		}
@@ -393,8 +416,12 @@ func (p *Public) playerPage(c *gin.Context, kind string) {
 	if !ok {
 		return
 	}
-	if err := p.media.ValidateCategory(name, kind); err != nil {
-		detail(c, 404, "Media category not found")
+	if err := p.media.CategoryExists(c.Request.Context(), name, kind); err != nil {
+		if errors.Is(err, media.ErrCategory) {
+			detail(c, 404, "Media category not found")
+		} else {
+			internalError(c, err)
+		}
 		return
 	}
 	parts := strings.Split(name, "/")

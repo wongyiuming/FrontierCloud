@@ -21,6 +21,13 @@ type SearchResult struct {
 // scan never follows symlinks or descends outside the supported hierarchy.
 // Caller holds the media mutation lock for a coherent filesystem/DB snapshot.
 func (s *Service) scan(ctx context.Context, scope string, h map[string]bool) ([]TreeItem, error) {
+	role, err := s.role(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if role == "Master" && !strings.HasPrefix(scope, "lyrics") {
+		return s.globalScan(ctx, scope, h)
+	}
 	if info, err := s.safeInfo(scope); err != nil {
 		return nil, err
 	} else if !info.IsDir() {
@@ -174,6 +181,10 @@ func (s *Service) Priorities(ctx context.Context, scope, query, kind string, pag
 	if err := s.ready(); err != nil {
 		return PriorityResult{}, err
 	}
+	role, err := s.role(ctx)
+	if err != nil {
+		return PriorityResult{}, err
+	}
 	h, err := s.repository.HiddenPaths(ctx)
 	if err != nil {
 		return PriorityResult{}, err
@@ -204,9 +215,16 @@ func (s *Service) Priorities(ctx context.Context, scope, query, kind string, pag
 		}
 		objects = append(objects, store.MediaObject{Path: file.Path, Kind: kind})
 	}
-	ids, err := s.repository.EnsureObjects(ctx, objects)
-	if err != nil {
-		return PriorityResult{}, err
+	ids := map[string]string{}
+	if role == "Master" {
+		for _, file := range files {
+			ids[file.Path] = file.MediaID
+		}
+	} else {
+		ids, err = s.repository.EnsureObjects(ctx, objects)
+		if err != nil {
+			return PriorityResult{}, err
+		}
 	}
 	identifiers := make([]string, 0, len(ids))
 	for _, id := range ids {

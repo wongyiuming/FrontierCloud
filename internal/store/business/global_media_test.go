@@ -138,6 +138,22 @@ func TestGlobalReservationsFolderAffinityIdempotentFinalizeAndCapacity(t *testin
 	if err != nil || preference.PlayScore != 1 || preference.Preference != 42 {
 		t.Fatal("global stats", preference, err)
 	}
+	fallback := store.MediaObject{Path: "lyrics/default.lrc", Kind: "lyric"}
+	if err = pool.BindGlobalLyric(ctx, first.MediaID, fallback); err != nil {
+		t.Fatal("global default lyric", err)
+	}
+	lyric := store.MediaObject{Path: "lyrics/GlobalAffinity/song.lrc", Kind: "lyric"}
+	if _, err = db.Media().ReplaceLyricRelations(ctx, store.MediaObject{ID: first.MediaID, Path: first.Path, Kind: "audio"}, []store.MediaObject{lyric}, fallback, store.AdminAudit{}); err != nil {
+		t.Fatal("global explicit lyric", err)
+	}
+	relations, err := db.Media().LyricRelations(ctx, "music/GlobalAffinity", "lyrics/GlobalAffinity")
+	if err != nil || len(relations) != 1 || relations[0].Track != first.Path || relations[0].Lyric != lyric.Path {
+		t.Fatal("global lyric relations", relations, err)
+	}
+	auto, err := db.Media().AutoLyricRelations(ctx, []store.LyricPair{{Track: store.MediaObject{ID: first.MediaID, Path: first.Path, Kind: "audio"}, Lyric: lyric}}, store.AutoLyricResult{}, store.AdminAudit{})
+	if err != nil || auto.Preserved != 1 || auto.Linked != 0 {
+		t.Fatal("global auto relation identity", auto, err)
+	}
 	var localRows int
 	if err = sqlDB.QueryRow("SELECT COUNT(*) FROM media_objects WHERE media_id=?", first.MediaID).Scan(&localRows); err != nil || localRows != 0 {
 		t.Fatal("remote placement turned into a local media identity", localRows, err)

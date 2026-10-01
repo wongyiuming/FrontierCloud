@@ -25,7 +25,15 @@ func (r *Repository) upsertLyric(ctx context.Context, q queryer, trackID, trackP
 func (r *Repository) LyricRelations(ctx context.Context, trackScope, lyricScope string) ([]store.LyricRelation, error) {
 	trackWhere, trackArgs := r.pathScope("t.media_path", trackScope, true)
 	lyricWhere, lyricArgs := r.pathScope("l.media_path", lyricScope, true)
-	rows, err := r.db.QueryContext(ctx, "SELECT t.media_path,l.media_path FROM media_lyric_links b JOIN media_objects t ON t.media_id=b.media_id JOIN media_objects l ON l.media_id=b.lyric_id WHERE t.object_kind='audio' AND l.object_kind='lyric' AND ("+trackWhere+" OR "+lyricWhere+") ORDER BY t.media_path", append(trackArgs, lyricArgs...)...)
+	tracks, active := "media_objects", ""
+	node, err := r.ReadIdentity(ctx)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if node.Role == "Master" {
+		tracks, active = "global_media_objects", " AND t.state='active'"
+	}
+	rows, err := r.db.QueryContext(ctx, "SELECT t.media_path,l.media_path FROM media_lyric_links b JOIN "+tracks+" t ON t.media_id=b.media_id JOIN media_objects l ON l.media_id=b.lyric_id WHERE t.object_kind='audio' AND l.object_kind='lyric'"+active+" AND ("+trackWhere+" OR "+lyricWhere+") ORDER BY t.media_path", append(trackArgs, lyricArgs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -41,6 +49,10 @@ func (r *Repository) LyricRelations(ctx context.Context, trackScope, lyricScope 
 	return result, rows.Err()
 }
 func (r *Repository) lockLyricObjects(ctx context.Context, q queryer, objects []store.MediaObject) (map[string]string, error) {
+	node, err := readNode(ctx, q, "")
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
 	unique := map[string]store.MediaObject{}
 	for _, object := range objects {
 		if object.Kind != "audio" && object.Kind != "lyric" {
@@ -58,6 +70,17 @@ func (r *Repository) lockLyricObjects(ctx context.Context, q queryer, objects []
 	sort.Strings(paths)
 	ids := map[string]string{}
 	for _, p := range paths {
+		if node.Role == "Master" && unique[p].Kind == "audio" {
+			var id string
+			if err := q.QueryRowContext(ctx, "SELECT media_id FROM global_media_objects WHERE path_locator=? AND media_path=? AND object_kind='audio' AND state='active'"+r.lock(), locator(p), p).Scan(&id); err != nil {
+				return nil, err
+			}
+			if unique[p].ID != "" && unique[p].ID != id {
+				return nil, nodeConflict("global lyric track identity mismatch")
+			}
+			ids[p] = id
+			continue
+		}
 		id, err := r.ensureWithLock(ctx, q, unique[p], r.lock())
 		if err != nil {
 			return nil, err

@@ -46,10 +46,22 @@ type LyricCatalog struct {
 	Relations        []store.LyricRelation `json:"relations"`
 }
 
-func (s *Service) lyricScope(name, root string) (string, error) {
+func (s *Service) lyricScope(ctx context.Context, name, root string) (string, error) {
 	name, err := normalizeAdminPath(name, false)
 	if err != nil || strings.Split(name, "/")[0] != root {
 		return "", ErrPath
+	}
+	role, err := s.role(ctx)
+	if err != nil {
+		return "", err
+	}
+	if role == "Master" && root == "music" {
+		if name != "music" {
+			if err := s.globalCategory(ctx, name, "music"); err != nil {
+				return "", err
+			}
+		}
+		return name, nil
 	}
 	info, err := s.safeInfo(name)
 	if err != nil {
@@ -65,6 +77,11 @@ func (s *Service) lyricCatalogScan(ctx context.Context, scope, query, kind strin
 	if err != nil {
 		return nil, nil, 0, false, err
 	}
+	role, err := s.role(ctx)
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+	global := role == "Master" && kind == "audio"
 	files := []LyricCatalogItem{}
 	dirs := []PriorityDirectory{}
 	normalized := ""
@@ -75,22 +92,35 @@ func (s *Service) lyricCatalogScan(ctx context.Context, scope, query, kind strin
 		}
 	}
 	if normalized == "" {
-		entries, err := s.readDir(scope)
-		if err != nil {
-			return nil, nil, 0, false, err
-		}
-		for _, entry := range entries {
-			name := scope + "/" + entry.Name()
-			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || len(strings.Split(name, "/")) > 3 {
-				continue
-			}
-			count := 0
+		if global {
+			counts := map[string]int{}
 			for _, item := range items {
-				if strings.HasPrefix(item.Path, name+"/") {
-					count++
+				remainder := strings.TrimPrefix(item.Path, scope+"/")
+				if strings.Contains(remainder, "/") {
+					counts[strings.Split(remainder, "/")[0]]++
 				}
 			}
-			dirs = append(dirs, PriorityDirectory{Name: entry.Name(), Path: name, Count: count})
+			for name, count := range counts {
+				dirs = append(dirs, PriorityDirectory{Name: name, Path: scope + "/" + name, Count: count})
+			}
+		} else {
+			entries, err := s.readDir(scope)
+			if err != nil {
+				return nil, nil, 0, false, err
+			}
+			for _, entry := range entries {
+				name := scope + "/" + entry.Name()
+				if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || len(strings.Split(name, "/")) > 3 {
+					continue
+				}
+				count := 0
+				for _, item := range items {
+					if strings.HasPrefix(item.Path, name+"/") {
+						count++
+					}
+				}
+				dirs = append(dirs, PriorityDirectory{Name: entry.Name(), Path: name, Count: count})
+			}
 		}
 	}
 	for _, item := range items {
@@ -125,9 +155,16 @@ func (s *Service) lyricCatalogScan(ctx context.Context, scope, query, kind strin
 	for _, file := range files {
 		objects = append(objects, store.MediaObject{Path: file.Path, Kind: kind})
 	}
-	ids, err := s.repository.EnsureObjects(ctx, objects)
-	if err != nil {
-		return nil, nil, 0, false, err
+	ids := map[string]string{}
+	if global {
+		for _, item := range items {
+			ids[item.Path] = item.MediaID
+		}
+	} else {
+		ids, err = s.repository.EnsureObjects(ctx, objects)
+		if err != nil {
+			return nil, nil, 0, false, err
+		}
 	}
 	for i := range files {
 		if kind == "audio" {
@@ -147,11 +184,11 @@ func (s *Service) LyricCatalog(ctx context.Context, trackScope, lyricScope, trac
 	if err := s.ready(); err != nil {
 		return LyricCatalog{}, err
 	}
-	trackScope, err := s.lyricScope(trackScope, "music")
+	trackScope, err := s.lyricScope(ctx, trackScope, "music")
 	if err != nil {
 		return LyricCatalog{}, err
 	}
-	lyricScope, err = s.lyricScope(lyricScope, "lyrics")
+	lyricScope, err = s.lyricScope(ctx, lyricScope, "lyrics")
 	if err != nil {
 		return LyricCatalog{}, err
 	}
@@ -220,8 +257,22 @@ func (s *Service) ReplaceLyrics(ctx context.Context, originKind, originPath stri
 	if originKind != "track" && originKind != "lyric" {
 		return 0, ErrPath
 	}
+	role, roleErr := s.role(ctx)
+	if roleErr != nil {
+		return 0, roleErr
+	}
 	validate := func(name string, track bool) (store.MediaObject, error) {
 		if track {
+			if role == "Master" {
+				rows, err := s.pool.Resources(ctx, name, true)
+				if err != nil {
+					return store.MediaObject{}, err
+				}
+				if len(rows) != 1 || rows[0].Kind != "audio" {
+					return store.MediaObject{}, ErrPath
+				}
+				return store.MediaObject{ID: rows[0].ID, Path: rows[0].Path, Kind: "audio"}, nil
+			}
 			object, err := s.ValidateTrack(name)
 			if err != nil || object.Kind != "audio" {
 				return store.MediaObject{}, ErrPath
@@ -300,7 +351,7 @@ func (s *Service) AutoLyrics(ctx context.Context, audit store.AdminAudit) (store
 				continue
 			}
 		}
-		pairs = append(pairs, store.LyricPair{Track: store.MediaObject{Path: track.Path, Kind: "audio"}, Lyric: store.MediaObject{Path: lyric, Kind: "lyric"}})
+		pairs = append(pairs, store.LyricPair{Track: store.MediaObject{ID: track.MediaID, Path: track.Path, Kind: "audio"}, Lyric: store.MediaObject{Path: lyric, Kind: "lyric"}})
 	}
 	return s.repository.AutoLyricRelations(ctx, pairs, result, audit)
 }

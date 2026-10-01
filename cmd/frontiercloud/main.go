@@ -141,6 +141,13 @@ func serve() error {
 	controlTransport := node.NewTransport()
 	defer controlTransport.Close()
 	controlService := node.NewService(database.Nodes(), identity, controlTransport)
+	mediaService.ConfigureCluster(database.Nodes(), database.Pool(), controlService)
+	recordingsRoot, err := os.OpenRoot(filepath.Join(settings.DataRoot, "recordings"))
+	if err != nil {
+		return err
+	}
+	defer recordingsRoot.Close()
+	controlService.ConfigureVolumes(database.Pool(), mediaService, recordingsRoot)
 	securityService, err := security.New(settings, database.Security())
 	if err != nil {
 		return err
@@ -178,6 +185,9 @@ func serve() error {
 	}
 	httpapi.RegisterSecurityAdmin(handler, adminHTTP, securityService)
 	httpapi.RegisterNodeIdentity(handler, settings, resolver, controlService)
+	httpapi.RegisterNodeControl(handler, settings, resolver, controlService)
+	httpapi.RegisterNodeMedia(handler, settings, resolver, controlService, mediaService)
+	httpapi.RegisterNodeStorage(handler, settings, resolver, controlService, mediaService)
 	httpapi.RegisterObservations(handler, adminHTTP, observation.New(database.Observations(), redisClient, settings.WebRTCCooldown), resolver)
 	server := &http.Server{
 		Addr:              settings.HTTPAddress,

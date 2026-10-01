@@ -20,6 +20,10 @@ type TreeItem struct {
 	HiddenDirect bool   `json:"hidden_direct"`
 	Media        bool   `json:"media"`
 	Hideable     bool   `json:"hideable"`
+	MediaID      string `json:"media_id,omitempty"`
+	MemberID     string `json:"storage_member_id,omitempty"`
+	Transport    string `json:"transport,omitempty"`
+	NodeHealth   string `json:"node_health,omitempty"`
 }
 type Tree struct {
 	Path  string     `json:"path"`
@@ -70,6 +74,13 @@ func (s *Service) Tree(ctx context.Context, name string) (Tree, error) {
 	name, err := normalizeAdminPath(name, true)
 	if err != nil {
 		return Tree{}, err
+	}
+	role, err := s.role(ctx)
+	if err != nil {
+		return Tree{}, err
+	}
+	if role == "Master" && name != "" && !strings.HasPrefix(name, "lyrics") {
+		return s.globalTree(ctx, name)
 	}
 	var entries []os.DirEntry
 	if name == "" {
@@ -191,8 +202,19 @@ func (s *Service) Preference(ctx context.Context, name string, value int, direct
 	if err := s.ready(); err != nil {
 		return PreferenceResult{}, err
 	}
+	role, err := s.role(ctx)
+	if err != nil {
+		return PreferenceResult{}, err
+	}
+	if role == "Master" && !directory {
+		row, _, err := s.resolveGlobal(ctx, "", name)
+		if err != nil {
+			return PreferenceResult{}, err
+		}
+		result, err := s.pool.SetGlobalPreference(ctx, row.ID, value, audit)
+		return PreferenceResult{result, row.Path}, err
+	}
 	var object store.MediaObject
-	var err error
 	if directory {
 		name, err = normalizeAdminPath(name, false)
 		if err != nil {
@@ -202,12 +224,22 @@ func (s *Service) Preference(ctx context.Context, name string, value int, direct
 		if len(parts) < 2 || parts[0] == "lyrics" {
 			return PreferenceResult{}, ErrPath
 		}
-		info, err := s.safeInfo(name)
-		if err != nil {
-			return PreferenceResult{}, err
-		}
-		if !info.IsDir() {
-			return PreferenceResult{}, ErrPath
+		if role == "Master" {
+			rows, err := s.pool.Resources(ctx, name, false)
+			if err != nil {
+				return PreferenceResult{}, err
+			}
+			if len(rows) == 0 {
+				return PreferenceResult{}, os.ErrNotExist
+			}
+		} else {
+			info, err := s.safeInfo(name)
+			if err != nil {
+				return PreferenceResult{}, err
+			}
+			if !info.IsDir() {
+				return PreferenceResult{}, ErrPath
+			}
 		}
 		object = store.MediaObject{Path: name, Kind: "directory"}
 	} else {
@@ -229,6 +261,10 @@ func (s *Service) Hide(ctx context.Context, paths []string, hide bool, audit sto
 	if err := s.ready(); err != nil {
 		return err
 	}
+	role, err := s.role(ctx)
+	if err != nil {
+		return err
+	}
 	normalized := []string{}
 	seen := map[string]bool{}
 	for _, name := range paths {
@@ -240,12 +276,22 @@ func (s *Service) Hide(ctx context.Context, paths []string, hide bool, audit sto
 		if parts[0] == "lyrics" {
 			return ErrPath
 		}
-		info, err := s.safeInfo(name)
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			return ErrPath
+		if role == "Master" {
+			rows, err := s.pool.Resources(ctx, name, false)
+			if err != nil {
+				return err
+			}
+			if len(rows) == 0 {
+				return os.ErrNotExist
+			}
+		} else {
+			info, err := s.safeInfo(name)
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() {
+				return ErrPath
+			}
 		}
 		if !seen[name] {
 			normalized = append(normalized, name)

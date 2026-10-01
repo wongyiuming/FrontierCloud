@@ -25,6 +25,70 @@ type Service struct {
 	recordings *os.Root
 }
 
+var ErrAuthentication = errors.New("invalid relationship authentication")
+
+func (s *Service) RequireFollower(ctx context.Context, relation store.Relationship) error {
+	row, err := s.repo.ReadIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	if row.Role != "Follower" || relation.Direction != "upstream" || relation.State != "active" || relation.Protocol != protocol.Version {
+		return store.ErrNodeState
+	}
+	return nil
+}
+
+func (s *Service) FollowerOrigin(ctx context.Context, origin string) (store.Relationship, error) {
+	row, err := s.repo.ReadIdentity(ctx)
+	if err != nil {
+		return store.Relationship{}, err
+	}
+	if row.Role != "Follower" || origin == "" {
+		return store.Relationship{}, ErrCapability
+	}
+	relations, err := s.repo.Relationships(ctx, false)
+	if err != nil {
+		return store.Relationship{}, err
+	}
+	for _, relation := range relations {
+		if relation.State == "active" && relation.Direction == "upstream" && relation.Protocol == protocol.Version && relation.Endpoint == origin {
+			return relation, nil
+		}
+	}
+	return store.Relationship{}, ErrCapability
+}
+
+func (s *Service) Confirm(ctx context.Context, relation store.Relationship) error {
+	row, err := s.repo.ReadIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	if row.Role != "Follower" || relation.Direction != "upstream" {
+		return store.ErrNodeState
+	}
+	return s.repo.ActivateRelationship(ctx, relation.ID, store.NodeAudit{Actor: relation.PeerID})
+}
+
+func (s *Service) ReceiveRevocation(ctx context.Context, relation store.Relationship) error {
+	row, err := s.repo.ReadIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	apply := func() error {
+		return s.repo.RevokeRelationship(ctx, relation.ID, true, store.NodeAudit{Actor: relation.PeerID})
+	}
+	if row.Role == "Follower" {
+		if relation.Direction != "upstream" || s.volume == nil {
+			return store.ErrNodeState
+		}
+		return s.volume.WithPromotion(ctx, "Follower", func(store.NodePromotion) error { return s.emptyRecordings(ctx, apply) })
+	}
+	if row.Role != "Master" || relation.Direction != "downstream" {
+		return store.ErrNodeState
+	}
+	return apply()
+}
+
 type BusinessVolume interface {
 	WithPromotion(context.Context, string, func(store.NodePromotion) error) error
 	PhysicalCapacity(context.Context) (int64, int64, error)
@@ -390,24 +454,31 @@ func (s *Service) Authenticate(ctx context.Context, headers http.Header, method,
 	values := map[string]string{}
 	for _, name := range []string{"X-Node-Relationship", "X-Node-Time", "X-Node-Nonce", "X-Node-Signature"} {
 		if len(headers.Values(name)) != 1 {
-			return store.Relationship{}, errors.New("invalid relationship authentication")
+			return store.Relationship{}, ErrAuthentication
 		}
 		values[name] = headers.Get(name)
 	}
 	relation, err := s.repo.Relationship(ctx, values["X-Node-Relationship"])
 	if err != nil {
+		if errors.Is(err, store.ErrNodeState) {
+			return store.Relationship{}, ErrAuthentication
+		}
 		return store.Relationship{}, err
 	}
 	credential, err := s.identity.vault.Unseal(relation.Credential)
 	if err != nil {
-		return store.Relationship{}, errors.New("relationship credential unavailable")
+		return store.Relationship{}, ErrAuthentication
 	}
 	now := time.Now().Unix()
 	nonce, err := protocol.VerifyAuth(credential, values, method, path, body, now)
 	if err != nil {
-		return store.Relationship{}, err
+		return store.Relationship{}, ErrAuthentication
 	}
-	return s.repo.ReserveNodeNonce(ctx, relation.ID, nonce, relation.Credential, now, pending, revoked)
+	result, err := s.repo.ReserveNodeNonce(ctx, relation.ID, nonce, relation.Credential, now, pending, revoked)
+	if errors.Is(err, store.ErrNodeState) {
+		err = ErrAuthentication
+	}
+	return result, err
 }
 func (s *Service) NotifyRevocation(ctx context.Context, relation store.Relationship) error {
 	ack, _ := relation.Summary["revocation_acknowledged"].(bool)

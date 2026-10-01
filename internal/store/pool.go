@@ -1,6 +1,11 @@
 package store
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+var ErrStorageCapacity = errors.New("storage lacks writable capacity")
 
 const GiB int64 = 1024 * 1024 * 1024
 const MaxStorageAllocation int64 = 10 * 1024 * GiB
@@ -51,6 +56,7 @@ type StorageMember struct {
 	Backup         map[string]any `json:"backup"`
 }
 type PoolRepository interface {
+	OwnedStorageRepository
 	Members(context.Context) ([]StorageMember, error)
 	MemberConfiguration(context.Context, string) (ResourceConfiguration, error)
 	ConfigureMember(context.Context, string, ResourceConfiguration, NodeAudit) error
@@ -66,6 +72,14 @@ type PoolRepository interface {
 	ExpiredUploads(context.Context, int) ([]UploadReservation, error)
 	RecordGlobalPlayback(context.Context, string, string) (PlaybackResult, error)
 	SetGlobalPreference(context.Context, string, int, AdminAudit) (PlaybackResult, error)
+	BindGlobalLyric(context.Context, string, MediaObject) error
+}
+
+type OwnedStorageRepository interface {
+	ReserveOwnedUpload(context.Context, string, string, MediaObject, int64, int64, NodeAudit) error
+	CompleteOwnedUpload(context.Context, string, MediaObject, int64, string, int64, NodeAudit) error
+	ReleaseOwnedUpload(context.Context, string, NodeAudit) error
+	OwnedPendingUploads(context.Context) ([]UploadReservation, error)
 }
 
 type GlobalMedia struct {

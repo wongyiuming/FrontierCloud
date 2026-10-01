@@ -22,6 +22,10 @@ func (a *Admin) mutationAudit(c *gin.Context, action string, paths []string) sto
 
 func mediaAdminError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, media.ErrUnavailable):
+		noStore(c)
+		c.Header("Retry-After", "30")
+		detail(c, 503, err.Error())
 	case errors.Is(err, os.ErrExist):
 		detail(c, 409, "目标名称或媒体身份已存在")
 	case errors.Is(err, os.ErrNotExist), errors.Is(err, media.ErrCategory):

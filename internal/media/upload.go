@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/wongyiuming/FrontierCloud/internal/filelease"
+	"github.com/wongyiuming/FrontierCloud/internal/fsutil"
 	"github.com/wongyiuming/FrontierCloud/internal/store"
 )
 
@@ -69,6 +70,10 @@ func (h *headWriter) Write(value []byte) (int, error) {
 }
 
 func (s *Service) Stage(ctx context.Context, reader io.Reader, maximum int64) (*Stage, error) {
+	return s.stage(ctx, reader, maximum, nil)
+}
+
+func (s *Service) stage(ctx context.Context, reader io.Reader, maximum int64, prepare func(*Stage) error) (*Stage, error) {
 	if err := s.Ready(ctx); err != nil {
 		return nil, err
 	}
@@ -108,6 +113,13 @@ func (s *Service) Stage(ctx context.Context, reader io.Reader, maximum int64) (*
 	if err != nil {
 		stage.Close()
 		return nil, err
+	}
+	if prepare != nil {
+		if err := prepare(stage); err != nil {
+			f.Close()
+			stage.Close()
+			return nil, err
+		}
 	}
 	digest := sha256.New()
 	head := &headWriter{}
@@ -297,13 +309,14 @@ func (s *Service) makeParents(name string) error {
 }
 
 type uploadJournal struct {
-	Format  string            `json:"format"`
-	Version int               `json:"version"`
-	ID      string            `json:"id"`
-	Object  store.MediaObject `json:"object"`
-	Bytes   int64             `json:"bytes"`
-	SHA256  string            `json:"sha256"`
-	Audit   store.AdminAudit  `json:"audit"`
+	Format    string            `json:"format"`
+	Version   int               `json:"version"`
+	ID        string            `json:"id"`
+	Object    store.MediaObject `json:"object"`
+	Bytes     int64             `json:"bytes"`
+	SHA256    string            `json:"sha256"`
+	Audit     store.AdminAudit  `json:"audit"`
+	NodeAudit store.NodeAudit   `json:"node_audit,omitempty"`
 }
 
 func journalPath(id string) string { return ".upload-" + id + ".json" }
@@ -344,7 +357,8 @@ func (s *Service) writeUploadJournal(journal uploadJournal) error {
 }
 
 func (s *Service) finishUpload(ctx context.Context, journal uploadJournal) error {
-	if journal.Format != "frontiercloud-local-upload" || journal.Version != 1 || !operationID.MatchString(journal.ID) || !managedObject(journal.Object.Path, false) || journal.Bytes < 1 || len(journal.SHA256) != 64 {
+	owned := journal.Format == "frontiercloud-owned-upload"
+	if (!owned && journal.Format != "frontiercloud-local-upload") || journal.Version != 1 || !operationID.MatchString(journal.ID) || !managedObject(journal.Object.Path, false) || journal.Bytes < 1 || len(journal.SHA256) != 64 {
 		return ErrRecovery
 	}
 	if _, err := hex.DecodeString(journal.SHA256); err != nil {
@@ -360,7 +374,7 @@ func (s *Service) finishUpload(ctx context.Context, journal uploadJournal) error
 		expected = "lyric"
 		action = "upload_lyric"
 	}
-	if journal.Object.Kind != expected || journal.Audit.Action != action {
+	if journal.Object.Kind != expected || !owned && journal.Audit.Action != action || owned && (s.owned == nil || expected == "lyric" || !ownedObjectID.MatchString(journal.Object.ID)) {
 		return ErrRecovery
 	}
 	stageName := ".upload-" + journal.ID + ".part"
@@ -407,8 +421,18 @@ func (s *Service) finishUpload(ctx context.Context, journal uploadJournal) error
 			return err
 		}
 	}
-	if err := s.repository.CompleteUpload(ctx, journal.Object, journal.ID, journal.Audit); err != nil {
-		return err
+	var completion error
+	if owned {
+		_, free, err := fsutil.DiskUsage(s.root)
+		if err != nil {
+			return err
+		}
+		completion = s.owned.CompleteOwnedUpload(ctx, journal.ID, journal.Object, journal.Bytes, `"`+journal.SHA256+`"`, free, journal.NodeAudit)
+	} else {
+		completion = s.repository.CompleteUpload(ctx, journal.Object, journal.ID, journal.Audit)
+	}
+	if completion != nil {
+		return completion
 	}
 	// Remove and sync the replay intent BEFORE unlinking its staged hard link.
 	// A later media deletion must not be resurrected by an old upload journal.
@@ -577,7 +601,7 @@ func (s *Service) recoverUploads(ctx context.Context) error {
 		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 			return ErrRecovery
 		}
-		if journal.ID != uploadJournalName.FindStringSubmatch(name)[1] || journal.Format != "frontiercloud-local-upload" || journal.Version != 1 || !managedObject(journal.Object.Path, false) {
+		if journal.ID != uploadJournalName.FindStringSubmatch(name)[1] || (journal.Format != "frontiercloud-local-upload" && journal.Format != "frontiercloud-owned-upload") || journal.Version != 1 || !managedObject(journal.Object.Path, false) {
 			return ErrRecovery
 		}
 		if err := s.verifyUploadBytes(ctx, journal); err != nil {

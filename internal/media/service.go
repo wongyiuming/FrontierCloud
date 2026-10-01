@@ -34,6 +34,10 @@ type Service struct {
 	mutation         sync.RWMutex
 	search           *search.Engine
 	recoveryRequired bool
+	nodes            store.NodeRepository
+	pool             store.PoolRepository
+	control          *node.Service
+	owned            store.OwnedStorageRepository
 }
 
 type Category struct {
@@ -41,13 +45,14 @@ type Category struct {
 	URL  string `json:"url"`
 }
 type Track struct {
-	MediaPath string `json:"media_path"`
-	Title     string `json:"title"`
-	Artist    string `json:"artist"`
-	Type      string `json:"type"`
-	URL       string `json:"url"`
-	Cover     string `json:"cover"`
-	MediaID   string `json:"media_id"`
+	MediaPath  string `json:"media_path"`
+	Title      string `json:"title"`
+	Artist     string `json:"artist"`
+	Type       string `json:"type"`
+	URL        string `json:"url"`
+	Cover      string `json:"cover"`
+	MediaID    string `json:"media_id"`
+	ResourceID string `json:"resource_id,omitempty"`
 	store.PlaybackStats
 	HasLyrics *bool  `json:"has_lyrics,omitempty"`
 	KaraokeID string `json:"karaoke_id"`
@@ -59,6 +64,7 @@ func New(directory string, repo store.MediaRepository, identity *node.Identity) 
 		return nil, err
 	}
 	service := &Service{root: root, repository: repo, identity: identity}
+	service.owned, _ = repo.(store.OwnedStorageRepository)
 	service.search, err = search.New()
 	if err != nil {
 		root.Close()
@@ -77,6 +83,9 @@ func New(directory string, repo store.MediaRepository, identity *node.Identity) 
 	err = service.recoverDeletes(recovery)
 	if err == nil {
 		err = service.recoverUploads(recovery)
+	}
+	if err == nil {
+		err = service.recoverOwnedReservations(recovery)
 	}
 	if err == nil {
 		err = service.recoverRenames(recovery)
@@ -301,6 +310,16 @@ func (s *Service) Categories(ctx context.Context, kind string, include bool) ([]
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
+	role, err := s.role(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if role == "Follower" {
+		return []Category{}, nil
+	}
+	if role == "Master" {
+		return s.globalCategories(ctx, kind, mediaRoot(kind), include)
+	}
 	return s.categories(ctx, kind, mediaRoot(kind), include)
 }
 func (s *Service) Subcategories(ctx context.Context, kind, name string, include bool) ([]Category, error) {
@@ -311,6 +330,22 @@ func (s *Service) Subcategories(ctx context.Context, kind, name string, include 
 	defer release()
 	if err := s.ready(); err != nil {
 		return nil, err
+	}
+	role, err := s.role(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if role == "Follower" {
+		return nil, ErrCategory
+	}
+	if role == "Master" {
+		if err := s.globalCategory(ctx, name, kind); err != nil {
+			return nil, err
+		}
+		if len(strings.Split(name, "/")) != 2 {
+			return []Category{}, nil
+		}
+		return s.globalCategories(ctx, kind, name, include)
 	}
 	if err := s.ValidateCategory(name, kind); err != nil {
 		return nil, err
@@ -329,6 +364,16 @@ func (s *Service) Catalog(ctx context.Context, kind, name, session string, inclu
 	defer release()
 	if err := s.ready(); err != nil {
 		return nil, err
+	}
+	role, err := s.role(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if role == "Follower" {
+		return nil, ErrCategory
+	}
+	if role == "Master" {
+		return s.globalCatalog(ctx, kind, name, session, include)
 	}
 	if err := s.ValidateCategory(name, kind); err != nil {
 		return nil, err
@@ -450,6 +495,16 @@ func (s *Service) Stream(ctx context.Context, name string) (*Stream, error) {
 }
 
 func (s *Service) Playback(ctx context.Context, name, session string, played, duration float64) (store.PlaybackResult, error) {
+	role, roleErr := s.role(ctx)
+	if roleErr != nil {
+		return store.PlaybackResult{}, roleErr
+	}
+	if role == "Master" {
+		return s.GlobalPlayback(ctx, name, "", session, played, duration)
+	}
+	if role == "Follower" {
+		return store.PlaybackResult{}, os.ErrNotExist
+	}
 	if math.IsNaN(played) || math.IsNaN(duration) || math.IsInf(played, 0) || math.IsInf(duration, 0) || played <= 0 || played > 86400 || duration <= 0 || duration > 86400 {
 		return store.PlaybackResult{}, errors.New("Invalid media duration")
 	}

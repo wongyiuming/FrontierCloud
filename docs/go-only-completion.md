@@ -79,9 +79,26 @@ the retired remote Compute Worker remains disabled.
 Real MySQL checks also pass for site-type upload reservations, same-folder
 placement affinity, category layout fences, physical/logical capacity limits,
 and idempotent global publication. Unknown expired physical placements retain
-their reservations until confirmed cleanup. These are domain implementations,
-not yet a complete public/Admin cluster API or media data plane. Production
-currently exposes only the signed node identity endpoint from this slice.
+their reservations until confirmed cleanup.
+
+Native HTTP pair/confirm/revoke/heartbeat handlers now use bounded raw control
+bodies and exact-path HMACs. The global public catalog, virtual category/player
+pages, exact-once playback, default/explicit lyrics, Direct capabilities and
+Nginx Relay destinations are implemented. Follower media serves verified
+capabilities with strict paired-origin CORS, Range and HEAD, never a public
+independent business catalog. Master Admin virtual tree/search, visibility,
+priorities and lyric management retain global IDs without manufacturing local
+identities for remote tracks.
+
+Follower uploads reserve quota before streaming, use bounded buffers, persist
+publication intents and exact object IDs, and atomically commit accounting with
+audit. Lost-response retries do not replace or re-charge files. Startup recovers
+completed intents and abandoned reservations while preserving another worker's
+live OS lease. Real MySQL verifies concurrent owned upload reservations and
+idempotent publication; SQLite fault tests cover interrupted/lost commits.
+The HTTP pair → heartbeat/configuration → signed upload → authenticated stat →
+global finalize → Direct Range/HEAD chain passes; Relay remains Nginx delegated.
+This is not yet a complete Admin upload/delete or cluster deployment workflow.
 
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.

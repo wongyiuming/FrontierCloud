@@ -159,7 +159,7 @@ func AuthHeaders(credential, relationship, method, path string, body []byte, now
 
 // MediaToken creates a media capability compatible with the Python runtime.
 func MediaToken(credential, relationship, master, owner, original, mediaID string, now int64, requestID, traceID string) (string, error) {
-	if !objectID.MatchString(mediaID) {
+	if !objectID.MatchString(mediaID) || !objectID.MatchString(original) || !identifier.MatchString(relationship) || !identifier.MatchString(master) || !identifier.MatchString(owner) {
 		return "", errors.New("invalid global media identity")
 	}
 	payload := map[string]any{
