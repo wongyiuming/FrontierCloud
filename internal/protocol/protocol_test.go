@@ -19,7 +19,9 @@ func loadVector(t *testing.T, name string, target any) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(content, target); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -102,6 +104,30 @@ func TestEd25519Vector(t *testing.T) {
 	}
 	if err := Verify(fixture.PublicKey, fixture.Payload, fixture.Signature); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCanonicalPreservesNativeNumericTypes(t *testing.T) {
+	actual, err := Canonical(map[string]any{"integer": int64(1), "floating": float64(1), "nested": []float64{math.Copysign(0, -1)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(actual) != `{"floating":1.0,"integer":1,"nested":[-0.0]}` {
+		t.Fatalf("unexpected numeric encoding: %s", actual)
+	}
+}
+
+func TestCanonicalAcceptsNestedWireJSON(t *testing.T) {
+	var value any = json.Number("1")
+	for range 100 {
+		value = map[string]any{"child": value}
+	}
+	encoded, err := Canonical(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(encoded) {
+		t.Fatal("nested canonical output is invalid JSON")
 	}
 }
 

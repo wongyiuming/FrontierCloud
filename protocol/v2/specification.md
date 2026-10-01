@@ -68,6 +68,12 @@ Canonical JSON bytes are produced as follows:
 4. Emit Unicode characters directly rather than ASCII or HTML escaping them,
    except for escaping required by JSON itself.
 5. Reject NaN and positive or negative infinity.
+6. Preserve the distinction between JSON integers and binary64 floating-point
+   values: `1` encodes as `1`, while `1.0` encodes as `1.0`. Finite floats use
+   their shortest round-trippable decimal representation, fixed notation for
+   decimal exponents -4 through 15, otherwise scientific notation with a sign
+   and at least two exponent digits. Negative floating-point zero is `-0.0`.
+   Wire decoders must preserve integer precision and numeric type.
 
 Signatures and token MACs operate on these exact bytes, not on a re-serialized
 equivalent object. See `vectors/canonical-json.json`.

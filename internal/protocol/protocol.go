@@ -57,51 +57,6 @@ func Decode(value string) ([]byte, error) {
 	return decoded, nil
 }
 
-// Canonical produces the exact JSON bytes used by FrontierCloud signatures.
-func Canonical(value any) ([]byte, error) {
-	if err := rejectNonFinite(value); err != nil {
-		return nil, err
-	}
-	var output bytes.Buffer
-	encoder := json.NewEncoder(&output)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, fmt.Errorf("encode canonical JSON: %w", err)
-	}
-	result := bytes.TrimSuffix(output.Bytes(), []byte{'\n'})
-	// encoding/json always escapes these code points for JavaScript safety.
-	// Python's ensure_ascii=False does not, so restore their UTF-8 form.
-	result = bytes.ReplaceAll(result, []byte(`\u2028`), []byte("\u2028"))
-	result = bytes.ReplaceAll(result, []byte(`\u2029`), []byte("\u2029"))
-	return result, nil
-}
-
-func rejectNonFinite(value any) error {
-	switch typed := value.(type) {
-	case float32:
-		if math.IsNaN(float64(typed)) || math.IsInf(float64(typed), 0) {
-			return errors.New("canonical JSON rejects non-finite numbers")
-		}
-	case float64:
-		if math.IsNaN(typed) || math.IsInf(typed, 0) {
-			return errors.New("canonical JSON rejects non-finite numbers")
-		}
-	case []any:
-		for _, item := range typed {
-			if err := rejectNonFinite(item); err != nil {
-				return err
-			}
-		}
-	case map[string]any:
-		for _, item := range typed {
-			if err := rejectNonFinite(item); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 // PublicKey derives the raw Ed25519 public key for a protocol private key.
 func PublicKey(private string) (string, error) {
 	seed, err := Decode(private)

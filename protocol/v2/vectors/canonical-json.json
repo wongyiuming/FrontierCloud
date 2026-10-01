@@ -11,17 +11,21 @@
           "a": null
         },
         "b": 1,
-        "a": "节点"
+        "a": "\u8282\u70b9"
       },
-      "canonical": "{\"a\":\"节点\",\"b\":1,\"nested\":{\"a\":null,\"z\":false}}"
+      "canonical": "{\"a\":\"\u8282\u70b9\",\"b\":1,\"nested\":{\"a\":null,\"z\":false}}"
     },
     {
       "name": "no-html-escaping",
       "value": {
-        "text": "<tag>&测试",
-        "array": [3, 2, 1]
+        "text": "<tag>&\u6d4b\u8bd5",
+        "array": [
+          3,
+          2,
+          1
+        ]
       },
-      "canonical": "{\"array\":[3,2,1],\"text\":\"<tag>&测试\"}"
+      "canonical": "{\"array\":[3,2,1],\"text\":\"<tag>&\u6d4b\u8bd5\"}"
     },
     {
       "name": "required-json-escaping-only",
@@ -31,6 +35,45 @@
         "control": "line1\nline2"
       },
       "canonical": "{\"control\":\"line1\\nline2\",\"quote\":\"a\\\"b\",\"slash\":\"a/b\"}"
+    },
+    {
+      "name": "unicode-separators-and-literal-escapes",
+      "value": {
+        "actual": "\u2028\u2029",
+        "literal": "\\u2028\\u2029",
+        "escaped-backslash": "\\\u2028",
+        "controls": "\u0000\u001f\b\f\r\t"
+      },
+      "canonical": "{\"actual\":\"\u2028\u2029\",\"controls\":\"\\u0000\\u001f\\b\\f\\r\\t\",\"escaped-backslash\":\"\\\\\u2028\",\"literal\":\"\\\\u2028\\\\u2029\"}"
+    },
+    {
+      "name": "finite-binary64-representation",
+      "value": [
+        0.0,
+        -0.0,
+        1.0,
+        1000000.0,
+        0.0001,
+        1e-05,
+        1000000000000000.0,
+        1e+16,
+        1e+20,
+        1e-308,
+        5e-324,
+        123.456,
+        -1.2345678901234567
+      ],
+      "canonical": "[0.0,-0.0,1.0,1000000.0,0.0001,1e-05,1000000000000000.0,1e+16,1e+20,1e-308,5e-324,123.456,-1.2345678901234567]"
+    },
+    {
+      "name": "integer-precision-and-type",
+      "value": [
+        9007199254740993,
+        18446744073709551616,
+        1,
+        1.0
+      ],
+      "canonical": "[9007199254740993,18446744073709551616,1,1.0]"
     }
   ]
 }
