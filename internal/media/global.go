@@ -31,6 +31,33 @@ func (s *Service) role(ctx context.Context) (string, error) {
 	row, err := s.nodes.ReadIdentity(ctx)
 	return row.Role, err
 }
+
+func (s *Service) IdentityState(ctx context.Context) (store.NodeIdentity, error) {
+	if s.nodes != nil {
+		return s.nodes.ReadIdentity(ctx)
+	}
+	return s.identity.NodeIdentity, nil
+}
+
+func (s *Service) MasterURL(ctx context.Context) (string, error) {
+	role, err := s.role(ctx)
+	if err != nil {
+		return "", err
+	}
+	if role != "Follower" || s.nodes == nil {
+		return "", nil
+	}
+	relations, err := s.nodes.Relationships(ctx, false)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range relations {
+		if r.Direction == "upstream" && r.State == "active" {
+			return r.Endpoint, nil
+		}
+	}
+	return "", nil
+}
 func categoryShape(name, kind string) bool {
 	parts := strings.Split(name, "/")
 	if (kind != "music" && kind != "video") || len(parts) < 2 || len(parts) > 3 || parts[0] != mediaRoot(kind) || strings.ContainsAny(name, "\\\x00") || name != path.Clean(name) {
@@ -192,8 +219,14 @@ func (s *Service) resolveGlobal(ctx context.Context, id, name string) (store.Glo
 		if v.Status == "offline" || time.Now().Unix()-v.LastHeartbeat >= 120 {
 			return row, relation, ErrUnavailable
 		}
-	} else if row.MemberID != s.identity.ID {
-		return row, nil, os.ErrNotExist
+	} else {
+		identity, err := s.IdentityState(ctx)
+		if err != nil {
+			return row, nil, err
+		}
+		if row.MemberID != identity.ID {
+			return row, nil, os.ErrNotExist
+		}
 	}
 	if row.Health != "online" {
 		return row, relation, ErrUnavailable
@@ -304,7 +337,12 @@ func (s *Service) OwnedStream(ctx context.Context, id string) (*Stream, error) {
 		f.Close()
 		return nil, ErrPath
 	}
-	return &Stream{File: f, Info: info, Path: o.Path, ObjectID: o.ID, OwnerID: s.identity.ID, ResourceID: node.ResourceID(s.identity.ID, o.ID)}, nil
+	identity, err := s.IdentityState(ctx)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &Stream{File: f, Info: info, Path: o.Path, ObjectID: o.ID, OwnerID: identity.ID, ResourceID: node.ResourceID(identity.ID, o.ID)}, nil
 }
 
 func (s *Service) GlobalPlayback(ctx context.Context, name, id, session string, played, duration float64) (store.PlaybackResult, error) {

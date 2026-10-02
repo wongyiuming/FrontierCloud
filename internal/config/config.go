@@ -51,6 +51,9 @@ type Config struct {
 	SecurityInvalidWindow  int
 	LogLevel               string
 	LogFormat              string
+	GitHubAPIToken         string
+	ReleaseBranch          string
+	ReleaseSourceBranch    string
 }
 
 // Load reads configuration from the process environment.
@@ -89,6 +92,19 @@ func LoadFrom(getenv func(string) string) (Config, error) {
 		ServerName:        fallback(getenv("SERVER_NAME"), "localhost"),
 	}
 	value.SecurityExemptNetworks = strings.Split(fallback(getenv("SECURITY_EXEMPT_NETWORKS"), "127.0.0.0/8,::1/128"), ",")
+	value.GitHubAPIToken = strings.TrimSpace(getenv("GITHUB_API_TOKEN"))
+	if len(value.GitHubAPIToken) > 4096 || strings.ContainsAny(value.GitHubAPIToken, "\r\n") {
+		return Config{}, errors.New("invalid GITHUB_API_TOKEN")
+	}
+	value.ReleaseBranch = fallback(getenv("RELEASE_BRANCH"), "main")
+	source := "dev"
+	if value.ReleaseBranch == "gin_main" {
+		source = "gin_dev"
+	}
+	value.ReleaseSourceBranch = fallback(getenv("RELEASE_SOURCE_BRANCH"), source)
+	if !(value.ReleaseBranch == "main" && value.ReleaseSourceBranch == "dev" || value.ReleaseBranch == "gin_main" && value.ReleaseSourceBranch == "gin_dev") {
+		return Config{}, errors.New("release policy must select main/dev or gin_main/gin_dev")
+	}
 	value.SecurityInvalidLimit, err = integer(getenv("SECURITY_INVALID_API_LIMIT"), 5)
 	if err != nil || value.SecurityInvalidLimit < 1 || value.SecurityInvalidLimit > 100000 {
 		return Config{}, errors.New("invalid SECURITY_INVALID_API_LIMIT")

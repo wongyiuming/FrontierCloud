@@ -68,3 +68,36 @@ func TestReadOnlyOpenNeverCreatesOrMutatesAuthoritativeDatabase(t *testing.T) {
 		t.Fatal("read-only initialization ignored cancellation", err)
 	}
 }
+
+func TestExistingWriterNeverInitializesAbsentStore(t *testing.T) {
+	ctx := context.Background()
+	name := filepath.Join(t.TempDir(), "absent", "node.sqlite")
+	if db, err := OpenExisting(ctx, name); err == nil {
+		db.Close()
+		t.Fatal("existing writer created absent database")
+	}
+	if _, err := os.Stat(filepath.Dir(name)); !os.IsNotExist(err) {
+		t.Fatal("existing writer created parent", err)
+	}
+	db, err := Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Database().Exec("CREATE TABLE fixture(value INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	db, err = OpenExisting(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Database().Exec("INSERT INTO fixture VALUES (42)"); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := OpenExisting(cancelled, name); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+}

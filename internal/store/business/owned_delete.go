@@ -28,9 +28,9 @@ func ownedDeleteItem(operation store.DeleteOperation) (store.DeleteItem, error) 
 func (r *Repository) ownedDeleteAccounting(ctx context.Context, q queryer, member string, item store.DeleteItem) error {
 	var size int64
 	err := q.QueryRowContext(ctx, "SELECT expected_bytes FROM cluster_upload_sessions WHERE media_id=? AND storage_member_id=? AND state='complete'"+r.lock(), item.OwnedID, member).Scan(&size)
-	// Legacy Follower objects may predate the durable local upload ledger.
+	// Legacy Follower objects need explicit offline physical adoption first.
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return nodeConflict("owned storage needs offline ledger adoption before refund")
 	}
 	if err != nil {
 		return err

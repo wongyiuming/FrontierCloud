@@ -35,6 +35,7 @@ type NodeRepository interface {
 	InitializeIdentity(context.Context, NodeIdentity) (NodeIdentity, error)
 	ReadIdentity(context.Context) (NodeIdentity, error)
 	PromoteIdentity(context.Context, NodePromotion, NodeAudit) (NodeIdentity, error)
+	ResetIdentity(context.Context, string, string, NodeIdentity, NodeAudit) (NodeIdentity, error)
 	IssuePair(context.Context, PairPackage, int64, NodeAudit) (NodeIdentity, error)
 	PairAvailable(context.Context, PairPackage, int64) error
 	Relationships(context.Context, bool) ([]Relationship, error)

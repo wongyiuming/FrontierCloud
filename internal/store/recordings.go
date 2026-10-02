@@ -84,6 +84,7 @@ type RecordingRepository interface {
 	CheckLocalRecordingUpload(context.Context, Recording) error
 	StageOwnedRecordingDeletion(context.Context, string, string, string) (*Recording, error)
 	StageOwnedUserDeletion(context.Context, string, string) error
+	CompleteOwnedUserDeletion(context.Context, string, string, NodeAudit) error
 	CompleteOwnedRecording(context.Context, string, RecordingReceipt, int64, NodeAudit) error
 	CompleteOwnedRecordingDeletion(context.Context, string, string, string, int64, NodeAudit) error
 }

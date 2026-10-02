@@ -107,5 +107,5 @@ func (s *Storage) DeleteUser(ctx context.Context, relationship, user string, a s
 	if len(files) != 0 {
 		return removed, ErrRecovery
 	}
-	return removed, nil
+	return removed, s.repo.CompleteOwnedUserDeletion(ctx, relationship, user, a)
 }

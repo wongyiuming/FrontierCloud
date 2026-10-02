@@ -133,11 +133,45 @@ func (r *Repository) StageOwnedUserDeletion(ctx context.Context, relationship, u
 		if _, e := q.ExecContext(ctx, r.ignoreInsert()+" INTO karaoke_users("+userColumns+") VALUES (?,?,?,'!','deleting',0,0,?,?)", user, user, user, now, now); e != nil {
 			return e
 		}
-		if _, e := q.ExecContext(ctx, "UPDATE karaoke_users SET status='deleting',updated_at=? WHERE user_id=?", now, user); e != nil {
+		if _, e := q.ExecContext(ctx, "UPDATE karaoke_users SET status='deleting',updated_at=? WHERE user_id=? AND status<>'deleted'", now, user); e != nil {
 			return e
 		}
 		_, e := q.ExecContext(ctx, "UPDATE karaoke_recordings SET state='deleting',updated_at=? WHERE user_id=? AND state IN ('pending','ready')", now, user)
 		return e
+	})
+}
+
+// The caller has verified the private owner directory is empty. Keep the owner
+// tombstone permanently: capabilities issued before deletion cannot recreate it.
+func (r *Repository) CompleteOwnedUserDeletion(ctx context.Context, relationship, user string, a store.NodeAudit) error {
+	if !nodeIDPattern.MatchString(relationship) || !nodeIDPattern.MatchString(user) {
+		return store.ErrRecordingState
+	}
+	return r.write(ctx, func(q queryer) error {
+		if _, err := r.ownedStorageNode(ctx, q, relationship); err != nil {
+			return err
+		}
+		var status string
+		if err := q.QueryRowContext(ctx, "SELECT status FROM karaoke_users WHERE user_id=?"+r.lock(), user).Scan(&status); err != nil {
+			return err
+		}
+		if status == "deleted" {
+			return nil
+		}
+		if status != "deleting" {
+			return store.ErrRecordingState
+		}
+		var count int64
+		if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM karaoke_recordings WHERE user_id=? AND state<>'deleted'", user).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return store.ErrRecordingState
+		}
+		if _, err := q.ExecContext(ctx, "UPDATE karaoke_users SET status='deleted',updated_at=? WHERE user_id=?", time.Now().Unix(), user); err != nil {
+			return err
+		}
+		return r.nodeAudit(ctx, q, "recording-user-deleted", relationship, map[string]any{"user_id": user}, a)
 	})
 }
 func (r *Repository) CompleteOwnedRecording(ctx context.Context, relationship string, receipt store.RecordingReceipt, free int64, a store.NodeAudit) error {

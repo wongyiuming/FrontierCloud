@@ -197,6 +197,7 @@ func (s *Service) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-s.wakeup:
 		}
 	}
 }

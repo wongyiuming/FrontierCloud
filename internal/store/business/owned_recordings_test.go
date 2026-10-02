@@ -108,8 +108,29 @@ func TestOwnedRecordingQuotaReplayPhysicalDeletionAndUnusedTicketTombstone(t *te
 	if e = raw.QueryRow("SELECT used_bytes,reserved_bytes FROM cluster_storage_members WHERE member_id=?", identity.ID).Scan(&used, &reserved); e != nil || used != 0 || reserved != 0 {
 		t.Fatal("refund replay", used, reserved, e)
 	}
+	pending := v
+	pending.ID = "ef" + strings.Repeat("8", 30)
+	if e = repo.ReserveOwnedRecording(ctx, relID, pending, 5*store.GiB, store.NodeAudit{}); e != nil {
+		t.Fatal(e)
+	}
 	if e = repo.StageOwnedUserDeletion(ctx, relID, owner); e != nil {
 		t.Fatal(e)
+	}
+	if e = repo.CompleteOwnedUserDeletion(ctx, relID, owner, store.NodeAudit{}); !errors.Is(e, store.ErrRecordingState) {
+		t.Fatal("live ownership ledger marked complete", e)
+	}
+	if e = repo.CompleteOwnedRecordingDeletion(ctx, relID, owner, pending.ID, 5*store.GiB, store.NodeAudit{}); e != nil {
+		t.Fatal(e)
+	}
+	if e = repo.CompleteOwnedUserDeletion(ctx, relID, owner, store.NodeAudit{}); e != nil {
+		t.Fatal(e)
+	}
+	if e = repo.StageOwnedUserDeletion(ctx, relID, owner); e != nil {
+		t.Fatal(e)
+	}
+	var status string
+	if e = raw.QueryRow("SELECT status FROM karaoke_users WHERE user_id=?", owner).Scan(&status); e != nil || status != "deleted" {
+		t.Fatal("terminal owner downgraded", status, e)
 	}
 	newTicket := v
 	newTicket.ID = "ef" + strings.Repeat("7", 30)

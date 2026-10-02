@@ -25,6 +25,7 @@ import (
 	"github.com/wongyiuming/FrontierCloud/internal/node"
 	"github.com/wongyiuming/FrontierCloud/internal/observation"
 	"github.com/wongyiuming/FrontierCloud/internal/recording"
+	"github.com/wongyiuming/FrontierCloud/internal/release"
 	"github.com/wongyiuming/FrontierCloud/internal/security"
 	storecontract "github.com/wongyiuming/FrontierCloud/internal/store"
 	mysqlstore "github.com/wongyiuming/FrontierCloud/internal/store/mysql"
@@ -80,6 +81,10 @@ func command(arguments []string) error {
 		return verifyBackupCommand(arguments[1:], os.Stdout)
 	case "maintenance":
 		return maintenanceCommand(arguments[1:], os.Stdout)
+	case "adopt-storage":
+		return adoptStorageCommand(arguments[1:], os.Stdout)
+	case "drain-rename-history":
+		return drainRenameCommand(arguments[1:], os.Stdout)
 	default:
 		return fmt.Errorf("unknown command %q", name)
 	}
@@ -220,6 +225,16 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	httpapi.RegisterAdminNodes(handler, adminHTTP, controlService)
+	policy := release.Policy{Branch: settings.ReleaseBranch, Source: settings.ReleaseSourceBranch}
+	verifier, err := release.NewVerifier(policy, settings.GitHubAPIToken)
+	if err != nil {
+		return err
+	}
+	agent := release.SocketAgent{}
+	releases := &release.Coordinator{Agent: agent, Verifier: verifier, Nodes: database.Nodes(), Control: controlService, Policy: policy}
+	httpapi.RegisterReleaseAdmin(handler, adminHTTP, releases)
+	httpapi.RegisterNodeRelease(handler, settings, resolver, controlService, agent)
 	httpapi.RegisterSecurityAdmin(handler, adminHTTP, securityService)
 	accountsHTTP := httpapi.RegisterKaraokeAccounts(handler, karaoke.New(database.Karaoke(), database.Nodes(), karaoke.NewRedisCache(redisClient)), public, adminHTTP, resolver)
 	httpapi.RegisterKaraokeRecordings(handler, accountsHTTP, recordingManager, recordingStorage)
@@ -247,7 +262,16 @@ func serve() error {
 	go func() { defer close(recordingDone); recordingManager.Run(shutdown) }()
 	backupDone := make(chan struct{})
 	go func() { defer close(backupDone); controlService.RunBackups(shutdown) }()
-	defer func() { stop(); <-publisherDone; <-deletionDone; <-recordingDone; <-backupDone }()
+	controlDone := make(chan struct{})
+	go func() { defer close(controlDone); controlService.Run(shutdown) }()
+	defer func() {
+		stop()
+		<-publisherDone
+		<-deletionDone
+		<-recordingDone
+		<-backupDone
+		<-controlDone
+	}()
 	// Cancel handlers, close network bodies, then join them BEFORE service roots
 	// or the lifecycle lease close. Even ignored-context cleanup holds the fence.
 	defer func() { runtime.Stop(); server.Close(); runtime.WaitHTTP() }()

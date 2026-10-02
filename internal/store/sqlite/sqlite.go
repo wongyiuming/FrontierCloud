@@ -26,16 +26,21 @@ type Store struct {
 // Open creates or opens a SQLite database with the FrontierCloud durability and
 // concurrency baseline applied to every pooled connection.
 func Open(path string) (*Store, error) {
-	return open(context.Background(), path, false)
+	return open(context.Background(), path, false, false)
 }
 
 // OpenReadOnly cannot create an absent authoritative database, even if it is
 // removed after an operator's existence check. It never changes journal mode.
 func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
-	return open(ctx, path, true)
+	return open(ctx, path, true, true)
 }
 
-func open(ctx context.Context, path string, readOnly bool) (*Store, error) {
+// OpenExisting opens a maintenance writer without creating a missing store.
+func OpenExisting(ctx context.Context, path string) (*Store, error) {
+	return open(ctx, path, false, true)
+}
+
+func open(ctx context.Context, path string, readOnly, existing bool) (*Store, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -46,7 +51,7 @@ func open(ctx context.Context, path string, readOnly bool) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve SQLite path: %w", err)
 	}
-	if !readOnly {
+	if !existing {
 		if err := os.MkdirAll(filepath.Dir(absolute), 0o750); err != nil {
 			return nil, fmt.Errorf("create SQLite directory: %w", err)
 		}
@@ -64,7 +69,12 @@ func open(ctx context.Context, path string, readOnly bool) (*Store, error) {
 	if readOnly {
 		query.Set("mode", "ro")
 	} else {
-		query.Set("_journal_mode", "WAL")
+		if existing {
+			query.Set("mode", "rw")
+		}
+		if !existing {
+			query.Set("_journal_mode", "WAL")
+		}
 	}
 	query.Set("_synchronous", "NORMAL")
 	databaseURL.RawQuery = query.Encode()

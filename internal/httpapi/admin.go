@@ -135,7 +135,17 @@ func (a *Admin) elevate(c *gin.Context) {
 }
 func (a *Admin) status(c *gin.Context) {
 	value := session(c)
-	c.JSON(200, gin.H{"status": "ok", "session": true, "node_role": a.identity.Role, "master_url": "", "limits": gin.H{"max_upload_file_size": a.settings.AdminMaxUploadBytes, "max_upload_task_files": a.settings.AdminMaxTaskFiles, "max_batch_files": a.settings.AdminMaxBatchFiles, "max_lyric_file_size": 2 * 1024 * 1024}, "csrf_cookie_name": a.settings.CSRFCookieName(), "credential_kind": value.Kind, "session_idle_minutes": value.IdleTTL / 60})
+	identity, err := a.public.media.IdentityState(c.Request.Context())
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	master, err := a.public.media.MasterURL(c.Request.Context())
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	c.JSON(200, gin.H{"status": "ok", "session": true, "node_role": identity.Role, "master_url": master, "limits": gin.H{"max_upload_file_size": a.settings.AdminMaxUploadBytes, "max_upload_task_files": a.settings.AdminMaxTaskFiles, "max_batch_files": a.settings.AdminMaxBatchFiles, "max_lyric_file_size": 2 * 1024 * 1024}, "csrf_cookie_name": a.settings.CSRFCookieName(), "credential_kind": value.Kind, "session_idle_minutes": value.IdleTTL / 60})
 }
 func (a *Admin) logout(c *gin.Context) {
 	if err := a.auth.Logout(c.Request.Context(), session(c), a.info(c)); err != nil {

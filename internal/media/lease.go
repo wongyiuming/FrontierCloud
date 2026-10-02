@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wongyiuming/FrontierCloud/internal/filelease"
+	"github.com/wongyiuming/FrontierCloud/internal/fsutil"
 )
 
 // Native RWMutex establishes Go's memory-order boundary; the OS lease protects
@@ -47,6 +48,18 @@ func (s *Service) acquire(ctx context.Context, write bool) (func(), error) {
 	}
 	f, err := s.root.OpenFile(".media-mutation.lock", os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
+		localRelease()
+		return nil, err
+	}
+	opened, err := f.Stat()
+	current, pathErr := s.root.Lstat(".media-mutation.lock")
+	if err != nil || pathErr != nil || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
+		f.Close()
+		localRelease()
+		return nil, ErrRecovery
+	}
+	if err := fsutil.InheritOwner(f, s.root); err != nil {
+		f.Close()
 		localRelease()
 		return nil, err
 	}

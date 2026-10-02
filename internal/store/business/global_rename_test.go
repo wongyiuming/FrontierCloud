@@ -40,6 +40,7 @@ func TestGlobalRenameDurableScopeFencesConcurrentCommitAndMetadataIdentity(t *te
 		}
 		d.Exec("UPDATE node_identity SET `role`=?,endpoint=? WHERE singleton=1", row.Role, row.Endpoint)
 		d.Exec("DELETE FROM admin_audit_log WHERE request_id='native-global-rename'")
+		d.Exec("DELETE FROM node_audit WHERE actor='native-rename-drain-fixture'")
 	})
 	for _, name := range []string{old + "/one.mp3", old + "/two.mp3", caseSibling + "/one.mp3"} {
 		v, err := db.Pool().ReserveUpload(ctx, name, "primary", 10, 10*store.GiB, store.AdminAudit{})
@@ -142,6 +143,9 @@ func TestGlobalRenameDurableScopeFencesConcurrentCommitAndMetadataIdentity(t *te
 	if _, err := db.Pool().ReserveUpload(ctx, target+"/until-cleanup.mp3", "primary", 10, 10*store.GiB, store.AdminAudit{}); !errors.Is(err, store.ErrNodeState) {
 		t.Fatal("namespace released before cleanup", err)
 	}
+	if _, err := db.Maintenance().DrainCompletedRenames(ctx, row.ID, store.NodeAudit{}); !errors.Is(err, store.ErrBackupBusy) {
+		t.Fatal("pending physical cleanup erased", err)
+	}
 	if err := db.Pool().CompleteGlobalRenameCleanup(ctx, opID); err != nil {
 		t.Fatal(err)
 	}
@@ -184,5 +188,65 @@ func TestGlobalRenameDurableScopeFencesConcurrentCommitAndMetadataIdentity(t *te
 	}
 	if err := d.QueryRow("SELECT used_bytes,reserved_bytes FROM cluster_storage_members WHERE member_id=?", row.ID).Scan(&used, &reserved); err != nil || used != 30 || reserved != 0 {
 		t.Fatal("rename changed funds", used, reserved, err)
+	}
+	var manifest string
+	if err := d.QueryRow("SELECT manifest FROM media_delete_operations WHERE operation_id=?", opID).Scan(&manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec("UPDATE media_delete_operations SET manifest=? WHERE operation_id=?", `{"format":"forged"}`, opID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Maintenance().DrainCompletedRenames(ctx, row.ID, store.NodeAudit{}); err == nil {
+		t.Fatal("malformed history erased")
+	}
+	if _, err := d.Exec("UPDATE media_delete_operations SET manifest=? WHERE operation_id=?", manifest, opID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec("UPDATE admin_audit_log SET result='failed' WHERE action='directory_rename' AND request_id='native-global-rename'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Maintenance().DrainCompletedRenames(ctx, row.ID, store.NodeAudit{}); !errors.Is(err, store.ErrNodeState) {
+		t.Fatal("missing successful receipt ignored", err)
+	}
+	if _, err := d.Exec("UPDATE admin_audit_log SET result='success' WHERE action='directory_rename' AND request_id='native-global-rename'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Maintenance().DrainCompletedRenames(ctx, strings.Repeat("0", 32), store.NodeAudit{}); !errors.Is(err, store.ErrNodeState) {
+		t.Fatal("stale confirmation accepted", err)
+	}
+	constraint := "native_rename_drain_audit_fail"
+	ddl, drop := "CREATE TRIGGER "+constraint+" BEFORE INSERT ON node_audit WHEN NEW.action='rename-history-drained' BEGIN SELECT RAISE(ABORT,'injected'); END", "DROP TRIGGER "+constraint
+	if db.Backend() == "mysql" {
+		ddl = "ALTER TABLE node_audit ADD CONSTRAINT " + constraint + " CHECK (action <> 'rename-history-drained')"
+		drop = "ALTER TABLE node_audit DROP CHECK " + constraint
+	}
+	if _, err := d.Exec(ddl); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Exec(drop) })
+	if count, err := db.Maintenance().DrainCompletedRenames(ctx, row.ID, store.NodeAudit{Actor: "native-rename-drain-fixture"}); err == nil || count != 0 {
+		t.Fatal("unaudited drainage committed", count, err)
+	}
+	if op, err := db.Pool().GlobalRename(ctx, opID); err != nil || op == nil || op.State != "rename_done" {
+		t.Fatal("history escaped rollback", op, err)
+	}
+	if _, err := d.Exec(drop); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		want := 1
+		if i == 1 {
+			want = 0
+		}
+		count, err := db.Maintenance().DrainCompletedRenames(ctx, row.ID, store.NodeAudit{Actor: "native-rename-drain-fixture"})
+		if err != nil || count != want {
+			t.Fatal(count, err)
+		}
+	}
+	if err := d.QueryRow("SELECT COUNT(*) FROM admin_audit_log WHERE action='directory_rename' AND request_id='native-global-rename'").Scan(&count); err != nil || count != 1 {
+		t.Fatal("success audit erased", count, err)
+	}
+	if err := d.QueryRow("SELECT used_bytes,reserved_bytes FROM cluster_storage_members WHERE member_id=?", row.ID).Scan(&used, &reserved); err != nil || used != 30 || reserved != 0 {
+		t.Fatal("drain changed quota", used, reserved, err)
 	}
 }

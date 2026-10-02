@@ -26,6 +26,7 @@ type Service struct {
 	recordings    *os.Root
 	backupBuilder *backup.Builder
 	backups       store.BackupRepository
+	wakeup        chan struct{}
 }
 
 var ErrAuthentication = errors.New("invalid relationship authentication")
@@ -105,7 +106,7 @@ func (s *Service) ConfigureVolumes(pool store.PoolRepository, volume BusinessVol
 }
 
 func NewService(repo store.NodeRepository, identity *Identity, transport ControlClient) *Service {
-	return &Service{repo: repo, identity: identity, transport: transport}
+	return &Service{repo: repo, identity: identity, transport: transport, wakeup: make(chan struct{}, 1)}
 }
 
 func (s *Service) emptyRecordings(ctx context.Context, apply func() error) error {

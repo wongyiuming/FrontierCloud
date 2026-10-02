@@ -37,3 +37,15 @@ func TestRejectsUnknownDatabase(t *testing.T) {
 		t.Fatal("unknown DB_TYPE was accepted")
 	}
 }
+
+func TestReleasePolicyAndTokenValidation(t *testing.T) {
+	value, err := LoadFrom(environment(map[string]string{"RELEASE_BRANCH": "gin_main", "GITHUB_API_TOKEN": " scoped-token "}))
+	if err != nil || value.ReleaseSourceBranch != "gin_dev" || value.GitHubAPIToken != "scoped-token" {
+		t.Fatal("explicit Gin release policy", err)
+	}
+	for _, values := range []map[string]string{{"RELEASE_BRANCH": "dev"}, {"RELEASE_BRANCH": "gin_main", "RELEASE_SOURCE_BRANCH": "dev"}, {"GITHUB_API_TOKEN": "secret\r\nInjected: value"}} {
+		if _, err := LoadFrom(environment(values)); err == nil {
+			t.Fatal("invalid release configuration accepted")
+		}
+	}
+}

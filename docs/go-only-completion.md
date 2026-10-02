@@ -291,8 +291,40 @@ rendering. The final source passed the isolated real-driver/race suite, and the
 Python contract oracle passed 567 tests (4 skipped), on 2026-10-02. The original
 ten nodes remained up for four days and were not redeployed.
 
+Native Admin node management now uses existing session/CSRF authentication and
+verified HTTPS for promotion, pairing, transport mode, storage/backup settings,
+revocation and identity reset. The joined control worker wakes for changes.
+Reset rotates the sealed signing identity atomically, retains revoked credentials
+and cold backup history, and refuses live global placements, reservations,
+recordings and unsafe physical state. Cached role/owner reads now use the fresh
+database identity. Real MySQL/Redis, Linux race and Nginx tests passed.
+
+The offline `adopt-storage` command supplies exact-size publication receipts for
+already registered Follower audio/video after complete physical verification.
+It requires the persistent closed native fence, refuses unknown bytes/staging,
+preserves IDs and quota, and rechecks current relationship/identity in the audit
+transaction. Audit failure rolls back receipts; replay does not recharge storage.
+Native deletion refuses missing historical receipts instead of refunding an
+unproven file. Recording adoption and all-writer isolation remain separate gates.
+
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.
 The default deployment and updater still contain Python and must be replaced
 only after the remaining acceptance gates pass. The original test topology has
 not been redeployed.
+
+Completed native rename history now has an explicit offline, physically fenced
+and audited drainage command. It refuses pending/unknown state and retains the
+original success audit, bytes, IDs and quota. Strict JSON validation tolerates
+MySQL's canonical object formatting without accepting duplicate/unknown fields.
+Follower recording owner cleanup now finishes durable deleted tombstones rather
+than leaving maintenance permanently blocked by terminal work. These changes
+passed real MySQL/Redis, Linux race and Nginx regression on 2026-10-02.
+
+Native release Admin and signed Follower control handlers now preserve session,
+CSRF, HTTPS, HMAC and replay contracts. GitHub verification requires the exact
+merged production commit, reviewed source tree and newest matching successful
+push workflow; older success cannot override a newer failure. Bounded cache,
+rate-limit backoff, fresh identity/relationship checks and pre-queue audit faults
+are covered, including real Redis HTTP and Linux race tests. This is control
+plane parity, not a completed Go Docker updater or only-Go deployment.

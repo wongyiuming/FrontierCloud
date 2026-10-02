@@ -81,11 +81,60 @@ The SQL snapshot counts unresolved media mutation, upload, placement, recording,
 account, reserved storage, cold transfer and worker states without changing them.
 `rename_done` is reported separately as native completed history, not proof of
 physical manifest validity. Old Python recovery cannot safely consume that native
-rename history; validated history drainage is still required before rollback.
+rename history; use the explicit validated history drainage below before rollback.
 
-No current command establishes all-writer isolation, validates physical journals
-or historical media ownership, remaps identities and relationships, publishes a
+No current command establishes all-writer isolation, remaps identities and relationships, publishes a
 recovered database/filesystem atomically, or grants Master/Follower promotion.
 The existing startup refusal for incomplete cluster roles remains unchanged.
-Restore, legacy adoption, updater replacement and mixed-runtime acceptance are
+Restore, recording-ledger adoption, updater replacement and mixed-runtime acceptance are
 separate unfinished gates.
+
+## Registered Follower storage adoption
+
+After stopping **all** legacy/background/remote writers independently, enter
+native maintenance and run with the same configured database and media volume:
+
+```sh
+frontiercloud adopt-storage --relationship <current-active-upstream-id> --confirm-node-id <current-follower-id> --wait-seconds 300
+```
+
+The closed maintenance fence is required and remains closed on success or
+failure. No schema is initialized. A bounded inventory of at most 5000 SQL
+registered audio/video objects must match every regular physical file under
+`music` and `vido`. Symlinks, unregistered/missing files, private staging or
+recovery journals, pending logical operations and conflicting publication
+ledgers reject the operation. Each registered file is hashed with bounded
+buffers under the exclusive native media lease; SQL atomically rechecks the
+current Follower identity, active upstream, complete object set and counters.
+
+Only missing exact-size publication receipts and their audit records are added.
+No bytes or existing media IDs/paths are changed, no quota is recharged/refunded,
+and no relationship is recreated. Identical replay adds zero receipts. Existing
+native receipt conflicts and orphan receipts fail closed. Legacy registered
+objects without an adoption receipt cannot be deleted/refunded by native
+storage; read access does not silently manufacture a deletion ledger.
+
+This proves local registered-file bookkeeping, **not** a digest authenticated by
+a former Master or stopping a writer that ignores native leases. It does not
+adopt historical recordings, change roles, restore a backup or resume service.
+
+## Completed native rename history
+
+With all writers stopped and the native fence closed, run:
+
+```sh
+frontiercloud drain-rename-history --confirm-node-id <current-node-id> --wait-seconds 300
+```
+
+This command refuses pending mutations, malformed/duplicate-key manifests,
+missing exact successful rename audits, symlinks, staging and physical recovery
+markers. It removes only completed `rename_done` SQL history in one audited
+transaction, retaining original success audits, media bytes, IDs and counters.
+MySQL JSON normalization is compared semantically without allowing unknown or
+lossy fields. Empty native lease files remain in place; live lock inodes are
+never removed. Replay drains zero rows. The fence stays closed on either outcome.
+
+Terminal Follower recording/owner tombstones are retained to reject old upload
+capabilities; `deleted` is not a pending operation. Drainage reports do not grant
+Python rollback or restore authority. Other native ledgers, schema compatibility
+and independent all-writer isolation still require their own checks.

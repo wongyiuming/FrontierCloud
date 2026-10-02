@@ -499,7 +499,12 @@ func (s *Service) Stream(ctx context.Context, name string) (*Stream, error) {
 		return nil, err
 	}
 	id := ids[o.Path]
-	return &Stream{f, info, o.Path, id, s.identity.ID, node.ResourceID(s.identity.ID, id)}, nil
+	identity, err := s.IdentityState(ctx)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &Stream{f, info, o.Path, id, identity.ID, node.ResourceID(identity.ID, id)}, nil
 }
 
 func (s *Service) Playback(ctx context.Context, name, session string, played, duration float64) (store.PlaybackResult, error) {

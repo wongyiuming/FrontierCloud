@@ -14,4 +14,7 @@ type MaintenanceSnapshot struct {
 
 type MaintenanceRepository interface {
 	InspectMaintenance(context.Context) (MaintenanceSnapshot, error)
+	OwnedAdoptionObjects(context.Context, string) ([]MediaObject, error)
+	AdoptOwnedStorage(context.Context, string, string, []LocalMedia, NodeAudit) (int, error)
+	DrainCompletedRenames(context.Context, string, NodeAudit) (int, error)
 }

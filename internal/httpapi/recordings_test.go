@@ -268,6 +268,14 @@ func TestRecordingClusterPrimaryDirectRelayRangeFinalizeOfflineDeleteAndTokenRep
 	if e != nil || result["status"] != "deleted" {
 		t.Fatal("owned user cleanup", result, e)
 	}
+	var ownerStatus string
+	if e = direct.db.Database().QueryRow("SELECT status FROM karaoke_users WHERE user_id=?", u.ID).Scan(&ownerStatus); e != nil || ownerStatus != "deleted" {
+		t.Fatal("owner cleanup never reached terminal state", ownerStatus, e)
+	}
+	maintenance, e := direct.db.Maintenance().InspectMaintenance(ctx)
+	if e != nil || maintenance.Pending["accounts"] != 0 || maintenance.Pending["recordings"] != 0 {
+		t.Fatal("tombstones block native offline inspection", maintenance, e)
+	}
 	r = httptest.NewRequest("PUT", oldOwnerTicket.URL, strings.NewReader(strings.Repeat("x", 100)))
 	r.Header.Set("X-Recording-Capability", *oldOwnerTicket.Capability)
 	w = httptest.NewRecorder()
