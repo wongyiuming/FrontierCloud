@@ -184,10 +184,10 @@ func checkBackupRow(table string, r map[string]any) error {
 			return bad
 		}
 		prefix := strings.Split(name, "/")[0]
-		if prefix != "music" && prefix != "movies" && prefix != "lyrics" {
+		if prefix != "music" && prefix != "vido" && prefix != "lyrics" {
 			return bad
 		}
-		if kind == "audio" && prefix != "music" || kind == "video" && prefix != "movies" || kind == "lyric" && (prefix != "lyrics" || !strings.HasSuffix(name, ".lrc")) {
+		if kind == "audio" && prefix != "music" || kind == "video" && prefix != "vido" || kind == "lyric" && (prefix != "lyrics" || !strings.HasSuffix(name, ".lrc")) {
 			return bad
 		}
 	}

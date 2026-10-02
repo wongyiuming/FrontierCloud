@@ -148,3 +148,7 @@ checksum proves byte integrity, not authenticity. Empty tables have no records
 in v2, so preflight cannot independently prove a table's historical completeness.
 Safe restore must not infer authority from old relationship IDs or reconstruct
 omitted upload/ownership journals without authenticated physical proofs.
+
+The scoped native stop/drain prerequisite is documented in
+`native-maintenance.md`. Its local lifecycle proof does not establish legacy or
+remote writer isolation and does not change preflight's `restore_ready=false`.

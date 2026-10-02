@@ -1,0 +1,17 @@
+package store
+
+import "context"
+
+// This is a read-only logical diagnostic, not a restore/adoption permission.
+// A lease only fences native writers sharing the same local data volume.
+type MaintenanceSnapshot struct {
+	SchemaGeneration       int              `json:"schema_generation"`
+	Role                   string           `json:"role"`
+	Pending                map[string]int64 `json:"pending"`
+	CompletedNativeRenames int64            `json:"completed_native_renames"`
+	LogicalIdle            bool             `json:"logical_idle"`
+}
+
+type MaintenanceRepository interface {
+	InspectMaintenance(context.Context) (MaintenanceSnapshot, error)
+}

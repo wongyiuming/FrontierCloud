@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -12,6 +13,12 @@ var mediaDirectories = []string{"media", "media/music", "media/vido", "media/lyr
 
 // InitializeMedia creates and repairs the shared data volume without following symlinks.
 func InitializeMedia(root string) error {
+	return InitializeMediaContext(context.Background(), root)
+}
+func InitializeMediaContext(ctx context.Context, root string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return err
@@ -20,6 +27,9 @@ func InitializeMedia(root string) error {
 		return fmt.Errorf("create data root: %w", err)
 	}
 	for _, relative := range mediaDirectories {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		mode := os.FileMode(0o755)
 		if relative == "recordings" {
 			mode = 0o750
@@ -29,6 +39,9 @@ func InitializeMedia(root string) error {
 		}
 	}
 	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}

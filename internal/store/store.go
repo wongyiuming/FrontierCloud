@@ -20,4 +20,5 @@ type Store interface {
 	Karaoke() KaraokeRepository
 	Recordings() RecordingRepository
 	Backups() BackupRepository
+	Maintenance() MaintenanceRepository
 }

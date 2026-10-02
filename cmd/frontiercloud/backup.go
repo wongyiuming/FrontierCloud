@@ -60,13 +60,7 @@ func verifyBackupCommand(arguments []string, output io.Writer) error {
 		if err != nil {
 			return err
 		}
-		// Do not create a missing authoritative SQLite file for inspection.
-		if settings.DatabaseType == "sqlite" {
-			if info, err := os.Stat(settings.SQLitePath); err != nil || !info.Mode().IsRegular() {
-				return errors.New("existing SQLite store required for cold backup inspection")
-			}
-		}
-		database, err := openStore(settings)
+		database, err := openExistingStore(ctx, settings)
 		if err != nil {
 			return err
 		}

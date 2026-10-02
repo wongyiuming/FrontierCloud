@@ -19,6 +19,7 @@ import (
 	"github.com/wongyiuming/FrontierCloud/internal/config"
 	"github.com/wongyiuming/FrontierCloud/internal/httpapi"
 	"github.com/wongyiuming/FrontierCloud/internal/karaoke"
+	"github.com/wongyiuming/FrontierCloud/internal/maintenance"
 	"github.com/wongyiuming/FrontierCloud/internal/media"
 	"github.com/wongyiuming/FrontierCloud/internal/network"
 	"github.com/wongyiuming/FrontierCloud/internal/node"
@@ -51,30 +52,34 @@ func command(arguments []string) error {
 		if err != nil {
 			return err
 		}
-		database, err := openStore(settings)
-		if err != nil {
-			return err
-		}
-		defer database.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		defer cancel()
-		return database.Initialize(ctx)
+		return guardedCommand(settings, func(parent context.Context) error {
+			database, err := openStore(settings)
+			if err != nil {
+				return err
+			}
+			defer database.Close()
+			ctx, cancel := context.WithTimeout(parent, 90*time.Second)
+			defer cancel()
+			return database.Initialize(ctx)
+		})
 	case "init-secrets":
 		settings, err := config.Load()
 		if err != nil {
 			return err
 		}
-		return bootstrap.InitializeSecrets(settings.SecretsDirectory)
+		return guardedCommand(settings, func(context.Context) error { return bootstrap.InitializeSecrets(settings.SecretsDirectory) })
 	case "init-media":
 		settings, err := config.Load()
 		if err != nil {
 			return err
 		}
-		return bootstrap.InitializeMedia(settings.DataRoot)
+		return guardedCommand(settings, func(ctx context.Context) error { return bootstrap.InitializeMediaContext(ctx, settings.DataRoot) })
 	case "healthcheck":
 		return healthcheck()
 	case "verify-backup":
 		return verifyBackupCommand(arguments[1:], os.Stdout)
+	case "maintenance":
+		return maintenanceCommand(arguments[1:], os.Stdout)
 	default:
 		return fmt.Errorf("unknown command %q", name)
 	}
@@ -102,12 +107,25 @@ func serve() error {
 		logging = slog.NewTextHandler(os.Stdout, options)
 	}
 	slog.SetDefault(slog.New(logging))
+	gate, err := maintenance.Open(settings.DataRoot)
+	if err != nil {
+		return err
+	}
+	defer gate.Close()
+	parent, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	runtime, err := gate.Runtime(parent)
+	if err != nil {
+		return err
+	}
+	defer runtime.Close()
+	shutdown := runtime.Context()
 	database, err := openStore(settings)
 	if err != nil {
 		return err
 	}
 	defer database.Close()
-	initialization, cancelInitialization := context.WithTimeout(context.Background(), 90*time.Second)
+	initialization, cancelInitialization := context.WithTimeout(shutdown, 90*time.Second)
 	defer cancelInitialization()
 	if err := database.Initialize(initialization); err != nil {
 		return err
@@ -121,7 +139,7 @@ func serve() error {
 	if identity.Role != "Standalone" {
 		return fmt.Errorf("Go cluster runtime is not yet complete for existing %s nodes", identity.Role)
 	}
-	mediaService, err := media.New(filepath.Join(settings.DataRoot, "media"), database.Media(), identity)
+	mediaService, err := media.NewContext(shutdown, filepath.Join(settings.DataRoot, "media"), database.Media(), identity)
 	if err != nil {
 		return err
 	}
@@ -159,7 +177,7 @@ func serve() error {
 	}
 	defer backupBuilder.Close()
 	controlService.ConfigureBackups(database.Backups(), backupBuilder)
-	recordingStorage, err := recording.New(recordingsRoot, database.Recordings(), database.Nodes())
+	recordingStorage, err := recording.NewContext(shutdown, recordingsRoot, database.Recordings(), database.Nodes())
 	if err != nil {
 		return err
 	}
@@ -169,7 +187,7 @@ func serve() error {
 		return err
 	}
 	defer securityService.Close()
-	edgeInit, edgeCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	edgeInit, edgeCancel := context.WithTimeout(shutdown, 15*time.Second)
 	err = securityService.Publish(edgeInit, true)
 	edgeCancel()
 	if err != nil {
@@ -215,12 +233,12 @@ func serve() error {
 	httpapi.RegisterObservations(handler, adminHTTP, observation.New(database.Observations(), redisClient, settings.WebRTCCooldown), resolver)
 	server := &http.Server{
 		Addr:              settings.HTTPAddress,
-		Handler:           handler,
+		Handler:           runtime.Handler(handler),
+		BaseContext:       func(net.Listener) context.Context { return shutdown },
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
-	shutdown, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	publisherDone := make(chan struct{})
 	go func() { defer close(publisherDone); securityService.Run(shutdown) }()
 	deletionDone := make(chan struct{})
@@ -230,6 +248,12 @@ func serve() error {
 	backupDone := make(chan struct{})
 	go func() { defer close(backupDone); controlService.RunBackups(shutdown) }()
 	defer func() { stop(); <-publisherDone; <-deletionDone; <-recordingDone; <-backupDone }()
+	// Cancel handlers, close network bodies, then join them BEFORE service roots
+	// or the lifecycle lease close. Even ignored-context cleanup holds the fence.
+	defer func() { runtime.Stop(); server.Close(); runtime.WaitHTTP() }()
+	if err := shutdown.Err(); err != nil {
+		return err
+	}
 	errorsChannel := make(chan error, 1)
 	go func() { errorsChannel <- server.ListenAndServe() }()
 	slog.Info("FrontierCloud Go runtime started", "address", settings.HTTPAddress, "database", database.Backend())

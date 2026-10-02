@@ -86,6 +86,29 @@ func TestBackupPreflightExactGenerationTypedRowsGeneratedColumnReferencesAndClea
 	}
 }
 
+func TestBackupPreflightExistingVideoRootContract(t *testing.T) {
+	for _, prefix := range []string{"vido", "movies"} {
+		records := preflightRecords()
+		name := prefix + "/导演/电影.mp4"
+		hash := sha256.Sum256([]byte(name))
+		for _, table := range []string{"media_objects", "global_media_objects"} {
+			row := preflightRow(records, table)
+			row["object_kind"], row["media_path"], row["path_locator"] = "video", name, hex.EncodeToString(hash[:])
+		}
+		preflightRow(records, "media_playback_stats")["media_path"] = name
+		preflightRow(records, "media_lyric_links")["media_path"] = name
+		data := encodedPreflight(records)
+		report, err := Preflight(context.Background(), bytes.NewReader(data), expectedPreflight(data), t.TempDir())
+		if prefix == "vido" {
+			if err != nil || !report.LogicalValid {
+				t.Fatal("valid legacy video root rejected", report, err)
+			}
+		} else if !errors.Is(err, store.ErrBackupState) {
+			t.Fatal("invented video root accepted", err)
+		}
+	}
+}
+
 func TestBackupPreflightRejectsSchemaIdentityCapacityAndUnsafePayloads(t *testing.T) {
 	cases := map[string]func([]map[string]any) []map[string]any{
 		"unknown-table": func(r []map[string]any) []map[string]any { r[1]["table"] = "node_identity"; return r },

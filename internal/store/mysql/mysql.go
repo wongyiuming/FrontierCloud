@@ -31,6 +31,13 @@ type Store struct {
 }
 
 func Open(value Config) (*Store, error) {
+	return OpenContext(context.Background(), value)
+}
+
+func OpenContext(ctx context.Context, value Config) (*Store, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	password, err := os.ReadFile(value.PasswordFile)
 	if err != nil {
 		return nil, fmt.Errorf("read MySQL password file: %w", err)
@@ -56,7 +63,7 @@ func Open(value Config) (*Store, error) {
 	database.SetMaxIdleConns(4)
 	database.SetConnMaxIdleTime(5 * time.Minute)
 	store := &Store{database: database}
-	if err := store.Ping(context.Background()); err != nil {
+	if err := store.Ping(ctx); err != nil {
 		_ = database.Close()
 		return nil, err
 	}
@@ -88,7 +95,10 @@ func (s *Store) Pool() store.PoolRepository            { return business.New(s.d
 func (s *Store) Karaoke() store.KaraokeRepository      { return business.New(s.database, s.Backend()) }
 func (s *Store) Recordings() store.RecordingRepository { return business.New(s.database, s.Backend()) }
 func (s *Store) Backups() store.BackupRepository       { return business.New(s.database, s.Backend()) }
-func (s *Store) Admin() store.AdminRepository          { return business.New(s.database, s.Backend()) }
+func (s *Store) Maintenance() store.MaintenanceRepository {
+	return business.New(s.database, s.Backend())
+}
+func (s *Store) Admin() store.AdminRepository { return business.New(s.database, s.Backend()) }
 
 func (s *Store) Observations() store.ObservationRepository {
 	return business.New(s.database, s.Backend())

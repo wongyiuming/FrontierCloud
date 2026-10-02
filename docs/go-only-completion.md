@@ -263,6 +263,34 @@ oracle also passed 567 tests (4 skipped). All original ten development nodes
 remain running unchanged; neither this report nor those tests establish final
 mixed-runtime recovery or an only-Go deployment.
 
+Native offline maintenance now persists a fail-closed local-volume fence before
+draining Go processes. Initializers, migrations, startup recovery, admitted HTTP
+handlers and all four existing background loops retain their lifecycle lease
+through cleanup and resource closure. Operator `enter/status/resume` commands
+inspect existing schema/role and unresolved intents without erasing them or
+granting restore authority. SQLite inspection is read-only and cannot initialize
+an absent file; all reports still state `restore_ready=false`.
+
+The Nginx hard fence defeats UI force-open and Admin/control exemptions while
+retaining only the fixed read-only error page. Native local quiescence is not
+proof that legacy Python or remote SQL writers stopped. The scope and failure
+contract are documented in `protocol/v2/native-maintenance.md`. Existing
+`rename_done` manifests still require validation and drainage before Python
+rollback; this maintenance slice does not establish safe restore or adoption.
+The backup preflight video path was also corrected to the existing `vido` root,
+with a regression rejecting the unsupported `movies` root.
+
+Persistent timeout/crash fences, ignored-context HTTP cleanup, failed reopening,
+initializer/migration admission, root/operator ownership and read-only SQLite
+inspection passed local Go/vet and full Linux race checks. Real Redis-backed
+native server subprocesses passed two start/drain/resume cycles, with maintenance
+refusing subsequent startup before initialization. Logical diagnostics passed
+real MySQL and SQLite without deleting pending intents. Actual Nginx routing
+passed force-open/Admin/control/health/static rejection and fixed error-page
+rendering. The final source passed the isolated real-driver/race suite, and the
+Python contract oracle passed 567 tests (4 skipped), on 2026-10-02. The original
+ten nodes remained up for four days and were not redeployed.
+
 This is NOT a complete backend replacement. Existing Master/Follower identities
 are explicitly refused at startup until the cluster implementation is complete.
 The default deployment and updater still contain Python and must be replaced

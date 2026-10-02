@@ -47,8 +47,11 @@ type journal struct {
 }
 
 func New(root *os.Root, repo store.RecordingRepository, nodes store.NodeRepository) (*Storage, error) {
+	return NewContext(context.Background(), root, repo, nodes)
+}
+func NewContext(parent context.Context, root *os.Root, repo store.RecordingRepository, nodes store.NodeRepository) (*Storage, error) {
 	s := &Storage{root: root, repo: repo, nodes: nodes}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	if e := s.Recover(ctx); e != nil {
 		return nil, e

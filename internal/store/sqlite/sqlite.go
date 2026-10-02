@@ -26,6 +26,19 @@ type Store struct {
 // Open creates or opens a SQLite database with the FrontierCloud durability and
 // concurrency baseline applied to every pooled connection.
 func Open(path string) (*Store, error) {
+	return open(context.Background(), path, false)
+}
+
+// OpenReadOnly cannot create an absent authoritative database, even if it is
+// removed after an operator's existence check. It never changes journal mode.
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	return open(ctx, path, true)
+}
+
+func open(ctx context.Context, path string, readOnly bool) (*Store, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if path == "" {
 		return nil, errors.New("SQLite path is empty")
 	}
@@ -33,8 +46,10 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve SQLite path: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(absolute), 0o750); err != nil {
-		return nil, fmt.Errorf("create SQLite directory: %w", err)
+	if !readOnly {
+		if err := os.MkdirAll(filepath.Dir(absolute), 0o750); err != nil {
+			return nil, fmt.Errorf("create SQLite directory: %w", err)
+		}
 	}
 	uriPath := filepath.ToSlash(absolute)
 	// A Windows volume needs file:///C:/..., not file://C:/... (authority).
@@ -46,7 +61,11 @@ func Open(path string) (*Store, error) {
 	query.Set("_busy_timeout", "5000")
 	query.Set("_defensive", "1")
 	query.Set("_foreign_keys", "on")
-	query.Set("_journal_mode", "WAL")
+	if readOnly {
+		query.Set("mode", "ro")
+	} else {
+		query.Set("_journal_mode", "WAL")
+	}
 	query.Set("_synchronous", "NORMAL")
 	databaseURL.RawQuery = query.Encode()
 
@@ -57,7 +76,7 @@ func Open(path string) (*Store, error) {
 	database.SetMaxOpenConns(4)
 	database.SetMaxIdleConns(4)
 	store := &Store{database: database}
-	if err := store.Ping(context.Background()); err != nil {
+	if err := store.Ping(ctx); err != nil {
 		_ = database.Close()
 		return nil, err
 	}
@@ -89,7 +108,10 @@ func (s *Store) Pool() store.PoolRepository            { return business.New(s.d
 func (s *Store) Karaoke() store.KaraokeRepository      { return business.New(s.database, s.Backend()) }
 func (s *Store) Recordings() store.RecordingRepository { return business.New(s.database, s.Backend()) }
 func (s *Store) Backups() store.BackupRepository       { return business.New(s.database, s.Backend()) }
-func (s *Store) Admin() store.AdminRepository          { return business.New(s.database, s.Backend()) }
+func (s *Store) Maintenance() store.MaintenanceRepository {
+	return business.New(s.database, s.Backend())
+}
+func (s *Store) Admin() store.AdminRepository { return business.New(s.database, s.Backend()) }
 
 func (s *Store) Observations() store.ObservationRepository {
 	return business.New(s.database, s.Backend())

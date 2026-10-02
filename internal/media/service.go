@@ -59,6 +59,13 @@ type Track struct {
 }
 
 func New(directory string, repo store.MediaRepository, identity *node.Identity) (*Service, error) {
+	return NewContext(context.Background(), directory, repo, identity)
+}
+
+func NewContext(parent context.Context, directory string, repo store.MediaRepository, identity *node.Identity) (*Service, error) {
+	if err := parent.Err(); err != nil {
+		return nil, err
+	}
 	root, err := os.OpenRoot(directory)
 	if err != nil {
 		return nil, err
@@ -73,7 +80,7 @@ func New(directory string, repo store.MediaRepository, identity *node.Identity) 
 	}
 	// Recovery may hash multi-GiB completed uploads. No HTTP traffic is accepted
 	// until durable publication/deletion intents have been reconciled.
-	recovery, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	recovery, cancel := context.WithTimeout(parent, 30*time.Minute)
 	release, err := service.acquire(recovery, true)
 	if err != nil {
 		cancel()
