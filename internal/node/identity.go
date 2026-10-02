@@ -21,6 +21,29 @@ type Identity struct {
 	vault   *vault.Vault
 }
 
+func OpenExisting(ctx context.Context, repo store.NodeRepository, secrets string) (*Identity, error) {
+	v, err := vault.OpenExisting(secrets)
+	if err != nil {
+		return nil, err
+	}
+	row, err := repo.ReadIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !ValidIdentifier(row.ID) || (row.Role != "Master" && row.Role != "Follower" && row.Role != "Standalone") {
+		return nil, store.ErrNodeState
+	}
+	encoded, err := v.Unseal(row.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("existing node identity cannot be decrypted")
+	}
+	seed, err := protocol.Decode(encoded)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("invalid existing node private key")
+	}
+	return &Identity{row, ed25519.NewKeyFromSeed(seed), v}, nil
+}
+
 func randomNodeID() (string, error) {
 	value := make([]byte, 16)
 	_, err := rand.Read(value)

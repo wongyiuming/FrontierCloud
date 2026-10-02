@@ -27,6 +27,7 @@ import (
 	"github.com/wongyiuming/FrontierCloud/internal/recording"
 	"github.com/wongyiuming/FrontierCloud/internal/release"
 	"github.com/wongyiuming/FrontierCloud/internal/security"
+	"github.com/wongyiuming/FrontierCloud/internal/sitecontrol"
 	storecontract "github.com/wongyiuming/FrontierCloud/internal/store"
 	mysqlstore "github.com/wongyiuming/FrontierCloud/internal/store/mysql"
 	sqlitestore "github.com/wongyiuming/FrontierCloud/internal/store/sqlite"
@@ -85,6 +86,15 @@ func command(arguments []string) error {
 		return adoptStorageCommand(arguments[1:], os.Stdout)
 	case "drain-rename-history":
 		return drainRenameCommand(arguments[1:], os.Stdout)
+	case "prepare-release":
+		return prepareReleaseCommand(arguments[1:])
+	case "cluster-release":
+		return clusterReleaseCommand(arguments[1:])
+	case "updater-status":
+		if len(arguments) != 1 {
+			return errors.New("updater-status accepts no arguments")
+		}
+		return updaterStatusCommand(os.Stdout)
 	default:
 		return fmt.Errorf("unknown command %q", name)
 	}
@@ -232,6 +242,12 @@ func serve() error {
 		return err
 	}
 	agent := release.SocketAgent{}
+	siteService, err := sitecontrol.Open(settings.DataRoot, agent)
+	if err != nil {
+		return err
+	}
+	defer siteService.Close()
+	httpapi.RegisterSiteAdmin(handler, adminHTTP, siteService)
 	releases := &release.Coordinator{Agent: agent, Verifier: verifier, Nodes: database.Nodes(), Control: controlService, Policy: policy}
 	httpapi.RegisterReleaseAdmin(handler, adminHTTP, releases)
 	httpapi.RegisterNodeRelease(handler, settings, resolver, controlService, agent)

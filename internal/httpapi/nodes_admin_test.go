@@ -10,6 +10,7 @@ import (
 	"github.com/wongyiuming/FrontierCloud/internal/network"
 	"github.com/wongyiuming/FrontierCloud/internal/node"
 	"github.com/wongyiuming/FrontierCloud/internal/release"
+	"github.com/wongyiuming/FrontierCloud/internal/sitecontrol"
 	storeSQLite "github.com/wongyiuming/FrontierCloud/internal/store/sqlite"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,7 @@ func TestNodeAdminRedisPromotionPairConfigurationRevocationAndReinitialize(t *te
 		id      string
 		agent   *testReleaseAgent
 		db      *storeSQLite.Store
+		root    string
 	}
 	create := func(origin string) site {
 		router, db, dir, p, control := clusterFixture(t, origin, transport, true)
@@ -63,6 +65,12 @@ func TestNodeAdminRedisPromotionPairConfigurationRevocationAndReinitialize(t *te
 		}
 		RegisterAdminNodes(router, a, control)
 		agent := &testReleaseAgent{status: map[string]any{"release_branch": "main", "current_sha": strings.Repeat("a", 40), "previous_sha": strings.Repeat("b", 40), "state": "success"}}
+		siteService, err := sitecontrol.Open(dir, agent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { siteService.Close() })
+		RegisterSiteAdmin(router, a, siteService)
 		coordinator := &release.Coordinator{Agent: agent, Verifier: &testReleaseEvidence{sha: strings.Repeat("c", 40), publishable: true}, Nodes: db.Nodes(), Control: control, Policy: release.DefaultPolicy()}
 		RegisterReleaseAdmin(router, a, coordinator)
 		resolver, _ := network.New(cfg.TrustedProxyNetworks)
@@ -103,7 +111,7 @@ func TestNodeAdminRedisPromotionPairConfigurationRevocationAndReinitialize(t *te
 		if w := perform("POST", "/elevate", "token="+url.QueryEscape(key), false, true); w.Code != 200 {
 			t.Fatal(w.Code, w.Body.String())
 		}
-		return site{perform, control, identity.ID, agent, db}
+		return site{perform, control, identity.ID, agent, db, dir}
 	}
 	m := create("https://admin-master.test")
 	f := create("https://admin-follower.test")
@@ -119,6 +127,38 @@ func TestNodeAdminRedisPromotionPairConfigurationRevocationAndReinitialize(t *te
 		return value
 	}
 	masterBody := `{"role":"Master","endpoint":"https://admin-master.test","local_capacity_gib":5}`
+	check(m.perform("POST", "/site/maintenance", `{"enabled":true}`, false, true), 403)
+	check(m.perform("POST", "/site/maintenance", `{"enabled":true}`, true, false), 403)
+	check(m.perform("POST", "/site/maintenance", `{}`, true, true), 422)
+	if _, err = m.db.Database().Exec("CREATE TRIGGER site_intent_failure BEFORE INSERT ON admin_audit_log WHEN NEW.action='maintenance_change' AND NEW.result='pending' BEGIN SELECT RAISE(ABORT,'injected'); END"); err != nil {
+		t.Fatal(err)
+	}
+	check(m.perform("POST", "/site/maintenance", `{"enabled":true}`, true, true), 500)
+	if _, err = os.Stat(filepath.Join(m.root, sitecontrol.Manual)); !os.IsNotExist(err) {
+		t.Fatal("failed audit changed site flags", err)
+	}
+	if _, err = m.db.Database().Exec("DROP TRIGGER site_intent_failure"); err != nil {
+		t.Fatal(err)
+	}
+	if value := check(m.perform("POST", "/site/maintenance", `{"enabled":true}`, true, true), 200); value["maintenance"] != true || value["source"] != "manual" {
+		t.Fatal(value)
+	}
+	m.agent.mu.Lock()
+	m.agent.status["state"] = "running"
+	m.agent.mu.Unlock()
+	check(m.perform("POST", "/site/maintenance", `{"enabled":false}`, true, true), 409)
+	m.agent.mu.Lock()
+	m.agent.status["state"] = "failed"
+	m.agent.mu.Unlock()
+	if value := check(m.perform("POST", "/site/maintenance", `{"enabled":false}`, true, true), 200); value["force_open"] != true || value["maintenance"] != false {
+		t.Fatal(value)
+	}
+	m.agent.mu.Lock()
+	m.agent.status["state"] = "success"
+	m.agent.mu.Unlock()
+	if value := check(m.perform("POST", "/site/maintenance", `{"enabled":false}`, true, true), 200); value["force_open"] != false {
+		t.Fatal(value)
+	}
 	check(m.perform("POST", "/nodes/promote", masterBody, false, true), 403)
 	check(m.perform("POST", "/nodes/promote", masterBody, true, false), 403)
 	check(m.perform("POST", "/nodes/promote", masterBody, true, true), 200)

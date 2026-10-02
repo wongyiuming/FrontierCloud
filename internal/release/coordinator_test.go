@@ -23,9 +23,13 @@ func (n *fixtureNodes) ReadIdentity(ctx context.Context) (store.NodeIdentity, er
 	return n.identity, ctx.Err()
 }
 func (n *fixtureNodes) Relationships(ctx context.Context, _ bool) ([]store.Relationship, error) {
-	return n.relations, ctx.Err()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]store.Relationship(nil), n.relations...), ctx.Err()
 }
 func (n *fixtureNodes) Relationship(ctx context.Context, id string) (store.Relationship, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	for _, r := range n.relations {
 		if r.ID == id {
 			return r, ctx.Err()

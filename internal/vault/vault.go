@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,42 @@ import (
 var ErrInvalidToken = errors.New("invalid vault token")
 
 type Vault struct{ key [32]byte }
+
+// OpenExisting is non-initializing: maintenance/control tools must not invent
+// an identity key when an existing encrypted relationship cannot be read.
+func OpenExisting(directory string) (*Vault, error) {
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("existing private vault directory required")
+	}
+	r, err := os.OpenRoot(directory)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	current, err := r.Stat(".")
+	if err != nil || !os.SameFile(info, current) {
+		return nil, ErrInvalidToken
+	}
+	info, err = r.Lstat("node-vault.key")
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > 128 {
+		return nil, ErrInvalidToken
+	}
+	f, err := r.Open("node-vault.key")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	current, err = f.Stat()
+	if err != nil || !os.SameFile(info, current) {
+		return nil, ErrInvalidToken
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, 129))
+	if err != nil || len(raw) > 128 {
+		return nil, ErrInvalidToken
+	}
+	return New(string(raw))
+}
 
 func New(encoded string) (*Vault, error) {
 	raw, err := base64.URLEncoding.DecodeString(strings.TrimSpace(encoded))

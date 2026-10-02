@@ -326,5 +326,22 @@ CSRF, HTTPS, HMAC and replay contracts. GitHub verification requires the exact
 merged production commit, reviewed source tree and newest matching successful
 push workflow; older success cannot override a newer failure. Bounded cache,
 rate-limit backoff, fresh identity/relationship checks and pre-queue audit faults
-are covered, including real Redis HTTP and Linux race tests. This is control
-plane parity, not a completed Go Docker updater or only-Go deployment.
+are covered, including real Redis HTTP and Linux race tests.
+
+The native Docker updater now builds immutable, allowlisted Git archives and
+replaces exact project services through the local Engine API without Python or
+the Docker CLI. Durable queue/replacement/self-handoff journals preserve failed
+release maintenance across crashes. Native offline preparation preserves schema
+generation and identities. A bounded Master coordinator requires fresh pinned
+relationships and exact follower acknowledgements before declaring convergence.
+Completed or failed restart recovery rechecks real service images and readiness;
+manual reopening is audited and cannot defeat native offline maintenance.
+
+A disposable Linux Standalone stack passed actual image builds, native secrets/
+media initialization, non-root control socket access, upgrade, Go updater image
+handoff and rollback. Separate actual Engine tests passed replacement, health,
+helper failure and mount preservation. Latest recovery, strict flag ownership,
+Admin maintenance/CSRF/audit tests passed real Redis and Linux race checks on
+2026-10-02. See `protocol/v2/native-updater.md` for the precise boundary. These
+checks do not prove mixed-cluster releases, portable restore or final deployment;
+the existing ten-node topology and the startup cluster-role fence are unchanged.

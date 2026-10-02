@@ -13,6 +13,9 @@ RUN CGO_ENABLED=0 /usr/local/go/bin/go test ./... && \
     CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath -ldflags="-s -w" -o /out/frontiercloud ./cmd/frontiercloud
 
 FROM debian:13.3-slim
+ARG REVISION
+LABEL frontiercloud.revision=$REVISION frontiercloud.component="web" \
+      frontiercloud.runtime="go" frontiercloud.schema-generation="2"
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
