@@ -73,3 +73,7 @@ Private recording directories are group-traversable; only hash/size-verified
 published native recordings become mode 0640. Secrets, operation intents,
 leases and incomplete upload stages remain private. Recording byte locations
 are internal and require the established account/capability authorization.
+
+Native SQLite writers create/repair the exact selected database inode to mode
+0600 before opening SQL. WAL/SHM inherit private database permissions. Read-only
+backup inspection does not chmod or otherwise mutate an authoritative file.

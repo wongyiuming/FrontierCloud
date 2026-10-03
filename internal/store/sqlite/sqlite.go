@@ -56,6 +56,40 @@ func open(ctx context.Context, path string, readOnly, existing bool) (*Store, er
 			return nil, fmt.Errorf("create SQLite directory: %w", err)
 		}
 	}
+	// Authoritative SQLite contains sealed credentials and account hashes. The
+	// edge's recording read group must never inherit read access to this store.
+	// Precreate a private inode rather than letting the driver use its 0644
+	// default; native writers also repair the exact existing selected file.
+	if !readOnly {
+		flags := os.O_RDWR
+		if !existing {
+			flags |= os.O_CREATE
+		}
+		before, statErr := os.Lstat(absolute)
+		if statErr == nil && !before.Mode().IsRegular() {
+			return nil, errors.New("SQLite store must be a regular file")
+		}
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return nil, statErr
+		}
+		file, err := os.OpenFile(absolute, flags, 0600)
+		if err != nil {
+			return nil, err
+		}
+		opened, openErr := file.Stat()
+		current, currentErr := os.Lstat(absolute)
+		if openErr != nil || currentErr != nil || !current.Mode().IsRegular() || !os.SameFile(opened, current) || statErr == nil && !os.SameFile(before, opened) {
+			file.Close()
+			return nil, errors.New("SQLite store changed while opening")
+		}
+		modeErr := file.Chmod(0600)
+		if modeErr == nil {
+			modeErr = file.Sync()
+		}
+		if err = errors.Join(modeErr, file.Close()); err != nil {
+			return nil, err
+		}
+	}
 	uriPath := filepath.ToSlash(absolute)
 	// A Windows volume needs file:///C:/..., not file://C:/... (authority).
 	if !strings.HasPrefix(uriPath, "/") {
