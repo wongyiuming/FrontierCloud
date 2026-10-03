@@ -4,6 +4,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -25,7 +26,8 @@ func New(database, redis Check) *gin.Engine {
 func NewWithResolver(database, redis Check, resolver *network.Resolver, middleware ...gin.HandlerFunc) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-	router.Use(requests(resolver), gin.Recovery())
+	m := newMetrics()
+	router.Use(m.instrument, requests(resolver), gin.CustomRecoveryWithWriter(os.Stderr, m.recovered))
 	router.Use(middleware...)
 	router.HandleMethodNotAllowed = true
 	router.NoRoute(func(c *gin.Context) { detail(c, 404, "Not Found") })
@@ -72,6 +74,16 @@ func readiness(database, redis Check) gin.HandlerFunc {
 		status, code := "ready", http.StatusOK
 		if checks["database"] != "ready" || checks["redis"] != "ready" {
 			status, code = "unavailable", http.StatusServiceUnavailable
+		}
+		if value, ok := ctx.Get(metricsContextKey); ok {
+			m := value.(*metrics)
+			for name, state := range checks {
+				ready := float64(0)
+				if state == "ready" {
+					ready = 1
+				}
+				m.dependencies.WithLabelValues(name).Set(ready)
+			}
 		}
 		ctx.Header("Cache-Control", "no-store")
 		ctx.JSON(code, gin.H{"status": status, "checks": checks})

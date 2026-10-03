@@ -41,7 +41,7 @@ func command(arguments []string) error {
 		return errors.New("compiled release revision required")
 	}
 	workspace := setting("UPDATER_WORKSPACE", "/workspace")
-	branch := setting("RELEASE_BRANCH", "main")
+	branch := setting("RELEASE_BRANCH", "gin_main")
 	if branch != "main" && branch != "gin_main" {
 		return errors.New("unsupported updater production branch")
 	}

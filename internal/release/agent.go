@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/wongyiuming/FrontierCloud/internal/protocol"
 	"io"
 	"net"
 	"time"
@@ -72,4 +73,19 @@ func AgentStatus(ctx context.Context, agent Agent) map[string]any {
 		}
 	}
 	return map[string]any{"state": "unavailable", "phase": "unavailable", "detail": "updater unavailable"}
+}
+
+func AgentControlStatus(ctx context.Context, agent Agent) map[string]any {
+	if agent != nil {
+		value, err := agent.Request(ctx, map[string]any{"action": "status"})
+		if err == nil && value["ok"] == true {
+			if status, ok := value["status"].(map[string]any); ok && status != nil {
+				caps, err := protocol.ReadCapabilities(value)
+				if err == nil {
+					return map[string]any{"status": status, "capabilities": caps}
+				}
+			}
+		}
+	}
+	return map[string]any{"status": map[string]any{"state": "unavailable", "phase": "unavailable", "detail": "updater unavailable"}, "capabilities": []string{}}
 }

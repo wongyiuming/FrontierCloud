@@ -43,7 +43,7 @@ func TestVerifyBackupCommandOnlyEmitsLogicalReportForVerifiedInput(t *testing.T)
 		t.Fatal(output.String())
 	}
 	entries, err := os.ReadDir(scratch)
-	if err != nil || len(entries) != 0 {
+	if err != nil || len(entries) != 1 || entries[0].Name() != ".cache.lock" {
 		t.Fatal("scratch leak", entries, err)
 	}
 	before, err := os.ReadFile(file)

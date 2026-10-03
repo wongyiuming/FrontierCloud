@@ -160,9 +160,11 @@ class Runtime:
                 # an older Follower also stops workers during a rolling upgrade.
                 resources["compute"] = {"enabled": False, "worker_slots": 0}
                 value = {"mode": relation["mode"], "resources": resources}
+            value["capabilities"] = list(p.BASELINE_CAPABILITIES)
             summary = await self.call(relation, "/internal/v1/heartbeat", value)
             if summary.get("protocol") != p.PROTOCOL_VERSION:
                 raise p.ProtocolError("Heartbeat protocol mismatch")
+            summary["capabilities"] = p.read_capabilities(summary)
             rtt_ms = int((time.monotonic() - start) * 1000)
             summary["heartbeat"] = heartbeat_summary(relation.get("summary") or {}, rtt_ms)
             await state.heartbeat(identifier, True, rtt_ms, summary)

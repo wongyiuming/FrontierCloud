@@ -99,6 +99,43 @@ func TestVerificationRequiresUniqueReviewedTreeAndNewestExactPush(t *testing.T) 
 	}
 }
 
+func TestExactHistoricalArtifactDoesNotReuseHeadCacheOrOlderSuccess(t *testing.T) {
+	target, source, tree := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
+	var failed atomic.Bool
+	v := verifierFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/commits/" + target:
+			fmt.Fprintf(w, `{"sha":%q,"commit":{"tree":{"sha":%q}}}`, target, tree)
+		case "/commits/" + source:
+			fmt.Fprintf(w, `{"sha":%q,"commit":{"tree":{"sha":%q}}}`, source, tree)
+		case "/commits/" + target + "/pulls":
+			fmt.Fprintf(w, `[{"merged_at":"2026-10-03","merge_commit_sha":%q,"base":{"ref":"main"},"head":{"ref":"dev","sha":%q,"repo":{"full_name":"wongyiuming/FrontierCloud"}}}]`, target, source)
+		case "/actions/workflows/docker.yml/runs":
+			newest := "success"
+			if failed.Load() {
+				newest = "failure"
+			}
+			// Deliberately reverse the response order: highest run number wins.
+			fmt.Fprintf(w, `{"workflow_runs":[{"head_branch":"dev","event":"push","head_sha":%q,"status":"completed","conclusion":"success","run_number":1},{"head_branch":"dev","event":"push","head_sha":%q,"status":"completed","conclusion":%q,"run_number":2}]}`, source, source, newest)
+		default:
+			t.Error("historical proof consulted unrelated HEAD", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	})
+	v.cache = map[string]any{"sha": strings.Repeat("d", 40), "publishable": true}
+	v.checked = v.now()
+	for _, fail := range []bool{false, true} {
+		failed.Store(fail)
+		proof, err := v.Artifact(context.Background(), target)
+		if err != nil || proof["sha"] != target || proof["publishable"] == fail {
+			t.Fatal(proof, err)
+		}
+	}
+	if _, err := v.Artifact(context.Background(), "main"); err == nil {
+		t.Fatal("mutable branch accepted as artifact")
+	}
+}
+
 func TestVerificationCacheContextAndRateLimitBackoffFailClosed(t *testing.T) {
 	var calls atomic.Int32
 	var limited atomic.Bool

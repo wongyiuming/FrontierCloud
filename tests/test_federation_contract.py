@@ -101,7 +101,7 @@ class FederationContractTests(unittest.TestCase):
 
     def test_main_is_promotion_only_and_dev_is_full_ci_authority(self):
         workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
-        self.assertIn('branches: ["dev", "main"]', workflow)
+        self.assertIn('branches: ["dev", "main", "gin_dev", "gin_main"]', workflow)
         self.assertNotIn("pull_request:", workflow)
         self.assertIn("merge_group:", workflow)
         self.assertIn("workflow_dispatch:", workflow)

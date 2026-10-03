@@ -38,6 +38,14 @@ func RegisterAdminNodes(router *gin.Engine, a *Admin, service *node.Service) {
 		}
 		c.JSON(200, result)
 	})
+	group.GET("/observability", func(c *gin.Context) {
+		result, err := service.Observability(c.Request.Context())
+		if err != nil {
+			internalError(c, err)
+			return
+		}
+		c.JSON(200, result)
+	})
 	writes := group.Group("", mutate)
 	writes.POST("/promote", func(c *gin.Context) {
 		var body struct {

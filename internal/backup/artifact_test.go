@@ -122,10 +122,7 @@ func TestArtifactPrivateStreamingChecksumFooterLyricAndFailureCleanup(t *testing
 	if _, err := builder.Build(context.Background()); !errors.Is(err, store.ErrBackupState) {
 		t.Fatal("unbounded lyric", err)
 	}
-	entries, err := os.ReadDir(cache)
-	if err != nil || len(entries) != 0 {
-		t.Fatal("failed artifact not removed", entries, err)
-	}
+	checkScratchEmpty(t, cache)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := builder.Build(ctx); !errors.Is(err, context.Canceled) {

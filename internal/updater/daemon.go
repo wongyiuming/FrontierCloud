@@ -16,10 +16,11 @@ import (
 )
 
 type Request struct {
-	Action string `json:"action"`
-	Target string `json:"target_sha,omitempty"`
-	Mode   string `json:"mode,omitempty"`
-	Hold   bool   `json:"hold_maintenance,omitempty"`
+	Action   string            `json:"action"`
+	Target   string            `json:"target_sha,omitempty"`
+	Mode     string            `json:"mode,omitempty"`
+	Hold     bool              `json:"hold_maintenance,omitempty"`
+	Manifest *release.Manifest `json:"release_manifest,omitempty"`
 }
 type Checkpoint struct {
 	State, Phase, Current, Previous string
@@ -140,13 +141,39 @@ func (d *Daemon) persistLocked() error {
 	}
 	return err
 }
-func (d *Daemon) Status() Status { d.mu.Lock(); defer d.mu.Unlock(); return d.status }
+func (d *Daemon) Status() Status {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	copy := d.status
+	copy.TargetManifest = release.CloneManifest(copy.TargetManifest)
+	copy.CurrentManifest = release.CloneManifest(copy.CurrentManifest)
+	copy.PreviousManifest = release.CloneManifest(copy.PreviousManifest)
+	return copy
+}
 func (d *Daemon) Start(request Request) (map[string]any, error) {
-	if !release.ValidSHA(request.Target) || (request.Mode != "upgrade" && request.Mode != "rollback") {
+	if request.Mode != "upgrade" && request.Mode != "rollback" {
 		return nil, ErrState
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if request.Manifest != nil {
+		policy, err := release.PolicyForBranch(d.status.ReleaseBranch)
+		if err != nil {
+			return nil, ErrState
+		}
+		cloned := release.CloneManifest(request.Manifest)
+		if cloned == nil {
+			return nil, ErrState
+		}
+		artifact, err := cloned.Select(policy)
+		if err != nil || request.Target != "" && request.Target != artifact.CommitSHA {
+			return nil, ErrState
+		}
+		request.Manifest, request.Target = cloned, artifact.CommitSHA
+	}
+	if !release.ValidSHA(request.Target) {
+		return nil, ErrState
+	}
 	if d.fault {
 		return nil, ErrState
 	}
@@ -155,6 +182,7 @@ func (d *Daemon) Start(request Request) (map[string]any, error) {
 	}
 	old := d.status
 	d.status.State, d.status.Phase, d.status.TargetSHA, d.status.Mode, d.status.HoldMaintenance, d.status.Detail = "queued", "queued", request.Target, request.Mode, request.Hold, ""
+	d.status.TargetManifest = request.Manifest
 	d.status.CompletedAt = 0
 	if err := d.persistLocked(); err != nil {
 		d.status = old
@@ -163,7 +191,11 @@ func (d *Daemon) Start(request Request) (map[string]any, error) {
 	// Publish a durable intent before waking the worker, under the same mutex.
 	select {
 	case d.queue <- request:
-		return map[string]any{"ok": true, "accepted": true, "target_sha": request.Target, "mode": request.Mode}, nil
+		out := map[string]any{"ok": true, "accepted": true, "target_sha": request.Target, "mode": request.Mode}
+		if request.Manifest != nil {
+			out["release_id"], _ = request.Manifest.ID()
+		}
+		return out, nil
 	default:
 		return nil, ErrState
 	}
@@ -179,6 +211,7 @@ func (d *Daemon) checkpoint(c Checkpoint) error {
 		d.status.Phase = c.Phase
 	}
 	if c.Current != "" {
+		d.publishManifest(c.Current)
 		d.status.CurrentSHA = c.Current
 	}
 	if c.Previous != "" || c.SetPrevious {
@@ -193,6 +226,29 @@ func (d *Daemon) checkpoint(c Checkpoint) error {
 		return err
 	}
 	return nil
+}
+
+// Manifest release history is independent of artifact SHA history: a common
+// release may change another profile while this node's artifact stays the same.
+func (d *Daemon) publishManifest(current string) {
+	if d.status.TargetManifest != nil && current == d.status.TargetSHA {
+		newID, _ := d.status.TargetManifest.ID()
+		oldID := ""
+		if d.status.CurrentManifest != nil {
+			oldID, _ = d.status.CurrentManifest.ID()
+		}
+		if newID != oldID {
+			if d.status.Mode == "upgrade" {
+				d.status.PreviousManifest = release.CloneManifest(d.status.CurrentManifest)
+			} else {
+				d.status.PreviousManifest = nil
+			}
+			d.status.CurrentManifest = release.CloneManifest(d.status.TargetManifest)
+		}
+	} else if current != d.status.CurrentSHA {
+		d.status.PreviousManifest = release.CloneManifest(d.status.CurrentManifest)
+		d.status.CurrentManifest = nil
+	}
 }
 func (d *Daemon) perform(ctx context.Context, r Request) {
 	d.mu.Lock()
@@ -224,6 +280,7 @@ func (d *Daemon) perform(ctx context.Context, r Request) {
 		d.persistLocked()
 		return
 	}
+	d.publishManifest(outcome.Current)
 	d.status.CurrentSHA, d.status.PreviousSHA = outcome.Current, outcome.Previous
 	if outcome.Handoff {
 		d.status.State, d.status.Phase = "restarting", "updater-restart"
@@ -317,7 +374,7 @@ func (d *Daemon) handle(ctx context.Context, conn net.Conn) {
 				switch action {
 				case "status":
 					if len(object) == 1 {
-						result = map[string]any{"ok": true, "status": d.Status()}
+						result = map[string]any{"ok": true, "status": d.Status(), "capabilities": []string{release.ManifestCapability}}
 					}
 				case "start":
 					target, tok := object["target_sha"].(string)

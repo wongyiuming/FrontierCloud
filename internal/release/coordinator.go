@@ -16,11 +16,13 @@ type Evidence interface {
 	Status(context.Context, bool) (map[string]any, error)
 }
 type Coordinator struct {
-	Agent    Agent
-	Verifier Evidence
-	Nodes    store.NodeRepository
-	Control  Caller
-	Policy   Policy
+	Agent            Agent
+	Verifier         Evidence
+	Nodes            store.NodeRepository
+	Control          Caller
+	Policy           Policy
+	ManifestSource   ManifestSource
+	ManifestEvidence map[string]ArtifactEvidence
 }
 
 func (s *Coordinator) followers(ctx context.Context, identity store.NodeIdentity) ([]map[string]any, error) {
@@ -63,6 +65,9 @@ func (s *Coordinator) followers(ctx context.Context, identity store.NodeIdentity
 				if err == nil {
 					if status, ok := value["status"].(map[string]any); ok && status != nil {
 						out["reachable"], out["status"] = true, status
+						if capabilities, present := value["capabilities"]; present {
+							out["capabilities"] = capabilities
+						}
 					}
 				}
 			}
@@ -104,6 +109,9 @@ func needConvergence(followers []map[string]any, target string) bool {
 }
 
 func (s *Coordinator) Status(ctx context.Context, refresh bool) (map[string]any, error) {
+	if s.ManifestSource != nil {
+		return s.manifestStatus(ctx)
+	}
 	n, err := s.Nodes.ReadIdentity(ctx)
 	if err != nil {
 		return nil, err
@@ -134,6 +142,9 @@ func (s *Coordinator) Status(ctx context.Context, refresh bool) (map[string]any,
 }
 
 func (s *Coordinator) Start(ctx context.Context, mode string) (map[string]any, error) {
+	if s.ManifestSource != nil {
+		return s.startPublishedManifest(ctx, mode)
+	}
 	if mode != "upgrade" && mode != "rollback" {
 		return nil, errors.New("invalid release mode")
 	}

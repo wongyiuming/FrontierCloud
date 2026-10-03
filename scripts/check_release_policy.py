@@ -71,7 +71,7 @@ require('.frontiercloud-maintenance' in maintenance_gate and '.frontiercloud-for
         "Nginx must combine release and explicit Admin maintenance gates")
 require('前沿娱乐 · 系统维护' in maintenance_page and '立即重试' in maintenance_page,
         "Public maintenance page must use the branded maintenance UI")
-require('branches: ["dev", "main"]' in workflow,
+require('branches: ["dev", "main", "gin_dev", "gin_main"]' in workflow,
         "Workflow must retain a lightweight main migration/promotion run")
 require('promote-main:' in workflow and "github.ref == 'refs/heads/main'" in workflow,
         "Main push must use the lightweight promotion gate")
@@ -92,6 +92,12 @@ require('verify-promotion-query:' in workflow and 'head_sha: context.sha' in wor
         "Dev CI must verify that the exact-SHA promotion lookup works before merge")
 require('github.paginate' not in workflow,
         "Main promotion must not rely on historical workflow pagination")
+require('promote-gin-main:' in workflow and "pr?.merge_commit_sha === target" in workflow
+        and "pr?.base?.ref === 'gin_main'" in workflow and "pr?.head?.ref === 'gin_dev'" in workflow,
+        "Native promotion must require the exact reviewed native branch pair")
+require('test-native:' in workflow and 'bash scripts/test-go-deployment.sh' in workflow
+        and 'bash scripts/test-go-updater.sh' in workflow,
+        "Native source push must verify deployment selection and real Go updater")
 require("github.event_name != 'pull_request' || github.head_ref != 'dev'" not in workflow,
         "Full CI must not rerun automatically on main")
 

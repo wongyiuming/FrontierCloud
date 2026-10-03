@@ -54,6 +54,7 @@ type Config struct {
 	GitHubAPIToken         string
 	ReleaseBranch          string
 	ReleaseSourceBranch    string
+	ReleaseManifestPath    string
 }
 
 // Load reads configuration from the process environment.
@@ -96,12 +97,16 @@ func LoadFrom(getenv func(string) string) (Config, error) {
 	if len(value.GitHubAPIToken) > 4096 || strings.ContainsAny(value.GitHubAPIToken, "\r\n") {
 		return Config{}, errors.New("invalid GITHUB_API_TOKEN")
 	}
-	value.ReleaseBranch = fallback(getenv("RELEASE_BRANCH"), "main")
+	value.ReleaseBranch = fallback(getenv("RELEASE_BRANCH"), "gin_main")
 	source := "dev"
 	if value.ReleaseBranch == "gin_main" {
 		source = "gin_dev"
 	}
 	value.ReleaseSourceBranch = fallback(getenv("RELEASE_SOURCE_BRANCH"), source)
+	value.ReleaseManifestPath = strings.TrimSpace(getenv("RELEASE_MANIFEST_PATH"))
+	if value.ReleaseManifestPath != "" && (!filepath.IsAbs(value.ReleaseManifestPath) || len(value.ReleaseManifestPath) > 4096 || strings.ContainsAny(value.ReleaseManifestPath, "\r\n")) {
+		return Config{}, fmt.Errorf("RELEASE_MANIFEST_PATH must be an absolute bounded path")
+	}
 	if !(value.ReleaseBranch == "main" && value.ReleaseSourceBranch == "dev" || value.ReleaseBranch == "gin_main" && value.ReleaseSourceBranch == "gin_dev") {
 		return Config{}, errors.New("release policy must select main/dev or gin_main/gin_dev")
 	}

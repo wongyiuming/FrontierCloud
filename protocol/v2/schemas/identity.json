@@ -15,7 +15,8 @@
         "public_key": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
         "challenge": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
         "protocol": {"const": 2},
-        "app_version": {"type": "string", "minLength": 1}
+        "app_version": {"type": "string", "minLength": 1},
+        "capabilities": {"type":"array","maxItems":64,"uniqueItems":true,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,63}$"}}
       },
       "additionalProperties": true
     },

@@ -1,0 +1,19 @@
+{
+ "format":"frontiercloud-protocol-vector",
+ "version":1,
+ "protocol":2,
+ "source":"Reviewed optional capability negotiation contract",
+ "cases":[
+  {"name":"legacy-v2-baseline","message":{},"valid":true,"required":["storage-v2"],"compatible":true,"selected":["backup-v2","media-v2","node-auth-v2","recordings-v2","storage-v2"]},
+  {"name":"explicit-empty","message":{"capabilities":[]},"valid":true,"required":["storage-v2"],"compatible":false,"selected":[]},
+  {"name":"unordered-subset","message":{"capabilities":["storage-v2","media-v2"]},"valid":true,"required":["media-v2"],"compatible":true,"selected":["media-v2","storage-v2"]},
+  {"name":"unknown-extension-ignored","message":{"capabilities":["future-feature-v7","media-v2"]},"valid":true,"required":["future-feature-v7"],"compatible":false,"selected":["media-v2"]},
+  {"name":"new-features-not-inferred-for-old-peer","message":{},"valid":true,"required":["release-manifest-v1"],"compatible":false,"selected":["backup-v2","media-v2","node-auth-v2","recordings-v2","storage-v2"]},
+  {"name":"null","message":{"capabilities":null},"valid":false},
+  {"name":"string-not-list","message":{"capabilities":"media-v2"},"valid":false},
+  {"name":"duplicate","message":{"capabilities":["media-v2","media-v2"]},"valid":false},
+  {"name":"non-string","message":{"capabilities":[true]},"valid":false},
+  {"name":"invalid-identifier","message":{"capabilities":["media/v2"]},"valid":false},
+  {"name":"private-non-ascii-field","message":{"capabilities":["内部数据库"]},"valid":false}
+ ]
+}

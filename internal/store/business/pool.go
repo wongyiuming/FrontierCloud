@@ -467,6 +467,7 @@ func (r *Repository) Members(ctx context.Context) ([]store.StorageMember, error)
 	}
 	for i := range result {
 		v := &result[i]
+		v.CurrentAllocation, v.ProjectUsed = v.Allocation, v.Used
 		v.Compute = map[string]any{}
 		v.Backup = map[string]any{}
 		var enabled, slots, available, cpu int

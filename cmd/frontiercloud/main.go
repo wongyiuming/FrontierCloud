@@ -13,21 +13,15 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/wongyiuming/FrontierCloud/internal/admin"
 	"github.com/wongyiuming/FrontierCloud/internal/backup"
 	"github.com/wongyiuming/FrontierCloud/internal/bootstrap"
 	"github.com/wongyiuming/FrontierCloud/internal/config"
-	"github.com/wongyiuming/FrontierCloud/internal/httpapi"
-	"github.com/wongyiuming/FrontierCloud/internal/karaoke"
 	"github.com/wongyiuming/FrontierCloud/internal/maintenance"
 	"github.com/wongyiuming/FrontierCloud/internal/media"
 	"github.com/wongyiuming/FrontierCloud/internal/network"
 	"github.com/wongyiuming/FrontierCloud/internal/node"
-	"github.com/wongyiuming/FrontierCloud/internal/observation"
 	"github.com/wongyiuming/FrontierCloud/internal/recording"
-	"github.com/wongyiuming/FrontierCloud/internal/release"
 	"github.com/wongyiuming/FrontierCloud/internal/security"
-	"github.com/wongyiuming/FrontierCloud/internal/sitecontrol"
 	storecontract "github.com/wongyiuming/FrontierCloud/internal/store"
 	mysqlstore "github.com/wongyiuming/FrontierCloud/internal/store/mysql"
 	sqlitestore "github.com/wongyiuming/FrontierCloud/internal/store/sqlite"
@@ -55,7 +49,7 @@ func command(arguments []string) error {
 			return err
 		}
 		return guardedCommand(settings, func(parent context.Context) error {
-			database, err := openStore(settings)
+			database, err := openRuntimeStore(parent, settings)
 			if err != nil {
 				return err
 			}
@@ -80,16 +74,24 @@ func command(arguments []string) error {
 		return healthcheck()
 	case "verify-backup":
 		return verifyBackupCommand(arguments[1:], os.Stdout)
+	case "cleanup-backup-cache":
+		return cleanupBackupCacheCommand(arguments[1:], os.Stdout)
 	case "maintenance":
 		return maintenanceCommand(arguments[1:], os.Stdout)
 	case "adopt-storage":
 		return adoptStorageCommand(arguments[1:], os.Stdout)
+	case "adopt-recordings":
+		return recordingAdoptionCommand(arguments[1:], os.Stdout, false)
+	case "recording-inventory":
+		return recordingAdoptionCommand(arguments[1:], os.Stdout, true)
 	case "drain-rename-history":
 		return drainRenameCommand(arguments[1:], os.Stdout)
 	case "prepare-release":
 		return prepareReleaseCommand(arguments[1:])
 	case "cluster-release":
 		return clusterReleaseCommand(arguments[1:])
+	case "cluster-release-manifest":
+		return clusterManifestCommand(arguments[1:])
 	case "updater-status":
 		if len(arguments) != 1 {
 			return errors.New("updater-status accepts no arguments")
@@ -135,7 +137,7 @@ func serve() error {
 	}
 	defer runtime.Close()
 	shutdown := runtime.Context()
-	database, err := openStore(settings)
+	database, err := openRuntimeStore(shutdown, settings)
 	if err != nil {
 		return err
 	}
@@ -208,60 +210,11 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	handler := httpapi.NewWithResolver(func(ctx context.Context) error {
-		if err := database.Ping(ctx); err != nil {
-			return err
-		}
-		if err := mediaService.Ready(ctx); err != nil {
-			return err
-		}
-		if err := recordingStorage.Ready(ctx); err != nil {
-			return err
-		}
-		return securityService.Ready(ctx)
-	}, func(ctx context.Context) error {
-		return redisClient.Ping(ctx).Err()
-	}, resolver, httpapi.SecurityMiddleware(securityService, resolver))
-	public, err := httpapi.RegisterPublic(handler, settings, mediaService)
+	handler, closeHTTP, err := newRuntimeHTTP(settings, runtimeHTTP{Database: database, Identity: identity, Media: mediaService, Control: controlService, Recordings: recordingStorage, Manager: recordingManager, Security: securityService, Redis: redisClient, Resolver: resolver})
 	if err != nil {
 		return err
 	}
-	defer public.Close()
-	adminService, err := admin.New(settings, admin.NewRedisCache(redisClient), database.Admin())
-	if err != nil {
-		return err
-	}
-	adminHTTP, err := httpapi.RegisterAdmin(handler, settings, adminService, public, identity)
-	if err != nil {
-		return err
-	}
-	httpapi.RegisterAdminNodes(handler, adminHTTP, controlService)
-	policy := release.Policy{Branch: settings.ReleaseBranch, Source: settings.ReleaseSourceBranch}
-	verifier, err := release.NewVerifier(policy, settings.GitHubAPIToken)
-	if err != nil {
-		return err
-	}
-	agent := release.SocketAgent{}
-	siteService, err := sitecontrol.Open(settings.DataRoot, agent)
-	if err != nil {
-		return err
-	}
-	defer siteService.Close()
-	httpapi.RegisterSiteAdmin(handler, adminHTTP, siteService)
-	releases := &release.Coordinator{Agent: agent, Verifier: verifier, Nodes: database.Nodes(), Control: controlService, Policy: policy}
-	httpapi.RegisterReleaseAdmin(handler, adminHTTP, releases)
-	httpapi.RegisterNodeRelease(handler, settings, resolver, controlService, agent)
-	httpapi.RegisterSecurityAdmin(handler, adminHTTP, securityService)
-	accountsHTTP := httpapi.RegisterKaraokeAccounts(handler, karaoke.New(database.Karaoke(), database.Nodes(), karaoke.NewRedisCache(redisClient)), public, adminHTTP, resolver)
-	httpapi.RegisterKaraokeRecordings(handler, accountsHTTP, recordingManager, recordingStorage)
-	httpapi.RegisterKaraokeMedia(handler, public, resolver)
-	httpapi.RegisterNodeRecordings(handler, settings, resolver, controlService, recordingStorage)
-	httpapi.RegisterNodeIdentity(handler, settings, resolver, controlService)
-	httpapi.RegisterNodeControl(handler, settings, resolver, controlService)
-	httpapi.RegisterNodeBackups(handler, settings, resolver, controlService, database.Backups())
-	httpapi.RegisterNodeMedia(handler, settings, resolver, controlService, mediaService)
-	httpapi.RegisterNodeStorage(handler, settings, resolver, controlService, mediaService)
-	httpapi.RegisterObservations(handler, adminHTTP, observation.New(database.Observations(), redisClient, settings.WebRTCCooldown), resolver)
+	defer closeHTTP()
 	server := &http.Server{
 		Addr:              settings.HTTPAddress,
 		Handler:           runtime.Handler(handler),

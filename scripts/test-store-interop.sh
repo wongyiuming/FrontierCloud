@@ -22,18 +22,26 @@ trap 'exit 143' TERM
 docker build -f Dockerfile.gin -t "$go_image" .
 docker build -f tests/store.Dockerfile -t "$python_image" .
 docker run --rm --entrypoint python "$python_image" -m unittest discover -s tests -p test_protocol_conformance.py -q
+docker run --rm --entrypoint python "$python_image" -m unittest discover -s tests -p test_capability_vectors.py -q
+docker run --rm --entrypoint python "$python_image" -m unittest discover -s tests -p test_release_manifest_vectors.py -q
 docker run --rm --entrypoint python "$python_image" -m unittest discover -s tests -p test_sqlite_store.py -q
 docker network create "$network" >/dev/null
 docker volume create "$secrets" >/dev/null
 docker volume create "$data" >/dev/null
 docker run --rm --user 0:0 -v "$secrets:/run/frontiercloud-secrets" "$go_image" init-secrets
 docker run --rm --user 0:0 -v "$data:/app/data" "$go_image" init-media
+for fixture in sqlite-go sqlite-python mysql-office_automation mysql-fc_python; do
+    docker run --rm --user 0:0 -e "DATA_ROOT=/app/data/$fixture" \
+        -v "$data:/app/data" "$go_image" init-media
+done
 
 go_sqlite() {
-    docker run --rm -e DB_TYPE=sqlite -e "SQLITE_PATH=/app/data/$1.db" -v "$data:/app/data" "$go_image" migrate
+    docker run --rm -e DB_TYPE=sqlite -e "DATA_ROOT=/app/data/sqlite-$1" \
+        -e "SQLITE_PATH=/app/data/sqlite-$1/frontiercloud.db" -v "$data:/app/data" "$go_image" migrate
 }
 python_sqlite() {
-    docker run --rm -e DB_TYPE=sqlite -e "SQLITE_PATH=/app/data/$1.db" -v "$data:/app/data" "$python_image" "${2:-verify}"
+    docker run --rm -e DB_TYPE=sqlite -e "DATA_ROOT=/app/data/sqlite-$1" \
+        -e "SQLITE_PATH=/app/data/sqlite-$1/frontiercloud.db" -v "$data:/app/data" "$python_image" "${2:-verify}"
 }
 
 # Both directions use the same file, durable IDs, and migration journal.
@@ -68,10 +76,12 @@ fi
 
 go_mysql() {
     docker run --rm --network "$network" -e DB_TYPE=mysql -e "MYSQL_DATABASE=$1" \
+        -e "DATA_ROOT=/app/data/mysql-$1" -v "$data:/app/data" \
         -v "$secrets:/run/frontiercloud-secrets:ro" "$go_image" migrate
 }
 python_mysql() {
     docker run --rm --network "$network" -e DB_TYPE=mysql -e "MYSQL_DATABASE=$1" \
+        -e "DATA_ROOT=/app/data/mysql-$1" -v "$data:/app/data" \
         -v "$secrets:/run/frontiercloud-secrets:ro" "$python_image" "${2:-verify}"
 }
 

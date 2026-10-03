@@ -12,11 +12,17 @@ on:
       - 'tests/**'
       - 'scripts/test-store-interop.sh'
       - 'scripts/test-go-business.sh'
+      - 'scripts/test-go-deployment.sh'
+      - 'scripts/test-go-updater.sh'
       - 'static/**'
       - 'go.mod'
       - 'go.sum'
       - 'pyproject.toml'
       - 'Dockerfile.gin'
+      - 'updater/Dockerfile.gin'
+      - 'nginx/**'
+      - 'docker-compose*.yaml'
+      - '.env.example'
       - '.github/workflows/runtime-conformance.yml'
   pull_request:
     branches: [gin_dev, gin_main, dev, main]

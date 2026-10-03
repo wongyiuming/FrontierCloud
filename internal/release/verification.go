@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -164,11 +165,50 @@ type run struct {
 }
 
 func (v *Verifier) verify(ctx context.Context, now time.Time) (map[string]any, error) {
+	return v.verifyTarget(ctx, now, "")
+}
+
+// Artifact verifies an exact historical production commit. It never substitutes
+// cached HEAD evidence or an older successful CI run. Source validation still
+// independently enforces current HEAD for upgrade and ancestry for rollback.
+func (v *Verifier) Artifact(parent context.Context, target string) (map[string]any, error) {
+	if !ValidSHA(target) {
+		return nil, ErrManifest
+	}
+	select {
+	case v.lock <- struct{}{}:
+	case <-parent.Done():
+		return nil, parent.Err()
+	}
+	defer func() { <-v.lock }()
+	if v.now().Before(v.backoff) {
+		return nil, errors.New("release verification rate limited")
+	}
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
+	defer cancel()
+	value, err := v.verifyTarget(ctx, v.now(), target)
+	var failure *apiFailure
+	if errors.As(err, &failure) && failure.kind == "rate_limited" {
+		v.backoff = v.now().Add(time.Duration(failure.retry) * time.Second)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return copyValue(value), nil
+}
+
+func (v *Verifier) verifyTarget(ctx context.Context, now time.Time, target string) (map[string]any, error) {
 	result := map[string]any{"available": false, "branch": v.policy.Branch, "source_branch": v.policy.Source, "status": "unknown", "conclusion": nil, "publishable": false, "checked_at": now.Unix(), "authenticated": v.token != ""}
 	var branch struct {
 		Commit commit `json:"commit"`
 	}
-	rate, err := v.get(ctx, "/branches/"+url.PathEscape(v.policy.Branch), &branch)
+	var rate map[string]any
+	var err error
+	if target == "" {
+		rate, err = v.get(ctx, "/branches/"+url.PathEscape(v.policy.Branch), &branch)
+	} else {
+		rate, err = v.get(ctx, "/commits/"+target, &branch.Commit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +216,7 @@ func (v *Verifier) verify(ctx context.Context, now time.Time) (map[string]any, e
 		result["rate_limit"] = rate
 	}
 	sha, tree := branch.Commit.SHA, branch.Commit.Commit.Tree.SHA
-	if !ValidSHA(sha) || !ValidSHA(tree) {
+	if !ValidSHA(sha) || !ValidSHA(tree) || target != "" && sha != target {
 		result["detail"] = "release HEAD tree is unavailable"
 		return result, nil
 	}
@@ -220,6 +260,7 @@ func (v *Verifier) verify(ctx context.Context, now time.Time) (map[string]any, e
 	}
 	// The first newest exact source push is authoritative. An older successful
 	// rerun cannot override a newer pending/failed result for the same commit.
+	sort.SliceStable(runs.Runs, func(i, j int) bool { return runs.Runs[i].Number > runs.Runs[j].Number })
 	for _, r := range runs.Runs {
 		if r.Branch != v.policy.Source || r.Event != "push" || r.SHA != source {
 			continue

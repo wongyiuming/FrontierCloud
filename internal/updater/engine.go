@@ -390,7 +390,7 @@ func (e *Engine) Build(ctx context.Context, source Source, target, component, do
 	defer archive.Close()
 	tag := "frontiercloud-" + component + ":" + target
 	labels, _ := json.Marshal(map[string]string{"frontiercloud.revision": target, "frontiercloud.component": component, "frontiercloud.runtime": "go", "frontiercloud.schema-generation": "2", "frontiercloud.project": e.Project})
-	args, _ := json.Marshal(map[string]string{"REVISION": target})
+	args, _ := json.Marshal(map[string]string{"REVISION": target, "FRONTIERCLOUD_RUNTIME": "go"})
 	query := url.Values{"dockerfile": {dockerfile}, "t": {tag}, "rm": {"true"}, "forcerm": {"true"}, "labels": {string(labels)}, "buildargs": {string(args)}, "version": {"1"}}
 	r, err := e.request(ctx, "POST", "/build?"+query.Encode(), archive, "application/x-tar")
 	if err != nil {

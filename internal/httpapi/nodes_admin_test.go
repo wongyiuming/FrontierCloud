@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"github.com/wongyiuming/FrontierCloud/internal/admin"
+	"github.com/wongyiuming/FrontierCloud/internal/diagnostics"
 	"github.com/wongyiuming/FrontierCloud/internal/network"
 	"github.com/wongyiuming/FrontierCloud/internal/node"
 	"github.com/wongyiuming/FrontierCloud/internal/release"
@@ -64,6 +66,9 @@ func TestNodeAdminRedisPromotionPairConfigurationRevocationAndReinitialize(t *te
 			t.Fatal(err)
 		}
 		RegisterAdminNodes(router, a, control)
+		RegisterOperational(router, a)
+		diagnosticResolver, _ := network.New(cfg.TrustedProxyNetworks)
+		RegisterPlaybackDiagnostics(router, cfg, diagnosticResolver, control, a, diagnostics.New())
 		agent := &testReleaseAgent{status: map[string]any{"release_branch": "main", "current_sha": strings.Repeat("a", 40), "previous_sha": strings.Repeat("b", 40), "state": "success"}}
 		siteService, err := sitecontrol.Open(dir, agent)
 		if err != nil {
@@ -105,11 +110,65 @@ func TestNodeAdminRedisPromotionPairConfigurationRevocationAndReinitialize(t *te
 		if w := perform("GET", "/nodes", "", false, true); w.Code != 401 {
 			t.Fatal("anonymous nodes", w.Code)
 		}
+		if w := perform("GET", "/nodes/observability", "", false, true); w.Code != 401 {
+			t.Fatal("anonymous observations", w.Code)
+		}
+		if w := perform("GET", "/playback-continuity-diagnostics", "", false, true); w.Code != 401 {
+			t.Fatal("anonymous diagnostics", w.Code)
+		}
+		for _, path := range []string{"/docs", "/redoc", "/openapi.json"} {
+			w := request(router, "GET", origin+path, "")
+			if w.Code != 401 {
+				t.Fatal("anonymous documentation", path, w.Code)
+			}
+		}
 		if w := perform("GET", "/nodes/release", "", false, true); w.Code != 401 {
 			t.Fatal("anonymous release status", w.Code)
 		}
 		if w := perform("POST", "/elevate", "token="+url.QueryEscape(key), false, true); w.Code != 200 {
 			t.Fatal(w.Code, w.Body.String())
+		}
+		for _, path := range []string{"/docs", "/redoc", "/openapi.json"} {
+			r := httptest.NewRequest("GET", origin+path, nil)
+			for _, cookie := range cookies {
+				r.AddCookie(cookie)
+			}
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, r)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), "/openapi.json") && path != "/openapi.json" {
+				t.Fatal(path, w.Code, w.Body.String())
+			}
+			if w.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("documentation cacheable", path)
+			}
+			if path == "/openapi.json" {
+				var schema map[string]any
+				if err := json.Unmarshal(w.Body.Bytes(), &schema); err != nil {
+					t.Fatal(err)
+				}
+				if schema["openapi"] != "3.1.0" || len(schema["paths"].(map[string]any)) < 80 {
+					t.Fatal("incomplete schema")
+				}
+				components := schema["components"].(map[string]any)["schemas"].(map[string]any)
+				if components["Promotion"] == nil || components["AuthPayload"] == nil {
+					t.Fatal("typed API schemas missing")
+				}
+			}
+		}
+		if w := request(router, "POST", origin+"/api/v1/media/playback-continuity-diagnostics", `{"diagnostic_id":"admin-case","stage":"pause","sample":{"cookie":"private","paused":true}}`); w.Code != 202 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		if w := perform("GET", "/playback-continuity-diagnostics", "", false, true); w.Code != 200 || !strings.Contains(w.Body.String(), "admin-case") || strings.Contains(w.Body.String(), "private") {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		if w := perform("DELETE", "/playback-continuity-diagnostics", "", false, true); w.Code != 403 {
+			t.Fatal("missing diagnostic clear CSRF", w.Code)
+		}
+		if w := perform("DELETE", "/playback-continuity-diagnostics", "", true, true); w.Code != 200 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		if w := perform("GET", "/playback-continuity-diagnostics", "", false, true); w.Code != 200 || !strings.Contains(w.Body.String(), `"reports":[]`) {
+			t.Fatal("diagnostic clear ineffective", w.Code, w.Body.String())
 		}
 		return site{perform, control, identity.ID, agent, db, dir}
 	}
@@ -221,6 +280,45 @@ func TestNodeAdminRedisPromotionPairConfigurationRevocationAndReinitialize(t *te
 	if f.agent.starts != 1 {
 		t.Fatal("Follower release replay duplicated", f.agent.starts)
 	}
+	// Exercise the real authenticated RPC boundary with different Python/Go
+	// artifacts. The Master must forward the complete manifest without a SHA.
+	manifest := &release.Manifest{Format: "frontiercloud-release-manifest", Version: 1, ReleaseVersion: "2.0.0", Protocol: 2, SchemaGeneration: 2, Artifacts: map[string]release.Artifact{
+		"main":     {Kind: "git-archive", CommitSHA: strings.Repeat("c", 40), SourceSHA: strings.Repeat("e", 40), TreeSHA: strings.Repeat("f", 40)},
+		"gin_main": {Kind: "git-archive", CommitSHA: strings.Repeat("d", 40), SourceSHA: strings.Repeat("a", 40), TreeSHA: strings.Repeat("b", 40)},
+	}}
+	encodedManifest, _ := manifest.Wire()
+	var whole map[string]any
+	manifestDecoder := json.NewDecoder(bytes.NewReader(encodedManifest))
+	manifestDecoder.UseNumber()
+	if err = manifestDecoder.Decode(&whole); err != nil {
+		t.Fatal(err)
+	}
+	f.agent.busy = false
+	f.agent.capabilities = []string{release.ManifestCapability}
+	manifestID, _ := manifest.ID()
+	manifestRequest := map[string]any{"release_manifest": whole, "mode": "upgrade"}
+	if _, err = f.control.Call(ctx, followerRelation, "/internal/v1/cluster-update/start", manifestRequest); err == nil {
+		t.Fatal("Follower controlled Master's manifest release")
+	}
+	ack, err := m.control.Call(ctx, masterRelation, "/internal/v1/cluster-update/start", manifestRequest)
+	if err != nil || ack["release_id"] != manifestID || f.agent.lastManifest == nil {
+		t.Fatal("whole manifest forwarding", ack, err)
+	}
+	f.agent.busy = true
+	ack, err = m.control.Call(ctx, masterRelation, "/internal/v1/cluster-update/start", manifestRequest)
+	if err != nil || ack["release_id"] != manifestID || f.agent.starts != 2 {
+		t.Fatal("manifest replay not idempotent", ack, err, f.agent.starts)
+	}
+	manifestRequest["target_sha"] = strings.Repeat("c", 40)
+	if _, err = m.control.Call(ctx, masterRelation, "/internal/v1/cluster-update/start", manifestRequest); err == nil {
+		t.Fatal("Master selected artifact alongside manifest")
+	}
+	delete(manifestRequest, "target_sha")
+	whole["protocol"] = 3
+	if _, err = m.control.Call(ctx, masterRelation, "/internal/v1/cluster-update/start", manifestRequest); err == nil {
+		t.Fatal("unsupported manifest protocol accepted")
+	}
+	whole["protocol"] = 2
 	check(m.perform("POST", "/nodes/"+relation+"/mode", `{"mode":"Direct"}`, true, true), 200)
 	check(m.perform("POST", "/nodes/"+relation+"/resources", `{"storage_enabled":true,"storage_capacity_gib":2,"backup_enabled":true}`, true, true), 200)
 	row, err := m.control.IdentityState(ctx)
@@ -240,6 +338,44 @@ func TestNodeAdminRedisPromotionPairConfigurationRevocationAndReinitialize(t *te
 	if status["storage_pool"] == nil {
 		t.Fatal("missing Master pool")
 	}
+	if err = m.control.Tick(ctx, masterRelation); err != nil {
+		t.Fatal(err)
+	}
+	observations := check(m.perform("GET", "/nodes/observability", "", false, true), 200)
+	if observations["role"] != "Master" || len(observations["members"].([]any)) != 2 {
+		t.Fatal("missing authoritative member observations", observations)
+	}
+	for _, raw := range observations["members"].([]any) {
+		member := raw.(map[string]any)
+		if member["sync"].(map[string]any)["storage"] != "effective" {
+			t.Fatal("heartbeat resource state not observed", member)
+		}
+		if member["member_kind"] == "MasterLocal" && member["connection"].(map[string]any)["status"] != "local" {
+			t.Fatal(member)
+		}
+	}
+	pool := status["storage_pool"].(map[string]any)
+	if pool["current_allocated_bytes"] != pool["allocated_bytes"] || pool["project_used_bytes"] != pool["used_bytes"] || pool["physical_total_bytes"].(float64) <= 0 {
+		t.Fatal("four capacity facts missing", pool)
+	}
+	var totalPhysical, totalFree, allocation, used float64
+	for _, raw := range pool["members"].([]any) {
+		member := raw.(map[string]any)
+		if member["member_kind"] == "Auto" {
+			continue
+		}
+		totalPhysical += member["physical_total_bytes"].(float64)
+		totalFree += member["physical_free_bytes"].(float64)
+		allocation += member["current_allocated_bytes"].(float64)
+		used += member["project_used_bytes"].(float64)
+	}
+	if totalPhysical != pool["physical_total_bytes"] || totalFree != pool["physical_free_bytes"] || allocation != pool["current_allocated_bytes"] || used != pool["project_used_bytes"] {
+		t.Fatal("synthetic Auto member changed aggregate capacity", pool)
+	}
+	followerView := check(f.perform("GET", "/nodes/observability", "", false, true), 200)
+	if followerView["role"] != "Follower" || len(followerView["members"].([]any)) != 0 || len(followerView["relationships"].([]any)) != 1 {
+		t.Fatal(followerView)
+	}
 	check(m.perform("POST", "/nodes/reinitialize", `{"confirmation":"wrong"}`, true, true), 409)
 	check(m.perform("POST", "/nodes/"+relation+"/revoke", "", true, true), 200)
 	pack = check(f.perform("POST", "/nodes/pair-package", "", true, true), 200)
@@ -251,6 +387,9 @@ func TestNodeAdminRedisPromotionPairConfigurationRevocationAndReinitialize(t *te
 	}
 	if value := check(m.perform("GET", "/status", "", false, true), 200); value["node_role"] != "Standalone" {
 		t.Fatal("reset role stale", value)
+	}
+	if value := check(m.perform("GET", "/nodes/observability", "", false, true), 200); value["role"] != "Standalone" || len(value["members"].([]any)) != 0 {
+		t.Fatal("reset observations stale", value)
 	}
 	check(m.perform("POST", "/nodes/release/rollback", "", true, true), 409)
 	if _, err := m.control.SignedIdentity(ctx, strings.Repeat("a", 32)); err != nil {

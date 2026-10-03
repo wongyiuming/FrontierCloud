@@ -356,6 +356,9 @@ func (t *Transport) Identity(ctx context.Context, origin, expectedID, expectedKe
 	if textField(value, "challenge") != challenge || !valid || version != protocol.Version || !nodeIdentifier.MatchString(peer.ID) || (expectedID != "" && peer.ID != expectedID) || (expectedKey != "" && public != expectedKey) || (role != "" && peer.Role != role) || (peer.Role != "Standalone" && peer.Role != "Master" && peer.Role != "Follower") || len(peer.AppVersion) > 64 {
 		return Peer{}, errors.New("node identity, endpoint or protocol mismatch")
 	}
+	if _, err = protocol.ReadCapabilities(value); err != nil {
+		return Peer{}, err
+	}
 	if peer.Role != "Standalone" {
 		endpoint, err := Endpoint(peer.Endpoint)
 		expected, expectedErr := Endpoint(origin)

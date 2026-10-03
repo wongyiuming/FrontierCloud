@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path"
 	"strings"
@@ -55,27 +56,41 @@ func (s *Service) StoragePool(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 	result := map[string]any{}
-	var allocated, used, reserved, available, offline, largest int64
+	var allocated, used, reserved, available, offline, largest, physicalTotal, physicalFree int64
+	add := func(a, b int64) int64 {
+		b = max(0, b)
+		if a > math.MaxInt64-b {
+			return math.MaxInt64
+		}
+		return a + b
+	}
 	for i := range members {
 		v := &members[i]
 		if v.Kind == "MasterLocal" {
 			v.PhysicalFree, v.PhysicalTotal = free, total
-			v.Available = 0
-			if v.Enabled != 0 && v.Writable != 0 && v.Health == "online" {
-				v.Available = min(max(0, v.Allocation-v.Used-v.Reserved), max(0, free-store.PhysicalReserve-v.Reserved))
-			}
-			v.OnlineWritable = v.Available
 		}
+		v.CurrentAllocation, v.ProjectUsed = v.Allocation, v.Used
+		// Operator observations match the existing four capacity facts. The
+		// placement repository retains its independently stricter reservation
+		// ceiling; this read view does not grant a write reservation.
+		v.Available = 0
+		if v.Enabled != 0 && v.Writable != 0 && v.Health == "online" {
+			v.Available = min(max(0, v.Allocation-v.Used-v.Reserved), max(0, v.PhysicalFree-store.PhysicalReserve))
+		}
+		v.OnlineWritable = v.Available
 		if v.Enabled != 0 {
-			allocated += v.Allocation
+			allocated = add(allocated, v.Allocation)
 		}
-		used += v.Used
-		reserved += v.Reserved
-		available += v.Available
-		offline += v.OfflineStored
+		used = add(used, v.Used)
+		reserved = add(reserved, v.Reserved)
+		available = add(available, v.Available)
+		offline = add(offline, v.OfflineStored)
+		physicalTotal = add(physicalTotal, v.PhysicalTotal)
+		physicalFree = add(physicalFree, v.PhysicalFree)
 		largest = max(largest, v.Available)
 	}
 	result["allocated_bytes"], result["used_bytes"], result["reserved_bytes"], result["available_bytes"], result["online_writable_bytes"], result["offline_stored_bytes"] = allocated, used, reserved, available, available, offline
+	result["physical_total_bytes"], result["physical_free_bytes"], result["current_allocated_bytes"], result["project_used_bytes"] = physicalTotal, physicalFree, allocated, used
 	auto := store.StorageMember{ID: "auto", Kind: "Auto", Transport: "Automatic", Enabled: 1, Health: "online", Writable: 1, Available: largest, OnlineWritable: largest, Compute: map[string]any{}, Backup: map[string]any{}}
 	result["members"] = append([]store.StorageMember{auto}, members...)
 	return result, nil

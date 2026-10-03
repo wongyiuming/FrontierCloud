@@ -87,6 +87,7 @@ class Transport:
                 raise ValueError()
             if identity["role"] != "Standalone" and p.endpoint(identity["endpoint"]) != p.endpoint(origin):
                 raise ValueError()
+            identity["capabilities"] = p.read_capabilities(identity)
             return identity
         except (KeyError, ValueError) as exc:
             raise p.ProtocolError("Node identity, endpoint or protocol mismatch") from exc

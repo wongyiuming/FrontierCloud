@@ -5,6 +5,7 @@ RUN /usr/local/go/bin/go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 COPY protocol ./protocol
+COPY migrations ./migrations
 ARG REVISION
 RUN test -n "$REVISION" && \
     CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath \
@@ -17,7 +18,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 ARG REVISION
 LABEL frontiercloud.revision=$REVISION frontiercloud.component="updater" \
-      frontiercloud.runtime="go" frontiercloud.schema-generation="2"
+      frontiercloud.runtime="go" frontiercloud.schema-generation="2" \
+      frontiercloud.release-manifest-version="1"
 COPY --from=build /out/frontiercloud-updater /app/frontiercloud-updater
 WORKDIR /workspace
 USER 0:0

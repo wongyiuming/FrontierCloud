@@ -19,7 +19,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/wongyiuming/FrontierCloud/internal/filelease"
 	"github.com/wongyiuming/FrontierCloud/internal/store"
 )
 
@@ -42,11 +41,26 @@ type Artifact struct {
 	name       string
 	once       sync.Once
 	err        error
+	release    func()
+	owner      bool
+	ownerInfo  os.FileInfo
 }
 
 func (a *Artifact) Read(p []byte) (int, error) { return a.file.Read(p) }
 func (a *Artifact) Close() error {
-	a.once.Do(func() { a.err = errors.Join(a.file.Close(), a.root.Remove(a.name)) })
+	a.once.Do(func() {
+		info, err := a.file.Stat()
+		a.err = errors.Join(err, a.file.Close())
+		if err == nil {
+			a.err = errors.Join(a.err, removeOwnedCacheFile(a.root, a.name, info))
+		}
+		if a.owner {
+			a.err = errors.Join(a.err, removeOwnedCacheFile(a.root, a.name+".owner", a.ownerInfo))
+		}
+		if a.release != nil {
+			a.release()
+		}
+	})
 	return a.err
 }
 func New(repository store.BackupRepository, source Source, directory string) (*Builder, error) {
@@ -74,22 +88,28 @@ func New(repository store.BackupRepository, source Source, directory string) (*B
 	if err != nil {
 		return nil, err
 	}
+	opened, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, opened) {
+		root.Close()
+		return nil, store.ErrBackupState
+	}
 	return &Builder{repository, source, root}, nil
 }
 func (b *Builder) Close() error { return b.root.Close() }
 func (b *Builder) SchedulerLease(ctx context.Context) (func(), error) {
-	if info, err := b.root.Lstat(".scheduler.lock"); err == nil && !info.Mode().IsRegular() {
-		return nil, store.ErrBackupState
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	f, err := b.root.OpenFile(".scheduler.lock", os.O_CREATE|os.O_RDWR, 0600)
+	return cacheNamedLease(ctx, b.root, ".scheduler.lock", true)
+}
+func (b *Builder) Build(ctx context.Context) (_ *Artifact, resultErr error) {
+	done, err := cacheLease(ctx, b.root, false)
 	if err != nil {
 		return nil, err
 	}
-	return filelease.Acquire(ctx, f, true)
-}
-func (b *Builder) Build(ctx context.Context) (_ *Artifact, resultErr error) {
+	transferred := false
+	defer func() {
+		if !transferred {
+			done()
+		}
+	}()
 	var identifier [16]byte
 	if _, err := rand.Read(identifier[:]); err != nil {
 		return nil, err
@@ -99,12 +119,30 @@ func (b *Builder) Build(ctx context.Context) (_ *Artifact, resultErr error) {
 	if err != nil {
 		return nil, err
 	}
-	artifact := &Artifact{Generation: time.Now().UnixNano(), file: f, root: b.root, name: name}
+	artifact := &Artifact{Generation: time.Now().UnixNano(), file: f, root: b.root, name: name, release: done}
+	transferred = true
 	defer func() {
 		if resultErr != nil {
 			resultErr = errors.Join(resultErr, artifact.Close())
 		}
 	}()
+	owner, err := b.root.OpenFile(name+".owner", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return nil, err
+	}
+	artifact.owner = true
+	artifact.ownerInfo, err = owner.Stat()
+	if err != nil {
+		owner.Close()
+		return nil, err
+	}
+	if _, err = owner.WriteString(artifactOwner); err == nil {
+		err = owner.Sync()
+	}
+	closeErr := owner.Close()
+	if err != nil || closeErr != nil {
+		return nil, errors.Join(err, closeErr)
+	}
 	digest := sha256.New()
 	output := bufio.NewWriterSize(io.MultiWriter(f, digest), 64*1024)
 	bounded := &recordOutput{writer: output}

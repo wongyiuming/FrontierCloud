@@ -448,7 +448,8 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
     async def test_incoming_heartbeat_cannot_mask_broken_peer_ingress(self):
         with patch.object(internal_nodes, "authenticated", new=AsyncMock()), patch.object(internal_nodes.catalog, "summary", new=AsyncMock(return_value={"protocol": 1})), patch.object(internal_nodes.state, "heartbeat", new=AsyncMock()) as recorded:
             self.assertEqual(await internal_nodes.heartbeat(None),
-                             {"app_version": p.APP_VERSION, "protocol": p.PROTOCOL_VERSION})
+                             {"app_version": p.APP_VERSION, "protocol": p.PROTOCOL_VERSION,
+                              "capabilities": list(p.BASELINE_CAPABILITIES)})
             recorded.assert_not_awaited()
 
 

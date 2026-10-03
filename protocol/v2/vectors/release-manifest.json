@@ -1,0 +1,294 @@
+{
+  "format": "frontiercloud-protocol-vector",
+  "version": 1,
+  "protocol": 2,
+  "cases": [
+    {
+      "name": "distinct-private-artifacts",
+      "manifest": {
+        "format": "frontiercloud-release-manifest",
+        "version": 1,
+        "release_version": "2.0.0rc1",
+        "protocol": 2,
+        "schema_generation": 2,
+        "artifacts": {
+          "main": {
+            "kind": "git-archive",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+          },
+          "gin_main": {
+            "kind": "git-archive",
+            "commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+            "source_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "tree_sha": "ffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "wrong-protocol",
+      "manifest": {
+        "format": "frontiercloud-release-manifest",
+        "version": 1,
+        "release_version": "2.0.0rc1",
+        "protocol": 3,
+        "schema_generation": 2,
+        "artifacts": {
+          "main": {
+            "kind": "git-archive",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+          },
+          "gin_main": {
+            "kind": "git-archive",
+            "commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+            "source_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "tree_sha": "ffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "future-schema",
+      "manifest": {
+        "format": "frontiercloud-release-manifest",
+        "version": 1,
+        "release_version": "2.0.0rc1",
+        "protocol": 2,
+        "schema_generation": 3,
+        "artifacts": {
+          "main": {
+            "kind": "git-archive",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+          },
+          "gin_main": {
+            "kind": "git-archive",
+            "commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+            "source_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "tree_sha": "ffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "boolean-version",
+      "manifest": {
+        "format": "frontiercloud-release-manifest",
+        "version": true,
+        "release_version": "2.0.0rc1",
+        "protocol": 2,
+        "schema_generation": 2,
+        "artifacts": {
+          "main": {
+            "kind": "git-archive",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+          },
+          "gin_main": {
+            "kind": "git-archive",
+            "commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+            "source_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "tree_sha": "ffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "missing-native-profile",
+      "manifest": {
+        "format": "frontiercloud-release-manifest",
+        "version": 1,
+        "release_version": "2.0.0rc1",
+        "protocol": 2,
+        "schema_generation": 2,
+        "artifacts": {
+          "main": {
+            "kind": "git-archive",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-profile",
+      "manifest": {
+        "format": "frontiercloud-release-manifest",
+        "version": 1,
+        "release_version": "2.0.0rc1",
+        "protocol": 2,
+        "schema_generation": 2,
+        "artifacts": {
+          "main": {
+            "kind": "git-archive",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+          },
+          "gin_main": {
+            "kind": "git-archive",
+            "commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+            "source_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "tree_sha": "ffffffffffffffffffffffffffffffffffffffff"
+          },
+          "custom": {
+            "kind": "git-archive",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-artifact-field",
+      "manifest": {
+        "format": "frontiercloud-release-manifest",
+        "version": 1,
+        "release_version": "2.0.0rc1",
+        "protocol": 2,
+        "schema_generation": 2,
+        "artifacts": {
+          "main": {
+            "kind": "git-archive",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+            "url": "https://untrusted.test/artifact"
+          },
+          "gin_main": {
+            "kind": "git-archive",
+            "commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+            "source_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "tree_sha": "ffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "uppercase-sha",
+      "manifest": {
+        "format": "frontiercloud-release-manifest",
+        "version": 1,
+        "release_version": "2.0.0rc1",
+        "protocol": 2,
+        "schema_generation": 2,
+        "artifacts": {
+          "main": {
+            "kind": "git-archive",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+          },
+          "gin_main": {
+            "kind": "git-archive",
+            "commit_sha": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+            "source_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "tree_sha": "ffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-artifact-kind",
+      "manifest": {
+        "format": "frontiercloud-release-manifest",
+        "version": 1,
+        "release_version": "2.0.0rc1",
+        "protocol": 2,
+        "schema_generation": 2,
+        "artifacts": {
+          "main": {
+            "kind": "oci",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+          },
+          "gin_main": {
+            "kind": "git-archive",
+            "commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+            "source_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "tree_sha": "ffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "unknown-root-field",
+      "manifest": {
+        "format": "frontiercloud-release-manifest",
+        "version": 1,
+        "release_version": "2.0.0rc1",
+        "protocol": 2,
+        "schema_generation": 2,
+        "artifacts": {
+          "main": {
+            "kind": "git-archive",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+          },
+          "gin_main": {
+            "kind": "git-archive",
+            "commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+            "source_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "tree_sha": "ffffffffffffffffffffffffffffffffffffffff"
+          }
+        },
+        "runtime": "go"
+      },
+      "valid": false
+    },
+    {
+      "name": "version-whitespace",
+      "manifest": {
+        "format": "frontiercloud-release-manifest",
+        "version": 1,
+        "release_version": "2.0.0 rc1",
+        "protocol": 2,
+        "schema_generation": 2,
+        "artifacts": {
+          "main": {
+            "kind": "git-archive",
+            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+          },
+          "gin_main": {
+            "kind": "git-archive",
+            "commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+            "source_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "tree_sha": "ffffffffffffffffffffffffffffffffffffffff"
+          }
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "duplicate-root-field",
+      "raw": "{\"format\":\"frontiercloud-release-manifest\",\"version\":1,\"version\":1,\"release_version\":\"2.0.0rc1\",\"protocol\":2,\"schema_generation\":2,\"artifacts\":{\"main\":{\"kind\":\"git-archive\",\"commit_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source_sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"tree_sha\":\"cccccccccccccccccccccccccccccccccccccccc\"},\"gin_main\":{\"kind\":\"git-archive\",\"commit_sha\":\"dddddddddddddddddddddddddddddddddddddddd\",\"source_sha\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"tree_sha\":\"ffffffffffffffffffffffffffffffffffffffff\"}}}",
+      "valid": false
+    },
+    {
+      "name": "trailing-json",
+      "raw": "{\"format\":\"frontiercloud-release-manifest\",\"version\":1,\"release_version\":\"2.0.0rc1\",\"protocol\":2,\"schema_generation\":2,\"artifacts\":{\"main\":{\"kind\":\"git-archive\",\"commit_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source_sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"tree_sha\":\"cccccccccccccccccccccccccccccccccccccccc\"},\"gin_main\":{\"kind\":\"git-archive\",\"commit_sha\":\"dddddddddddddddddddddddddddddddddddddddd\",\"source_sha\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"tree_sha\":\"ffffffffffffffffffffffffffffffffffffffff\"}}}{}",
+      "valid": false
+    }
+  ]
+}

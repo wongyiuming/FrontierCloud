@@ -2,11 +2,11 @@
 FROM python:3.14.7-slim
 WORKDIR /src
 COPY pyproject.toml .
-RUN python -c "import tomllib,subprocess; deps=tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']; names=('sqlalchemy==','asyncmy==','aiosqlite==','pydantic-settings==','cryptography=='); subprocess.check_call(['python','-m','pip','install','--no-cache-dir',*[d for d in deps if d.startswith(names)]])"
+RUN python -c "import tomllib,subprocess; deps=tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']; names=('sqlalchemy==','asyncmy==','aiosqlite==','pydantic-settings==','cryptography==','pypinyin==','opencc=='); subprocess.check_call(['python','-m','pip','install','--no-cache-dir',*[d for d in deps if d.startswith(names)]])"
 COPY app ./app
 COPY migrations ./migrations
 COPY protocol ./protocol
-COPY tests/test_protocol_conformance.py tests/test_sqlite_store.py ./tests/
+COPY tests/test_protocol_conformance.py tests/test_sqlite_store.py tests/test_capability_vectors.py tests/test_release_manifest_vectors.py ./tests/
 COPY tests/store_interop_smoke.py .
 RUN chmod -R a+rX /src/app /src/migrations /src/protocol /src/tests && \
     chmod a+r /src/store_interop_smoke.py

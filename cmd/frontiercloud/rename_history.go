@@ -40,6 +40,9 @@ func drainRenameCommand(arguments []string, output io.Writer) error {
 	defer cancel()
 	var drained int
 	err = gate.Inspect(ctx, func(ctx context.Context) error {
+		if err := bindStore(ctx, settings); err != nil {
+			return err
+		}
 		var db store.Store
 		var err error
 		if settings.DatabaseType == config.DatabaseSQLite {

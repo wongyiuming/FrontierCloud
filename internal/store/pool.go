@@ -36,24 +36,26 @@ type ResourceConfiguration struct {
 	} `json:"backup"`
 }
 type StorageMember struct {
-	ID             string         `json:"member_id"`
-	RelationshipID *string        `json:"relationship_id"`
-	Kind           string         `json:"member_kind"`
-	Transport      string         `json:"transport"`
-	Enabled        int            `json:"storage_enabled"`
-	Allocation     int64          `json:"allocated_bytes"`
-	Used           int64          `json:"used_bytes"`
-	Reserved       int64          `json:"reserved_bytes"`
-	PhysicalFree   int64          `json:"physical_free_bytes"`
-	Health         string         `json:"health"`
-	Writable       int            `json:"writable"`
-	UpdatedAt      int64          `json:"updated_at"`
-	Available      int64          `json:"available_bytes"`
-	OnlineWritable int64          `json:"online_writable_bytes"`
-	OfflineStored  int64          `json:"offline_stored_bytes"`
-	PhysicalTotal  int64          `json:"physical_total_bytes"`
-	Compute        map[string]any `json:"compute"`
-	Backup         map[string]any `json:"backup"`
+	ID                string         `json:"member_id"`
+	RelationshipID    *string        `json:"relationship_id"`
+	Kind              string         `json:"member_kind"`
+	Transport         string         `json:"transport"`
+	Enabled           int            `json:"storage_enabled"`
+	Allocation        int64          `json:"allocated_bytes"`
+	Used              int64          `json:"used_bytes"`
+	Reserved          int64          `json:"reserved_bytes"`
+	PhysicalFree      int64          `json:"physical_free_bytes"`
+	Health            string         `json:"health"`
+	Writable          int            `json:"writable"`
+	UpdatedAt         int64          `json:"updated_at"`
+	Available         int64          `json:"available_bytes"`
+	OnlineWritable    int64          `json:"online_writable_bytes"`
+	OfflineStored     int64          `json:"offline_stored_bytes"`
+	PhysicalTotal     int64          `json:"physical_total_bytes"`
+	CurrentAllocation int64          `json:"current_allocated_bytes"`
+	ProjectUsed       int64          `json:"project_used_bytes"`
+	Compute           map[string]any `json:"compute"`
+	Backup            map[string]any `json:"backup"`
 }
 type PoolRepository interface {
 	OwnedStorageRepository

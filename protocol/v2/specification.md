@@ -28,6 +28,25 @@ Unknown JSON object fields SHOULD be ignored unless accepting them would weaken
 authentication or authorization. Required fields and their existing meanings
 MUST NOT change within protocol v2.
 
+### Optional capability negotiation
+
+Signed identities and authenticated heartbeat requests/responses may include
+`capabilities`: a unique list of at most 64 ASCII feature identifiers matching
+`[a-z0-9][a-z0-9._-]{0,63}`. Unknown identifiers are bounded but not selected by
+a runtime that does not implement them. Malformed lists must be rejected before
+applying desired configuration or recording successful reachability. Negotiation
+occurs only after existing protocol-v2 signature/HMAC validation; the list grants
+neither role nor relationship authority.
+
+Existing protocol-v2 peers lacking the field retain only the established baseline:
+`backup-v2`, `media-v2`, `node-auth-v2`, `recordings-v2`, `storage-v2`. An explicit
+empty list advertises no optional operation. New features, including release
+manifest or restore, are never inferred from the baseline, app version, language
+or database. Required operations must belong to the intersection of both peers'
+implemented capabilities. This optional extension does not increment protocol
+version or disclose backend language/database details. Shared negotiation vectors
+are in `vectors/capabilities.json`.
+
 ## 2. Transport
 
 - Node control traffic MUST use HTTPS with normal certificate verification.
@@ -206,7 +225,7 @@ The current v2 compatibility surface includes:
 - `/internal/v1/recordings/*` for upload, stream, stat, and delete
 - `/internal/v1/media-control/*` for directory mutation
 - `/internal/v1/cluster-update/*` for update control and status
-- `/internal/v1/playback-diagnostics`
+- `/internal/v1/playback-continuity-diagnostics` (temporary, retires 2026-10-15)
 
 Endpoint-specific authorization always includes relationship direction, role,
 and resource ownership checks in addition to a valid MAC or capability token.

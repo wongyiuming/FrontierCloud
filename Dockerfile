@@ -1,5 +1,6 @@
 # Use a patch-pinned official Debian-based Python 3.14 slim image.
 FROM python:3.14.7-slim
+LABEL frontiercloud.release-manifest-version="1"
 
 # Set the application working directory.
 WORKDIR /app
@@ -17,12 +18,13 @@ RUN chmod 0644 pyproject.toml && \
 # after dependencies, then normalize them for the fixed unprivileged UID.
 COPY main.py .
 COPY app ./app
+COPY updater/release_evidence.py ./updater/release_evidence.py
 COPY static ./static
 COPY tests ./tests
 COPY migrations ./migrations
 COPY protocol ./protocol
 RUN chmod 0644 /app/main.py && \
-    chmod -R a+rX /app/app /app/static /app/tests /app/migrations /app/protocol
+    chmod -R a+rX /app/app /app/updater /app/static /app/tests /app/migrations /app/protocol
 
 # The public service does not require root. A fixed UID simplifies host
 # permissions for the data directory.

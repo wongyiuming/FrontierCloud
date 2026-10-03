@@ -86,6 +86,23 @@ class State:
             from app.services import resource_pool
             await resource_pool.adopt_master_local_media(self.node, self.database)
 
+    async def read_existing_identity(self) -> dict:
+        """Read authority without creating keys, nodes, pool rows or migrations."""
+        async with self.database.connect() as conn:
+            row = (await conn.execute(select(s.identity).where(s.identity.c.singleton == 1))).mappings().first()
+        if row is None or row["role"] not in {"Standalone", "Master", "Follower"}:
+            raise p.ProtocolError("Existing node identity is unavailable")
+        return dict(row)
+
+    async def load_existing_identity(self) -> None:
+        if self._vault is None:
+            # read_bytes must fail if the existing vault is absent; never use
+            # vault_key here, which may generate a replacement secret.
+            self._vault = Fernet((SECRET_DIR / "node-vault.key").read_bytes())
+        row = await self.read_existing_identity()
+        self.unseal(row["private_key"])
+        self.node = row
+
     def identity(self, challenge: str) -> dict:
         if not p.IDENTIFIER.fullmatch(challenge):
             raise p.ProtocolError("Invalid identity challenge")
@@ -93,7 +110,7 @@ class State:
         return p.sign(private, {"node_id": self.node["node_id"], "role": self.node["role"],
                                "endpoint": self.node["endpoint"], "public_key": p.public_key(private),
                                "challenge": challenge, "protocol": p.PROTOCOL_VERSION,
-                               "app_version": p.APP_VERSION})
+                               "app_version": p.APP_VERSION, "capabilities": list(p.BASELINE_CAPABILITIES)})
 
     async def log(self, conn, action: str, actor: str, relationship: str | None = None, **detail):
         request_id, trace_id = request_id_context.get(), trace_id_context.get()

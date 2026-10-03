@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wongyiuming/FrontierCloud/internal/protocol"
 	"github.com/wongyiuming/FrontierCloud/internal/release"
 	"github.com/wongyiuming/FrontierCloud/internal/sitecontrol"
 )
@@ -16,6 +17,7 @@ type DockerExecutor struct {
 	Socket, Project, ControlDirectory string
 	Runtime                           string
 	DataDirectory                     string
+	ManifestVerifier                  release.ArtifactEvidence
 }
 type replacement struct {
 	Target    string               `json:"target"`
@@ -55,6 +57,11 @@ func previousFor(request Request, before Status) string {
 func (x *DockerExecutor) Execute(parent context.Context, request Request, before Status, progress func(Checkpoint) error) (Outcome, error) {
 	ctx, cancel := context.WithTimeout(parent, 45*time.Minute)
 	defer cancel()
+	if request.Manifest != nil {
+		if err := x.verifyManifest(ctx, request, before); err != nil {
+			return Outcome{}, err
+		}
+	}
 	if err := x.clearForceOpen(ctx); err != nil {
 		return Outcome{}, err
 	}
@@ -100,6 +107,19 @@ func (x *DockerExecutor) Execute(parent context.Context, request Request, before
 	}
 	previous := previousFor(request, before)
 	web := journal.Snapshots["web"]
+	if request.Target == before.CurrentSHA && (request.Manifest != nil || before.CurrentManifest != nil || before.PreviousManifest != nil) {
+		for _, component := range []string{"web", "updater"} {
+			c := journal.Snapshots[component]
+			revision := before.CurrentSHA
+			if component == "updater" {
+				revision = x.Runtime
+			}
+			image, e := engine.Image(ctx, c.Image, revision, component)
+			if e != nil || image.Config.Labels["frontiercloud.release-manifest-version"] != "1" {
+				return Outcome{}, release.ErrManifest
+			}
+		}
+	}
 	if request.Target != before.CurrentSHA {
 		if err = progress(Checkpoint{Phase: "building"}); err != nil {
 			return Outcome{}, err
@@ -114,6 +134,14 @@ func (x *DockerExecutor) Execute(parent context.Context, request Request, before
 		}
 		if _, e = engine.Build(ctx, x.Source, request.Target, "updater", "updater/Dockerfile.gin"); e != nil {
 			return Outcome{}, e
+		}
+		if request.Manifest != nil || before.CurrentManifest != nil || before.PreviousManifest != nil {
+			for component, ref := range map[string]string{"web": webImage, "updater": "frontiercloud-updater:" + request.Target} {
+				image, e := engine.Image(ctx, ref, request.Target, component)
+				if e != nil || image.Config.Labels["frontiercloud.release-manifest-version"] != "1" {
+					return Outcome{}, release.ErrManifest
+				}
+			}
 		}
 		if e = private.write("replacement.json", journal, 16<<20); e != nil {
 			return Outcome{}, e
@@ -193,11 +221,26 @@ func (x *DockerExecutor) Execute(parent context.Context, request Request, before
 	if err = engine.NginxReady(ctx, currentNginx.ID); err != nil {
 		return Outcome{}, err
 	}
+	if request.Target == before.CurrentSHA && request.Manifest != nil {
+		// A joint release can change only another profile. Publish local whole
+		// release history durably even when no native containers are replaced.
+		if err = progress(Checkpoint{Current: request.Target, Previous: previous, SetPrevious: true, Phase: "local-committed"}); err != nil {
+			return Outcome{}, err
+		}
+	}
 	if request.Hold {
 		if err = progress(Checkpoint{State: "distributing", Phase: "distributing"}); err != nil {
 			return Outcome{}, err
 		}
-		if err = engine.Exec(ctx, web.ID, []string{"/app/frontiercloud", "cluster-release", request.Target, request.Mode}); err != nil {
+		command := []string{"/app/frontiercloud", "cluster-release", request.Target, request.Mode}
+		if request.Manifest != nil {
+			wire, e := request.Manifest.Wire()
+			if e != nil {
+				return Outcome{}, e
+			}
+			command = []string{"/app/frontiercloud", "cluster-release-manifest", protocol.Encode(wire), request.Mode}
+		}
+		if err = engine.Exec(ctx, web.ID, command); err != nil {
 			return Outcome{}, err
 		}
 	}
@@ -223,6 +266,29 @@ func (x *DockerExecutor) Execute(parent context.Context, request Request, before
 		return Outcome{}, err
 	}
 	return Outcome{Current: request.Target, Previous: previous, Handoff: true}, nil
+}
+
+func (x *DockerExecutor) verifyManifest(ctx context.Context, request Request, before Status) error {
+	policy, err := release.PolicyForBranch(x.Source.Branch)
+	if err != nil || before.ReleaseBranch != policy.Branch || request.Manifest == nil {
+		return release.ErrManifest
+	}
+	artifact, err := request.Manifest.Select(policy)
+	if err != nil || artifact.CommitSHA != request.Target {
+		return release.ErrManifest
+	}
+	verifier := x.ManifestVerifier
+	if verifier == nil {
+		verifier, err = release.NewVerifier(policy, os.Getenv("GITHUB_API_TOKEN"))
+		if err != nil {
+			return err
+		}
+	}
+	proof, err := verifier.Artifact(ctx, artifact.CommitSHA)
+	if err != nil {
+		return err
+	}
+	return request.Manifest.CheckEvidence(policy, proof)
 }
 func (x *DockerExecutor) helper(ctx context.Context, e *Engine, s *privateStore, j *replacement, phase string, snap Container, image string, command []string) error {
 	name := "fc-release-" + phase + "-" + j.Target + "-" + snap.ID[:12]
@@ -333,7 +399,15 @@ func (x *DockerExecutor) Recover(ctx context.Context, status Status) error {
 	defer s.Close()
 	var journal replacement
 	journalErr := s.read("replacement.json", 16<<20, &journal)
-	if journalErr == nil || release.Busy(status.State) || status.State == "success" {
+	var pending handoff
+	handoffErr := s.read("handoff.json", 16<<20, &pending)
+	if handoffErr != nil && !errors.Is(handoffErr, os.ErrNotExist) {
+		return handoffErr
+	}
+	if handoffErr == nil && !x.validHandoff(pending, status.TargetSHA) {
+		return ErrState
+	}
+	if journalErr == nil || handoffErr == nil || release.Busy(status.State) || status.State == "success" {
 		if err = x.clearForceOpen(ctx); err != nil {
 			return err
 		}
@@ -353,6 +427,31 @@ func (x *DockerExecutor) Recover(ctx context.Context, status Status) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if status.State == "failed" && handoffErr == nil {
+		if pending.Target != status.CurrentSHA || status.RuntimeSHA != x.Runtime {
+			return ErrState
+		}
+		current, err := e.Service(ctx, x.Project, "updater")
+		if err != nil {
+			return err
+		}
+		if current.State.Status != "running" {
+			return ErrState
+		}
+		image, imageErr := e.Image(ctx, current.Image, x.Runtime, "updater")
+		if imageErr != nil {
+			return imageErr
+		}
+		if manifestState(status) && image.Config.Labels["frontiercloud.release-manifest-version"] != "1" {
+			return release.ErrManifest
+		}
+		if err = x.retireHandoffHelper(ctx, e, pending); err != nil {
+			return err
+		}
+		if err = s.remove("handoff.json"); err != nil {
+			return err
+		}
+	}
 	if status.State == "success" || status.State == "restarting" {
 		if x.Runtime != status.CurrentSHA || (status.State == "restarting" && x.Runtime != status.TargetSHA) {
 			return ErrState
@@ -362,8 +461,12 @@ func (x *DockerExecutor) Recover(ctx context.Context, status Status) error {
 			if err != nil {
 				return err
 			}
-			if _, err = e.Image(ctx, c.Image, status.CurrentSHA, service); err != nil {
-				return err
+			image, imageErr := e.Image(ctx, c.Image, status.CurrentSHA, service)
+			if imageErr != nil {
+				return imageErr
+			}
+			if manifestState(status) && service != "nginx" && image.Config.Labels["frontiercloud.release-manifest-version"] != "1" {
+				return release.ErrManifest
 			}
 			if service == "web" {
 				if c.State.Status != "running" || c.State.Health.Status != "healthy" {
@@ -384,6 +487,9 @@ func (x *DockerExecutor) Recover(ctx context.Context, status Status) error {
 			if h.Target != status.CurrentSHA {
 				return ErrState
 			}
+			if err = x.retireHandoffHelper(ctx, e, h); err != nil {
+				return err
+			}
 			if err = s.remove("handoff.json"); err != nil {
 				return err
 			}
@@ -392,6 +498,33 @@ func (x *DockerExecutor) Recover(ctx context.Context, status Status) error {
 		}
 	}
 	return nil
+}
+
+func manifestState(status Status) bool {
+	return status.TargetManifest != nil || status.CurrentManifest != nil || status.PreviousManifest != nil
+}
+
+func (x *DockerExecutor) validHandoff(h handoff, target string) bool {
+	return release.ValidSHA(target) && h.Target == target && h.Snapshot.valid() && h.Snapshot.label("com.docker.compose.project") == x.Project && h.Snapshot.label("com.docker.compose.service") == "updater" && h.Helper == "fc-handoff-"+h.Target+"-"+h.Snapshot.ID[:12]
+}
+func (x *DockerExecutor) retireHandoffHelper(ctx context.Context, e *Engine, h handoff) error {
+	if !x.validHandoff(h, h.Target) {
+		return ErrState
+	}
+	c, err := e.Inspect(ctx, h.Helper)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if c.label("frontiercloud.helper") != h.Helper || c.label("frontiercloud.project") != x.Project {
+		return ErrState
+	}
+	if err = e.Stop(ctx, c.ID); err != nil {
+		return err
+	}
+	return e.Remove(ctx, c.ID)
 }
 
 func (x *DockerExecutor) clearForceOpen(ctx context.Context) error {
@@ -416,6 +549,11 @@ func (x *DockerExecutor) Handoff(ctx context.Context) error {
 		return err
 	}
 	defer s.Close()
+	done, err := s.handoffLease()
+	if err != nil {
+		return err
+	}
+	defer done()
 	var h handoff
 	if err = s.read("handoff.json", 16<<20, &h); err != nil {
 		return err
@@ -424,7 +562,7 @@ func (x *DockerExecutor) Handoff(ctx context.Context) error {
 	if err = s.read("status.json", 8192, &status); err != nil {
 		return err
 	}
-	if !status.valid() || status.State != "restarting" || status.TargetSHA != x.Runtime || h.Target != x.Runtime || !h.Snapshot.valid() || h.Snapshot.label("com.docker.compose.project") != x.Project || h.Snapshot.label("com.docker.compose.service") != "updater" {
+	if !status.valid() || status.State != "restarting" || status.CurrentSHA != h.Target || status.TargetSHA != x.Runtime || !x.validHandoff(h, x.Runtime) {
 		return ErrState
 	}
 	e, err := x.engine(ctx)
@@ -436,17 +574,87 @@ func (x *DockerExecutor) Handoff(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var original Image
+	if err = e.call(ctx, "GET", "/images/"+h.Snapshot.Image+"/json", nil, &original); err != nil {
+		return err
+	}
+	if !release.ValidSHA(original.Config.Labels["frontiercloud.revision"]) {
+		return ErrState
+	}
+	if _, err = e.Image(ctx, h.Snapshot.Image, original.Config.Labels["frontiercloud.revision"], "updater"); err != nil {
+		return err
+	}
 	name := strings.TrimPrefix(h.Snapshot.Name, "/")
 	if current, e2 := e.Inspect(ctx, name); e2 == nil {
 		if current.ID != h.Snapshot.ID {
 			if current.Image != desired.ID || current.label("frontiercloud.release-operation") != h.Target {
 				return ErrState
 			}
-			return e.Start(ctx, current.ID)
+			if current.State.Status == "running" {
+				return nil
+			}
+			if err = e.Start(ctx, current.ID); err == nil {
+				return nil
+			}
+			return x.recoverHandoff(ctx, e, s, h, status, desired, err)
 		}
 	} else if !errors.Is(e2, ErrNotFound) {
 		return e2
 	}
 	_, err = e.Replace(ctx, h.Snapshot, h.Image, h.Target)
-	return err
+	if err == nil {
+		return nil
+	}
+	return x.recoverHandoff(ctx, e, s, h, status, desired, err)
+}
+
+// A failed handoff must not remove the only control agent. Restore only the
+// exact saved native updater image/configuration; the already committed Web
+// generation stays intact and public maintenance remains closed. A lost Docker
+// start reply is first reconciled, so a running target is never rolled back.
+func (x *DockerExecutor) recoverHandoff(parent context.Context, e *Engine, s *privateStore, h handoff, status Status, desired Image, cause error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 4*time.Minute)
+	defer cancel()
+	name := strings.TrimPrefix(h.Snapshot.Name, "/")
+	current, err := e.Inspect(ctx, name)
+	if err == nil {
+		if current.ID != h.Snapshot.ID && (current.label("frontiercloud.release-operation") != h.Target || current.label("com.docker.compose.project") != x.Project || current.label("com.docker.compose.service") != "updater") {
+			return errors.Join(cause, ErrState)
+		}
+		if current.Image == desired.ID && current.State.Status == "running" {
+			return nil
+		}
+		if err = e.Stop(ctx, current.ID); err != nil {
+			return errors.Join(cause, err)
+		}
+	} else if !errors.Is(err, ErrNotFound) {
+		return errors.Join(cause, err)
+	}
+	var old Image
+	if err = e.call(ctx, "GET", "/images/"+h.Snapshot.Image+"/json", nil, &old); err != nil {
+		return errors.Join(cause, err)
+	}
+	revision := old.Config.Labels["frontiercloud.revision"]
+	if !release.ValidSHA(revision) {
+		return errors.Join(cause, ErrState)
+	}
+	if _, err = e.Image(ctx, h.Snapshot.Image, revision, "updater"); err != nil {
+		return errors.Join(cause, err)
+	}
+	var latest Status
+	if err = s.read("status.json", 8192, &latest); err != nil {
+		return errors.Join(cause, err)
+	}
+	if !latest.valid() || latest.State != "restarting" || latest.TargetSHA != status.TargetSHA || latest.CurrentSHA != h.Target {
+		return errors.Join(cause, ErrState)
+	}
+	latest.State, latest.Phase, latest.Detail = "failed", "updater-restart-failed", "updater handoff failed; previous control runtime restored under maintenance"
+	latest.RuntimeSHA, latest.CompletedAt, latest.UpdatedAt = revision, time.Now().Unix(), time.Now().Unix()
+	if err = s.write("status.json", latest, 8192); err != nil {
+		return errors.Join(cause, err)
+	}
+	if _, err = e.Replace(ctx, h.Snapshot, h.Snapshot.Image, h.Target); err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
 }

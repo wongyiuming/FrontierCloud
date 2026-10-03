@@ -100,6 +100,15 @@ func Preflight(ctx context.Context, reader io.Reader, expected Expectation, dire
 		return Report{}, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
+	opened, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, opened) {
+		return Report{}, store.ErrBackupState
+	}
+	done, err := cacheLease(ctx, root, false)
+	if err != nil {
+		return Report{}, err
+	}
+	defer done()
 	var identifier [16]byte
 	if _, err := rand.Read(identifier[:]); err != nil {
 		return Report{}, err
@@ -111,6 +120,9 @@ func Preflight(ctx context.Context, reader io.Reader, expected Expectation, dire
 	// Exact generated child under a rooted directory; never delete the caller's
 	// directory or any pre-existing artifact, even after a validation failure.
 	defer func() { resultErr = errors.Join(resultErr, root.RemoveAll(name)) }()
+	if err := writeCacheOwner(root, name+"/.owner", scratchOwner); err != nil {
+		return Report{}, err
+	}
 	f, err := root.OpenFile(name+"/check.sqlite", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 	if err != nil {
 		return Report{}, err

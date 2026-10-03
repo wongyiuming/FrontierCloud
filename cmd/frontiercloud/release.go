@@ -39,6 +39,9 @@ func prepareReleaseCommand(arguments []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	return gate.Inspect(ctx, func(ctx context.Context) error {
+		if err := bindStore(ctx, settings); err != nil {
+			return err
+		}
 		var db store.Store
 		var err error
 		if settings.DatabaseType == config.DatabaseSQLite {

@@ -21,16 +21,21 @@ type engineContract struct {
 	containers           map[string]Container
 	images               map[string]Image
 	execs                map[string]int
+	commands             [][]string
 	old, target, project string
 	next                 int
 	fault                string
 	removed              []string
+	cancelMutation       context.CancelFunc
 }
 
 func (f *engineContract) image(ref, revision, component string) Image {
 	f.next++
 	i := Image{ID: "sha256:" + fmt.Sprintf("%064x", f.next), RepoTags: []string{ref}}
 	i.Config.Labels = map[string]string{"frontiercloud.revision": revision, "frontiercloud.component": component, "frontiercloud.runtime": "go", "frontiercloud.schema-generation": "2", "frontiercloud.project": f.project}
+	if f.fault != "manifest-incompatible" || revision != f.target {
+		i.Config.Labels["frontiercloud.release-manifest-version"] = "1"
+	}
 	f.images[ref], f.images[i.ID] = i, i
 	return i
 }
@@ -115,6 +120,15 @@ func (f *engineContract) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(404)
 			return
 		}
+		if image.Config.Labels["frontiercloud.component"] == "updater" && image.Config.Labels["frontiercloud.revision"] == f.target && name == "private-updater" {
+			if f.fault == "updater-create" || f.fault == "updater-create-cancel" {
+				if f.cancelMutation != nil {
+					f.cancelMutation()
+				}
+				w.WriteHeader(500)
+				return
+			}
+		}
 		f.next++
 		c := Container{ID: fmt.Sprintf("%064x", f.next), Name: "/" + name, Image: image.ID, Config: cloneObject(body)}
 		c.HostConfig, _ = c.Config["HostConfig"].(map[string]any)
@@ -123,6 +137,10 @@ func (f *engineContract) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.State.Status = "created"
 		c.NetworkSettings.Networks = sampleContainer().NetworkSettings.Networks
 		f.containers[c.ID] = c
+		if f.fault == "updater-create-lost" && image.Config.Labels["frontiercloud.component"] == "updater" && image.Config.Labels["frontiercloud.revision"] == f.target && name == "private-updater" {
+			w.WriteHeader(500)
+			return
+		}
 		reply(map[string]any{"Id": c.ID})
 		return
 	}
@@ -138,6 +156,10 @@ func (f *engineContract) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "json":
 			reply(c)
 		case "start":
+			if f.fault == "updater-start" && c.label("com.docker.compose.service") == "updater" && f.images[c.Image].Config.Labels["frontiercloud.revision"] == f.target {
+				w.WriteHeader(500)
+				return
+			}
 			c.State.Status = "running"
 			c.State.Health.Status = "healthy"
 			if c.label("frontiercloud.helper") != "" && strings.HasPrefix(c.label("frontiercloud.helper"), "fc-release-") {
@@ -147,6 +169,10 @@ func (f *engineContract) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				c.State.Health.Status = "unhealthy"
 			}
 			f.containers[c.ID] = c
+			if f.fault == "updater-start-lost" && c.label("com.docker.compose.service") == "updater" && f.images[c.Image].Config.Labels["frontiercloud.revision"] == f.target {
+				w.WriteHeader(500)
+				return
+			}
 			w.WriteHeader(204)
 		case "stop":
 			if c.State.Status == "exited" {
@@ -161,10 +187,11 @@ func (f *engineContract) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "exec":
 			var v struct{ Cmd []string }
 			json.NewDecoder(r.Body).Decode(&v)
+			f.commands = append(f.commands, append([]string(nil), v.Cmd...))
 			f.next++
 			id := fmt.Sprintf("%064x", f.next)
 			code := 0
-			if (f.fault == "nginx" && len(v.Cmd) > 2 && strings.Contains(v.Cmd[2], "nginx -t") && f.images[c.Image].Config.Labels["frontiercloud.revision"] == f.target) || (f.fault == "distribution" && len(v.Cmd) > 1 && v.Cmd[1] == "cluster-release") {
+			if (f.fault == "nginx" && len(v.Cmd) > 2 && strings.Contains(v.Cmd[2], "nginx -t") && f.images[c.Image].Config.Labels["frontiercloud.revision"] == f.target) || (f.fault == "distribution" && len(v.Cmd) > 1 && (v.Cmd[1] == "cluster-release" || v.Cmd[1] == "cluster-release-manifest")) {
 				code = 7
 				if f.fault == "nginx" {
 					c.State.Status = "exited"
@@ -181,6 +208,11 @@ func (f *engineContract) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				f.removed = append(f.removed, c.Name)
 				delete(f.containers, c.ID)
+				if f.fault == "updater-remove-lost" && c.label("com.docker.compose.service") == "updater" && f.images[c.Image].Config.Labels["frontiercloud.revision"] == f.old {
+					f.fault = ""
+					w.WriteHeader(500)
+					return
+				}
 				w.WriteHeader(204)
 			} else {
 				w.WriteHeader(404)

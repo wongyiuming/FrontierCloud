@@ -39,6 +39,10 @@ func TestRejectsUnknownDatabase(t *testing.T) {
 }
 
 func TestReleasePolicyAndTokenValidation(t *testing.T) {
+	defaults, err := LoadFrom(environment(nil))
+	if err != nil || defaults.ReleaseBranch != "gin_main" || defaults.ReleaseSourceBranch != "gin_dev" {
+		t.Fatal("native default release policy", defaults.ReleaseBranch, err)
+	}
 	value, err := LoadFrom(environment(map[string]string{"RELEASE_BRANCH": "gin_main", "GITHUB_API_TOKEN": " scoped-token "}))
 	if err != nil || value.ReleaseSourceBranch != "gin_dev" || value.GitHubAPIToken != "scoped-token" {
 		t.Fatal("explicit Gin release policy", err)

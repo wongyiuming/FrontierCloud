@@ -40,6 +40,9 @@ func adoptStorageCommand(arguments []string, output io.Writer) error {
 	defer cancel()
 	var adopted int
 	err = gate.Inspect(ctx, func(ctx context.Context) error {
+		if err := bindStore(ctx, settings); err != nil {
+			return err
+		}
 		var db store.Store
 		var err error
 		if settings.DatabaseType == config.DatabaseSQLite {

@@ -345,3 +345,67 @@ Admin maintenance/CSRF/audit tests passed real Redis and Linux race checks on
 2026-10-02. See `protocol/v2/native-updater.md` for the precise boundary. These
 checks do not prove mixed-cluster releases, portable restore or final deployment;
 the existing ten-node topology and the startup cluster-role fence are unchanged.
+
+## Native candidate verification (2026-10-03)
+
+Separate Gin/SQLite and optional Gin/MySQL Compose candidates now use native
+initializers, UID/GID 10001 Web and a separately restricted updater. SQLite has
+no MySQL service/dependency; MySQL uses the same logical schema and creates no
+authoritative SQLite database. Actual isolated stacks passed native upgrade,
+compiled updater handoff and rollback for both stores. The root deployment is
+still unchanged pending final acceptance. Actual Compose JSON checks cover
+commands, permissions, immutable revision labels and project selection.
+
+Native database selection is now bound durably to the data root before opening
+the first writer, with existing-vault identity proof before legacy admission.
+An accidental `.env` switch cannot create an empty database next to an existing
+identity. The fixed-target backup-cache maintenance command requires a closed
+fence, matching identity and committed audit before deleting only owner-marked,
+inactive native leftovers. Unknown/legacy files and symlinks remain untouched.
+
+Node observations and four storage capacity facts now reflect real SQL heartbeat/
+membership state. Temporary playback diagnostics preserve bounded process memory,
+sensitive-key filtering, signed relay/fallback and retirement. These additions,
+cache crash/lease tests and selected-store admission passed Windows checks and
+the isolated real MySQL/Redis, Linux race, native drain and Nginx regression.
+Metrics/documentation and self-handoff failure recovery passed the real-driver
+and Linux race suite. Both actual SQLite and MySQL stacks then passed native
+upgrade, immutable updater handoff and rollback again. Production HTTP route
+registration now has shared-route and OpenAPI coverage through the actual Gin
+factory. Protocol-v2 capability negotiation uses shared Python/Go vectors;
+legacy peers retain only the established baseline, not new feature capabilities.
+The latest route/capability slice passed the cross-language Linux rerun, actual
+Compose parsing and Python/Go x SQLite/MySQL initialization, restart and shared
+generation migration checks. The Python oracle passed 572 tests (4 skipped).
+
+Historical recording adoption now requires a short-lived inventory signed by
+the current Master, complete exact-size/SHA-256 physical verification and a
+transactional recheck of the current pinned upstream. It preserves already
+charged capacity and IDs, refuses unknown files, pending work and tombstones,
+and publishes ownership receipts atomically with audit. The command chain,
+replay, deletion/refund, audit rollback and scan failure tests pass locally;
+the new adoption slice also passed the real MySQL/Linux race rerun, including
+the full native command chain and physical authority-change faults.
+
+The bounded whole-release manifest now has shared Python/Go parsing/digest
+vectors, privately selected artifacts, durable queue/current/previous joint
+history and independent exact CI proof. Historical proof cannot reuse HEAD cache
+or let an older success supersede the newest failed source run. Authenticated
+Follower RPC forwards the whole manifest, never a Master-selected artifact SHA.
+Nine-peer mixed-profile tests require both common digest and local artifact
+convergence; status RPC advertises the feature only through a supporting agent.
+The general identity/heartbeat baseline still does not advertise it.
+
+Both Master implementations can opt into a read-only publication metadata file
+through `RELEASE_MANIFEST_PATH`; Admin request bodies cannot provide a target or
+manifest. Both profile proofs and current production HEADs are required before
+upgrade queueing; rollback uses only durable whole-release history. Membership,
+pins and authority are rechecked around proof/probes. Failed source metadata or
+CI cannot reach Docker/source mutation. See `protocol/v2/release-manifest.md`.
+These controls pass local regression, not real fleet release acceptance. The
+latest full Python oracle passed 581 tests (4 skipped), alongside Go tests/vet.
+
+The final gates still include runtime-agnostic mixed releases, portable restore/
+physical ownership, default deployment promotion and isolated ten-node mixed
+startup/restart acceptance. Existing production Master/Follower startup remains
+fenced, and the original ten-node environment has not been redeployed.

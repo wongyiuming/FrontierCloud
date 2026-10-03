@@ -17,4 +17,6 @@ type MaintenanceRepository interface {
 	OwnedAdoptionObjects(context.Context, string) ([]MediaObject, error)
 	AdoptOwnedStorage(context.Context, string, string, []LocalMedia, NodeAudit) (int, error)
 	DrainCompletedRenames(context.Context, string, NodeAudit) (int, error)
+	ExportRecordingInventory(context.Context, string, int64) (RecordingInventory, error)
+	AdoptOwnedRecordings(context.Context, SignedRecordingInventory, string, NodeAudit) (int, error)
 }

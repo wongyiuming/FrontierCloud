@@ -21,19 +21,22 @@ import (
 var ErrState = errors.New("unsafe updater persistent state")
 
 type Status struct {
-	State           string `json:"state"`
-	Phase           string `json:"phase"`
-	Mode            string `json:"mode,omitempty"`
-	TargetSHA       string `json:"target_sha,omitempty"`
-	CurrentSHA      string `json:"current_sha"`
-	PreviousSHA     string `json:"previous_sha"`
-	RuntimeSHA      string `json:"updater_runtime_sha"`
-	ReleaseBranch   string `json:"release_branch"`
-	HoldMaintenance bool   `json:"hold_maintenance"`
-	Detail          string `json:"detail"`
-	UpdatedAt       int64  `json:"updated_at"`
-	StartedAt       int64  `json:"started_at,omitempty"`
-	CompletedAt     int64  `json:"completed_at,omitempty"`
+	State            string            `json:"state"`
+	Phase            string            `json:"phase"`
+	Mode             string            `json:"mode,omitempty"`
+	TargetSHA        string            `json:"target_sha,omitempty"`
+	CurrentSHA       string            `json:"current_sha"`
+	PreviousSHA      string            `json:"previous_sha"`
+	RuntimeSHA       string            `json:"updater_runtime_sha"`
+	ReleaseBranch    string            `json:"release_branch"`
+	HoldMaintenance  bool              `json:"hold_maintenance"`
+	Detail           string            `json:"detail"`
+	UpdatedAt        int64             `json:"updated_at"`
+	StartedAt        int64             `json:"started_at,omitempty"`
+	CompletedAt      int64             `json:"completed_at,omitempty"`
+	TargetManifest   *release.Manifest `json:"target_manifest,omitempty"`
+	CurrentManifest  *release.Manifest `json:"current_manifest,omitempty"`
+	PreviousManifest *release.Manifest `json:"previous_manifest,omitempty"`
 }
 
 func (s Status) valid() bool {
@@ -55,6 +58,22 @@ func (s Status) valid() bool {
 	}
 	if release.Busy(s.State) && (!release.ValidSHA(s.TargetSHA) || (s.Mode != "upgrade" && s.Mode != "rollback")) {
 		return false
+	}
+	policy, err := release.PolicyForBranch(s.ReleaseBranch)
+	if err != nil {
+		return false
+	}
+	for _, pair := range []struct {
+		value *release.Manifest
+		sha   string
+	}{{s.TargetManifest, s.TargetSHA}, {s.CurrentManifest, s.CurrentSHA}, {s.PreviousManifest, ""}} {
+		if pair.value == nil {
+			continue
+		}
+		artifact, err := pair.value.Select(policy)
+		if err != nil || pair.sha != "" && artifact.CommitSHA != pair.sha {
+			return false
+		}
 	}
 	return s.ReleaseBranch == "main" || s.ReleaseBranch == "gin_main"
 }
@@ -119,6 +138,25 @@ func (s *privateStore) Close() error {
 		s.release()
 	}
 	return s.root.Close()
+}
+func (s *privateStore) handoffLease() (func(), error) {
+	const name = ".handoff.lock"
+	if info, err := s.root.Lstat(name); err == nil && (!info.Mode().IsRegular() || info.Size() != 0) {
+		return nil, ErrState
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	f, err := s.root.OpenFile(name, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := f.Stat()
+	found, lookupErr := s.root.Lstat(name)
+	if err != nil || lookupErr != nil || !opened.Mode().IsRegular() || opened.Size() != 0 || !found.Mode().IsRegular() || !os.SameFile(opened, found) {
+		f.Close()
+		return nil, ErrState
+	}
+	return filelease.Try(f, true)
 }
 func safeName(name string) bool {
 	return name == "status.json" || name == "replacement.json" || name == "handoff.json" || name == "enabled"

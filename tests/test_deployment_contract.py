@@ -91,6 +91,8 @@ class DeploymentContractTests(unittest.TestCase):
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
         config = (ROOT / "app/core/config.py").read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        compose += (ROOT / "docker-compose.gin.yaml").read_text(encoding="utf-8")
+        compose += (ROOT / "docker-compose.gin-mysql.yaml").read_text(encoding="utf-8")
         listed = re.findall(r"(?m)^#? ?([A-Z][A-Z0-9_]*)=", env_example)
         active = {
             line.split("=", 1)[0]
@@ -107,7 +109,9 @@ class DeploymentContractTests(unittest.TestCase):
                 self.assertNotRegex(lines[index - 1], r"^# [A-Z][A-Z0-9_]*=")
         app_names = set(re.findall(r'validation_alias="([A-Z][A-Z0-9_]*)"', config))
         compose_names = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", compose))
-        self.assertEqual(set(listed), app_names | compose_names)
+        # COMPOSE_FILE is consumed by Compose itself; deployment-specific
+        # application variables must still be present in an actual contract.
+        self.assertEqual(set(listed), app_names | compose_names | {"COMPOSE_FILE"})
 
     def test_private_deployment_variables_are_absent_from_contract(self):
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")

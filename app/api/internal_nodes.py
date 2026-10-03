@@ -132,6 +132,7 @@ async def heartbeat(request: Request):
     if request is not None:
         try:
             value = json.loads(request.state.node_control_body or b"{}")
+            p.read_capabilities(value)
             mode = value.get("mode")
             if mode is not None:
                 if relation["direction"] != "upstream" or mode not in ("Relay", "Direct"):
@@ -147,7 +148,7 @@ async def heartbeat(request: Request):
             raise HTTPException(400, "Invalid heartbeat configuration") from exc
     # Only our own outbound probe establishes peer reachability. Incoming probes
     # must not hide a peer whose HTTPS/media ingress is broken.
-    summary = {"app_version": p.APP_VERSION, "protocol": p.PROTOCOL_VERSION}
+    summary = {"app_version": p.APP_VERSION, "protocol": p.PROTOCOL_VERSION, "capabilities": list(p.BASELINE_CAPABILITIES)}
     if relation["direction"] == "upstream":
         local = await resource_pool.follower_resource_summary(state.node, state.database)
         summary.update(storage_capacity.enrich_local_resource_summary(local))

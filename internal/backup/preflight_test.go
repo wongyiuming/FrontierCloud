@@ -65,7 +65,7 @@ func preflightRow(records []map[string]any, table string) map[string]any {
 func checkScratchEmpty(t *testing.T, directory string) {
 	t.Helper()
 	entries, err := os.ReadDir(directory)
-	if err != nil || len(entries) != 0 {
+	if err != nil || len(entries) != 1 || entries[0].Name() != cacheLock {
 		t.Fatal("scratch leaked", entries, err)
 	}
 }
@@ -277,7 +277,9 @@ func TestBackupPreflightBoundedParserAndScratchSafety(t *testing.T) {
 	if _, err := Preflight(context.Background(), bytes.NewReader(data), expectedPreflight(data), link); !errors.Is(err, store.ErrBackupState) {
 		t.Fatal("symlink scratch accepted", err)
 	}
-	checkScratchEmpty(t, target)
+	if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 {
+		t.Fatal("rejected symlink scratch was modified", entries, err)
+	}
 }
 
 func (r *cancelPreflightReader) Read(p []byte) (int, error) {

@@ -57,6 +57,15 @@ health and persistent state before claiming success or reopening public traffic.
 Mismatched/restarted old code fails closed. No mutable checkout is interpreted
 as proof that the running binary changed.
 
+Handoff helpers also hold an exclusive retained OS lease. A failed target create/
+start restores the exact previous native updater image/configuration, publishes
+a durable failed checkpoint and leaves the committed Web generation intact under
+maintenance. A lost successful start reply is reconciled before fallback; a
+running target is never replaced with old code merely because an acknowledgment
+was lost. The replacement daemon proves its live control image before retiring
+the exact project-owned helper and handoff journal. Unknown helper ownership or
+fallback provenance is never treated as removal authority.
+
 Only exact obsolete native release tags belonging to the configured project are
 eligible for cleanup. Current/previous releases, unrelated tags/projects, shared
 parents, business volumes and in-use images are not force-deleted. Helper

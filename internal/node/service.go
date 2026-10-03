@@ -217,6 +217,9 @@ func resourceValue(raw any) (store.ResourceConfiguration, error) {
 // ReceiveHeartbeat never changes reachability. Only an outbound, authenticated
 // probe can mark the peer online; inbound probes apply desired configuration.
 func (s *Service) ReceiveHeartbeat(ctx context.Context, relation store.Relationship, value map[string]any) (map[string]any, error) {
+	if _, err := protocol.ReadCapabilities(value); err != nil {
+		return nil, err
+	}
 	if s.pool == nil || s.volume == nil {
 		return nil, errors.New("business volume is not configured")
 	}
@@ -247,7 +250,7 @@ func (s *Service) ReceiveHeartbeat(ctx context.Context, relation store.Relations
 			return nil, err
 		}
 	}
-	summary := map[string]any{"app_version": AppVersion, "protocol": protocol.Version}
+	summary := map[string]any{"app_version": AppVersion, "protocol": protocol.Version, "capabilities": protocol.BaselineCapabilities()}
 	if relation.Direction == "upstream" {
 		total, free, err := s.volume.PhysicalCapacity(ctx)
 		if err != nil {
@@ -282,7 +285,7 @@ func (s *Service) SignedIdentity(ctx context.Context, challenge string) (Envelop
 	if err != nil {
 		return Envelope{}, err
 	}
-	return s.identity.signed(row, map[string]any{"node_id": row.ID, "role": row.Role, "endpoint": row.Endpoint, "public_key": public, "challenge": challenge, "protocol": protocol.Version, "app_version": AppVersion})
+	return s.identity.signed(row, map[string]any{"node_id": row.ID, "role": row.Role, "endpoint": row.Endpoint, "public_key": public, "challenge": challenge, "protocol": protocol.Version, "app_version": AppVersion, "capabilities": protocol.BaselineCapabilities()})
 }
 func newCredential() (string, error) {
 	value := make([]byte, 48)

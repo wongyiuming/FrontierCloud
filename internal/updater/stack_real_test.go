@@ -24,6 +24,13 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 	if base == "" || socket == "" {
 		t.Skip("isolated native updater stack not selected")
 	}
+	database := os.Getenv("FRONTIERCLOUD_TEST_UPDATER_DATABASE")
+	if database == "" {
+		database = "sqlite"
+	}
+	if database != "sqlite" && database != "mysql" {
+		t.Fatal("unsupported isolated native store selection")
+	}
 	info, err := os.Lstat(base)
 	if err != nil || !filepath.IsAbs(base) || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !strings.HasPrefix(filepath.Base(base), "fc-native-updater-") {
 		t.Fatal("explicit private host workspace required")
@@ -136,10 +143,10 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 	var names []string
 	var networkID string
 	defer func() {
-		cleanup, stop := context.WithTimeout(context.Background(), 2*time.Minute)
+		cleanup, stop := context.WithTimeout(context.Background(), 4*time.Minute)
 		defer stop()
 		// Stop the updater first, joining its worker before retiring its helpers.
-		for _, service := range []string{"updater", "nginx", "web", "secrets-init", "media-init", "redis"} {
+		for _, service := range []string{"updater", "nginx", "web", "secrets-init", "media-init", "redis", "mysql"} {
 			if c, err := e.Service(cleanup, prefix, service); err == nil {
 				e.Stop(cleanup, c.ID)
 				e.Remove(cleanup, c.ID)
@@ -191,7 +198,7 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	networkID = network.ID
-	for _, dir := range []string{"data", "secrets", "control", "maintenance", "redis"} {
+	for _, dir := range []string{"data", "secrets", "control", "maintenance", "redis", "mysql"} {
 		if err = os.Mkdir(filepath.Join(root, dir), 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -204,7 +211,7 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 		return filepath.Join(root, dir) + ":" + mount + mode
 	}
 	appBinds := []string{bind("data", "/app/data", false), bind("secrets", "/run/frontiercloud-secrets", false), bind("control", "/run/frontiercloud-updater", true)}
-	appEnv := []string{"DB_TYPE=sqlite", "SQLITE_PATH=/app/data/frontiercloud.db", "DATA_ROOT=/app/data", "REDIS_URL=redis://redis:6379/0", "RELEASE_BRANCH=gin_main", "RELEASE_SOURCE_BRANCH=gin_dev", "TLS_ENABLED=false"}
+	appEnv := []string{"DB_TYPE=" + database, "SQLITE_PATH=/app/data/frontiercloud.db", "DATA_ROOT=/app/data", "REDIS_URL=redis://redis:6379/0", "RELEASE_BRANCH=gin_main", "RELEASE_SOURCE_BRANCH=gin_dev", "TLS_ENABLED=false", "MYSQL_HOST=mysql", "MYSQL_DATABASE=fc_native", "MYSQL_USER=media_admin"}
 	create := func(service, image string, cmd []string, env, binds []string, user string, health bool, readonly bool, rootCaps bool) Container {
 		t.Helper()
 		name := prefix + "-" + service
@@ -212,7 +219,7 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 		host := map[string]any{"Binds": binds, "NetworkMode": prefix + "-net", "ReadonlyRootfs": readonly, "CapDrop": []string{"ALL"}, "RestartPolicy": map[string]any{"Name": "no"}, "Tmpfs": map[string]string{"/tmp": "size=64m,mode=1777"}}
 		// Retain the existing official Redis entrypoint's UID/GID setup; it is
 		// an external service, not a Go app/helper inheriting CapDrop=ALL.
-		if service == "redis" || service == "nginx" {
+		if service == "redis" || service == "nginx" || service == "mysql" {
 			host["CapDrop"] = []string{}
 		}
 		if rootCaps {
@@ -221,6 +228,9 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 		body := map[string]any{"Image": image, "Cmd": cmd, "User": user, "Env": env, "HostConfig": host, "Labels": map[string]string{"com.docker.compose.project": prefix, "com.docker.compose.service": service}, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{prefix + "-net": map[string]any{"Aliases": []string{service}}}}}
 		if health {
 			body["Healthcheck"] = map[string]any{"Test": []string{"CMD", "/app/frontiercloud", "healthcheck"}, "Interval": int64(time.Second), "Timeout": int64(5 * time.Second), "Retries": 30, "StartPeriod": int64(2 * time.Second)}
+			if service == "mysql" {
+				body["Healthcheck"] = map[string]any{"Test": []string{"CMD-SHELL", "MYSQL_PWD=\"$(cat /run/frontiercloud-secrets/mysql_password)\" mysql -h 127.0.0.1 -u media_admin -e 'SELECT 1' fc_native"}, "Interval": int64(time.Second), "Timeout": int64(5 * time.Second), "Retries": 90, "StartPeriod": int64(60 * time.Second)}
+			}
 		}
 		id, err := e.Create(ctx, name, body)
 		if err != nil {
@@ -244,6 +254,13 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 		c := create(service, webImage, []string{command}, appEnv, appBinds, "0:0", false, true, true)
 		if err = e.Wait(ctx, c.ID); err != nil {
 			t.Fatal(service, err)
+		}
+	}
+	if database == "mysql" {
+		mysql := create("mysql", "mysql:8.4.11", []string{"--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"}, []string{"MYSQL_DATABASE=fc_native", "MYSQL_USER=media_admin", "MYSQL_PASSWORD_FILE=/run/frontiercloud-secrets/mysql_password", "MYSQL_ROOT_PASSWORD_FILE=/run/frontiercloud-secrets/mysql_root_password"}, []string{bind("mysql", "/var/lib/mysql", false), bind("secrets", "/run/frontiercloud-secrets", true)}, "", true, false, false)
+		if err = e.Healthy(ctx, mysql.ID); err != nil {
+			diagnose()
+			t.Fatal("isolated MySQL initialization failed", err)
 		}
 	}
 	web := create("web", webImage, []string{"serve"}, appEnv, appBinds, "10001:10001", true, true, false)
@@ -340,5 +357,12 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Log("native stack upgrade, immutable updater handoff and rollback verified", prefix)
+	if database == "mysql" {
+		if _, err = os.Stat(filepath.Join(root, "data", "frontiercloud.db")); !os.IsNotExist(err) {
+			t.Fatal("MySQL runtime created an authoritative SQLite business database", err)
+		}
+	} else if _, err = e.Service(ctx, prefix, "mysql"); err == nil {
+		t.Fatal("SQLite fixture launched a MySQL service")
+	}
+	t.Log("native stack upgrade, immutable updater handoff and rollback verified", prefix, database)
 }
