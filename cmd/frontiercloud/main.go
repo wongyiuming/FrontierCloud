@@ -151,10 +151,8 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	// Refuse existing cluster roles until their full control/storage implementation
-	// is available. A partial runtime must never silently take over a Master.
-	if identity.Role != "Standalone" {
-		return fmt.Errorf("Go cluster runtime is not yet complete for existing %s nodes", identity.Role)
+	if err := identity.CheckNativeRuntime(initialization, settings.DataRoot); err != nil {
+		return err
 	}
 	mediaService, err := media.NewContext(shutdown, filepath.Join(settings.DataRoot, "media"), database.Media(), identity)
 	if err != nil {
@@ -215,6 +213,12 @@ func serve() error {
 		return err
 	}
 	defer closeHTTP()
+	admission, cancelAdmission := context.WithTimeout(shutdown, 15*time.Second)
+	err = identity.RecordNativeRuntime(admission, settings.DataRoot)
+	cancelAdmission()
+	if err != nil {
+		return err
+	}
 	server := &http.Server{
 		Addr:              settings.HTTPAddress,
 		Handler:           runtime.Handler(handler),

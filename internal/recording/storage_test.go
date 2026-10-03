@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -112,6 +113,13 @@ func TestPrivateStorageUploadSizeFooterReplayAndDeletionRecovery(t *testing.T) {
 		t.Fatal(e)
 	}
 	name, _ := Path(relationship, u.ID, id)
+	if runtime.GOOS != "windows" {
+		published, err := s.root.Stat(name)
+		private, privateErr := s.root.Stat(".recordings-mutation.lock")
+		if err != nil || privateErr != nil || published.Mode().Perm() != 0640 || private.Mode().Perm() != 0600 {
+			t.Fatal("finalized recording read group or private lease permissions changed", err, privateErr)
+		}
+	}
 	file, info, release, e := s.Open(ctx, relationship, u.ID, id)
 	if e != nil || info.Size() != int64(len(data)) {
 		t.Fatal(info, e)

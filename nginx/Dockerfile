@@ -8,6 +8,10 @@ LABEL frontiercloud.revision=$REVISION frontiercloud.component="nginx" \
 # Remove the bundled default server.
 RUN rm /etc/nginx/conf.d/default.conf
 
+# Read finalized private recordings through internal authenticated locations.
+# This group matches the native volume owner; the worker keeps its own UID.
+RUN addgroup -g 10001 frontiercloud-media
+
 # Keep runtime environment substitution in Nginx templates. Avoid BuildKit-only
 # COPY --chmod so the in-cluster updater can build with the legacy Docker builder.
 COPY nginx/nginx.conf /etc/nginx/templates/nginx.conf.template

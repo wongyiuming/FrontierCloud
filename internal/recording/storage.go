@@ -471,6 +471,20 @@ func (s *Storage) finishUpload(ctx context.Context, j journal) error {
 	if receipt.SHA256 != j.Receipt.SHA256 || receipt.Bytes != j.Receipt.Bytes {
 		return ErrRecovery
 	}
+	// Nginx has the volume's read-only media group, never the application UID.
+	// Only verified published bytes become group-readable; private intents,
+	// lease files and incomplete stages remain 0600.
+	file, e := s.root.OpenFile(target, os.O_RDWR, 0)
+	if e != nil {
+		return e
+	}
+	e = file.Chmod(0640)
+	if e == nil {
+		e = file.Sync()
+	}
+	if e = errors.Join(e, file.Close()); e != nil {
+		return e
+	}
 	n, e := s.nodes.ReadIdentity(ctx)
 	if e != nil {
 		return e

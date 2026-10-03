@@ -51,3 +51,25 @@ archive builds and exact CI evidence; the updater already uses that boundary.
 Final default promotion, portable restore, mixed releases and cluster startup/
 restart acceptance remain gates. Do not run this candidate against existing
 ten-node volumes to bypass them.
+
+## Native role restart provenance
+
+After every service and media/recording recovery has initialized, native startup
+publishes a fsynced private `.native-runtime` receipt under a retained local
+lease. The vault-sealed receipt binds the current node ID and `.native-store`
+fingerprint. A later native Master/Follower may restart only with matching
+provenance, and still runs all recovery before accepting traffic. Missing,
+foreign, malformed and non-regular receipts fail closed for cluster roles.
+No environment switch disables this check. A confirmed empty identity reset
+returns to Standalone and may republish its new identity after complete startup.
+
+Historical Python cluster identities without native provenance remain fenced;
+storage/recording adoption alone does not issue a startup admission receipt.
+Offline migration admission and actual ten-node restart are separate acceptance
+gates, not implied by the receipt unit tests.
+
+Nginx workers retain their own UID and use the fixed native media group 10001.
+Private recording directories are group-traversable; only hash/size-verified
+published native recordings become mode 0640. Secrets, operation intents,
+leases and incomplete upload stages remain private. Recording byte locations
+are internal and require the established account/capability authorization.
