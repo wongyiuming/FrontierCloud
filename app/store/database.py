@@ -1,6 +1,7 @@
 """Connection and transaction policy; dialect selection stays in the store layer."""
 from pathlib import Path
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 
 from sqlalchemy import URL, event
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -26,6 +27,17 @@ def create_database_engine(configuration: Settings) -> AsyncEngine:
     def configure_connection(connection, _record):
         # SQLAlchemy owns BEGIN, including transactional DDL and savepoints.
         connection.isolation_level = None
+        def packed_ip(value):
+            try:
+                return ip_address(value).packed
+            except ValueError:
+                return None
+        connection.create_function("INET6_ATON", 1, packed_ip, deterministic=True)
+        # Shared domain expressions preserve MySQL NULL propagation rather than
+        # SQLite's aggregate MAX semantics. These functions remain store-local.
+        connection.create_function("GREATEST", -1,
+            lambda *values: max(values) if values and all(v is not None for v in values) else None,
+            deterministic=True)
         cursor = connection.cursor()
         try:
             cursor.execute("PRAGMA busy_timeout=5000")

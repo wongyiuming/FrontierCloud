@@ -25,6 +25,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 import httpx
 
 from app.core.db import engine
+from app.store.database import write_transaction
 from app.services import media_objects
 from app.services.federation import protocol as p
 from app.services.federation import schema as s
@@ -133,7 +134,7 @@ async def ensure_master_local(node: dict, allocation_bytes: int | None = None, *
     from app.api.v1.media import MEDIA_ROOT
     now = int(time.time())
     if conn is None:
-        async with engine.begin() as owned_conn:
+        async with write_transaction(engine) as owned_conn:
             return await ensure_master_local(node, allocation_bytes, conn=owned_conn)
     else:
         current = (await conn.execute(select(s.storage_members).where(
@@ -167,7 +168,7 @@ async def ensure_master_local(node: dict, allocation_bytes: int | None = None, *
 async def register_follower(relation: dict, *, conn=None) -> None:
     now = int(time.time())
     if conn is None:
-        async with engine.begin() as owned_conn:
+        async with write_transaction(engine) as owned_conn:
             await register_follower(relation, conn=owned_conn)
         return
     else:
@@ -232,7 +233,7 @@ async def configure_member(member_id: str, *, storage_enabled: bool, allocated_b
     if not 0 <= worker_slots <= 256:
         raise p.ProtocolError("Worker slots are outside the supported range")
     now = int(time.time())
-    async with store.database.begin() as conn:
+    async with write_transaction(store.database) as conn:
         node = await store.lock(conn)
         if node["role"] != "Master":
             raise p.ProtocolError("Only Master configures resource members")
@@ -299,7 +300,7 @@ async def accept_follower_configuration(configuration: dict, node: dict, databas
         raise p.ProtocolError("Invalid resource configuration") from exc
     from app.api.v1.media import MEDIA_ROOT
     now = int(time.time())
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         used = int((await conn.execute(select(func.coalesce(func.sum(s.global_media.c.size_bytes), 0)).where(
             s.global_media.c.storage_member_id == node["node_id"],
             s.global_media.c.state.in_(("active", "pending_delete"))))).scalar_one() or 0)
@@ -336,7 +337,7 @@ async def accept_follower_configuration(configuration: dict, node: dict, databas
 async def follower_resource_summary(node: dict, database=engine) -> dict:
     from app.api.v1.media import MEDIA_ROOT
     now = int(time.time())
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         member = (await conn.execute(select(s.storage_members).where(
             s.storage_members.c.member_id == node["node_id"]))).mappings().first()
         if not member:
@@ -445,7 +446,7 @@ async def backup_begin(master_id: str, generation: int, database=engine) -> None
     if not p.IDENTIFIER.fullmatch(master_id) or generation <= 0:
         raise p.ProtocolError("Invalid backup generation")
     now = int(time.time())
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         await conn.execute(delete(s.business_backup_chunks).where(
             s.business_backup_chunks.c.master_id == master_id,
             s.business_backup_chunks.c.generation == generation))
@@ -466,7 +467,7 @@ async def backup_append(master_id: str, generation: int, chunk_index: int, chunk
         raise p.ProtocolError("Backup chunk too large")
     if chunk_index < 0 or chunk_index > 10_000_000:
         raise p.ProtocolError("Invalid backup chunk index")
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         row = await conn.scalar(select(s.business_backups.c.state).where(
             s.business_backups.c.master_id == master_id,
             s.business_backups.c.generation == generation,
@@ -486,7 +487,7 @@ async def backup_commit(master_id: str, generation: int, checksum: str, node: di
     if not re_full_hash(checksum):
         raise p.ProtocolError("Invalid backup checksum")
     now = int(time.time())
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         row = (await conn.execute(select(s.business_backups).where(
             s.business_backups.c.master_id == master_id,
             s.business_backups.c.generation == generation).with_for_update())).mappings().first()
@@ -533,7 +534,7 @@ async def enqueue_job(job_type: str, payload: dict, idempotency_key: str,
     if not re_full_hash(idempotency_key) or job_type not in {"hash", "probe", "metadata"}:
         raise p.ProtocolError("Invalid worker job")
     now, job_id = int(time.time()), uuid.uuid4().hex
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         statement = mysql_insert(s.worker_jobs).values(job_id=job_id, idempotency_key=idempotency_key,
             job_type=job_type, media_id=media_id, member_id=member_id, payload=payload, result={},
             state="queued", lease_token_hash=None, lease_expires_at=0, attempts=0,
@@ -549,7 +550,7 @@ async def lease_job(member_id: str, capabilities: list[str], database=engine) ->
     if not allowed:
         return None
     now, lease = int(time.time()), uuid.uuid4().hex
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         row = (await conn.execute(select(s.worker_jobs).where(
             s.worker_jobs.c.job_type.in_(allowed),
             ((s.worker_jobs.c.state == "queued") | ((s.worker_jobs.c.state == "leased") &
@@ -577,7 +578,7 @@ async def lease_job(member_id: str, capabilities: list[str], database=engine) ->
 async def complete_job(member_id: str, job_id: str, lease: str, result: dict,
                        database=engine) -> None:
     now = int(time.time())
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         row = (await conn.execute(select(s.worker_jobs).where(
             s.worker_jobs.c.job_id == job_id).with_for_update())).mappings().first()
         if (not row or row["state"] != "leased" or row["member_id"] != member_id
@@ -638,7 +639,7 @@ async def choose_member(size: int, preferred: str | None = None, database=engine
 
 async def release_expired_uploads(database=engine) -> int:
     now = int(time.time())
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         rows = [dict(row) for row in (await conn.execute(select(s.upload_sessions).where(
             s.upload_sessions.c.state == "reserved", s.upload_sessions.c.expires_at <= now
         ).limit(500).with_for_update())).mappings()]
@@ -662,7 +663,7 @@ async def reserve_upload(path: str, size: int, preferred: str | None, database=e
     now, upload_id = int(time.time()), uuid.uuid4().hex
     media_id = hashlib.sha256((upload_id + ":" + path).encode()).hexdigest()
     try:
-        async with database.begin() as conn:
+        async with write_transaction(database) as conn:
             current = (await conn.execute(select(s.storage_members).where(
                 s.storage_members.c.member_id == member["member_id"]).with_for_update())).mappings().first()
             logical_available = (int(current["allocated_bytes"]) - int(current["used_bytes"])
@@ -704,7 +705,7 @@ async def upload_session(upload_id: str, database=engine) -> dict:
 async def finalize_upload(upload_id: str, *, object_id: str, actual_size: int, etag: str,
                           database=engine) -> dict:
     now = int(time.time())
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         row = (await conn.execute(select(s.upload_sessions).where(
             s.upload_sessions.c.upload_id == upload_id).with_for_update())).mappings().first()
         if row and row["state"] == "complete":
@@ -730,7 +731,7 @@ async def finalize_upload(upload_id: str, *, object_id: str, actual_size: int, e
 
 async def fail_upload(upload_id: str, database=engine) -> None:
     now = int(time.time())
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         row = (await conn.execute(select(s.upload_sessions).where(
             s.upload_sessions.c.upload_id == upload_id).with_for_update())).mappings().first()
         if not row or row["state"] != "reserved":
@@ -758,7 +759,7 @@ async def list_media(database=engine) -> list[dict]:
 
 
 async def mark_pending_delete(media_ids: list[str], database=engine) -> list[dict]:
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         rows = [dict(row) for row in (await conn.execute(select(s.global_media).where(
             s.global_media.c.media_id.in_(media_ids)).with_for_update())).mappings()]
         if rows:
@@ -769,7 +770,7 @@ async def mark_pending_delete(media_ids: list[str], database=engine) -> list[dic
 
 async def complete_delete(media_id: str, database=engine) -> None:
     now = int(time.time())
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         row = (await conn.execute(select(s.global_media).where(
             s.global_media.c.media_id == media_id).with_for_update())).mappings().first()
         if not row:
@@ -819,7 +820,7 @@ async def retry_pending_deletes(store, limit: int = 20) -> int:
                         headers={"X-Storage-Capability": token})
                 if response.status_code != 200:
                     continue
-            async with store.database.begin() as conn:
+            async with write_transaction(store.database) as conn:
                 from sqlalchemy import text
                 await conn.execute(text("DELETE FROM media_lyric_links WHERE media_id=:id"), {"id": row["media_id"]})
                 await conn.execute(text("DELETE FROM media_playback_events WHERE media_id=:id"),
@@ -842,7 +843,7 @@ async def adopt_master_local_media(node: dict, database=engine) -> None:
         return
     from app.api.v1.media import MEDIA_ROOT
     existing_bytes = local_filesystem_bytes(MEDIA_ROOT)
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         configured = await conn.scalar(select(s.storage_members.c.allocated_bytes).where(
             s.storage_members.c.member_id == node["node_id"]))
         await ensure_master_local(node, max(int(configured or 0), GIB, existing_bytes), conn=conn)
@@ -859,7 +860,7 @@ async def adopt_master_local_media(node: dict, database=engine) -> None:
                 continue
             discovered.append((relative.as_posix(), object_kind))
     await media_objects.ensure_objects(discovered, database)
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         from sqlalchemy import text
         local_rows = [dict(row) for row in (await conn.execute(text(
             "SELECT media_id, object_kind, media_path FROM media_objects "
@@ -874,13 +875,11 @@ async def adopt_master_local_media(node: dict, database=engine) -> None:
                 object_kind=item["object_kind"], size_bytes=info.st_size,
                 etag=f'"{int(info.st_mtime):x}-{info.st_size:x}"', state="active",
                 created_at=int(info.st_ctime), updated_at=int(info.st_mtime))
-            statement = mysql_insert(s.global_media).values(**values)
-            await conn.execute(statement.on_duplicate_key_update(
-                storage_member_id=statement.inserted.storage_member_id, object_id=statement.inserted.object_id,
-                size_bytes=statement.inserted.size_bytes, etag=statement.inserted.etag,
-                object_kind=statement.inserted.object_kind, state="active", updated_at=statement.inserted.updated_at))
+            await _upsert(conn, s.global_media, values, ("media_id",),
+                          ("storage_member_id", "object_id", "size_bytes", "etag",
+                           "object_kind", "state", "updated_at"))
     # Recompute used counters after adoption.
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         rows = (await conn.execute(select(s.global_media.c.storage_member_id,
             func.coalesce(func.sum(s.global_media.c.size_bytes), 0).label("used")).where(
             s.global_media.c.state.in_(("active", "pending_delete"))).group_by(s.global_media.c.storage_member_id))).mappings()

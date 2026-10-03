@@ -3,7 +3,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +11,8 @@ from sqlalchemy.exc import IntegrityError
 from app.core import db, schema_migrations
 from app.core.config import Settings
 from app.services import media_objects
+from app.services import ip_security
+from redis.exceptions import RedisError
 from app.store.database import create_database_engine, write_transaction
 from app.store.schema import schema_statements, schema_tables
 from app.store.sqlite_schema import initialize_schema
@@ -37,6 +39,8 @@ class SQLiteStoreTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(actual, expected, table)
             for pragma, expected in {"journal_mode": "wal", "foreign_keys": 1, "busy_timeout": 5000, "synchronous": 1}.items():
                 self.assertEqual(await connection.scalar(text("PRAGMA " + pragma)), expected)
+            self.assertEqual(await connection.scalar(text("SELECT GREATEST(0, -3, 2)")), 2)
+            self.assertIsNone(await connection.scalar(text("SELECT GREATEST(0, NULL, 2)")))
             columns = await connection.execute(text("PRAGMA table_xinfo(ip_auto_ban_events)"))
             self.assertIn("active_ip_address", {row[1] for row in columns})
         async with write_transaction(self.database) as connection:
@@ -110,6 +114,66 @@ class SQLiteStoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_python_entrypoint_selects_the_sqlite_schema(self):
         with patch.object(db, "engine", self.database), patch.object(db, "settings", self.configuration):
             await db.init_db()
+
+    async def test_real_sqlite_master_promotion_without_test_sql_translation(self):
+        from cryptography.fernet import Fernet
+        from app.services.federation.state import State
+        from app.api.v1 import media as media_api
+        state = State(self.database, Fernet.generate_key())
+        await state.initialize()
+        media_root = Path(self.directory.name) / "media"
+        media_root.mkdir()
+        category = media_root / "music" / "fixture"
+        category.mkdir(parents=True)
+        (category / "track.mp3").write_bytes(b"disposable media fixture")
+        with patch.object(media_api, "MEDIA_ROOT", media_root):
+            await state.promote("Master", "https://master.fleet.invalid", "session", 1024**3)
+        self.assertEqual((await state.read_existing_identity())["role"], "Master")
+        async with self.database.connect() as connection:
+            self.assertEqual(await connection.scalar(text("SELECT COUNT(*) FROM global_media_objects")), 1)
+
+    async def test_security_startup_and_durable_transitions_on_sqlite(self):
+        redis = MagicMock()
+        redis.lock.return_value.acquire = AsyncMock(side_effect=RedisError("offline"))
+        redis.set = AsyncMock()
+        redis.delete = AsyncMock()
+        async def empty_scan(**_kwargs):
+            for value in ():
+                yield value
+        redis.scan_iter = empty_scan
+        pipe = MagicMock()
+        pipe.execute = AsyncMock(return_value=[])
+        redis.pipeline.return_value = pipe
+        with (patch.object(ip_security, "engine", self.database),
+              patch.object(ip_security, "redis_client", redis),
+              patch.object(ip_security, "publish_edge_snapshot", AsyncMock()),
+              patch.object(ip_security, "append_admin_log")):
+            await ip_security.initialize_ip_security_cache()
+            await ip_security.manual_ban_ip("203.0.113.91", "session", "test")
+            block = await ip_security._mysql_block_fallback("203.0.113.91")
+            self.assertEqual(block["ban_kind"], "manual")
+            await ip_security._hydrate_ip_security_cache()
+            await ip_security.add_whitelist("203.0.113.91", "session", "first")
+            await ip_security.add_whitelist("203.0.113.91", "session", "updated")
+            self.assertIsNone(await ip_security._mysql_block_fallback("203.0.113.91"))
+            with self.assertRaises(ValueError):
+                await ip_security.manual_permanent_ban_ip("203.0.113.91", "session", "test")
+            await ip_security.remove_whitelist("203.0.113.91", "session")
+            await ip_security.manual_permanent_ban_ip("203.0.113.91", "session", "test")
+            self.assertTrue((await ip_security._mysql_block_fallback("203.0.113.91"))["permanent"])
+            await ip_security.unban_ip("203.0.113.91", "session")
+            self.assertIsNone(await ip_security._mysql_block_fallback("203.0.113.91"))
+            await ip_security.record_invalid_api("203.0.113.92", "GET", "/invalid", "test")
+            await ip_security.record_invalid_api("203.0.113.92", "GET", "/invalid", "test")
+            await ip_security.add_whitelist("10.199.0.1", "session")
+            await ip_security.add_whitelist("13.11.0.1", "session")
+            await ip_security.add_whitelist("2001:db8::1", "session")
+            summary = await ip_security.list_security_summary(status_filter="whitelisted")
+            self.assertEqual([row["ip"] for row in summary["whitelist"]], ["10.199.0.1", "13.11.0.1", "2001:db8::1"])
+        async with self.database.connect() as connection:
+            self.assertEqual(await connection.scalar(text("SELECT attack_count FROM ip_security_summary")), 2)
+            self.assertEqual(await connection.scalar(text("SELECT COUNT(*) FROM ip_permanent_whitelist")), 3)
+            self.assertEqual(await connection.scalar(text("SELECT COUNT(*) FROM ip_security_audit_log WHERE action='whitelist_add'")), 5)
 
 
 class DatabaseConfigurationTests(unittest.TestCase):
