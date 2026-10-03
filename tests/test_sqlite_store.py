@@ -132,6 +132,31 @@ class SQLiteStoreTests(unittest.IsolatedAsyncioTestCase):
         async with self.database.connect() as connection:
             self.assertEqual(await connection.scalar(text("SELECT COUNT(*) FROM global_media_objects")), 1)
 
+    async def test_independent_sqlite_control_writers_lock_before_reading(self):
+        from cryptography.fernet import Fernet
+        from app.services.federation.state import State
+        key = Fernet.generate_key()
+        first = State(self.database, key)
+        await first.initialize()
+        await first.promote("Follower", "https://follower.fleet.invalid", "session")
+        worker = create_database_engine(self.configuration)
+        self.addAsyncCleanup(worker.dispose)
+        second = State(worker, key)
+        await second.initialize()
+        packages = await asyncio.gather(*[
+            state.create_pair("session") for state in [first, second] * 8
+        ])
+        self.assertEqual(len({item["payload"]["nonce"] for item in packages}), 16)
+        async with worker.connect() as connection:
+            self.assertEqual(await connection.scalar(text("SELECT COUNT(*) FROM node_pair_packages")), 16)
+
+    async def test_real_sqlite_registration_ledger_survives_concurrent_failures(self):
+        from app.services import karaoke_accounts
+        from types import SimpleNamespace
+        with patch.object(karaoke_accounts, "state", SimpleNamespace(database=self.database)):
+            await asyncio.gather(*[karaoke_accounts._record_registration_failure("203.0.113.93") for _ in range(16)])
+            self.assertEqual(await karaoke_accounts._registration_counts("203.0.113.93"), (16, 0))
+
     async def test_security_startup_and_durable_transitions_on_sqlite(self):
         redis = MagicMock()
         redis.lock.return_value.acquire = AsyncMock(side_effect=RedisError("offline"))

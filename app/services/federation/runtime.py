@@ -1,6 +1,8 @@
 """One bounded control loop per participating node; no media forwarding."""
 from __future__ import annotations
 
+from app.store.database import write_transaction
+
 import asyncio
 import base64
 import logging
@@ -126,7 +128,7 @@ class Runtime:
         await self.call(relation, "/internal/v1/revoke", {})
         from sqlalchemy import update
         from . import schema as s
-        async with state.database.begin() as conn:
+        async with write_transaction(state.database) as conn:
             await state.lock(conn)
             await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == relation["relationship_id"],
                 s.relationships.c.state == "revoked").values(summary={"revocation_acknowledged": True}))

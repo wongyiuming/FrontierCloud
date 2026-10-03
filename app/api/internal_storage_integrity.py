@@ -1,6 +1,8 @@
 """Crash-safe Follower storage publish path."""
 from __future__ import annotations
 
+from app.store.database import write_transaction
+
 import asyncio
 import hashlib
 import json
@@ -36,7 +38,7 @@ async def storage_upload(request: Request, original: str):
         raise HTTPException(413, "Upload size is invalid")
 
     reserved = False
-    async with state.database.begin() as conn:
+    async with write_transaction(state.database) as conn:
         member = (await conn.execute(select(s.storage_members).where(
             s.storage_members.c.member_id == state.node["node_id"]
         ).with_for_update())).mappings().first()
@@ -77,7 +79,7 @@ async def storage_upload(request: Request, original: str):
         published = True
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)
-        async with state.database.begin() as conn:
+        async with write_transaction(state.database) as conn:
             await conn.execute(text("""
                 INSERT INTO media_objects
                 (media_id, object_kind, media_path, path_locator, created_at, updated_at)
@@ -106,13 +108,13 @@ async def storage_upload(request: Request, original: str):
         if published:
             target.unlink(missing_ok=True)
             try:
-                async with state.database.begin() as conn:
+                async with write_transaction(state.database) as conn:
                     await conn.execute(text("DELETE FROM media_objects WHERE media_id=:media_id"),
                                        {"media_id": original})
             except Exception:
                 pass
         if reserved:
-            async with state.database.begin() as conn:
+            async with write_transaction(state.database) as conn:
                 await conn.execute(update(s.storage_members).where(
                     s.storage_members.c.member_id == state.node["node_id"]
                 ).values(reserved_bytes=func.greatest(

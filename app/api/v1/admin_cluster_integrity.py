@@ -6,6 +6,8 @@ silently fall back to the local filesystem.
 """
 from __future__ import annotations
 
+from app.store.database import write_transaction
+
 import hashlib
 import json
 import os
@@ -108,7 +110,7 @@ async def _reserve_upload(path: str, size: int, preferred: str | None) -> dict:
     now, upload_id = int(time.time()), uuid.uuid4().hex
     media_id = hashlib.sha256((upload_id + ":" + path).encode()).hexdigest()
     try:
-        async with node_state.database.begin() as conn:
+        async with write_transaction(node_state.database) as conn:
             current = (await conn.execute(select(s.storage_members).where(
                 s.storage_members.c.member_id == member["member_id"]).with_for_update()
             )).mappings().first()
@@ -180,7 +182,7 @@ async def _cleanup_upload_session(upload_id: str, *, allow_unindexed_local: bool
             return False
         if exists:
             target.unlink(missing_ok=True)
-        async with node_state.database.begin() as conn:
+        async with write_transaction(node_state.database) as conn:
             await conn.execute(text("DELETE FROM media_objects WHERE media_id=:id"), {"id": row["media_id"]})
         await resource_pool.fail_upload(upload_id, node_state.database)
         return True
@@ -386,7 +388,7 @@ async def _receive_master_local(upload_id: str, request: Request, row: dict) -> 
         now_epoch = int(time.time())
         now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
         etag = f'"{digest.hexdigest()}"'
-        async with node_state.database.begin() as conn:
+        async with write_transaction(node_state.database) as conn:
             locked = (await conn.execute(select(s.upload_sessions).where(
                 s.upload_sessions.c.upload_id == upload_id).with_for_update()
             )).mappings().first()
@@ -526,7 +528,7 @@ async def hide_objects(request: Request, payload: dict, session_hash: str = Depe
             raise HTTPException(404, f"全局媒体目录不存在: {rel}")
         normalized.append(rel)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    async with node_state.database.begin() as conn:
+    async with write_transaction(node_state.database) as conn:
         for rel in normalized:
             if hidden:
                 await conn.execute(text("""

@@ -1,6 +1,8 @@
 """HTTPS-only V1 control endpoints; independent relationship authentication."""
 from __future__ import annotations
 
+from app.store.database import write_transaction
+
 import asyncio
 import hashlib
 import base64
@@ -291,7 +293,7 @@ async def storage_upload(request: Request, original: str):
     if expected <= 0:
         raise HTTPException(413, "Upload size is invalid")
     reserved = False
-    async with state.database.begin() as conn:
+    async with write_transaction(state.database) as conn:
         member = (await conn.execute(select(s.storage_members).where(
             s.storage_members.c.member_id == state.node["node_id"]).with_for_update())).mappings().first()
         physical_available = resource_pool.physical_free(MEDIA_ROOT) - resource_pool.PHYSICAL_RESERVE_BYTES
@@ -326,7 +328,7 @@ async def storage_upload(request: Request, original: str):
         MediaManager._validate_media_destination(target)
         os.replace(temporary, target)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
-        async with state.database.begin() as conn:
+        async with write_transaction(state.database) as conn:
             await conn.execute(text("""
                 INSERT INTO media_objects
                 (media_id, object_kind, media_path, path_locator, created_at, updated_at)
@@ -346,7 +348,7 @@ async def storage_upload(request: Request, original: str):
     except BaseException:
         temporary.unlink(missing_ok=True)
         if reserved:
-            async with state.database.begin() as conn:
+            async with write_transaction(state.database) as conn:
                 await conn.execute(update(s.storage_members).where(
                     s.storage_members.c.member_id == state.node["node_id"]
                 ).values(reserved_bytes=func.greatest(
@@ -376,7 +378,7 @@ async def storage_delete(request: Request, original: str):
         raise HTTPException(404, "Storage object not found")
     removed = target.stat().st_size if target.is_file() else 0
     target.unlink(missing_ok=True)
-    async with state.database.begin() as conn:
+    async with write_transaction(state.database) as conn:
         await conn.execute(text("DELETE FROM media_objects WHERE media_id=:media_id"), {"media_id": original})
         if removed:
             await conn.execute(update(s.storage_members).where(
@@ -499,7 +501,7 @@ async def recording_delete(request: Request, recording_id: str):
         value = json.loads(request.state.node_control_body or b"{}")
         removed = karaoke_storage.remove(relation["relationship_id"], value["user_id"], recording_id)
         if removed:
-            async with state.database.begin() as conn:
+            async with write_transaction(state.database) as conn:
                 await conn.execute(update(s.storage_members).where(
                     s.storage_members.c.member_id == state.node["node_id"]
                 ).values(used_bytes=func.greatest(0, s.storage_members.c.used_bytes - removed),
@@ -517,7 +519,7 @@ async def recording_user_delete(request: Request, user_id: str):
         raise HTTPException(403, "Only a Follower stores recordings")
     removed = karaoke_storage.remove_user(relation["relationship_id"], user_id)
     if removed:
-        async with state.database.begin() as conn:
+        async with write_transaction(state.database) as conn:
             await conn.execute(update(s.storage_members).where(
                 s.storage_members.c.member_id == state.node["node_id"]
             ).values(used_bytes=func.greatest(0, s.storage_members.c.used_bytes - removed),
