@@ -2,7 +2,7 @@
 
 Example:
     python tests/direct_audio_browser_probe.py --base-url https://520mall.cc \
-        --path music/激进 --title 齐秦_悬崖 --source static/js/audio-continuous-stream.js
+        --path music/example --title example --source static/js/audio-continuous-stream.js
 
 The probe uses real catalog/redirect/CORS/media responses. It never uploads or
 changes server configuration. No capability URLs or media bytes are saved.
