@@ -8,6 +8,7 @@
     const MAX_TRACK_BYTES = 128 * 1024 * 1024;
     const FIRST_APPEND_BYTES = 64 * 1024;
     const APPEND_BATCH_BYTES = 512 * 1024;
+    const APPEND_MAX_WAIT_MS = 1000;
     const DURATION_PROBE_BYTES = 128 * 1024;
     const MAX_BUFFER_AHEAD_SECONDS = 30;
     const SEEK_RANGE_ALIGNMENT_BYTES = 64 * 1024;
@@ -191,6 +192,20 @@
         return merged;
     }
 
+    async function readBeforeFlushDeadline(read, delay) {
+        let timer;
+        try {
+            return await Promise.race([
+                read,
+                new Promise(resolve => {
+                    timer = window.setTimeout(() => resolve(null), Math.max(0, delay));
+                }),
+            ]);
+        } finally {
+            window.clearTimeout(timer);
+        }
+    }
+
     function readUint32(bytes, offset) {
         if (offset < 0 || offset + 4 > bytes.length) return 0;
         return ((bytes[offset] << 24) >>> 0)
@@ -333,6 +348,7 @@
             this.activeSegment = null;
             this.appendPromise = null;
             this.closed = false;
+            this.fetchController = new AbortController();
             this.startIndex = startIndex;
             this.lastPrunedBefore = 0;
             this.quotaWaitCount = 0;
@@ -559,8 +575,11 @@
             let response;
             try {
                 const headers = seek?.rangeStart > 0 ? {Range: `bytes=${seek.rangeStart}-`} : undefined;
-                response = await fetch(media.url, {credentials: 'same-origin', headers});
+                response = await fetch(media.url, {
+                    credentials: 'same-origin', headers, signal: this.fetchController.signal,
+                });
             } catch (_error) {
+                if (this.closed || session !== this) return false;
                 this.markRuntimeSkip(index, '连续流读取失败 · 自动续播跳过');
                 return false;
             }
@@ -609,6 +628,8 @@
             let bytes = 0;
             let pending = [];
             let pendingBytes = 0;
+            let pendingSince = 0;
+            let nextRead = null;
             let firstAppend = true;
 
             const flush = async () => {
@@ -616,6 +637,7 @@
                 const merged = concatChunks(pending, pendingBytes);
                 pending = [];
                 pendingBytes = 0;
+                pendingSince = 0;
                 if (!presentationDuration(segment)) {
                     const estimate = estimateMp3Duration(merged, totalBytes);
                     if (estimate > 0) {
@@ -654,7 +676,18 @@
 
             try {
                 while (!this.closed && session === this) {
-                    const {done, value} = await reader.read();
+                    if (!nextRead) nextRead = reader.read();
+                    // Retain the same read when a flush deadline wins. Issuing a
+                    // second read here would lose or reorder the next bytes.
+                    const result = pendingBytes
+                        ? await readBeforeFlushDeadline(nextRead, APPEND_MAX_WAIT_MS - (Date.now() - pendingSince))
+                        : await nextRead;
+                    if (result === null) {
+                        await flush();
+                        continue;
+                    }
+                    nextRead = null;
+                    const {done, value} = result;
                     if (done) break;
                     bytes += value.byteLength;
                     if (bytes > MAX_TRACK_BYTES) {
@@ -663,15 +696,27 @@
                         await reader.cancel();
                         break;
                     }
-                    pending.push(value);
-                    pendingBytes += value.byteLength;
-                    const threshold = firstAppend ? FIRST_APPEND_BYTES : APPEND_BATCH_BYTES;
-                    if (pendingBytes >= threshold) await flush();
+                    // Fetch chunk sizes are browser-controlled and may be several
+                    // MiB after backpressure. Bound each individual MSE append.
+                    let offset = 0;
+                    while (offset < value.byteLength) {
+                        const threshold = firstAppend ? FIRST_APPEND_BYTES : APPEND_BATCH_BYTES;
+                        const length = Math.min(threshold - pendingBytes, value.byteLength - offset);
+                        if (!pendingBytes) pendingSince = Date.now();
+                        pending.push(value.subarray(offset, offset + length));
+                        pendingBytes += length;
+                        offset += length;
+                        if (pendingBytes >= threshold) await flush();
+                    }
+                    if (pendingBytes && Date.now() - pendingSince >= APPEND_MAX_WAIT_MS) await flush();
                 }
                 await flush();
             } catch (error) {
                 if (this.closed || session !== this) throw error;
                 segment.partial = true;
+            } finally {
+                // Cancel partially consumed responses on switch or decoder failure.
+                void reader.cancel().catch(() => {});
             }
 
             const end = this.bufferedEnd();
@@ -786,6 +831,7 @@
         stop() {
             if (this.closed) return;
             this.closed = true;
+            this.fetchController.abort();
             window.clearTimeout(this.seekTimer);
             if (session === this) session = null;
             if (activeObjectUrl === this.objectUrl) activeObjectUrl = null;
@@ -922,6 +968,7 @@
         lookahead_tracks: LOOKAHEAD_TRACKS,
         max_track_bytes: MAX_TRACK_BYTES,
         append_batch_bytes: APPEND_BATCH_BYTES,
+        append_max_wait_ms: APPEND_MAX_WAIT_MS,
         first_append_bytes: FIRST_APPEND_BYTES,
         max_buffer_ahead_seconds: MAX_BUFFER_AHEAD_SECONDS,
         supported: browserSupportsContinuousAudio,

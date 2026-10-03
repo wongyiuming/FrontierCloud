@@ -69,8 +69,10 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.assertIn("const FIRST_APPEND_BYTES = 64 * 1024;", self.core)
         self.assertIn("const APPEND_BATCH_BYTES = 512 * 1024;", self.core)
         self.assertIn("const MAX_BUFFER_AHEAD_SECONDS = 30;", self.core)
-        self.assertIn("pending.push(value)", self.core)
+        self.assertIn("pending.push(value.subarray(offset, offset + length))", self.core)
         self.assertIn("if (pendingBytes >= threshold) await flush();", self.core)
+        self.assertIn("APPEND_MAX_WAIT_MS = 1000", self.core)
+        self.assertIn("readBeforeFlushDeadline(nextRead", self.core)
         self.assertNotIn("await this.appendBytes(value);", self.core)
         self.assertNotIn("cache: 'no-store'", self.core)
 
