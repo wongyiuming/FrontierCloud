@@ -1,46 +1,40 @@
-# Use a patch-pinned official Debian-based Python 3.14 slim image.
-FROM python:3.14.7-slim
-LABEL frontiercloud.release-manifest-version="1"
+# Build a statically linked Go runtime without Python or CGO.
+FROM golang:1.26.0-bookworm AS build
 
-# Set the application working directory.
-WORKDIR /app
-
-# Install locked dependencies before copying application sources. Code and test
-# changes must not invalidate the dependency layer on every deployment.
-# Keep this Dockerfile compatible with the legacy Docker builder used by the
-# in-cluster updater: do not depend on BuildKit-only COPY/RUN flags here.
-COPY pyproject.toml .
-RUN chmod 0644 pyproject.toml && \
-    python -c "import pathlib,tomllib; data=tomllib.loads(pathlib.Path('pyproject.toml').read_text()); pathlib.Path('/tmp/requirements.txt').write_text('\\n'.join(data['project']['dependencies'])+'\\n')" && \
-    python -m pip install --no-cache-dir -r /tmp/requirements.txt
-
-# Git worktree permissions can be restrictive on the host. Copy mutable sources
-# after dependencies, then normalize them for the fixed unprivileged UID.
-COPY main.py .
-COPY app ./app
-COPY updater/release_evidence.py ./updater/release_evidence.py
-COPY static ./static
-COPY tests ./tests
-COPY migrations ./migrations
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN /usr/local/go/bin/go mod download
+COPY cmd ./cmd
+COPY internal ./internal
 COPY protocol ./protocol
-RUN chmod 0644 /app/main.py && \
-    chmod -R a+rX /app/app /app/updater /app/static /app/tests /app/migrations /app/protocol
+COPY migrations ./migrations
+COPY static ./static
+RUN CGO_ENABLED=0 /usr/local/go/bin/go test ./... && \
+    CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath -ldflags="-s -w" -o /out/frontiercloud ./cmd/frontiercloud
 
-# The public service does not require root. A fixed UID simplifies host
-# permissions for the data directory.
-RUN groupadd --system --gid 10001 appuser && \
+FROM debian:13.3-slim
+ARG REVISION
+LABEL frontiercloud.revision=$REVISION frontiercloud.component="web" \
+      frontiercloud.runtime="go" frontiercloud.schema-generation="2" \
+      frontiercloud.release-manifest-version="1"
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --system --gid 10001 appuser && \
     useradd --system --uid 10001 --gid appuser --home-dir /app --shell /usr/sbin/nologin appuser && \
-    mkdir -p /app/data && \
-    chown 10001:10001 /app/data
+    mkdir -p /app/data /data && \
+    chown 10001:10001 /app/data /data
+
+WORKDIR /app
+COPY --from=build /out/frontiercloud /app/frontiercloud
+COPY --chown=10001:10001 static /app/static
+COPY internal/search/data/LICENSE.pypinyin.txt internal/search/data/LICENSE.opencc.txt /app/licenses/
+RUN chmod -R a+rX /app/static
 
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
-
-# Document the application port.
 EXPOSE 8000
-
-# Keep the runtime process unprivileged.
 USER 10001:10001
-
-# Start the ASGI server without trusting client-supplied proxy headers.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers", "--no-access-log"]
+ENTRYPOINT ["/app/frontiercloud"]
+CMD ["serve"]

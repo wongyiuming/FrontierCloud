@@ -26,7 +26,8 @@ maintenance_gate = read("nginx/maintenance-gate.conf")
 maintenance_page = read("nginx/maintenance.html")
 workflow = read(".github/workflows/docker.yml")
 compose = read("docker-compose.yaml")
-web_dockerfile = read("Dockerfile")
+mysql_overlay = read("docker-compose.gin-mysql.yaml")
+web_dockerfile = read("Dockerfile.python")
 updater_dockerfile = read("updater/Dockerfile")
 nginx_dockerfile = read("nginx/Dockerfile")
 
@@ -53,7 +54,8 @@ require('refs/remotes/origin/{RELEASE_BRANCH}' in updater,
         "Updater must maintain an explicit origin/main remote-tracking ref")
 require('refs/heads/{RELEASE_BRANCH}' in updater,
         "Updater fetch must not depend on a pre-existing remote fetch refspec")
-require('FORCE_OPEN_FLAG = ROOT / "data" / ".frontiercloud-force-open"' in updater
+require('FORCE_OPEN_FLAG = UPDATER_DATA_DIRECTORY / ".frontiercloud-force-open"' in updater
+        and 'or str(ROOT / "data")' in updater
         and 'FORCE_OPEN_FLAG.unlink(missing_ok=True)' in updater,
         "Every updater must clear stale open overrides before entering release maintenance")
 require('followers_need_convergence' in release and 'cluster_convergence_needed' in release,
@@ -112,8 +114,20 @@ require('FROM nginx:1.30.4-alpine' in nginx_dockerfile,
         "Nginx base image must be patch-pinned")
 require('image: redis:7.4.11-alpine' in compose,
         "Redis image must be patch-pinned")
-require('image: mysql:8.4.11' in compose,
+require('image: mysql:8.4.11' in mysql_overlay,
         "MySQL image must be patch-pinned")
+require('  mysql:' not in compose and 'DB_TYPE: ${DB_TYPE:-sqlite}' in compose,
+        "Default native SQLite must not require a MySQL service")
+require(read("Dockerfile") == read("Dockerfile.gin") and compose == read("docker-compose.gin.yaml"),
+        "Default native entry points and retained Gin aliases must agree")
+require('command: [init-secrets]' in compose and 'command: [init-media]' in compose
+        and 'dockerfile: updater/Dockerfile.gin' in compose,
+        "Default initializers/updater must remain native")
+require('RELEASE_BRANCH: ${RELEASE_BRANCH:-gin_main}' in compose
+        and 'RELEASE_SOURCE_BRANCH: ${RELEASE_SOURCE_BRANCH:-gin_dev}' in compose,
+        "Native default must retain the fixed native release profile")
+require('test-mixed-runtime:' in workflow and 'bash scripts/test-mixed-runtime.sh' in workflow,
+        "Native source CI must include all four real mixed-runtime fleets")
 require('image: coturn/coturn:4.17.2-r0-alpine' in compose,
         "Coturn image must remain patch-pinned")
 require('image: redis:7-alpine' not in compose,

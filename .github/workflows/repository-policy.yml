@@ -6,7 +6,7 @@ permissions:
 on:
   create:
   pull_request:
-    branches: ["main"]
+    branches: ["main", "gin_main"]
     types: [opened, synchronize, reopened, edited, ready_for_review]
 
 jobs:
@@ -21,8 +21,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$CREATED_REF" != "dev" && "$CREATED_REF" != "main" ]]; then
-            echo "::error::new branches are prohibited; only existing canonical refs dev and main are allowed (created: $CREATED_REF)"
+          if [[ "$CREATED_REF" != "dev" && "$CREATED_REF" != "main" && "$CREATED_REF" != "gin_dev" && "$CREATED_REF" != "gin_main" ]]; then
+            echo "::error::new branches are prohibited outside the authorized dev/main and gin_dev/gin_main profiles (created: $CREATED_REF)"
             exit 1
           fi
           echo "Canonical branch event: $CREATED_REF"
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
-      - name: Enforce same-repository dev to main only
+      - name: Enforce same-repository runtime-specific promotion
         env:
           BASE_REF: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
@@ -41,12 +41,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$BASE_REF" != "main" ]]; then
-            echo "::error::repository-policy workflow was invoked for unexpected base '$BASE_REF'"
+          case "$BASE_REF" in
+            main) expected_source=dev ;;
+            gin_main) expected_source=gin_dev ;;
+            *) echo "::error::unexpected production profile '$BASE_REF'"; exit 1 ;;
+          esac
+          if [[ "$HEAD_REF" != "$expected_source" || "$HEAD_REPO" != "$BASE_REPO" ]]; then
+            echo "::error::only same-repository dev -> main or gin_dev -> gin_main promotion PRs are valid; got $HEAD_REPO:$HEAD_REF -> $BASE_REPO:$BASE_REF"
             exit 1
           fi
-          if [[ "$HEAD_REF" != "dev" || "$HEAD_REPO" != "$BASE_REPO" ]]; then
-            echo "::error::main only accepts a same-repository dev -> main promotion PR; got $HEAD_REPO:$HEAD_REF -> $BASE_REPO:$BASE_REF"
-            exit 1
-          fi
-          echo "Valid release topology: $HEAD_REPO:dev -> $BASE_REPO:main"
+          echo "Valid release topology: $HEAD_REPO:$HEAD_REF -> $BASE_REPO:$BASE_REF"

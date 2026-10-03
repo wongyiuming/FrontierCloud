@@ -564,7 +564,8 @@ def main():
                 "-addext", "subjectKeyIdentifier=hash")
         bundle = directory / "ca-certificates.crt"
         bundle.write_bytes(Path("/etc/ssl/certs/ca-certificates.crt").read_bytes() + b"\n" + ca.read_bytes())
-        base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.yaml"),
+        base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.python.yaml"),
+                                  "-f", str(ROOT / "docker-compose.gin-mysql.yaml"),
                                   "config", "--format", "json"))
         try:
             for index, name in enumerate(("master-a", "direct-b", "relay-c")):

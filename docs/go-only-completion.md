@@ -1,7 +1,7 @@
 # Go-only backend completion gate
 
-The target is a standalone Go backend, not a Python wrapper. The historical
-Python source remains a contract oracle until parity is established; it must
+The default backend is native Go, not a Python wrapper. The explicitly selected
+Python reference remains independently maintained for interoperability; it must
 not appear in the final runtime, initializer, migration, maintenance or updater.
 The default is Gin + SQLite. DB_TYPE=mysql selects the same logical schema on
 MySQL. Existing frontend, Nginx, Redis and coturn remain unchanged.
@@ -16,20 +16,54 @@ route alone, an empty response, or a generic success response is not parity.
 - [x] Exact canonical JSON, Ed25519, HMAC and capability conformance vectors
 - [x] Independent Go image, initial secrets/media and schema migration commands
 - [x] Shared logical schema, SQLite and MySQL initialization and migration tests
-- [ ] Complete environment configuration and selected database deployment
-- [ ] Public pages, catalog, streaming, playback, lyrics and brand
-- [ ] Admin authentication, CSRF, keys, tree, upload, visibility and deletion
-- [ ] Directory rename/priorities, lyric management and security observability
-- [ ] Node identity, fixed role, pair/confirm/revoke/re-pair and heartbeat
-- [ ] Master global catalog, storage allocations and Direct/Relay capabilities
-- [ ] Recording accounts, quotas, upload/finalize/download/delete
-- [ ] Logical business backups, promotion and restore with either database
-- [ ] Go updater, release verification, maintenance, rollback and cleanup
+- [x] Complete environment configuration and selected database deployment
+- [x] Public pages, catalog, streaming, playback, lyrics and brand
+- [x] Admin authentication, CSRF, keys, tree, upload, visibility and deletion
+- [x] Directory rename/priorities, lyric management and security observability
+- [x] Node identity, fixed role, pair/confirm/revoke/re-pair and heartbeat
+- [x] Master global catalog, storage allocations and Direct/Relay capabilities
+- [x] Recording accounts, quotas, upload/finalize/download/delete
+- [x] Logical business export, mixed transfer and independent read-only preflight
+- [ ] Portable physical restore/promotion and historical cluster migration admission
+- [x] Native standalone updater, exact release proof, maintenance, rollback and cleanup
+- [ ] Actual mixed-profile whole-release execution/convergence
 - [ ] Only-Go deployment contains no Python process or Python-dependent script
-- [ ] Isolated 1 Master / 3 Direct / 6 Relay private-CA integration validation
+- [x] Four isolated 1 Master / 3 Direct / 6 Relay private-CA integration validations
 
 Do not switch the existing development topology to Go until the replacement
 passes its integration gates. Do not claim completion from schema tests alone.
+
+## Latest verification (2026-10-03)
+
+At production slice `8f8f2f5`, four sequential fresh private-CA fleets passed
+`TestRealMixedRuntimeFleetControl` in 1531.04 seconds: Go/SQLite 346.22s,
+Go/MySQL 344.66s, Python/SQLite 418.61s and Python/MySQL 421.54s. Every fleet
+used one Master, three Direct and six Relay Followers cycling both runtimes
+and both stores. No original node, volume or database was redeployed.
+
+Actual pairing/confirmation/configuration/heartbeat, revoke/re-pair, placement
+across all ten physical stores, public global catalog and exact byte ranges,
+account registration, ten recording uploads/finalizations/ranges/deletions,
+CSRF/anonymous rejection, cold transfer to Python/MySQL and Go/SQLite Followers
+and independent native read-only logical preflight passed. A real native
+Follower stop became offline and ineligible for storage; restart restored its
+fixed role and heartbeat. All ten Web processes, Redis AOF and MySQL then
+restarted with node identities, relationships, account session and recordings
+preserved. All ten media deletions and catalog invalidation converged.
+
+The root deployment now selects Go/SQLite; explicit Python/SQLite and both
+MySQL overlays passed actual Compose parsing. Immutable operator bootstrap
+archives only an exact commit's fixed native paths. Its capture-only shell
+regression rejects branch/short/missing selections and excludes mutable edits,
+untracked files, tracked secrets/data and the reference runtime. That regression
+is not itself actual image-build evidence. Fresh root Compose bootstrap and the
+new fixed-role TLS-loss integration check are being verified separately.
+
+Historical Python Master/Follower admission remains fail-closed without native
+provenance. Logical preflight continues to report `restore_ready=false`.
+The remaining unchecked items above are not covered by the passing core fleet;
+default Go startup is not permission to overwrite historical state. Chronological
+slice notes below describe their evidence and limitations at the recorded dates.
 
 ## Current verified slice (2026-10-01)
 

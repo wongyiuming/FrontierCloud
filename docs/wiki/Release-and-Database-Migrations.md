@@ -2,22 +2,24 @@
 
 ## 1. Canonical branch topology
 
-FrontierCloud has exactly two canonical branches:
+FrontierCloud has two independent owner-authorized runtime profiles:
 
 ```text
-dev   implementation + complete CI authority
-main  reviewed release history
+dev / main          Python reference implementation / reviewed release
+gin_dev / gin_main  native Go implementation / reviewed release
 ```
 
 Repository policy is strict:
 
 - do not create feature/fix/release/temporary branches;
-- all engineering changes go directly to the existing `dev`;
-- the only valid PR into `main` is same-repository `dev -> main`;
-- never force-rewrite `dev` or `main`;
-- after a release PR is merged, fast-forward `dev` to the resulting `main` merge commit before further work.
+- engineering changes go to the selected profile's development branch;
+- only same-repository `dev -> main` and `gin_dev -> gin_main` PRs are valid;
+- never force-rewrite a canonical branch;
+- after promotion, fast-forward its development branch to the release merge commit.
 
-The no-new-branch rule is an architecture constraint, not a preference.
+The no-additional-branch rule remains an architecture constraint. Database selection
+does not select a release profile. The native verifier applies the same exact CI,
+reviewed-tree and newest-run requirements below to `gin_dev` / `gin_main`.
 
 ## 2. Normal release path
 

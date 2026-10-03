@@ -7,17 +7,22 @@ Recommended host requirements:
 - Linux;
 - Docker Engine;
 - Docker Compose v2;
-- sufficient disk for `./data`, MySQL, Redis, images, and recovery data;
+- sufficient disk for `./data`, Redis, images, recovery data and optional MySQL;
 - valid DNS/certificate conditions before fixing a node into Master/Follower.
 
-FrontierCloud currently assumes one Web process with one ASGI worker. Do not increase `WEB_CONCURRENCY`, start multiple Gunicorn/Uvicorn workers, or horizontally replicate Web until the process-local media mutation fence has been replaced with a database/distributed lock.
+FrontierCloud assumes one Web process: native Go by default, or one ASGI worker
+in the explicit Python reference profile. Do not horizontally replicate Web or
+increase Python worker counts. Native OS leases protect shared-volume mutation;
+they do not create a second business authority.
 
 ## 2. Minimal Standalone startup
 
-No `.env` is required for local HTTP Standalone use:
+For a fresh native HTTP Standalone node, select an exact committed image revision:
 
 ```bash
-docker compose up -d --build --wait
+export FRONTIERCLOUD_REVISION="$(git rev-parse HEAD)"
+bash scripts/build-native-images.sh "$FRONTIERCLOUD_REVISION"
+docker compose up -d --no-build --wait
 ```
 
 Check status:
@@ -39,6 +44,12 @@ Follow logs:
 docker compose logs -f --tail=200
 ```
 
+The default is Go + SQLite. To select Go + MySQL, Python + SQLite or Python +
+MySQL through `.env`, use the four configurations in
+[Native deployment](../../protocol/v2/native-deployment.md). Use a distinct
+project/data root for a new instance. Changing the selection never migrates an
+existing database or grants historical cluster startup admission.
+
 ## 3. HTTPS and fixed roles
 
 Create `.env`:
@@ -46,6 +57,8 @@ Create `.env`:
 ```dotenv
 TLS_ENABLED=true
 SERVER_NAME=media.example.com
+# Also persist the exact native image SHA if not exported by the operator:
+# FRONTIERCLOUD_REVISION=<40-character committed SHA>
 ```
 
 Default certificate files:
@@ -69,10 +82,12 @@ media-init
 updater
 web
 redis
-mysql
 nginx
 stun
 ```
+
+MySQL is an additional service only in the MySQL overlay; SQLite uses the private
+`data/frontiercloud.db` file and requires no MySQL server.
 
 ### secrets-init
 
@@ -93,7 +108,10 @@ Initializes the managed host data tree under `./data` and grants the unprivilege
 
 ### web
 
-Runs FastAPI business/control logic, Admin, catalog, playback metadata, lyrics, cluster control, and observability.
+Runs native Gin business/control logic, Admin, catalog, playback metadata,
+lyrics, cluster control and observability. The explicit Python reference profile
+runs FastAPI instead. Native initialization, migration, health checks,
+maintenance and the default updater use Go binaries, not Python wrappers.
 
 Production Web must remain single-worker while the media mutation fence is process-local.
 
@@ -103,7 +121,8 @@ Owns Web-managed release build/replace, upgrade, rollback, maintenance state, an
 
 ### mysql / redis
 
-MySQL stores durable business and cluster facts. Redis is runtime cache/coordination and is not the sole durable store for business truth.
+The selected SQLite or MySQL backend stores durable business and cluster facts.
+Redis is runtime cache/coordination and is not the sole durable business store.
 
 ### nginx
 
@@ -118,8 +137,8 @@ Provides the STUN service required by WebRTC observation.
 Important persistent locations:
 
 ```text
-./data                 media, lyrics, recordings, temporary recovery data
-mysql_data             MySQL durable state
+./data                 SQLite DB, media, lyrics, recordings, recovery state
+mysql_data             optional MySQL durable state
 redis_data             Redis runtime state
 runtime_secrets        Admin/MySQL/metrics secrets
 updater_control        Web-to-Updater control channel

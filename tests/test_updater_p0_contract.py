@@ -200,6 +200,43 @@ class UpdaterRuntimeRestartTests(unittest.TestCase):
         self.assertNotIn("execv", source)
         self.assertIn("os._exit(0)", source)
 
+    def test_reference_project_selector_never_falls_back_to_original_nodes(self):
+        updater = load_updater_module()
+        updater.UPDATER_PROJECT = "fc-private-reference"
+        engine = MagicMock()
+        owned = object()
+        engine.containers.list.return_value = [owned]
+        self.assertIs(updater.service_container(engine, "web"), owned)
+        engine.containers.list.assert_called_once_with(all=True, filters={"label": [
+            "com.docker.compose.project=fc-private-reference", "com.docker.compose.service=web",
+        ]})
+        engine.containers.get.assert_not_called()
+        for rows in ([], [owned, owned]):
+            engine.containers.list.return_value = rows
+            with self.assertRaises(RuntimeError):
+                updater.service_container(engine, "web")
+        engine.containers.get.assert_not_called()
+        updater.UPDATER_PROJECT = "../foreign"
+        engine.containers.list.reset_mock()
+        with self.assertRaises(RuntimeError):
+            updater.service_container(engine, "web")
+        engine.containers.list.assert_not_called()
+
+    def test_reference_build_never_uses_native_root_recipe(self):
+        updater = load_updater_module()
+        engine = MagicMock()
+        for source, expected in ((["FROM python:3.14.7-slim"], "Dockerfile.python"),
+                                 (["", "FROM python:3.14.7-slim"], "Dockerfile")):
+            engine.images.build.reset_mock()
+            with patch.object(updater, "git", side_effect=source):
+                updater.build(engine, CURRENT_SHA)
+            self.assertEqual(engine.images.build.call_args_list[0].kwargs["dockerfile"], expected)
+        engine.images.build.reset_mock()
+        with patch.object(updater, "git", side_effect=["", "FROM golang:1.26.0-bookworm"]):
+            with self.assertRaises(RuntimeError):
+                updater.build(engine, CURRENT_SHA)
+        engine.images.build.assert_not_called()
+
     def test_restart_request_persists_target_before_process_exit(self):
         updater = load_updater_module()
         updater.RUNTIME_SHA = RUNTIME_SHA

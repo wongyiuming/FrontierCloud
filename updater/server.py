@@ -31,8 +31,10 @@ STATUS_PATH = CONTROL_DIR / "status.json"
 REPLACEMENT_PATH = CONTROL_DIR / "replacement.json"
 MAINTENANCE_DIR = pathlib.Path("/run/frontiercloud-maintenance")
 MAINTENANCE_FLAG = MAINTENANCE_DIR / "enabled"
-FORCE_OPEN_FLAG = ROOT / "data" / ".frontiercloud-force-open"
+UPDATER_DATA_DIRECTORY = pathlib.Path(os.environ.get("UPDATER_DATA_DIRECTORY") or str(ROOT / "data"))
+FORCE_OPEN_FLAG = UPDATER_DATA_DIRECTORY / ".frontiercloud-force-open"
 RELEASE_BRANCH = "main"
+UPDATER_PROJECT = os.environ.get("UPDATER_PROJECT", "").strip()
 RELEASE_MANIFEST_VERSION = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 RELEASE_IMAGE_TAG_RE = re.compile(r"^frontiercloud-(?:web|nginx):([0-9a-f]{40})$")
@@ -152,6 +154,18 @@ def client():
 
 
 def service_container(engine, service: str):
+    if service not in {"web", "nginx", "secrets-init", "media-init"}:
+        raise RuntimeError("unsupported reference service")
+    if UPDATER_PROJECT:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", UPDATER_PROJECT):
+            raise RuntimeError("invalid reference project identity")
+        rows = engine.containers.list(all=True, filters={"label": [
+            f"com.docker.compose.project={UPDATER_PROJECT}",
+            f"com.docker.compose.service={service}",
+        ]})
+        if len(rows) != 1:
+            raise RuntimeError(f"expected exactly one project-owned {service} container")
+        return rows[0]
     fixed = SERVICE_NAMES.get(service)
     if fixed:
         return engine.containers.get(fixed)
@@ -257,11 +271,20 @@ def wait_healthy(container, timeout: int = 240) -> None:
 
 
 def build(engine, target: str) -> tuple[str, str]:
+    # The native checkout's root recipe is Go. Select the explicit reference
+    # recipe from the exact target; old main history retains its root recipe.
+    recipe = "Dockerfile.python"
+    contents = git("show", f"{target}:{recipe}", check=False)
+    if not contents:
+        recipe = "Dockerfile"
+        contents = git("show", f"{target}:{recipe}")
+    if not re.search(r"(?m)^FROM python:[^\s]+", contents):
+        raise RuntimeError("reviewed target has no Python reference runtime recipe")
     web_tag = f"frontiercloud-web:{target}"
     nginx_tag = f"frontiercloud-nginx:{target}"
     log(f"building web image {target}")
     engine.images.build(
-        path=str(ROOT), dockerfile="Dockerfile", tag=web_tag, rm=True, forcerm=True,
+        path=str(ROOT), dockerfile=recipe, tag=web_tag, rm=True, forcerm=True,
         labels={"frontiercloud.revision": target, "frontiercloud.component": "web"},
     )
     log(f"building nginx image {target}")

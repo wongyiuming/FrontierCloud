@@ -81,7 +81,7 @@ All Master path mutations participate in one process-local reader/writer fence. 
 
 ### Process model for mutation safety
 
-The production Web service must run a **single ASGI worker**. The media mutation fence above is process-local; starting multiple Uvicorn/Gunicorn workers or setting `WEB_CONCURRENCY` would create independent locks and silently invalidate rename/upload/delete/hide serialization.
+The production Web service must remain a single process: one native Go service, or a **single ASGI worker** in the explicit Python reference profile. Python's media mutation fence is process-local; starting multiple Uvicorn/Gunicorn workers or setting `WEB_CONCURRENCY` would invalidate its serialization. Native mutation and recovery also retain cross-process OS leases, but this does not authorize horizontally replicated Web services or multiple independent business authorities.
 
 Do not add multiple Web workers as a performance tweak. Multi-process or horizontally scaled Web execution requires replacing the process-local media mutation fence with a database-backed or distributed lock, plus new cross-process concurrency regressions, before deployment topology changes are allowed.
 
@@ -159,18 +159,18 @@ Dynamic modules must join this same final DOM/visual order. Reordering code must
 
 ## 11. Release topology
 
-The repository has two canonical branches:
+The owner-authorized reconstruction adds one independent native release profile:
 
-- `dev` — implementation and complete CI authority;
-- `main` — reviewed release history.
+- `dev` / `main` — Python reference implementation / reviewed release history;
+- `gin_dev` / `gin_main` — native Go implementation / reviewed release history.
 
 Absolute repository policy:
 
-- **Do not create any new branch.** Additional feature/fix/release/temporary branches are prohibited.
-- all changes go to the existing `dev`;
-- the only PR into `main` is same-repository `dev -> main`;
-- after the release PR is merged, fast-forward `dev` to the resulting `main` commit before further work;
-- never force-rewrite `dev` or `main`.
+- **Do not create any new branch** outside these four authorized refs. Additional feature/fix/release/temporary branches remain prohibited.
+- changes go to the appropriate development branch, never directly to a release branch;
+- only same-repository `dev -> main` and `gin_dev -> gin_main` promotion PRs are valid;
+- after promotion, fast-forward that profile's development branch to its release merge commit;
+- never force-rewrite any canonical branch. Database selection does not change release profile.
 
 GitHub-side ref creation cannot be fully prevented by a unit test. The repository-policy workflow detects non-canonical branch creation after the event, while true pre-creation prevention requires GitHub repository ruleset/administrative enforcement. The no-new-branch invariant must remain documented here, in `CONTRIBUTING.md`, and in the Wiki/ruleset configuration.
 

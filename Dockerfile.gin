@@ -38,4 +38,3 @@ EXPOSE 8000
 USER 10001:10001
 ENTRYPOINT ["/app/frontiercloud"]
 CMD ["serve"]
-

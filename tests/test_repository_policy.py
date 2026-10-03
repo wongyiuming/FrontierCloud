@@ -28,19 +28,21 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
     def test_main_prs_are_dev_to_main_only(self):
         workflow = (ROOT / ".github/workflows/repository-policy.yml").read_text(encoding="utf-8")
         self.assertIn('pull_request:', workflow)
-        self.assertIn('branches: ["main"]', workflow)
+        self.assertIn('branches: ["main", "gin_main"]', workflow)
         self.assertIn('HEAD_REF: ${{ github.head_ref }}', workflow)
         self.assertIn('HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}', workflow)
         self.assertIn('BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}', workflow)
-        self.assertIn('[[ "$HEAD_REF" != "dev" || "$HEAD_REPO" != "$BASE_REPO" ]]', workflow)
-        self.assertIn('same-repository dev -> main', workflow)
+        self.assertIn('main) expected_source=dev ;;', workflow)
+        self.assertIn('gin_main) expected_source=gin_dev ;;', workflow)
+        self.assertIn('[[ "$HEAD_REF" != "$expected_source" || "$HEAD_REPO" != "$BASE_REPO" ]]', workflow)
+        self.assertIn('same-repository dev -> main or gin_dev -> gin_main', workflow)
 
     def test_noncanonical_branch_creation_is_detected(self):
         workflow = (ROOT / ".github/workflows/repository-policy.yml").read_text(encoding="utf-8")
         self.assertRegex(workflow, r"(?m)^  create:\s*$")
         self.assertIn("github.ref_type == 'branch'", workflow)
         self.assertIn('CREATED_REF: ${{ github.ref_name }}', workflow)
-        self.assertIn('[[ "$CREATED_REF" != "dev" && "$CREATED_REF" != "main" ]]', workflow)
+        self.assertIn('[[ "$CREATED_REF" != "dev" && "$CREATED_REF" != "main" && "$CREATED_REF" != "gin_dev" && "$CREATED_REF" != "gin_main" ]]', workflow)
         self.assertIn("new branches are prohibited", workflow)
 
     def test_no_new_branch_rule_is_explicit_and_release_flow_is_two_branch(self):
@@ -51,6 +53,7 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
             self.assertIn("dev", content)
             self.assertIn("main", content)
             self.assertIn("dev -> main", content)
+            self.assertIn("gin_dev -> gin_main", content)
             self.assertIn("fast-forward", content)
         self.assertIn("only development branch", contributing)
         self.assertIn("never force-rewrite", architecture)
@@ -88,10 +91,13 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
     def test_media_mutation_fence_requires_single_web_process(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        reference = (ROOT / "Dockerfile.python").read_text(encoding="utf-8")
         architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
-        combined = dockerfile + "\n" + compose
+        combined = dockerfile + "\n" + compose + "\n" + reference
 
-        self.assertIn('CMD ["uvicorn", "main:app"', dockerfile)
+        self.assertIn('ENTRYPOINT ["/app/frontiercloud"]', dockerfile)
+        self.assertIn('CMD ["serve"]', dockerfile)
+        self.assertIn('CMD ["uvicorn", "main:app"', reference)
         self.assertNotRegex(combined, re.compile(r"--workers(?:=|\s)", re.I))
         self.assertNotRegex(combined, re.compile(r"\bWEB_CONCURRENCY\b", re.I))
         self.assertNotRegex(combined, re.compile(r"\bgunicorn\b", re.I))

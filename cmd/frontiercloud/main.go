@@ -151,6 +151,9 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	if err := runtimeIdentityTransport(settings, identity); err != nil {
+		return err
+	}
 	if err := identity.CheckNativeRuntime(initialization, settings.DataRoot); err != nil {
 		return err
 	}
@@ -264,6 +267,26 @@ func serve() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)
+	}
+}
+
+func runtimeIdentityTransport(settings config.Config, identity *node.Identity) error {
+	if identity == nil {
+		return storecontract.ErrNodeState
+	}
+	switch identity.Role {
+	case "Standalone":
+		return nil
+	case "Master", "Follower":
+		if !settings.TLSEnabled {
+			return errors.New("fixed Master/Follower identity requires HTTPS; restore TLS_ENABLED, role is never reset automatically")
+		}
+		if _, err := node.Endpoint(identity.Endpoint); err != nil {
+			return err
+		}
+		return nil
+	default:
+		return storecontract.ErrNodeState
 	}
 }
 

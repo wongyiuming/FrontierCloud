@@ -1,63 +1,105 @@
+# Default native Go + SQLite deployment. Historical cluster volumes still need
+# separately verified offline migration; changing .env never migrates data.
+name: ${COMPOSE_PROJECT_NAME:-frontiercloud-gin}
+
 x-app-image: &app-image
-  image: frontiercloud-web
-  build: .
+  env_file:
+    - path: .env
+      required: false
+  image: frontiercloud-go-web:${FRONTIERCLOUD_REVISION:?Set the exact committed source SHA}
+  build:
+    context: .
+    dockerfile: Dockerfile.gin
+    args: {REVISION: "${FRONTIERCLOUD_REVISION:?Set the exact committed source SHA}"}
+
+x-app-environment: &app-environment
+  DB_TYPE: ${DB_TYPE:-sqlite}
+  SQLITE_PATH: ${SQLITE_PATH:-/app/data/frontiercloud.db}
+  DATA_ROOT: /app/data
+  SECRETS_DIR: /run/frontiercloud-secrets
+  MYSQL_HOST: ${MYSQL_HOST:-mysql}
+  MYSQL_PORT: ${MYSQL_PORT:-3306}
+  MYSQL_DATABASE: ${MYSQL_DATABASE:-office_automation}
+  MYSQL_USER: ${MYSQL_USER:-media_admin}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  SERVER_NAME: ${SERVER_NAME:-localhost}
+  RELEASE_BRANCH: ${RELEASE_BRANCH:-gin_main}
+  RELEASE_SOURCE_BRANCH: ${RELEASE_SOURCE_BRANCH:-gin_dev}
+  RELEASE_MANIFEST_PATH: ${RELEASE_MANIFEST_PATH:-}
+  TLS_ENABLED: ${TLS_ENABLED:-false}
+
+x-logging: &service-logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
 
 services:
   secrets-init:
     <<: *app-image
     user: "0:0"
-    command: ["python", "-m", "app.services.runtime_secrets"]
+    command: [init-secrets]
+    environment: *app-environment
     restart: "no"
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
-    volumes: [runtime_secrets:/run/frontiercloud-secrets]
-    logging: &service_logging
-      driver: json-file
-      options: {max-size: "10m", max-file: "3"}
+    volumes:
+      - ${DATA_DIRECTORY:-./data}:/app/data:z
+      - runtime_secrets:/run/frontiercloud-secrets
+    logging: *service-logging
 
   media-init:
     <<: *app-image
     user: "0:0"
-    command: ["python", "-m", "app.services.media_storage_init"]
+    command: [init-media]
+    environment: *app-environment
     restart: "no"
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
     volumes:
-      - ./data:/app/data:z
-    logging: *service_logging
+      - ${DATA_DIRECTORY:-./data}:/app/data:z
+    logging: *service-logging
 
   updater:
-    build: {context: ., dockerfile: updater/Dockerfile}
-    image: frontiercloud-updater
-    restart: always
+    image: frontiercloud-go-updater:${FRONTIERCLOUD_REVISION:?Set the exact committed source SHA}
+    build:
+      context: .
+      dockerfile: updater/Dockerfile.gin
+      args: {REVISION: "${FRONTIERCLOUD_REVISION:?Set the exact committed source SHA}"}
+    command: [serve]
     user: "0:0"
-    command: ["python", "/workspace/updater/server.py"]
+    restart: always
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
+    # Only control-socket group setup and access to the selected private data root.
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    environment:
+      UPDATER_PROJECT: ${COMPOSE_PROJECT_NAME:-frontiercloud-gin}
+      UPDATER_DATA_DIRECTORY: /data
+      RELEASE_BRANCH: ${RELEASE_BRANCH:-gin_main}
+      GITHUB_API_TOKEN: ${GITHUB_API_TOKEN:-}
     volumes:
       - .:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${DATA_DIRECTORY:-./data}:/data:z
       - updater_control:/run/frontiercloud-updater
       - maintenance_state:/run/frontiercloud-maintenance
     tmpfs:
       - /tmp:size=64m,mode=1777
-    logging: *service_logging
+    logging: *service-logging
 
   web:
     <<: *app-image
-    container_name: office_automation_web
+    command: [serve]
+    user: "10001:10001"
     restart: always
     env_file:
       - path: .env
         required: false
-    environment:
-      TLS_ENABLED: ${TLS_ENABLED:-false}
-      PYTHONDONTWRITEBYTECODE: "1"
+    environment: *app-environment
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
@@ -66,62 +108,39 @@ services:
       secrets-init: {condition: service_completed_successfully}
       media-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
-      mysql: {condition: service_healthy}
     volumes:
-      - ./data:/app/data:z
+      - ${DATA_DIRECTORY:-./data}:/app/data:z
       - web_tmp:/tmp
       - runtime_secrets:/run/frontiercloud-secrets
       - updater_control:/run/frontiercloud-updater:ro
     healthcheck:
-      test: ["CMD", "python", "-m", "app.services.health_probe"]
+      test: [CMD, /app/frontiercloud, healthcheck]
       interval: 30s
       start_interval: 2s
       timeout: 5s
       retries: 4
       start_period: 15s
-    stop_grace_period: 3s
-    logging: *service_logging
+    stop_grace_period: 30s
+    logging: *service-logging
 
   redis:
     image: redis:7.4.11-alpine
-    container_name: office_automation_redis
     restart: always
     command: redis-server --appendonly yes
     volumes: [redis_data:/data]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [CMD, redis-cli, ping]
       interval: 5s
       timeout: 3s
       retries: 10
-    logging: *service_logging
-
-  mysql:
-    image: mysql:8.4.11
-    container_name: office_automation_mysql
-    restart: always
-    environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-office_automation}
-      MYSQL_USER: ${MYSQL_USER:-media_admin}
-      MYSQL_PASSWORD_FILE: /run/frontiercloud-secrets/mysql_password
-      MYSQL_ROOT_PASSWORD_FILE: /run/frontiercloud-secrets/mysql_root_password
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - mysql_socket:/var/run/mysqld
-      - runtime_secrets:/run/frontiercloud-secrets:ro
-    depends_on:
-      secrets-init: {condition: service_completed_successfully}
-    healthcheck:
-      test: ["CMD-SHELL", "MYSQL_PWD=$$(cat /run/frontiercloud-secrets/mysql_password) mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} --silent"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    logging: *service_logging
+    logging: *service-logging
 
   nginx:
-    build: {context: ., dockerfile: nginx/Dockerfile}
-    image: frontiercloud-nginx
-    container_name: office_automation_nginx
+    image: frontiercloud-go-nginx:${FRONTIERCLOUD_REVISION:?Set the exact committed source SHA}
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+      args: {REVISION: "${FRONTIERCLOUD_REVISION:?Set the exact committed source SHA}", FRONTIERCLOUD_RUNTIME: go}
     restart: always
     environment:
       TLS_ENABLED: ${TLS_ENABLED:-false}
@@ -140,19 +159,18 @@ services:
         protocol: tcp
         host_ip: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}
     volumes:
-      - ./data:/app/data:ro,z
+      - ${DATA_DIRECTORY:-./data}:/app/data:ro,z
       - ${SSL_CERT_PATH:-./certs/fullchain.pem}:/etc/nginx/certs/fullchain.pem:ro
       - ${SSL_KEY_PATH:-./certs/privkey.pem}:/etc/nginx/certs/privkey.pem:ro
       - ${ACME_WEBROOT:-./certs/acme}:/var/www/certbot:ro
       - maintenance_state:/run/frontiercloud-maintenance:ro
     depends_on:
       web: {condition: service_healthy}
-    stop_grace_period: 3s
-    logging: *service_logging
+    stop_grace_period: 30s
+    logging: *service-logging
 
   stun:
     image: coturn/coturn:4.17.2-r0-alpine
-    container_name: frontiercloud_stun
     restart: always
     command: [-n, --stun-only, --no-auth, --no-cli, --no-tls, --no-dtls, --fingerprint, --no-multicast-peers, --log-file=stdout, --simple-log, --listening-port=3478]
     ports:
@@ -174,15 +192,11 @@ services:
     mem_limit: 32m
     cpus: "0.20"
     pids_limit: 64
-    logging:
-      driver: json-file
-      options: {max-size: "5m", max-file: "2"}
+    logging: *service-logging
 
 volumes:
   web_tmp:
   runtime_secrets:
   redis_data:
-  mysql_data:
-  mysql_socket:
   updater_control:
   maintenance_state:

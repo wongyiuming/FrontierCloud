@@ -71,10 +71,27 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify native real drivers, authentication, lifecycle and race contracts
         run: bash scripts/test-go-business.sh
-      - name: Verify actual native SQLite/MySQL Compose selection
+      - name: Verify actual Go/Python and SQLite/MySQL Compose selection
         run: bash scripts/test-go-deployment.sh
+      - name: Verify actual immutable native default bootstrap and store restart
+        run: FRONTIERCLOUD_REVISION="$GITHUB_SHA" bash scripts/test-native-default.sh
       - name: Verify real immutable upgrade, agent handoff and rollback without Python
         run: bash scripts/test-go-updater.sh
+
+  test-mixed-runtime:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/gin_dev') ||
+      (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/gin_')) ||
+      (github.event_name == 'merge_group' && github.event.merge_group.base_ref == 'refs/heads/gin_main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    concurrency:
+      group: mixed-runtime-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify four actual private-CA mixed fleets with 3 Direct and 6 Relay
+        run: bash scripts/test-mixed-runtime.sh
 
   promote-main:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -179,6 +196,8 @@ jobs:
             core.notice(`promotion query resolves dev ${context.sha} as CI #${run.run_number}`);
 
   browser-ui:
+    env:
+      COMPOSE_FILE: docker-compose.python.yaml:docker-compose.gin-mysql.yaml
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'merge_group' ||
@@ -280,7 +299,7 @@ jobs:
           command -v tc
       - name: Build the same application for every node
         run: |
-          docker build -t frontiercloud-acceptance-web .
+          docker build -f Dockerfile.python -t frontiercloud-acceptance-web .
           docker build -t frontiercloud-acceptance-nginx -f nginx/Dockerfile .
           docker build -t frontiercloud-updater -f updater/Dockerfile .
       - name: Run verified local HTTPS topology and browser acceptance
@@ -295,6 +314,8 @@ jobs:
           path: /tmp/federation-acceptance.json
 
   test-compose:
+    env:
+      COMPOSE_FILE: docker-compose.python.yaml:docker-compose.gin-mysql.yaml
     needs: [verify-promotion-query, browser-ui, test-cluster]
     if: >-
       always() &&

@@ -93,6 +93,7 @@ class DeploymentContractTests(unittest.TestCase):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
         compose += (ROOT / "docker-compose.gin.yaml").read_text(encoding="utf-8")
         compose += (ROOT / "docker-compose.gin-mysql.yaml").read_text(encoding="utf-8")
+        compose += (ROOT / "docker-compose.python.yaml").read_text(encoding="utf-8")
         listed = re.findall(r"(?m)^#? ?([A-Z][A-Z0-9_]*)=", env_example)
         active = {
             line.split("=", 1)[0]
@@ -208,7 +209,9 @@ class DeploymentContractTests(unittest.TestCase):
         initializer = (ROOT / "app/services/media_storage_init.py").read_text(encoding="utf-8")
         federation_harness = (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8")
         self.assertIn("media-init:", compose)
-        self.assertIn('command: ["python", "-m", "app.services.media_storage_init"]', compose)
+        self.assertIn('command: [init-media]', compose)
+        reference = (ROOT / "docker-compose.python.yaml").read_text(encoding="utf-8")
+        self.assertIn('command: ["python", "-m", "app.services.media_storage_init"]', reference)
         self.assertIn("media-init: {condition: service_completed_successfully}", compose)
         for directory in ("media/music", "media/vido", "media/lyrics"):
             self.assertIn(f'"{directory}"', initializer)
@@ -258,11 +261,28 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertTrue(dockerfile.startswith("FROM nginx:1.30.4-alpine\n"))
 
     def test_duplicate_uvicorn_access_log_is_disabled(self):
-        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        dockerfile = (ROOT / "Dockerfile.python").read_text(encoding="utf-8")
         logging_config = (ROOT / "app/core/logging_config.py").read_text(encoding="utf-8")
         self.assertIn("--no-access-log", dockerfile)
         self.assertIn('logging.getLogger("uvicorn.access")', logging_config)
         self.assertIn("access_logger.disabled = True", logging_config)
+
+    def test_default_deployment_is_native_and_reference_is_explicit(self):
+        compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertEqual(dockerfile, (ROOT / "Dockerfile.gin").read_text(encoding="utf-8"))
+        self.assertEqual(compose, (ROOT / "docker-compose.gin.yaml").read_text(encoding="utf-8"))
+        for forbidden in ("python", "uvicorn", "app.services", "container_name:", "  mysql:"):
+            self.assertNotIn(forbidden, compose.lower())
+        self.assertIn("DB_TYPE: ${DB_TYPE:-sqlite}", compose)
+        self.assertIn("RELEASE_BRANCH: ${RELEASE_BRANCH:-gin_main}", compose)
+        self.assertIn("RELEASE_SOURCE_BRANCH: ${RELEASE_SOURCE_BRANCH:-gin_dev}", compose)
+        self.assertNotIn("python", re.sub(r"(?m)^#.*$", "", dockerfile).lower())
+        self.assertIn('ENTRYPOINT ["/app/frontiercloud"]', dockerfile)
+        reference = (ROOT / "docker-compose.python.yaml").read_text(encoding="utf-8")
+        self.assertIn("dockerfile: Dockerfile.python", reference)
+        self.assertIn("DB_TYPE: ${DB_TYPE:-sqlite}", reference)
+        self.assertNotIn("  mysql:", reference)
 
     def test_runtime_secret_initializer_has_no_legacy_environment_inputs(self):
         initializer = (ROOT / "app/services/runtime_secrets.py").read_text(encoding="utf-8")

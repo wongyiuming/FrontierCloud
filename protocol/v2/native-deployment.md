@@ -1,23 +1,42 @@
-# Native deployment candidate
+# Native default and explicit reference deployment
 
-`docker-compose.gin.yaml` is an isolated candidate, not permission to redeploy an
-existing cluster. Its default database is SQLite and it has no MySQL service,
-volume or dependency. `docker-compose.gin-mysql.yaml` adds the optional MySQL
-service and explicit readiness dependency. The unchanged root Compose file is
-the legacy deployment until final integration acceptance.
+The root `Dockerfile` and `docker-compose.yaml` now select native Go. The retained
+`Dockerfile.gin` / `docker-compose.gin.yaml` aliases are identical. The default
+SQLite profile has no MySQL service, volume or dependency; the optional
+`docker-compose.gin-mysql.yaml` overlay adds MySQL and its healthy dependency.
+The Python reference is explicit in `Dockerfile.python` and
+`docker-compose.python.yaml`. These selections are not permission to overwrite
+an existing cluster's database, identity or physical ownership.
 
-In `.env`, select `COMPOSE_FILE=docker-compose.gin.yaml` for Gin/SQLite, or
-`COMPOSE_FILE=docker-compose.gin.yaml:docker-compose.gin-mysql.yaml` for
-Gin/MySQL (use `;` as the separator on Windows). An external MySQL deployment
+In `.env`, select the runtime/database combination:
+
+| Runtime / database | `COMPOSE_FILE` |
+| --- | --- |
+| Go / SQLite (default) | `docker-compose.yaml` |
+| Go / MySQL | `docker-compose.yaml:docker-compose.gin-mysql.yaml` |
+| Python / SQLite | `docker-compose.python.yaml` |
+| Python / MySQL | `docker-compose.python.yaml:docker-compose.gin-mysql.yaml` |
+
+Use `;` instead of `:` as the separator on Windows. An external MySQL deployment
 can select `DB_TYPE=mysql` and a stable `MYSQL_HOST` without the service overlay.
 Use a distinct `COMPOSE_PROJECT_NAME`, `DATA_DIRECTORY`, database and secrets
 volume for acceptance fixtures. The required `FRONTIERCLOUD_REVISION` is a full
 source commit SHA, not a branch, runtime compatibility version or schema version.
 
+For fresh native bootstrap, export that exact SHA and run
+`bash scripts/build-native-images.sh "$FRONTIERCLOUD_REVISION"`, then
+`docker compose up -d --no-build --wait`. The builder sends only fixed paths from
+`git archive` at the exact commit: never `.env`, data, keys, mutable edits or
+untracked files. It builds images only and cannot replace services. Ordinary
+Compose `--build` is useful for private testing, but its SHA label alone is not
+source proof. Publication still requires reviewed source and exact successful CI.
+
 The fixed Web commands, initializers and updater use native binaries. The Web
 process is UID/GID 10001, has no Docker socket, drops capabilities and has a
 read-only root filesystem. The separately restricted updater uses only the
-local Engine API. Its project selector must match the Compose project. Redis,
+local Engine API. It drops all capabilities except CHOWN for the private
+control-socket group and DAC_OVERRIDE for selected-volume maintenance. Web
+receives neither capability nor Docker authority. Its project selector must match the Compose project. Redis,
 Nginx and coturn retain their established protocol roles.
 
 ## Database selection is durable configuration
@@ -48,9 +67,9 @@ exists in the Web/updater and MySQL does not create an authoritative SQLite DB.
 Compose build labels by themselves do not prove that a mutable build context
 matches the supplied SHA. Reviewed production artifacts require immutable Git
 archive builds and exact CI evidence; the updater already uses that boundary.
-Final default promotion, portable restore, mixed releases and cluster startup/
-restart acceptance remain gates. Do not run this candidate against existing
-ten-node volumes to bypass them.
+Portable physical restore and actual mixed-profile release execution remain
+separate gates. Do not apply a fresh native profile to historical ten-node
+volumes to bypass admission or ownership proof.
 
 ## Native role restart provenance
 
@@ -65,8 +84,10 @@ returns to Standalone and may republish its new identity after complete startup.
 
 Historical Python cluster identities without native provenance remain fenced;
 storage/recording adoption alone does not issue a startup admission receipt.
-Offline migration admission and actual ten-node restart are separate acceptance
-gates, not implied by the receipt unit tests.
+Offline historical migration admission remains a separate gate. Four newly
+created private-CA mixed fleets passed durable-role restart, real Redis AOF and
+MySQL restart, outage recovery, media/recording transport and logical cold-backup
+preflight on 2026-10-03. This does not authorize switching old Python identities.
 
 Nginx workers retain their own UID and use the fixed native media group 10001.
 Private recording directories are group-traversable; only hash/size-verified

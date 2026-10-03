@@ -1,16 +1,16 @@
 # Contributing to FrontierCloud
 
-FrontierCloud intentionally uses a two-branch delivery model. These rules are architectural constraints, not suggestions.
+FrontierCloud uses two independent two-branch runtime profiles. These rules are architectural constraints, not suggestions.
 
 ## Repository topology — MUST NOT violate
 
-- `dev` is the **only development branch**. All implementation, tests, documentation, and conflict-resolution commits go directly to the existing `dev` branch.
-- `main` is the **release branch**. The only valid pull request targeting `main` is a same-repository `dev -> main` promotion.
-- **Do not create any new branch.** This includes `feature/*`, `fix/*`, temporary conflict-resolution branches, release branches, experiment branches, or automation-created branches.
+- `dev` is the **only development branch** for the Python reference profile; `gin_dev` is the only development branch for native Go.
+- `main` and `gin_main` are their respective release branches. Only same-repository `dev -> main` and `gin_dev -> gin_main` promotions are valid.
+- **Do not create any new branch** outside these owner-authorized refs. This includes `feature/*`, `fix/*`, temporary conflict-resolution branches, experiment branches, or automation-created branches.
 - Do not open a feature/fix branch directly against `main`.
-- Do not force-push or rewrite `dev` or `main`.
-- Do not commit implementation work directly to `main`.
-- After a `dev -> main` release PR is merged, fast-forward `dev` to the resulting `main` merge commit before the next implementation commit. This keeps the two histories linear even when GitHub creates a merge commit for the release PR.
+- Do not force-push or rewrite canonical branches.
+- Do not commit implementation work directly to `main` or `gin_main`.
+- After a release PR is merged, fast-forward its development branch to the resulting release merge commit before further implementation.
 - Historical non-canonical branches may exist until the repository owner deletes them. They are not implementation targets and must not be reused.
 
 The repository can fail an invalid PR topology, but repository-local code cannot reliably prevent somebody with GitHub ref permission from creating a branch. The **no-new-branch rule therefore remains an explicit human/automation invariant** and should also be mirrored in the GitHub Wiki and repository ruleset/branch-protection settings.
@@ -18,11 +18,11 @@ The repository can fail an invalid PR topology, but repository-local code cannot
 ## Change discipline
 
 1. Read `ARCHITECTURE.md` before changing a cross-cutting subsystem.
-2. Start from the current `dev` HEAD. If `main` was just promoted, synchronize `dev` to `main` first as described above.
+2. Start from the selected profile's development HEAD. Synchronize it with a just-promoted release first as described above.
 3. Change the smallest coherent surface. Do not revive retired compatibility/product features to make a test pass.
 4. Add or strengthen regression coverage for every bug fix and every new invariant.
-5. Run the complete `dev` CI. A passing narrow unit test is not release evidence.
-6. Open exactly one release PR from `dev` to `main`. The repository owner performs the merge.
+5. Run the profile's complete CI, including actual mixed-runtime acceptance for native changes. A narrow unit test is not release evidence.
+6. Open a release PR only when authorized, using the profile's fixed promotion pair. The repository owner performs the merge.
 
 ## Documentation ownership
 
@@ -66,6 +66,6 @@ Never weaken an existing regression merely to make a new implementation pass. If
 
 ## Release evidence
 
-A release is valid only when the exact `dev` commit being promoted has successful CI and the resulting `main` tree is identical to the reviewed `dev` tree. Post-merge release provenance checks are an additional guard, not a replacement for the `dev -> main` workflow.
+A release is valid only when the exact development commit has successful CI and the production tree is identical to the reviewed source tree. Both `dev -> main` and `gin_dev -> gin_main` use this rule. Post-merge proof is an additional guard, not a replacement for review. A local tested commit is not an already-published production release.
 
 The complete local baseline and CI composition are maintained in [`docs/wiki/Engineering-and-CI.md`](docs/wiki/Engineering-and-CI.md). Deployment, rollback, and migration procedures are maintained in [`docs/wiki/Release-and-Database-Migrations.md`](docs/wiki/Release-and-Database-Migrations.md).

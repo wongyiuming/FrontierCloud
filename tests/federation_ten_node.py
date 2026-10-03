@@ -50,7 +50,8 @@ def main():
         nss.mkdir(parents=True)
         command("certutil", "-N", "--empty-password", "-d", f"sql:{nss}")
         command("certutil", "-A", "-d", f"sql:{nss}", "-n", "FrontierCloud test CA", "-t", "C,,", "-i", str(ca))
-        base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.yaml"), "config", "--format", "json"))
+        base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.python.yaml"),
+                                  "-f", str(ROOT / "docker-compose.gin-mysql.yaml"), "config", "--format", "json"))
         for index, name in enumerate(("ten-master", "ten-direct-1", "ten-direct-2", "ten-direct-3",
                                       "ten-relay-1", "ten-relay-2", "ten-relay-3",
                                       "ten-relay-4", "ten-relay-5", "ten-relay-6")):

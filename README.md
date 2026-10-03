@@ -1,6 +1,6 @@
 # FrontierCloud
 
-FrontierCloud is a self-hosted media browsing, continuous-audio playback, karaoke, cluster-storage, backup, and administration system. FastAPI currently provides the business/control plane, native browser JavaScript provides the UI, and Docker Compose runs the service stack.
+FrontierCloud is a self-hosted media browsing, continuous-audio playback, karaoke, cluster-storage, backup, and administration system. Go (Gin) provides the default business/control plane with SQLite; an explicit Python reference profile and MySQL option support mixed clusters. Browser JavaScript, Nginx, Redis and coturn retain their existing roles.
 
 The core product model is deliberately small: one business Master owns business truth, Followers provide Storage and/or Backup resources, and every managed media object has one complete physical owner.
 
@@ -17,13 +17,22 @@ The core product model is deliberately small: one business Master owns business 
 
 ## Quick start
 
-HTTP Standalone mode needs no `.env` file:
+For a fresh HTTP Standalone node, build the exact committed native source. No
+Python or MySQL service is required:
 
 ```bash
-docker compose up -d --build --wait
+export FRONTIERCLOUD_REVISION="$(git rev-parse HEAD)"
+bash scripts/build-native-images.sh "$FRONTIERCLOUD_REVISION"
+docker compose up -d --no-build --wait
 ```
 
 Open `http://localhost`. The startup initializer creates the managed media tree under `data/media` and the persistent runtime secrets required by the stack.
+
+The four explicit `.env` deployment selections are documented in
+[Native deployment](protocol/v2/native-deployment.md). Changing the runtime or
+database selection does not migrate existing state. Historical Python cluster
+volumes remain fenced until a separately verified offline adoption/migration;
+do not apply this quick start to an existing cluster.
 
 For HTTPS, copy the relevant switches from `.env.example`, enable TLS, set `SERVER_NAME`, and provide `certs/fullchain.pem` plus `certs/privkey.pem`. Fixed Master/Follower roles require certificate-verified HTTPS and fail closed when that contract is missing.
 
@@ -54,6 +63,9 @@ The published GitHub Wiki is available at [github.com/wongyiuming/FrontierCloud/
 
 ## Repository delivery
 
-FrontierCloud has exactly two canonical branches: `dev` for implementation and complete CI, and `main` for reviewed release history. Do not create additional branches. The only valid promotion PR is same-repository `dev -> main`; after merge, fast-forward `dev` to the resulting `main` commit before the next change.
+The authorized profiles are `gin_dev -> gin_main` for native Go and `dev -> main`
+for the Python reference. Do not create additional branches. Each promotion must
+be same-repository, reviewed and backed by exact source CI; synchronize its
+implementation branch after merge. Database selection never changes release profile.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing cross-cutting behavior.
