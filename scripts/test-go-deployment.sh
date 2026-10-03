@@ -19,10 +19,10 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 export COMPOSE_PROJECT_NAME="fc-go-config-$$"
 export DB_TYPE=sqlite SQLITE_PATH=/app/data/frontiercloud.db
-docker compose --env-file /dev/null -f docker-compose.yaml config --format json > "$work/sqlite.json"
-docker compose --env-file /dev/null -f docker-compose.yaml -f docker-compose.gin-mysql.yaml config --format json > "$work/mysql.json"
-docker compose --env-file /dev/null -f docker-compose.python.yaml config --format json > "$work/python-sqlite.json"
-docker compose --env-file /dev/null -f docker-compose.python.yaml -f docker-compose.gin-mysql.yaml config --format json > "$work/python-mysql.json"
+COMPOSE_FILE=docker-compose.yaml docker compose --env-file /dev/null config --format json > "$work/sqlite.json"
+COMPOSE_FILE=docker-compose.yaml:docker-compose.gin-mysql.yaml docker compose --env-file /dev/null config --format json > "$work/mysql.json"
+COMPOSE_FILE=docker-compose.python.yaml docker compose --env-file /dev/null config --format json > "$work/python-sqlite.json"
+COMPOSE_FILE=docker-compose.python.yaml:docker-compose.gin-mysql.yaml docker compose --env-file /dev/null config --format json > "$work/python-mysql.json"
 docker run --rm -v "$PWD:/src:ro" -v "$work:/compose-check:ro" \
     -e FRONTIERCLOUD_TEST_COMPOSE_JSON_DIR=/compose-check \
     frontiercloud-go:business-test \

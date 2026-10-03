@@ -90,6 +90,8 @@ full native disposable-stack upgrade/handoff/rollback test also passed, includin
 unprivileged Web access to the group-restricted socket. This uses a fresh private
 Git origin and a separate Standalone project, not production CI or ten-node
 mixed-runtime acceptance; do not interpret it as either of those gates.
-Original development nodes remain untouched. Default deployment selection,
-mixed-runtime release/recovery and cluster-role startup acceptance are separate
-gates, not established by this document.
+Original development nodes remain untouched. The native default and newly
+created mixed-fleet durable-role startup/restart gates are documented separately
+in `native-deployment.md`. This standalone updater proof does not establish
+actual mixed-profile whole-release execution, historical migration admission
+or portable physical restore.

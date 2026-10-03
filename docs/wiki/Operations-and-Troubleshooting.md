@@ -9,7 +9,7 @@ Recommended order:
 ```text
 1. Is public/business traffic actually unavailable?
 2. Nginx / Web liveness and readiness
-3. MySQL / Redis
+3. selected SQLite or MySQL / Redis
 4. Master/Follower relationship and heartbeat
 5. Storage / Backup state
 6. Managed-media mutation/recovery state
@@ -18,6 +18,14 @@ Recommended order:
 ```
 
 A GitHub release-verification problem does not imply playback failure. A Backup failure does not imply heartbeat or Storage failure.
+
+The default Web / initializer / maintenance / updater commands are native Go.
+Do not install Python in the Web image to diagnose it. Use
+`docker compose exec -T web /app/frontiercloud updater-status` for local release
+agent status, and the Admin cluster view for identity and relationship facts.
+MySQL log/SQL examples apply only to a selected MySQL overlay. SQLite's exact
+private file lives under the selected data root; do not switch `DB_TYPE` as an
+incident workaround or chmod its database/WAL/SHM for a public worker.
 
 ## 2. Fast host check
 

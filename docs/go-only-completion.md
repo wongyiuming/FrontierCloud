@@ -27,7 +27,7 @@ route alone, an empty response, or a generic success response is not parity.
 - [ ] Portable physical restore/promotion and historical cluster migration admission
 - [x] Native standalone updater, exact release proof, maintenance, rollback and cleanup
 - [ ] Actual mixed-profile whole-release execution/convergence
-- [ ] Only-Go deployment contains no Python process or Python-dependent script
+- [x] Only-Go default deployment contains no Python process or Python-dependent script
 - [x] Four isolated 1 Master / 3 Direct / 6 Relay private-CA integration validations
 
 Do not switch the existing development topology to Go until the replacement
@@ -56,8 +56,39 @@ MySQL overlays passed actual Compose parsing. Immutable operator bootstrap
 archives only an exact commit's fixed native paths. Its capture-only shell
 regression rejects branch/short/missing selections and excludes mutable edits,
 untracked files, tracked secrets/data and the reference runtime. That regression
-is not itself actual image-build evidence. Fresh root Compose bootstrap and the
-new fixed-role TLS-loss integration check are being verified separately.
+is not itself actual image-build evidence. The actual operator archive builder
+then built all three native images from a fresh private Git fixture; root
+SQLite and root+MySQL Compose projects passed non-root native PID checks, absence
+of Python in Web/updater, absence of the Docker CLI in the updater, revision /
+runtime labels and non-root control-socket access. Redis / database / Web
+restart retained the sealed identity receipt. SQLite remained mode 0600 with
+no MySQL service, and MySQL created no authoritative SQLite file. The private
+HTTP fixture overrides only container listener-family selection so its random
+host ports stay on loopback. It follows the established root-page redirect.
+At production slice `436ec59`, a second fresh-image four-fleet run passed in
+1574.00 seconds: Go/SQLite 349.74s, Go/MySQL 348.78s, Python/SQLite 443.05s and
+Python/MySQL 432.42s. In every fleet a stopped native Follower was launched with
+TLS disabled: the real process exited with the fixed-role HTTPS rejection,
+retained its sealed provenance, and recovered the same identity/heartbeat after
+TLS was restored. Both actual native standalone upgrade/handoff/rollback stacks
+then passed again (SQLite 266.09s, MySQL 284.03s). Actual `COMPOSE_FILE` selection
+for all four profiles passed independently; the latest local Python suite passed
+589 tests with four skips, alongside full Go tests/vet. Operator bootstrap and
+these release stacks use private Git fixtures, not published production CI.
+
+Reproduction on a disposable Linux host:
+
+```bash
+bash scripts/test-go-business.sh
+bash scripts/test-go-deployment.sh
+FRONTIERCLOUD_REVISION="$(git rev-parse HEAD)" bash scripts/test-native-default.sh
+bash scripts/test-go-updater.sh
+bash scripts/test-mixed-runtime.sh
+```
+
+Do not select the original deployment's project, data, secrets or database for
+these fixtures. The default profile is Go-only; the optional reference profile
+is not removed from the repository or silently invoked by native services.
 
 Historical Python Master/Follower admission remains fail-closed without native
 provenance. Logical preflight continues to report `restore_ready=false`.

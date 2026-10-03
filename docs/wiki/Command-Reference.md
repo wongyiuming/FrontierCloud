@@ -2,6 +2,12 @@
 
 > Examples assume the repository is available at `/root/FrontierCloud`. Adjust the path for your deployment.
 
+The default is native Go/SQLite. Set `FRONTIERCLOUD_REVISION` to the exact
+committed native image SHA for Compose commands. MySQL commands below apply only
+to the explicit MySQL overlay; they are not required by SQLite. For an optional
+host-side SQLite diagnostic, use `sudo sqlite3 -readonly ./data/frontiercloud.db`
+against the exact selected path. Do not install a Python or SQL CLI in Web.
+
 ## 1. Compose status
 
 ```bash
@@ -42,7 +48,13 @@ git branch --show-current
 git status --short
 ```
 
-Before assuming a UI fix is missing, verify the running release SHA in System Release Management and compare it with repository `main`.
+Before assuming a UI fix is missing, verify the running release SHA in System
+Release Management and compare it with the selected `gin_main` or `main` profile.
+Native local updater status is available without Python:
+
+```bash
+docker compose exec -T web /app/frontiercloud updater-status
+```
 
 ## 5. Generated Admin Key
 
@@ -87,7 +99,7 @@ SQL
 ## 9. Node identity
 
 ```sql
-SELECT * FROM node_identity;
+SELECT node_id, role, endpoint, created_at FROM node_identity;
 ```
 
 ## 10. Relationships
@@ -364,35 +376,10 @@ Never manually advance the generation marker to hide a failed migration.
 ## 24. GitHub API rate-limit diagnostics
 
 ```bash
-docker compose exec -T web python - <<'PY'
-import httpx
-import time
-
-url = "https://api.github.com/repos/wongyiuming/FrontierCloud/branches/main"
-with httpx.Client(
-    trust_env=False,
-    timeout=httpx.Timeout(5, connect=3),
-    headers={
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "FrontierCloud-release-control",
-    },
-) as client:
-    response = client.get(url)
-
-print("HTTP:", response.status_code)
-for name in (
-    "x-ratelimit-limit",
-    "x-ratelimit-remaining",
-    "x-ratelimit-used",
-    "x-ratelimit-reset",
-    "retry-after",
-):
-    print(name + ":", response.headers.get(name))
-reset = response.headers.get("x-ratelimit-reset")
-if reset:
-    print("reset in:", max(0, int(reset) - int(time.time())), "seconds")
-print(response.text[:1000])
-PY
+curl --connect-timeout 3 --max-time 5 --silent --show-error --head \
+  -H 'Accept: application/vnd.github+json' \
+  -H 'User-Agent: FrontierCloud-operator-diagnostic' \
+  https://api.github.com/repos/wongyiuming/FrontierCloud/branches/gin_main
 ```
 
 If production regularly approaches anonymous quota, configure a least-privilege read-only `GITHUB_API_TOKEN` on the Master.
@@ -420,16 +407,20 @@ Docker disk usage:
 docker system df
 ```
 
-## 27. Check the exact dev/main relationship
+This host-side anonymous check diagnoses rate-limit headers only. It is not
+reviewed CI or release authorization; use `main` for the Python reference.
+
+## 27. Check the exact native branch relationship
 
 ```bash
-git fetch origin dev main
-git rev-parse origin/dev
-git rev-parse origin/main
-git merge-base origin/dev origin/main
+git fetch origin gin_dev gin_main
+git rev-parse origin/gin_dev
+git rev-parse origin/gin_main
+git merge-base origin/gin_dev origin/gin_main
 ```
 
-After a `dev -> main` release PR merges, `dev` should be fast-forwarded to the resulting `main` merge commit before the next development cycle.
+After promotion, synchronize the implementation branch with its release merge.
+Use `dev` / `main` instead for the explicit reference profile.
 
 Do not force-update either branch.
 
@@ -437,12 +428,14 @@ Do not force-update either branch.
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py' -v
+go test ./...
+go vet ./...
 node tests/admin_ui_smoke.mjs
 node tests/player_cache_smoke.mjs
 docker compose config --quiet
 ```
 
-The exact final `dev` push CI is still the authoritative release evidence.
+The exact final implementation push CI is still authoritative release evidence.
 
 ## 29. Commands that are not routine troubleshooting tools
 

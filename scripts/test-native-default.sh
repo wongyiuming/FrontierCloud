@@ -13,6 +13,12 @@ cleanup() {
     docker compose --env-file /dev/null -p "$project" "${files[@]}" down --volumes --remove-orphans >/dev/null
   fi
 }
+diagnose() {
+  if [[ "$project" == "$prefix-"* && ${#files[@]} -gt 0 ]]; then
+    docker compose --env-file /dev/null -p "$project" "${files[@]}" logs --no-color --tail=15 nginx updater >&2 || true
+  fi
+}
+trap diagnose ERR
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -26,6 +32,7 @@ for database in sqlite mysql; do
   export COMPOSE_PROJECT_NAME="$project" DATA_DIRECTORY="$work/data-$database"
   files=(-f docker-compose.yaml)
   if [[ "$database" == mysql ]]; then files+=(-f docker-compose.gin-mysql.yaml); fi
+  files+=(-f tests/native-loopback.compose.yaml)
   compose() { docker compose --env-file /dev/null -p "$project" "${files[@]}" "$@"; }
   compose up -d --no-build --wait --wait-timeout 180
   for component in web updater nginx; do
@@ -37,9 +44,10 @@ for database in sqlite mysql; do
   done
   compose exec -T web sh -c 'test "$(id -u)" = 10001; test "$(readlink /proc/1/exe)" = /app/frontiercloud; ! command -v python; ! command -v python3; ! command -v mysql'
   compose exec -T updater sh -c 'test "$(readlink /proc/1/exe)" = /app/frontiercloud-updater; ! command -v python; ! command -v python3; ! command -v docker'
+  compose exec -T web /app/frontiercloud updater-status | grep -q "\"updater_runtime_sha\":\"$revision\""
   address=$(compose port nginx 80)
   curl --fail --silent --show-error "http://$address/health/ready" >/dev/null
-  curl --fail --silent --show-error "http://$address/" | grep -q '前沿娱乐'
+  curl --fail --silent --show-error --location --max-redirs 1 "http://$address/" | grep -q '前沿娱乐'
   test -f "$DATA_DIRECTORY/.native-runtime"
   receipt=$(sha256sum "$DATA_DIRECTORY/.native-runtime" | cut -d' ' -f1)
   if [[ "$database" == sqlite ]]; then

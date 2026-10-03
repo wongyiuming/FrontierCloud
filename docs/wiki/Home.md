@@ -1,6 +1,10 @@
 # FrontierCloud Wiki
 
-FrontierCloud is a self-hosted media browsing, playback, karaoke, cluster-storage, backup, and administration system. FastAPI provides the business/control plane, native browser JavaScript provides the UI, and Docker Compose runs Web/API, Nginx, MySQL, Redis, Updater, and STUN.
+FrontierCloud is a self-hosted media browsing, playback, karaoke, cluster-storage,
+backup and administration system. Native Go (Gin) with SQLite is the default;
+an explicit FastAPI reference profile and optional MySQL support mixed clusters.
+Browser JavaScript, Nginx, Redis and STUN keep their established roles. Native
+Web, initialization, maintenance and the default updater do not require Python.
 
 This Wiki documents the **current implementation**, not aspirational architecture. The project has changed quickly, so treat repository code, `ARCHITECTURE.md`, `CONTRIBUTING.md`, and exact-SHA CI as the final authority when a page and code disagree.
 
@@ -67,7 +71,9 @@ For Direct/Relay, FrontierCloud chooses among ready members of that type. Select
 
 Folder rename, upload reservation, delete, hide/unhide, and priority changes participate in one mutation-fence model. Folder rename is deliberately narrow: same parent only, real `music`/`vido` directories only, full metadata update, cross-member rollback on failure, and no guessing around active uploads/pending deletes/offline required Followers.
 
-The current mutation fence is process-local, so **production Web must run one ASGI worker**. Multi-worker/horizontal Web execution is unsupported until this lock becomes database/distributed and gains cross-process regressions.
+Web remains one process: one native Go service or one Python ASGI worker.
+Native shared-volume mutation/recovery also retains OS leases; this does not
+authorize horizontal Web replicas or additional business authorities.
 
 ### Lyrics are Master-owned business content
 
@@ -93,16 +99,22 @@ Backup is not live SQL replication, HA storage, automatic Master election, or au
 
 ### Releases fail closed
 
-The repository has exactly two canonical branches:
+The owner-authorized runtime profiles are:
 
 ```text
-dev   implementation + complete CI authority
-main  reviewed release history
+gin_dev / gin_main  native Go implementation / reviewed release
+dev / main          Python reference implementation / reviewed release
 ```
 
-No feature/fix/release/temporary branches are allowed. The only PR into `main` is same-repository `dev -> main`. After merge, `dev` must be fast-forwarded to the resulting `main` merge commit before further work.
+No additional feature/fix/release/temporary branches are allowed. Only same-repository
+`dev -> main` and `gin_dev -> gin_main` promotions are valid. After merge, synchronize
+that profile's implementation branch with its release merge commit.
 
-A `main` target is publishable only when the release verifier can prove merged `dev -> main` provenance, successful exact promoted `dev` push CI, and identical reviewed `dev` / `main` trees. Temporary GitHub verification failure keeps the running service available but disables new upgrade authorization.
+Either profile is publishable only with exact merged-promotion provenance,
+successful newest source push CI and an identical reviewed tree. A whole mixed
+release requires independent proof for both artifacts; peers privately select
+their own runtime profile. Temporary verification failure disables upgrade
+authorization without taking down the running service.
 
 ## Current Admin domains
 

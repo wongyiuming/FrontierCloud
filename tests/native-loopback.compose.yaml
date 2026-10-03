@@ -1,0 +1,6 @@
+# Test-only: bind random host ports to loopback while the private container
+# retains the supported IPv4 Nginx listener selection. No deployed project.
+services:
+  nginx:
+    environment:
+      PUBLIC_BIND_ADDRESS: 0.0.0.0

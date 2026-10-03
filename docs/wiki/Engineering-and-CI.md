@@ -2,20 +2,20 @@
 
 ## 1. Repository topology
 
-The repository has exactly two canonical branches:
+The repository has two independent authorized runtime profiles:
 
 ```text
-dev   implementation + complete CI authority
-main  reviewed release history
+gin_dev / gin_main  native implementation / reviewed release
+dev / main          Python reference implementation / reviewed release
 ```
 
 Absolute policy:
 
-- all engineering changes go directly to the existing `dev`;
+- changes go to the selected profile's implementation branch;
 - do not create feature/fix/release/temporary/conflict-resolution branches;
-- the only valid PR into `main` is same-repository `dev -> main`;
-- never force-push or rewrite `dev` / `main`;
-- after a release PR merges, fast-forward `dev` to the resulting `main` merge commit before further work.
+- only same-repository `dev -> main` and `gin_dev -> gin_main` PRs are valid;
+- never force-push or rewrite canonical refs;
+- after promotion, synchronize its implementation branch with the release merge.
 
 Repository Policy workflow detects non-canonical branch creation events and invalid PR topology. True pre-creation branch prevention depends on GitHub repository/ruleset administration, so engineers must still follow the documented invariant.
 
@@ -38,19 +38,19 @@ Important examples:
 - one complete media object has one storage owner;
 - folder rename is same-parent only;
 - media mutations share one fence model;
-- production Web remains single ASGI worker while that fence is process-local;
+- Web remains one native process or one Python ASGI worker;
 - lyrics support at most two directory levels below `lyrics`;
 - `lyrics/default.lrc` is internal fallback content;
 - Admin module order is contractual;
-- releases use only exact `dev -> main` provenance.
+- releases use exact runtime-specific promotion and CI provenance.
 
 ## 3. Technology stack
 
 Major technologies:
 
-- Python / FastAPI;
-- SQLAlchemy async;
-- MySQL;
+- Go / Gin (default native runtime and updater);
+- Python / FastAPI / SQLAlchemy async (explicit reference profile);
+- SQLite (default) or MySQL with the same logical schema;
 - Redis;
 - Nginx;
 - Docker Compose;
@@ -62,9 +62,14 @@ Major technologies:
 
 ```text
 app/
-  api/                 API, Admin, internal control endpoints
+  api/                 reference API, Admin, internal control endpoints
   core/                settings, database, schema generation/migrations
   services/            business services, federation, storage, release, observability
+
+cmd/                    native Web, initializer, maintenance and updater commands
+internal/               native domain/repository/protocol implementations
+protocol/               shared cross-language contracts and vectors
+migrations/             shared logical schema and generation migrations
 
 static/
   media/               public/Admin/player HTML
@@ -83,7 +88,8 @@ CONTRIBUTING.md          repository/Git collaboration rules
 README.md                current quick project overview
 ```
 
-The live GitHub Wiki is an independent Wiki Git repository. It is not represented by a persistent in-repo `docs/wiki/` tree.
+`docs/wiki/` contains reviewable documentation sources. The published GitHub
+Wiki is a separate repository; changing these files does not publish the Wiki.
 
 ## 5. Local baseline checks
 
@@ -91,12 +97,25 @@ Before pushing a meaningful change:
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py' -v
+go test ./...
+go vet ./...
 node tests/admin_ui_smoke.mjs
 node tests/player_cache_smoke.mjs
 docker compose config --quiet
 ```
 
-GitHub Actions on the exact final `dev` SHA remains the authoritative validation.
+Exact final source push CI for the selected profile remains release authority.
+For disposable Linux hosts only, native integration runs:
+
+```bash
+bash scripts/test-go-business.sh
+bash scripts/test-go-deployment.sh
+FRONTIERCLOUD_REVISION="$(git rev-parse HEAD)" bash scripts/test-native-default.sh
+bash scripts/test-go-updater.sh
+bash scripts/test-mixed-runtime.sh
+```
+
+These scripts create private fixtures, not permission to redeploy existing nodes.
 
 ## 6. CI topology
 
@@ -106,7 +125,12 @@ Main workflow:
 .github/workflows/docker.yml
 ```
 
-Primary gates:
+Native `gin_dev` gates are `test-native` (real drivers/race, four Compose
+selections, immutable default bootstrap and both-store upgrade/handoff/rollback)
+and `test-mixed-runtime` (four fresh private-CA fleets, each 1 Master / 3 Direct /
+6 Relay, with actual control/media/recordings/backup and durable restarts).
+The reference gates below explicitly select Python/MySQL, never implicitly rely
+on a Python root Dockerfile:
 
 ```text
 verify-promotion-query
@@ -150,7 +174,7 @@ CI checks the boundary before building, runs Web with one CPU, and places a 120-
 
 ## 7. Exact-SHA rule
 
-Do not reuse an older green run after changing `dev`.
+Do not reuse an older green run after changing either implementation branch.
 
 ```text
 final dev SHA
@@ -182,7 +206,8 @@ If responsibility moves from one module to another, update the regression to fol
 
 ## 9. Managed-media mutation rules
 
-Path/metadata operations are high-risk because filesystem bytes and MySQL facts form one business lifecycle.
+Path/metadata operations are high-risk because filesystem bytes and selected
+SQLite/MySQL facts form one business lifecycle.
 
 Current mutation model:
 
@@ -195,7 +220,8 @@ When adding a new path mutation, join this protocol. Do not create an independen
 
 ### Single-worker requirement
 
-The mutation fence is process-local. Multiple Web workers would have independent locks.
+Python's mutation fence is process-local. Native filesystem mutation retains OS
+leases, but production Web remains one process in either profile.
 
 Do not add:
 
@@ -350,9 +376,9 @@ Operational UI should explain semantics rather than dump raw fields. Examples:
 
 Release control is high risk. Relevant changes need regressions for:
 
-- merged `dev -> main` provenance;
-- exact dev push CI lookup;
-- source/main tree equality;
+- merged runtime-specific promotion provenance;
+- exact newest source push CI lookup;
+- reviewed source/release tree equality;
 - GitHub rate limiting/backoff;
 - last-known-good display-only behavior;
 - `can_upgrade` authorization;
@@ -365,14 +391,14 @@ External/stale verification data may aid observability but must never authorize 
 
 ## 19. Pull request content
 
-A useful `dev -> main` PR should state:
+A useful runtime-specific promotion PR should state:
 
 - problem/root cause or feature intent;
 - affected behavior/modules;
 - architecture/safety boundary;
 - migration/upgrade impact;
 - regression coverage;
-- final exact `dev` SHA;
+- final exact source SHA;
 - exact CI run/result.
 
 Avoid vague descriptions such as only `fix bug`.
@@ -381,8 +407,8 @@ Avoid vague descriptions such as only `fix bug`.
 
 After the PR is merged:
 
-1. record the resulting `main` merge commit;
-2. fast-forward `dev` to that commit without force;
+1. record the resulting profile's release merge commit;
+2. fast-forward its implementation branch to that commit without force;
 3. only then start the next development cycle.
 
 This keeps the two-branch history convergent and preserves the release verifier's provenance assumptions.
