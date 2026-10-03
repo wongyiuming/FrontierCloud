@@ -35,6 +35,8 @@ type nativePublicationFixture struct {
 	network, driver string
 	mu              sync.Mutex
 	proofs          map[string]release.Artifact
+	policies        map[string]release.Policy
+	heads           map[string]string
 	calls           map[string]int
 }
 
@@ -74,7 +76,7 @@ func startNativePublicationFixture(t *testing.T, ctx context.Context, e *Engine,
 	if err != nil {
 		t.Fatal("private driver publication listener", err)
 	}
-	fixture := &nativePublicationFixture{proofs: map[string]release.Artifact{}, calls: map[string]int{}, done: make(chan error, 1)}
+	fixture := &nativePublicationFixture{proofs: map[string]release.Artifact{}, policies: map[string]release.Policy{}, heads: map[string]string{}, calls: map[string]int{}, done: make(chan error, 1)}
 	fixture.server = &http.Server{Handler: http.HandlerFunc(fixture.reply), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 15 * time.Second, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{pair}}}
 	go func() { fixture.done <- fixture.server.ServeTLS(listener, "", "") }()
 	if err = e.call(ctx, "POST", "/networks/"+network+"/connect", map[string]any{"Container": driver.ID, "EndpointConfig": map[string]any{"Aliases": []string{"api.github.com"}}}, nil); err != nil {
@@ -105,6 +107,8 @@ func (f *nativePublicationFixture) manifest(t *testing.T, version, target string
 	artifact := release.Artifact{Kind: "git-archive", CommitSHA: target, SourceSHA: source, TreeSHA: tree}
 	f.mu.Lock()
 	f.proofs[target] = artifact
+	f.policies[target] = release.Policy{Branch: "gin_main", Source: "gin_dev"}
+	f.heads["gin_main"] = target
 	f.mu.Unlock()
 	return &release.Manifest{Format: "frontiercloud-release-manifest", Version: 1, ReleaseVersion: version, Protocol: 2, SchemaGeneration: 2, Artifacts: map[string]release.Artifact{"gin_main": artifact, "main": {Kind: "git-archive", CommitSHA: reference, SourceSHA: source, TreeSHA: tree}}}
 }
@@ -119,15 +123,21 @@ func (f *nativePublicationFixture) reply(w http.ResponseWriter, r *http.Request)
 	defer f.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	for target, artifact := range f.proofs {
+		policy := f.policies[target]
+		if !policy.Valid() {
+			policy = release.Policy{Branch: "gin_main", Source: "gin_dev"}
+		}
 		var reply any
 		switch {
+		case path == "/branches/"+policy.Branch && f.heads[policy.Branch] == target:
+			reply = map[string]any{"commit": map[string]any{"sha": target, "commit": map[string]any{"tree": map[string]any{"sha": artifact.TreeSHA}}}}
 		case path == "/commits/"+target || path == "/commits/"+artifact.SourceSHA:
 			sha := strings.TrimPrefix(path, "/commits/")
 			reply = map[string]any{"sha": sha, "commit": map[string]any{"tree": map[string]any{"sha": artifact.TreeSHA}}}
 		case path == "/commits/"+target+"/pulls" && r.URL.Query().Get("per_page") == "100":
-			reply = []any{map[string]any{"merged_at": "2026-10-04T00:00:00Z", "merge_commit_sha": target, "base": map[string]any{"ref": "gin_main"}, "head": map[string]any{"ref": "gin_dev", "sha": artifact.SourceSHA, "repo": map[string]any{"full_name": "wongyiuming/FrontierCloud"}}}}
+			reply = []any{map[string]any{"merged_at": "2026-10-04T00:00:00Z", "merge_commit_sha": target, "base": map[string]any{"ref": policy.Branch}, "head": map[string]any{"ref": policy.Source, "sha": artifact.SourceSHA, "repo": map[string]any{"full_name": "wongyiuming/FrontierCloud"}}}}
 		case path == "/actions/workflows/docker.yml/runs" && r.URL.Query().Get("event") == "push" && r.URL.Query().Get("head_sha") == artifact.SourceSHA && r.URL.Query().Get("per_page") == "20":
-			reply = map[string]any{"workflow_runs": []any{map[string]any{"head_branch": "gin_dev", "head_sha": artifact.SourceSHA, "event": "push", "run_number": 1, "status": "completed", "conclusion": "success"}}}
+			reply = map[string]any{"workflow_runs": []any{map[string]any{"head_branch": policy.Source, "head_sha": artifact.SourceSHA, "event": "push", "run_number": 1, "status": "completed", "conclusion": "success"}}}
 		}
 		if reply != nil {
 			f.calls[target+path]++
@@ -201,4 +211,44 @@ func TestPrivatePublicationFixtureScopesExactArtifactRequests(t *testing.T) {
 		}
 	}
 	f.assertProofs(t, target)
+}
+
+func TestPrivatePublicationFixtureSeparatesJointProfilesAndCurrentHeads(t *testing.T) {
+	f := &nativePublicationFixture{proofs: map[string]release.Artifact{}, policies: map[string]release.Policy{}, heads: map[string]string{}, calls: map[string]int{}}
+	for i, policy := range []release.Policy{release.DefaultPolicy(), {Branch: "gin_main", Source: "gin_dev"}} {
+		artifact := release.Artifact{Kind: "git-archive", CommitSHA: strings.Repeat(string(rune('a'+i)), 40), SourceSHA: strings.Repeat(string(rune('c'+i)), 40), TreeSHA: strings.Repeat(string(rune('e'+i)), 40)}
+		f.proofs[artifact.CommitSHA], f.policies[artifact.CommitSHA], f.heads[policy.Branch] = artifact, policy, artifact.CommitSHA
+	}
+	for target, artifact := range f.proofs {
+		policy := f.policies[target]
+		for _, path := range []string{"/branches/" + policy.Branch, "/commits/" + target + "/pulls?per_page=100", "/actions/workflows/docker.yml/runs?event=push&head_sha=" + artifact.SourceSHA + "&per_page=20"} {
+			r := httptest.NewRequest("GET", "https://api.github.com/repos/wongyiuming/FrontierCloud"+path, nil)
+			w := httptest.NewRecorder()
+			f.reply(w, r)
+			if w.Code != 200 {
+				t.Fatal("missing joint private publication proof", path)
+			}
+			var value any
+			if err := json.Unmarshal(w.Body.Bytes(), &value); err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case strings.HasPrefix(path, "/branches/"):
+				commit := value.(map[string]any)["commit"].(map[string]any)
+				if commit["sha"] != target {
+					t.Fatal("private current HEAD crossed profiles")
+				}
+			case strings.Contains(path, "/pulls"):
+				pull := value.([]any)[0].(map[string]any)
+				if pull["base"].(map[string]any)["ref"] != policy.Branch || pull["head"].(map[string]any)["ref"] != policy.Source {
+					t.Fatal("private reviewed source crossed profiles")
+				}
+			default:
+				run := value.(map[string]any)["workflow_runs"].([]any)[0].(map[string]any)
+				if run["head_branch"] != policy.Source || run["head_sha"] != artifact.SourceSHA {
+					t.Fatal("private CI selection crossed profiles")
+				}
+			}
+		}
+	}
 }
