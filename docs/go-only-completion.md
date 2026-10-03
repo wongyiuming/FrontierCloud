@@ -96,6 +96,35 @@ The remaining unchecked items above are not covered by the passing core fleet;
 default Go startup is not permission to overwrite historical state. Chronological
 slice notes below describe their evidence and limitations at the recorded dates.
 
+## Native whole-manifest wire revalidation (2026-10-04)
+
+A fresh actual native stack exposed a missing control-socket branch: direct
+daemon/executor tests could accept whole manifests, while the compiled Unix
+wire handler still rejected them. The handler now admits two disjoint strict
+start forms, selecting whole-manifest artifacts from its durable local policy.
+Actual socket regressions cover both profiles, nested duplicate keys, unknown
+fields, null/malformed manifests, mixed manifest/SHA selection, default versus
+explicit maintenance flags, exact acknowledgment and durable worker delivery.
+
+The disposable SQLite and MySQL whole-manifest stacks then passed in 248.69s
+and 279.19s. Legacy single-SHA upgrade/handoff/rollback passed again in 352.76s
+and 262.64s respectively. The compiled
+agent used its unchanged fixed HTTPS publication verifier against an isolated
+private-CA publication fixture. The fixture supplied synthetic reviewed CI
+metadata for actual private Git objects; it is not production CI evidence.
+No host resolver, public trust store or verifier authority setting was changed.
+An encoded manifest with the wrong reviewed tree failed before replacement and
+retained the old whole history. A joint release changing only the other profile
+advanced/rolled back whole history without replacing native containers. Native
+artifact upgrade, immutable agent handoff and rollback retained exact manifests.
+The complete actual four-stack driver exited successfully; local full Go
+tests/vet and the Python suite (589 tests, four skips) also passed. The expanded
+native CI driver runs both wire forms on both stores under a 65-minute job limit.
+
+This is local native whole-manifest execution, not Python artifact execution or
+ten-node mixed-profile convergence. The unchecked mixed whole-release and
+portable physical restore/admission gates above remain open.
+
 ## Current verified slice (2026-10-01)
 
 The Go runtime currently supports Standalone public media pages/catalog,

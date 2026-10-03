@@ -2,13 +2,106 @@ package updater
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wongyiuming/FrontierCloud/internal/protocol"
 	"github.com/wongyiuming/FrontierCloud/internal/release"
 )
+
+type socketManifestExecutor struct{ requests chan Request }
+
+func (e *socketManifestExecutor) Execute(ctx context.Context, request Request, before Status, progress func(Checkpoint) error) (Outcome, error) {
+	e.requests <- request
+	<-ctx.Done()
+	return Outcome{}, ctx.Err()
+}
+func (*socketManifestExecutor) Recover(context.Context, Status) error { return nil }
+
+func TestWholeManifestTraversesActualControlSocketWithPrivateArtifactSelection(t *testing.T) {
+	for _, branch := range []string{"gin_main", "main"} {
+		t.Run(branch, func(t *testing.T) {
+			executor := &socketManifestExecutor{requests: make(chan Request, 1)}
+			d, control, _ := daemonFixture(t, executor)
+			defer d.Close()
+			d.status.ReleaseBranch = branch
+			if err := d.persistLocked(); err != nil {
+				t.Fatal(err)
+			}
+			cancel, done := serveTest(t, d, control)
+			defer func() {
+				cancel()
+				if err := <-done; err != nil {
+					t.Error(err)
+				}
+			}()
+			agent := release.SocketAgent{Path: filepath.Join(control, "control.sock")}
+			manifest := nativeManifest("2.0.0", testTarget)
+			for _, invalid := range []map[string]any{
+				{"action": "start", "release_manifest": manifest, "target_sha": testTarget, "mode": "upgrade"},
+				{"action": "start", "release_manifest": manifest, "target_sha": "", "mode": "upgrade"},
+				{"action": "start", "release_manifest": nil, "mode": "upgrade"},
+				{"action": "start", "release_manifest": manifest, "mode": "upgrade", "hold_maintenance": "false"},
+				{"action": "start", "release_manifest": manifest, "mode": "unknown"},
+				{"action": "start", "release_manifest": manifest, "mode": "upgrade", "extra": true},
+				{"action": "start", "release_manifest": map[string]any{}, "mode": "upgrade"},
+				{"action": "start", "release_manifest": manifest},
+			} {
+				out, err := agent.Request(context.Background(), invalid)
+				if err != nil || out["ok"] != false {
+					t.Fatal("malformed/mixed manifest wire request accepted", err)
+				}
+			}
+			if d.Status().State != "idle" || len(executor.requests) != 0 {
+				t.Fatal("invalid wire requests mutated the durable queue")
+			}
+			wire, _ := manifest.Wire()
+			duplicate := strings.Replace(string(wire), `"version":1`, `"version":1,"version":1`, 1)
+			conn, err := net.Dial("unix", agent.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = conn.SetDeadline(time.Now().Add(time.Second))
+			_, _ = conn.Write([]byte(`{"action":"start","mode":"upgrade","release_manifest":` + duplicate + "}\n"))
+			var rejection map[string]any
+			err = json.NewDecoder(conn).Decode(&rejection)
+			_ = conn.Close()
+			if err != nil || rejection["ok"] != false || d.Status().State != "idle" {
+				t.Fatal("duplicate nested manifest field reached durable work", err)
+			}
+			start := map[string]any{"action": "start", "release_manifest": manifest, "mode": "upgrade"}
+			if branch == "gin_main" {
+				start["hold_maintenance"] = true
+			}
+			out, err := agent.Request(context.Background(), start)
+			policy, _ := release.PolicyForBranch(branch)
+			selected, _ := manifest.Select(policy)
+			id, _ := manifest.ID()
+			if err != nil || out["ok"] != true || out["target_sha"] != selected.CommitSHA || out["release_id"] != id {
+				t.Fatal("whole manifest did not traverse actual control socket", out, err)
+			}
+			var request Request
+			select {
+			case request = <-executor.requests:
+			case <-time.After(3 * time.Second):
+				t.Fatal("accepted socket request never reached worker")
+			}
+			queuedID, _ := request.Manifest.ID()
+			if request.Target != selected.CommitSHA || queuedID != id || request.Hold != (branch == "gin_main") || request.Mode != "upgrade" {
+				t.Fatal("wire request lost whole manifest or private selection")
+			}
+			var persisted Status
+			if err := d.store.read("status.json", 8192, &persisted); err != nil || persisted.TargetManifest == nil || persisted.TargetSHA != selected.CommitSHA {
+				t.Fatal("accepted wire manifest was not durable", err)
+			}
+		})
+	}
+}
 
 func nativeManifest(version, target string) *release.Manifest {
 	return &release.Manifest{Format: "frontiercloud-release-manifest", Version: 1, ReleaseVersion: version, Protocol: 2, SchemaGeneration: 2, Artifacts: map[string]release.Artifact{

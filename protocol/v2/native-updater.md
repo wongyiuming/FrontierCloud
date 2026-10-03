@@ -15,6 +15,18 @@ wrong types, non-full lowercase commit SHAs and unknown modes are rejected.
 One OS runtime lease prevents a second agent from unlinking a live socket.
 Corrupt persistent state fails closed; interrupted queues are not auto-replayed.
 
+The control socket has two disjoint `start` forms: the legacy full `target_sha`,
+or a bounded whole `release_manifest`. Both require `mode` (`upgrade` or
+`rollback`), and optionally a boolean `hold_maintenance` (default false).
+A whole manifest cannot also contain `target_sha`, even an empty value. The
+daemon selects the artifact using its durable local publication policy; the
+executor independently verifies exact reviewed-tree/CI evidence before any
+replacement. Null/unknown/nested-duplicate manifest fields and unknown request
+fields are rejected before publishing queue intent. A successful whole-manifest
+acknowledgment binds its common `release_id` and locally selected `target_sha`.
+The actual Unix wire entry point, not merely direct daemon calls, is covered by
+regression tests for both supported private policies.
+
 Production branches are explicitly `main` or `gin_main`. The separate native
 Master verifier checks reviewed tree and newest successful source push CI before
 queueing. The updater independently fetches the configured production ref,
@@ -90,6 +102,12 @@ full native disposable-stack upgrade/handoff/rollback test also passed, includin
 unprivileged Web access to the group-restricted socket. This uses a fresh private
 Git origin and a separate Standalone project, not production CI or ten-node
 mixed-runtime acceptance; do not interpret it as either of those gates.
+The additional actual whole-manifest stacks passed on SQLite and MySQL on
+2026-10-04. They use the unchanged compiled control wire and fixed HTTPS verifier
+against a private-CA synthetic publication fixture for real private Git objects.
+They cover wrong-tree rejection before replacement, whole history when only the
+other profile changes, and manifest retention through upgrade/handoff/rollback.
+The other profile's artifact is not executed by this local native proof.
 Original development nodes remain untouched. The native default and newly
 created mixed-fleet durable-role startup/restart gates are documented separately
 in `native-deployment.md`. This standalone updater proof does not establish

@@ -377,23 +377,9 @@ func (d *Daemon) handle(ctx context.Context, conn net.Conn) {
 						result = map[string]any{"ok": true, "status": d.Status(), "capabilities": []string{release.ManifestCapability}}
 					}
 				case "start":
-					target, tok := object["target_sha"].(string)
-					mode, mok := object["mode"].(string)
-					hold, hok := object["hold_maintenance"].(bool)
-					if _, exists := object["hold_maintenance"]; !exists {
-						hok = true
-					}
-					if tok && mok && hok && len(object) >= 3 && len(object) <= 4 {
-						valid := true
-						for key := range object {
-							if key != "action" && key != "target_sha" && key != "mode" && key != "hold_maintenance" {
-								valid = false
-							}
-						}
-						if valid {
-							if out, e := d.Start(Request{Action: "start", Target: target, Mode: mode, Hold: hold}); e == nil {
-								result = out
-							}
+					if request, e := decodeSocketStart(object); e == nil {
+						if out, e := d.Start(request); e == nil {
+							result = out
 						}
 					}
 				}
@@ -401,4 +387,48 @@ func (d *Daemon) handle(ctx context.Context, conn net.Conn) {
 		}
 	}
 	json.NewEncoder(conn).Encode(result)
+}
+
+// The wire contract has two disjoint start forms. A whole release selects its
+// artifact only from the daemon's durable local policy, never a caller's SHA.
+// Independent publication proof still belongs to the executor before mutation.
+func decodeSocketStart(object map[string]any) (Request, error) {
+	request := Request{Action: "start"}
+	if object["action"] != "start" {
+		return Request{}, ErrState
+	}
+	for key := range object {
+		if key != "action" && key != "target_sha" && key != "release_manifest" && key != "mode" && key != "hold_maintenance" {
+			return Request{}, ErrState
+		}
+	}
+	mode, ok := object["mode"].(string)
+	if !ok || mode != "upgrade" && mode != "rollback" {
+		return Request{}, ErrState
+	}
+	request.Mode = mode
+	if value, exists := object["hold_maintenance"]; exists {
+		hold, ok := value.(bool)
+		if !ok {
+			return Request{}, ErrState
+		}
+		request.Hold = hold
+	}
+	if value, exists := object["release_manifest"]; exists {
+		if _, selected := object["target_sha"]; selected {
+			return Request{}, ErrState
+		}
+		manifest, err := release.ManifestFromValue(value)
+		if err != nil {
+			return Request{}, ErrState
+		}
+		request.Manifest = &manifest
+	} else {
+		target, ok := object["target_sha"].(string)
+		if !ok || !release.ValidSHA(target) {
+			return Request{}, ErrState
+		}
+		request.Target = target
+	}
+	return request, nil
 }

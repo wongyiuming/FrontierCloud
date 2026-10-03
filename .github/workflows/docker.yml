@@ -63,7 +63,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/gin_')) ||
       (github.event_name == 'merge_group' && github.event.merge_group.base_ref == 'refs/heads/gin_main')
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 65
     concurrency:
       group: native-${{ github.event_name }}-${{ github.head_ref || github.ref }}
       cancel-in-progress: true

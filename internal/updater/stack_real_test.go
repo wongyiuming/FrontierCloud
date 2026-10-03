@@ -19,6 +19,20 @@ import (
 // mounted at the SAME absolute path into the test runner. Docker bind sources
 // otherwise resolve on the host, not in the runner's private filesystem.
 func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
+	testRealNativeUpdaterStack(t, false)
+}
+
+// This adds whole-manifest execution through the unchanged compiled agent and
+// fixed HTTPS publication verifier. Publication replies are private fixtures,
+// not evidence of a reviewed/published production release or mixed convergence.
+func TestRealNativeUpdaterWholeManifestHandoffRollback(t *testing.T) {
+	if os.Getenv("FRONTIERCLOUD_TEST_UPDATER_MANIFEST") != "1" {
+		t.Skip("isolated native whole-manifest stack not selected")
+	}
+	testRealNativeUpdaterStack(t, true)
+}
+
+func testRealNativeUpdaterStack(t *testing.T, whole bool) {
 	base := os.Getenv("FRONTIERCLOUD_TEST_UPDATER_WORKSPACE")
 	socket := os.Getenv("FRONTIERCLOUD_TEST_DOCKER_SOCKET")
 	if base == "" || socket == "" {
@@ -198,6 +212,11 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	networkID = network.ID
+	var publication *nativePublicationFixture
+	if whole {
+		publication = startNativePublicationFixture(t, ctx, e, base, root, networkID)
+		defer publication.close()
+	}
 	for _, dir := range []string{"data", "secrets", "control", "maintenance", "redis", "mysql"} {
 		if err = os.Mkdir(filepath.Join(root, dir), 0755); err != nil {
 			t.Fatal(err)
@@ -275,7 +294,11 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 	}
 	updaterEnv := []string{"UPDATER_PROJECT=" + prefix, "UPDATER_DATA_DIRECTORY=/data", "RELEASE_BRANCH=gin_main"}
 	updaterBinds := []string{sourceDir + ":/workspace:rw", socket + ":/var/run/docker.sock:rw", bind("data", "/data", false), bind("control", "/run/frontiercloud-updater", false), bind("maintenance", "/run/frontiercloud-maintenance", false)}
-	create("updater", updaterImage, []string{"serve"}, updaterEnv, updaterBinds, "0:0", false, true, true)
+	if whole {
+		updaterEnv = append(updaterEnv, "SSL_CERT_FILE=/private-publication/ca.pem", "SSL_CERT_DIR=/private-publication/empty")
+		updaterBinds = append(updaterBinds, filepath.Join(root, "publication")+":/private-publication:ro")
+	}
+	updater := create("updater", updaterImage, []string{"serve"}, updaterEnv, updaterBinds, "0:0", false, true, true)
 	agent := release.SocketAgent{Path: filepath.Join(root, "control", "control.sock")}
 	wait := func(target, state string) map[string]any {
 		t.Helper()
@@ -302,6 +325,43 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 		diagnose()
 		t.Fatal("unprivileged Web cannot reach control socket", err)
 	}
+	var initial, next *release.Manifest
+	if whole {
+		initial = publication.manifest(t, "1.0.0", old, git)
+		out, err := agent.Request(ctx, nativeManifestStart(initial, "upgrade"))
+		if err != nil || out["ok"] != true {
+			t.Fatal("initial native manifest queue failed", err)
+		}
+		nativeManifestStatus(t, wait(old, "success"), initial, nil)
+		// The other private profile can change while the native artifact stays
+		// identical. Whole history still advances, and rollback must not invent
+		// a new native SHA or unnecessarily replace the already healthy stack.
+		joint := release.CloneManifest(initial)
+		joint.ReleaseVersion = "1.1.0"
+		reference := joint.Artifacts["main"]
+		reference.CommitSHA = git("commit-tree", reference.TreeSHA, "-m", "private reference-only target "+prefix)
+		joint.Artifacts["main"] = reference
+		for _, check := range []struct {
+			manifest, previous *release.Manifest
+			mode               string
+		}{{joint, initial, "upgrade"}, {initial, nil, "rollback"}} {
+			out, err := agent.Request(ctx, nativeManifestStart(check.manifest, check.mode))
+			if err != nil || out["ok"] != true {
+				t.Fatal("unchanged native artifact manifest queue failed", err)
+			}
+			status := wait(old, "success")
+			nativeManifestStatus(t, status, check.manifest, check.previous)
+			if status["updater_runtime_sha"] != old || status["previous_sha"] != "" {
+				t.Fatal("whole history confused with native SHA history")
+			}
+			for service, original := range map[string]Container{"web": web, "nginx": nginx, "updater": updater} {
+				current, err := e.Service(ctx, prefix, service)
+				if err != nil || current.ID != original.ID || current.Image != original.Image {
+					t.Fatal("unchanged native artifact replaced a service", service, err)
+				}
+			}
+		}
+	}
 	if err = os.WriteFile(filepath.Join(sourceDir, "static", "native-updater-fixture.txt"), []byte(prefix+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -312,13 +372,53 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 	for _, component := range []string{"web", "nginx", "updater"} {
 		images = append(images, "frontiercloud-"+component+":"+target)
 	}
-	out, err := agent.Request(ctx, map[string]any{"action": "start", "target_sha": target, "mode": "upgrade", "hold_maintenance": false})
+	request := map[string]any{"action": "start", "target_sha": target, "mode": "upgrade", "hold_maintenance": false}
+	if whole {
+		next = publication.manifest(t, "2.0.0", target, git)
+		// A validly encoded manifest cannot invent a reviewed tree. Exercise the
+		// real verifier before replacement, then retry the independently proven
+		// fixture. Neither service/image nor whole history may change on rejection.
+		bad := release.CloneManifest(next)
+		artifact := bad.Artifacts["gin_main"]
+		artifact.TreeSHA = strings.Repeat("0", 40)
+		bad.Artifacts["gin_main"] = artifact
+		out, err := agent.Request(ctx, nativeManifestStart(bad, "upgrade"))
+		if err != nil || out["ok"] != true {
+			t.Fatal("bounded invalid-proof request not queued", err)
+		}
+		for {
+			out, err := agent.Request(ctx, map[string]any{"action": "status"})
+			status, _ := out["status"].(map[string]any)
+			if err == nil && status["state"] == "failed" {
+				if status["current_sha"] != old {
+					t.Fatal("invalid proof committed a new generation")
+				}
+				nativeManifestStatus(t, status, initial, nil)
+				break
+			}
+			if ctx.Err() != nil {
+				t.Fatal("invalid publication proof deadline")
+			}
+			time.Sleep(time.Second)
+		}
+		for service, original := range map[string]Container{"web": web, "nginx": nginx} {
+			current, err := e.Service(ctx, prefix, service)
+			if err != nil || current.ID != original.ID || current.Image != original.Image {
+				t.Fatal("invalid publication proof replaced a service", service, err)
+			}
+		}
+		request = nativeManifestStart(next, "upgrade")
+	}
+	out, err := agent.Request(ctx, request)
 	if err != nil || out["ok"] != true {
 		t.Fatal(out, err)
 	}
 	status := wait(target, "success")
 	if status["previous_sha"] != old || status["updater_runtime_sha"] != target {
 		t.Fatal("handoff runtime proof missing", status)
+	}
+	if whole {
+		nativeManifestStatus(t, status, next, initial)
 	}
 	if _, err = os.Stat(filepath.Join(root, "maintenance", "enabled")); !os.IsNotExist(err) {
 		t.Fatal("successful release left public fence", err)
@@ -337,13 +437,21 @@ func TestRealNativeUpdaterUpgradeHandoffRollback(t *testing.T) {
 			}
 		}
 	}
-	out, err = agent.Request(ctx, map[string]any{"action": "start", "target_sha": old, "mode": "rollback", "hold_maintenance": false})
+	request = map[string]any{"action": "start", "target_sha": old, "mode": "rollback", "hold_maintenance": false}
+	if whole {
+		request = nativeManifestStart(initial, "rollback")
+	}
+	out, err = agent.Request(ctx, request)
 	if err != nil || out["ok"] != true {
 		t.Fatal(out, err)
 	}
 	status = wait(old, "success")
 	if status["previous_sha"] != "" || status["updater_runtime_sha"] != old {
 		t.Fatal("rollback runtime proof missing", status)
+	}
+	if whole {
+		nativeManifestStatus(t, status, initial, nil)
+		publication.assertProofs(t, old, target)
 	}
 	if _, err = os.Stat(filepath.Join(root, "data", ".frontiercloud-native-maintenance")); !os.IsNotExist(err) {
 		t.Fatal("native fence not resumed", err)

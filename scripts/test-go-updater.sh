@@ -8,11 +8,12 @@ cd "$(dirname "$0")/.."
 for database in sqlite mysql; do
   work=$(mktemp -d /tmp/fc-native-updater-XXXXXXXX)
   printf 'Private native updater fixture (%s): %s\n' "$database" "$work"
-  docker run --rm -v "$PWD:/src:ro" \
+  docker run --rm --label "frontiercloud.updater-acceptance=$work" -v "$PWD:/src:ro" \
     -v /var/run/docker.sock:/var/run/docker.sock -v "$work:$work" \
     -e FRONTIERCLOUD_TEST_DOCKER_SOCKET=/var/run/docker.sock \
     -e FRONTIERCLOUD_TEST_UPDATER_WORKSPACE="$work" \
     -e FRONTIERCLOUD_TEST_UPDATER_DATABASE="$database" \
+    -e FRONTIERCLOUD_TEST_UPDATER_MANIFEST=1 \
     frontiercloud-go:business-test \
-    go test -race -count=1 -v ./internal/updater -run TestRealNativeUpdaterUpgradeHandoffRollback
+    go test -race -timeout 60m -count=1 -v ./internal/updater -run 'TestRealNativeUpdater(UpgradeHandoffRollback|WholeManifestHandoffRollback)$'
 done
