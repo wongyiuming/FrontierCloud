@@ -49,7 +49,9 @@ for database in sqlite mysql; do
   curl --fail --silent --show-error "http://$address/health/ready" >/dev/null
   curl --fail --silent --show-error --location --max-redirs 1 "http://$address/" | grep -q '前沿娱乐'
   test -f "$DATA_DIRECTORY/.native-runtime"
-  receipt=$(sha256sum "$DATA_DIRECTORY/.native-runtime" | cut -d' ' -f1)
+  # The receipt is deliberately 0600 and owned by the runtime UID, not the
+  # unprivileged CI host user. Hash it as that UID without weakening permissions.
+  receipt=$(compose exec --interactive=false -T web sha256sum /app/data/.native-runtime | cut -d' ' -f1)
   if [[ "$database" == sqlite ]]; then
     ! compose config --services | grep -qx mysql
     test "$(stat -c %a "$DATA_DIRECTORY/frontiercloud.db")" = 600
@@ -60,7 +62,7 @@ for database in sqlite mysql; do
   compose restart redis
   if [[ "$database" == mysql ]]; then compose restart mysql; fi
   compose up -d --no-build --wait --wait-timeout 180
-  test "$(sha256sum "$DATA_DIRECTORY/.native-runtime" | cut -d' ' -f1)" = "$receipt"
+  test "$(compose exec --interactive=false -T web sha256sum /app/data/.native-runtime | cut -d' ' -f1)" = "$receipt"
   curl --fail --silent --show-error "http://$address/health/ready" >/dev/null
   cleanup
   project=
