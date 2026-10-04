@@ -271,6 +271,30 @@ def wait_healthy(container, timeout: int = 240) -> None:
     raise TimeoutError(f"{container.name} did not become healthy")
 
 
+def wait_nginx_ready(container, timeout: int = 60) -> None:
+    """Docker start precedes template rendering; nginx -t alone is not readiness."""
+    deadline = time.monotonic() + timeout
+    command = ["/bin/sh", "-c",
+        'test -f /etc/nginx/runtime/public-listen.conf && nginx -t && '
+        'pid=$(cat /var/run/nginx.pid) && kill -0 "$pid"']
+    while time.monotonic() < deadline:
+        container.reload()
+        state = container.attrs.get("State") or {}
+        if state.get("Status") in {"dead", "exited"}:
+            raise RuntimeError("nginx release startup failed")
+        if state.get("Status") == "running":
+            try:
+                result = container.exec_run(command, demux=True)
+            except Exception:
+                # A process can exit between inspect and exec. Reinspect rather
+                # than accepting start acknowledgement or a default config.
+                result = None
+            if result is not None and result.exit_code == 0:
+                return
+        time.sleep(1)
+    raise TimeoutError("nginx release readiness deadline reached")
+
+
 def release_image_tag(target: str, component: str) -> str:
     suffix = "-" + hashlib.sha256(UPDATER_PROJECT.encode()).hexdigest()[:12] if UPDATER_PROJECT else ""
     return f"frontiercloud-{component}:{target}{suffix}"
@@ -390,7 +414,7 @@ def restore_local(engine, snapshots: dict[str, dict], old_sha: str) -> None:
             elif service == "web":
                 wait_healthy(restored)
             elif service == "nginx":
-                restored.exec_run(["nginx", "-t"], demux=True)
+                wait_nginx_ready(restored)
         except Exception as exc:
             log(f"restore {service} failed: {type(exc).__name__}: {exc}")
     if old_sha and SHA_RE.fullmatch(old_sha):
@@ -549,9 +573,7 @@ def perform(target: str, mode: str, hold_maintenance: bool, manifest: dict | Non
             web = replace(engine, snapshots["web"], web_image)
             wait_healthy(web)
             nginx = replace(engine, snapshots["nginx"], nginx_image)
-            result = nginx.exec_run(["nginx", "-t"], demux=True)
-            if result.exit_code != 0:
-                raise RuntimeError("nginx configuration check failed")
+            wait_nginx_ready(nginx)
             local_replaced = True
             previous_sha = old_sha if mode == "upgrade" else ""
             write_status(current_sha=target, previous_sha=previous_sha, **manifest_changes(current, manifest, target, mode))

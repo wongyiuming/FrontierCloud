@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,30 @@ type fleetJointRelease struct {
 	source                                                  *jointSourceFixture
 	initial                                                 *release.Manifest
 	metadata, native, agent, reference, edge, referenceEdge string
+}
+
+// Only private synthetic fixture failures are inspected. Drop credential-bearing
+// lines and opaque values before bounding output; never publish raw status/logs.
+func fleetFailureDiagnostic(detail string) string {
+	opaque := regexp.MustCompile(`[A-Za-z0-9_+/-]{32,}={0,2}`)
+	lines := []string{}
+	for _, line := range strings.Split(detail, "\n") {
+		lower := strings.ToLower(line)
+		private := false
+		for _, field := range []string{"password", "secret", "credential", "authorization", "cookie", "token", "private_key", "pair_package"} {
+			private = private || strings.Contains(lower, field)
+		}
+		if private {
+			lines = append(lines, "[private diagnostic line omitted]")
+		} else {
+			lines = append(lines, opaque.ReplaceAllString(line, "[opaque value omitted]"))
+		}
+	}
+	result := strings.Join(lines, "\n")
+	if len(result) > 2048 {
+		result = result[:2048] + " [bounded]"
+	}
+	return result
 }
 
 func retireFleetProjects(t *testing.T, ctx context.Context, e *Engine, owned map[string]bool) {
@@ -262,6 +287,8 @@ func (f *fleetJointRelease) execute(t *testing.T, ctx context.Context, e *Engine
 				if err == nil && status["state"] == "failed" {
 					if site.runtime == "go" {
 						t.Log("bounded native failure classification", status["detail"])
+					} else if detail, ok := status["detail"].(string); ok {
+						t.Log("bounded reference failure diagnostic", fleetFailureDiagnostic(detail))
 					}
 					t.Log("real mixed whole release failed", site.project, site.runtime, site.database, status["phase"])
 					failed = true
@@ -343,6 +370,15 @@ func (f *fleetJointRelease) execute(t *testing.T, ctx context.Context, e *Engine
 		for _, a := range m.Artifacts {
 			f.publication.assertProofs(t, a.CommitSHA)
 		}
+	}
+}
+
+func TestFleetFailureDiagnosticDoesNotExposePrivateValues(t *testing.T) {
+	key := strings.Repeat("k", 48)
+	raw := "RuntimeError: nginx configuration check failed\npassword=" + key + "\nopaque=" + key
+	got := fleetFailureDiagnostic(raw)
+	if strings.Contains(got, key) || !strings.Contains(got, "nginx configuration check failed") || len(fleetFailureDiagnostic(strings.Repeat("!", 9000))) > 2100 {
+		t.Fatal("private fleet diagnostics were not safely bounded")
 	}
 }
 

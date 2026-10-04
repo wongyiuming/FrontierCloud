@@ -171,6 +171,53 @@ class ReleaseImageRetentionTests(unittest.TestCase):
         )
 
 
+class ReferenceNginxReadinessTests(unittest.TestCase):
+    def test_waits_for_rendered_transport_and_live_process(self):
+        updater = load_updater_module()
+        container = MagicMock()
+        container.attrs = {"State": {"Status": "running"}}
+        container.exec_run.side_effect = [SimpleNamespace(exit_code=1), SimpleNamespace(exit_code=0)]
+        with patch.object(updater.time, "sleep") as pause:
+            updater.wait_nginx_ready(container)
+        self.assertEqual(container.exec_run.call_count, 2)
+        command = container.exec_run.call_args.args[0]
+        self.assertIn("public-listen.conf", command[2])
+        self.assertIn("nginx -t", command[2])
+        self.assertIn("kill -0", command[2])
+        pause.assert_called_once_with(1)
+
+    def test_exited_edge_fails_without_accepting_configuration(self):
+        updater = load_updater_module()
+        container = MagicMock()
+        container.attrs = {"State": {"Status": "exited"}}
+        with self.assertRaisesRegex(RuntimeError, "startup failed"):
+            updater.wait_nginx_ready(container)
+        container.exec_run.assert_not_called()
+
+    def test_missing_rendered_transport_never_succeeds_after_deadline(self):
+        updater = load_updater_module()
+        container = MagicMock()
+        container.attrs = {"State": {"Status": "running"}}
+        container.exec_run.return_value = SimpleNamespace(exit_code=1)
+        with (patch.object(updater.time, "monotonic", side_effect=[0, 0, 61]),
+              patch.object(updater.time, "sleep")):
+            with self.assertRaisesRegex(TimeoutError, "readiness deadline"):
+                updater.wait_nginx_ready(container)
+
+    def test_inspect_exec_exit_race_is_reinspected_and_fails_closed(self):
+        updater = load_updater_module()
+        container = MagicMock()
+        container.attrs = {"State": {"Status": "running"}}
+        def reload():
+            if container.reload.call_count > 1:
+                container.attrs = {"State": {"Status": "exited"}}
+        container.reload.side_effect = reload
+        container.exec_run.side_effect = RuntimeError("process exited between inspect and exec")
+        with patch.object(updater.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "startup failed"):
+                updater.wait_nginx_ready(container)
+
+
 class UpdaterRuntimeRestartTests(unittest.TestCase):
     def test_recovery_can_recreate_container_removed_before_process_crash(self):
         updater = load_updater_module()
