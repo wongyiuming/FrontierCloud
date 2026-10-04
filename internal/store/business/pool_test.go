@@ -141,6 +141,12 @@ func TestMasterPromotionStableIdentityAllocationAndFollowerCapacity(t *testing.T
 	if _, err = sqlDB.Exec("UPDATE cluster_compute_members SET enabled=1,worker_slots=4,available_slots=3,cpu_percent=29,memory_available_bytes=1024,capabilities=? WHERE member_id=?", legacyCapabilities, memberID); err != nil {
 		t.Fatal(err)
 	}
+	// MySQL JSON storage can normalize whitespace at INSERT time; preserve
+	// the driver's stored representation, rather than the fixture's spelling.
+	var storedCapabilities string
+	if err = sqlDB.QueryRow("SELECT capabilities FROM cluster_compute_members WHERE member_id=?", memberID).Scan(&storedCapabilities); err != nil {
+		t.Fatal(err)
+	}
 	for _, online := range []bool{true, false} {
 		if err = nodes.RecordHeartbeat(ctx, v.ID, online, 8, map[string]any{"compute": map[string]any{"enabled": false, "worker_slots": 0}}, time.Now().Unix()); err != nil {
 			t.Fatal(err)
@@ -151,7 +157,7 @@ func TestMasterPromotionStableIdentityAllocationAndFollowerCapacity(t *testing.T
 		if err = sqlDB.QueryRow("SELECT enabled,worker_slots,available_slots,cpu_percent,memory_available_bytes,capabilities FROM cluster_compute_members WHERE member_id=?", memberID).Scan(&enabled, &slots, &available, &cpu, &memory, &capabilities); err != nil {
 			t.Fatal(err)
 		}
-		if enabled != 1 || slots != 4 || available != 3 || cpu != 29 || memory != 1024 || capabilities != legacyCapabilities {
+		if enabled != 1 || slots != 4 || available != 3 || cpu != 29 || memory != 1024 || capabilities != storedCapabilities {
 			t.Fatalf("heartbeat rewrote imported metadata: %d %d %d %d %d %q", enabled, slots, available, cpu, memory, capabilities)
 		}
 		desired, err = pool.MemberConfiguration(ctx, memberID)
