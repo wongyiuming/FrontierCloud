@@ -80,7 +80,7 @@ The following are P0 release contracts:
 - an all-compatible MP3 catalog must not perform a second per-row DOM decoration scan after the normal playlist render;
 - compatibility warning DOM work is performed only when an incompatible/runtime-skipped item actually exists.
 
-The current first-append target is 64 KiB and the regular append batch target is 512 KiB. These are implementation constants and may be tuned only together with browser regression tests.
+The current first-append target is 64 KiB and the regular append batch target is 512 KiB. Received bytes wait at most one second for a batch to fill before being submitted to the backpressured append pipeline. This prevents a slow Direct transfer from starving the decoder while playable bytes sit in JavaScript. The pending network read is retained across a timed flush; it must never be duplicated or reordered. Browser-controlled chunks are split at the batch limits, so a multi-MiB read cannot bypass playback-clock backpressure. Stopping a session aborts its in-flight transfer. These are implementation constants and may be tuned only together with browser regression tests.
 
 ## Track boundary semantics
 

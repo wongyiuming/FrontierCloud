@@ -43,6 +43,7 @@ let selectedIndex = null;
 let querySelectorCalls = 0;
 const windowObject = {
     setTimeout() { return 1; },
+    clearTimeout() {},
 };
 const context = {
     PLAYER_KIND: 'audio',
@@ -72,6 +73,8 @@ const context = {
     console,
     setTimeout() { return 1; },
     clearTimeout() {},
+    Uint8Array,
+    AbortController,
 };
 vm.createContext(context);
 const instrumented = source.replace(
@@ -91,6 +94,7 @@ assert.equal(api.installed, true);
 assert.equal(api.mime, 'audio/mpeg');
 assert.equal(api.lookahead_tracks, 2);
 assert.equal(api.append_batch_bytes, 512 * 1024);
+assert.equal(api.append_max_wait_ms, 1000);
 assert.equal(api.first_append_bytes, 64 * 1024);
 assert.equal(api.max_buffer_ahead_seconds, 30);
 assert.equal(api.supported(), true);
@@ -155,6 +159,85 @@ assert.equal(
     '{"appendCalls":2,"capacityCalls":[false,true,false],"quotaWaitCount":1}',
     'quota pressure must retry the same append after silent capacity backpressure',
 );
+
+// A slow Direct transfer must deliver partial batches while its next read is
+// pending, without consuming that read twice or changing byte order.
+context.currentMediaList = [{type: 'audio', media_path: 'music/direct/song.mp3', url: '/fixture'}];
+context.art = {_syncTime() {}, _syncBuffered() {}, video: {buffered: {length: 0}}};
+function transferCandidate(reader, total) {
+    const candidate = Object.create(windowObject.__ContinuousAudioSession.prototype);
+    let appended = 0;
+    const batches = [];
+    Object.assign(candidate, {
+        closed: false, generation: 9, startIndex: 0, segments: [], activeSegment: null,
+        fetchController: new AbortController(), initialSeek: null,
+        bufferedEnd: () => appended / 32768,
+        appendBytes: async bytes => { batches.push(bytes); appended += bytes.byteLength; },
+    });
+    context.fetch = async () => ({
+        ok: true,
+        headers: {get(name) { return name === 'Content-Length' ? String(total) : 'audio/mpeg'; }},
+        body: {getReader() { return reader; }},
+    });
+    windowObject.__setContinuousSessionForTest(candidate);
+    return {candidate, batches};
+}
+const slowChunks = [new Uint8Array(65536).fill(1), new Uint8Array(32768).fill(2), new Uint8Array(65536).fill(3)];
+let slowReads = 0;
+let finishRead;
+let readerCancelled = false;
+const slowReader = {
+    read() {
+        slowReads += 1;
+        if (slowReads < 3) return Promise.resolve({done: false, value: slowChunks[slowReads - 1]});
+        if (slowReads === 3) return new Promise(resolve => { finishRead = resolve; });
+        return Promise.resolve({done: true});
+    },
+    cancel() { readerCancelled = true; return Promise.resolve(); },
+};
+const timers = new Map();
+let timerSequence = 0;
+windowObject.setTimeout = (callback, delay) => { timers.set(++timerSequence, {callback, delay}); return timerSequence; };
+windowObject.clearTimeout = id => timers.delete(id);
+const slow = transferCandidate(slowReader, slowChunks.reduce((sum, chunk) => sum + chunk.length, 0));
+const transferring = slow.candidate.appendTrack(0);
+await new Promise(setImmediate);
+assert.deepEqual(slow.batches.map(bytes => bytes.length), [65536]);
+assert.equal(slowReads, 3);
+assert.equal(timers.size, 1, 'one deadline must guard the retained network read');
+const deadline = [...timers.values()][0];
+assert.ok(deadline.delay <= 1000);
+deadline.callback();
+await new Promise(setImmediate);
+assert.deepEqual(slow.batches.map(bytes => bytes.length), [65536, 32768], 'received audio must flush before another network chunk arrives');
+assert.equal(slowReads, 3, 'a deadline must not issue an additional concurrent reader.read');
+finishRead({done: false, value: slowChunks[2]});
+await transferring;
+assert.deepEqual(slow.batches.flatMap(bytes => Array.from(bytes)), slowChunks.flatMap(bytes => Array.from(bytes)));
+assert.equal(readerCancelled, true);
+assert.equal(timers.size, 0, 'all flush timers must be released');
+
+// Chromium may hand over a multi-MiB chunk after consumer backpressure. Every
+// append must still honor the startup/regular caps and preserve exact bytes.
+const largeChunk = Uint8Array.from({length: 2 * 1024 * 1024 + 37}, (_, index) => index % 251);
+let largeRead = 0;
+const large = transferCandidate({
+    read: async () => largeRead++ === 0 ? {done: false, value: largeChunk} : {done: true},
+    cancel: async () => {},
+}, largeChunk.length);
+await large.candidate.appendTrack(0);
+assert.equal(large.batches[0].length, 65536);
+assert.ok(large.batches.every(bytes => bytes.length <= 512 * 1024), 'MSE append size must not depend on native fetch chunk size');
+assert.deepEqual(Buffer.concat(large.batches), Buffer.from(largeChunk));
+
+const stopController = new AbortController();
+const stopping = Object.create(windowObject.__ContinuousAudioSession.prototype);
+Object.assign(stopping, {closed: false, fetchController: stopController, objectUrl: 'blob:old'});
+context.activeObjectUrl = 'blob:old';
+windowObject.__setContinuousSessionForTest(stopping);
+stopping.stop();
+assert.equal(stopController.signal.aborted, true, 'switching tracks must abort the old Direct download');
+assert.equal(context.activeObjectUrl, null);
 
 const mp3Only = [
     {type: 'audio', media_path: 'music/a/one.mp3'},
