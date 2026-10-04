@@ -11,6 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentContractTests(unittest.TestCase):
+    def test_web_upstream_tracks_replaced_container_without_uri_rewriting(self):
+        nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+        self.assertIn("upstream frontiercloud_web {", nginx)
+        self.assertIn("zone frontiercloud_web 64k;", nginx)
+        self.assertIn("resolver 127.0.0.11 valid=1s ipv6=off;", nginx)
+        self.assertIn("server web:8000 resolve;", nginx)
+        self.assertNotIn("proxy_pass http://web:8000", nginx)
+        self.assertEqual(nginx.count("proxy_pass http://frontiercloud_web;"), 9)
+
     def test_container_shell_entrypoints_use_lf_even_on_windows(self):
         attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
         self.assertIn("*.sh text eol=lf", attributes)
