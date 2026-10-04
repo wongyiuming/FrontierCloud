@@ -34,6 +34,7 @@ type nativePublicationFixture struct {
 	engine          *Engine
 	network, driver string
 	mu              sync.Mutex
+	once            sync.Once
 	proofs          map[string]release.Artifact
 	policies        map[string]release.Policy
 	heads           map[string]string
@@ -88,13 +89,19 @@ func startNativePublicationFixture(t *testing.T, ctx context.Context, e *Engine,
 }
 
 func (f *nativePublicationFixture) close() {
-	_ = f.server.Close()
-	<-f.done
-	if f.engine != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_ = f.engine.call(ctx, "POST", "/networks/"+f.network+"/disconnect", map[string]any{"Container": f.driver, "Force": false}, nil)
-	}
+	f.closeOnce()
+}
+
+func (f *nativePublicationFixture) closeOnce() {
+	f.once.Do(func() {
+		_ = f.server.Close()
+		<-f.done
+		if f.engine != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			_ = f.engine.call(ctx, "POST", "/networks/"+f.network+"/disconnect", map[string]any{"Container": f.driver, "Force": false}, nil)
+		}
+	})
 }
 
 func (f *nativePublicationFixture) manifest(t *testing.T, version, target string, git func(...string) string) *release.Manifest {

@@ -9,6 +9,30 @@ import (
 	"testing"
 )
 
+func TestNativeCompilationBudgetDoesNotChangeRuntimeEnvironment(t *testing.T) {
+	root, err := os.ReadFile(filepath.Join("..", "..", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias, err := os.ReadFile(filepath.Join("..", "..", "Dockerfile.gin"))
+	if err != nil || strings.ReplaceAll(string(root), "\r\n", "\n") != strings.ReplaceAll(string(alias), "\r\n", "\n") {
+		t.Fatal("native root and explicit alias diverged", err)
+	}
+	for _, file := range []string{"Dockerfile", filepath.Join("updater", "Dockerfile.gin")} {
+		contents, err := os.ReadFile(filepath.Join("..", "..", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(contents)
+		if !strings.Contains(text, "GOMAXPROCS=2 CGO_ENABLED=0 /usr/local/go/bin/go build -p=1") || strings.Contains(text, "ENV GOMAXPROCS") {
+			t.Fatal("compile budget missing or incorrectly applied to runtime", file)
+		}
+		if file == "Dockerfile" && !strings.Contains(text, "GOMAXPROCS=2 CGO_ENABLED=0 /usr/local/go/bin/go test -p=1 ./...") {
+			t.Fatal("native image unit compilation is unbounded")
+		}
+	}
+}
+
 type composeService struct {
 	Image       string            `json:"image"`
 	Command     []string          `json:"command"`

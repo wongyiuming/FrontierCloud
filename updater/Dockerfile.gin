@@ -8,7 +8,7 @@ COPY protocol ./protocol
 COPY migrations ./migrations
 ARG REVISION
 RUN test -n "$REVISION" && \
-    CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath \
+    GOMAXPROCS=2 CGO_ENABLED=0 /usr/local/go/bin/go build -p=1 -trimpath \
     -ldflags="-s -w -X main.Revision=$REVISION" \
     -o /out/frontiercloud-updater ./cmd/frontiercloud-updater
 

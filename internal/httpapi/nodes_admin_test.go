@@ -264,6 +264,18 @@ func TestNodeAdminRedisPromotionPairConfigurationRevocationAndReinitialize(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.agent.mu.Lock()
+	f.agent.unavailable = true
+	f.agent.mu.Unlock()
+	if value, probeErr := m.control.Call(ctx, masterRelation, "/internal/v1/cluster-update/status", map[string]any{}); probeErr == nil || !strings.HasPrefix(probeErr.Error(), "control status 503:") || len(value) != 0 {
+		t.Fatal("agent socket gap was reported as successful capability/profile observation", value, probeErr)
+	}
+	f.agent.mu.Lock()
+	f.agent.unavailable = false
+	f.agent.mu.Unlock()
+	if _, probeErr := m.control.Call(ctx, masterRelation, "/internal/v1/cluster-update/status", map[string]any{}); probeErr != nil {
+		t.Fatal("recovered agent status unavailable", probeErr)
+	}
 	if _, err = f.control.Call(ctx, followerRelation, "/internal/v1/cluster-update/start", map[string]any{"target_sha": strings.Repeat("c", 40), "mode": "upgrade"}); err == nil {
 		t.Fatal("Follower controlled Master's updater")
 	}

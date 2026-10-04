@@ -125,7 +125,16 @@ func RegisterNodeRelease(router *gin.Engine, settings config.Config, resolver *n
 				return
 			}
 			if action == "status" {
-				c.JSON(200, release.AgentControlStatus(ctx, agent))
+				out := release.AgentControlStatus(ctx, agent)
+				status, _ := out["status"].(map[string]any)
+				if status["state"] == "unavailable" {
+					// A socket gap while the immutable agent hands off is not a
+					// successful profile/capability observation. Preflight rejects
+					// this response; active convergence may retry it to its deadline.
+					detail(c, 503, "Follower updater temporarily unavailable")
+					return
+				}
+				c.JSON(200, out)
 				return
 			}
 			if value.Mode == "" {

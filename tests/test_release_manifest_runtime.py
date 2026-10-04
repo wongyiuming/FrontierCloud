@@ -10,12 +10,14 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
+import httpx
 
 from app.api import internal_cluster_update as api
 from app.services import cluster_manifest_coordinator as coordinator
 from app.services import release_manifest_control as master
 from app.services.federation import protocol as p
 from app.services.federation import release_manifest as manifests
+from app.services.federation.transport import ControlHTTPError, Transport
 from tests.test_updater_p0_contract import load_updater_module
 from updater import release_evidence
 
@@ -102,6 +104,21 @@ class ManifestQueueTests(unittest.TestCase):
 
 
 class ManifestApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_agent_socket_gap_is_http503_not_successful_capability_loss(self):
+        with (patch.object(api.state, "node", {"role": "Follower"}),
+              patch.object(api, "authenticated", AsyncMock(return_value={"direction": "upstream"})),
+              patch.object(api, "agent_request", AsyncMock(return_value={"ok": False, "reason": "private socket failure"}))):
+            with self.assertRaises(HTTPException) as caught:
+                await api.status(SimpleNamespace())
+            self.assertEqual(caught.exception.status_code, 503)
+            self.assertNotIn("private", caught.exception.detail)
+        with (patch.object(api.state, "node", {"role": "Follower"}),
+              patch.object(api, "authenticated", AsyncMock(return_value={"direction": "upstream"})),
+              patch.object(api, "agent_request", AsyncMock(return_value={"ok": True, "status": {"release_branch": "main", "state": "success"}, "capabilities": [manifests.MANIFEST_CAPABILITY]}))):
+            value = await api.status(SimpleNamespace())
+            self.assertEqual(value["status"]["release_branch"], "main")
+            self.assertEqual(value["capabilities"], [manifests.MANIFEST_CAPABILITY])
+
     async def test_whole_manifest_forwarding_idempotence_and_ambiguous_targets(self):
         manifest = fixture()
         release_id = manifests.identifier(manifest)
@@ -123,8 +140,20 @@ class ManifestApiTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ManifestConvergenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_control_http_errors_preserve_only_status_not_upstream_body(self):
+        for code in (401,403,502,503,504):
+            transport=Transport()
+            transport.client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(code,text="never-propagate-upstream-body")))
+            try:
+                with patch.object(transport,"open"),self.assertRaises(ControlHTTPError) as caught:
+                    await transport.request("https://peer.invalid","/internal/v1/cluster-update/status")
+                self.assertEqual(caught.exception.status_code,code)
+                self.assertEqual(str(caught.exception),f"Node control HTTP {code}")
+            finally:
+                await transport.close()
+
     async def test_mixed_private_profiles_whole_digest_and_all_peer_preflight(self):
-        for fault in ("", "old", "wrong-sha", "wrong-manifest", "unacknowledged", "reset", "revoked", "failed"):
+        for fault in ("", "old", "wrong-sha", "wrong-manifest", "unacknowledged", "reset", "revoked", "failed", "http502", "http503", "http504", "http401", "http403", "invalid", "http-preflight", "http-outage"):
             with self.subTest(fault=fault):
                 manifest = fixture()
                 release_id = manifests.identifier(manifest)
@@ -132,6 +161,8 @@ class ManifestConvergenceTests(unittest.IsolatedAsyncioTestCase):
                           "peer_key": "pin", "credential": "encrypted", "direction": "downstream", "state": "active", "protocol": 2} for index in range(9)]
                 identity = {"node_id": "node", "role": "Master", "private_key": "sealed"}
                 starts = []
+                probes = set()
+                succeeds = fault in {"", "http502", "http503", "http504"}
 
                 async def call(peer, path, payload):
                     index = int(peer["relationship_id"])
@@ -140,6 +171,12 @@ class ManifestConvergenceTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(payload, {"release_manifest": manifest, "mode": "upgrade"})
                         starts.append(index)
                         return {"accepted": True, "release_id": "wrong" if fault == "unacknowledged" else release_id}
+                    if fault == "http-preflight": raise ControlHTTPError(503)
+                    if starts and fault == "http-outage": raise ControlHTTPError(503)
+                    if starts and fault == "invalid": raise p.ProtocolError("Invalid node control response")
+                    if starts and fault.startswith("http") and index not in probes:
+                        probes.add(index)
+                        raise ControlHTTPError(int(fault[4:]))
                     current = copy.deepcopy(manifest)
                     if starts and fault == "wrong-manifest": current["release_version"] = "2.0.0rc9"
                     if fault == "reset": identity["role"] = "Standalone"
@@ -151,15 +188,16 @@ class ManifestConvergenceTests(unittest.IsolatedAsyncioTestCase):
                 with (patch.object(coordinator.state, "read_existing_identity", AsyncMock(side_effect=lambda: copy.deepcopy(identity))),
                       patch.object(coordinator.state, "list_relationships", AsyncMock(side_effect=lambda: copy.deepcopy(peers))),
                       patch.object(coordinator.state, "relationship", AsyncMock(side_effect=lambda key: copy.deepcopy(peers[int(key)]))),
-                      patch.object(coordinator.runtime, "call", AsyncMock(side_effect=call)), patch.object(coordinator, "TIMEOUT_SECONDS", 1 if not fault else 0.2),
+                      patch.object(coordinator.runtime, "call", AsyncMock(side_effect=call)), patch.object(coordinator, "TIMEOUT_SECONDS", 1 if succeeds else 0.2),
                       patch.object(coordinator, "POLL_SECONDS", 0.001)):
-                    if fault:
+                    if not succeeds:
                         with self.assertRaises((p.ProtocolError, TimeoutError)):
                             await coordinator.converge(manifest, "upgrade")
                     else:
                         await coordinator.converge(manifest, "upgrade")
-                if fault in {"old", "reset", "revoked"}: self.assertEqual(starts, [])
-                if not fault: self.assertEqual(len(starts), 9)
+                if fault in {"old", "reset", "revoked", "http-preflight"}: self.assertEqual(starts, [])
+                if succeeds: self.assertEqual(len(starts), 9)
+                if fault in {"http502", "http503", "http504"}: self.assertEqual(len(probes), 9)
 
 
 class MasterManifestTests(unittest.IsolatedAsyncioTestCase):

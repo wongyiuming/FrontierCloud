@@ -10,6 +10,13 @@ import httpx
 from . import protocol as p
 
 
+class ControlHTTPError(p.ProtocolError):
+    """A control HTTP status, without arbitrary response bodies or credentials."""
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        super().__init__(f"Node control HTTP {status_code}")
+
+
 class Transport:
     def __init__(self):
         self.client: httpx.AsyncClient | None = None
@@ -58,7 +65,7 @@ class Transport:
         async with client.stream(method, origin + path, content=body, headers=headers, timeout=timeout) as response:
             if response.status_code != 200:
                 # Do not log pairing tokens, credentials, or arbitrary upstream bodies.
-                raise p.ProtocolError(f"Node control HTTP {response.status_code}")
+                raise ControlHTTPError(response.status_code)
             chunks, length = [], 0
             async for chunk in response.aiter_bytes():
                 length += len(chunk)

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/wongyiuming/FrontierCloud/internal/release"
@@ -14,12 +15,16 @@ type testReleaseAgent struct {
 	busy         bool
 	capabilities []string
 	lastManifest any
+	unavailable  bool
 }
 
 func (a *testReleaseAgent) Request(_ context.Context, value map[string]any) (map[string]any, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if value["action"] == "status" {
+		if a.unavailable {
+			return nil, errors.New("private socket unavailable")
+		}
 		out := map[string]any{"ok": true, "status": a.status}
 		if a.capabilities != nil {
 			out["capabilities"] = a.capabilities

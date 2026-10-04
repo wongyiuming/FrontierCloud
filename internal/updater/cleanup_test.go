@@ -49,3 +49,44 @@ func TestCleanupOnlyExactOwnObsoleteTagsNeverForceOrPrune(t *testing.T) {
 		t.Fatal("cleanup crossed retention/project scope", removed)
 	}
 }
+
+func TestProjectImageTagsStayBoundedAndCleanupCannotCrossNamespaces(t *testing.T) {
+	const project = "native-test"
+	if got := releaseImageTag(project, testTarget, "web"); got != "frontiercloud-web:"+testTarget+"-825a03693b16" {
+		t.Fatal("cross-runtime project tag vector changed", got)
+	}
+	if len(strings.Split(releaseImageTag(strings.Repeat("x", 128), testTarget, "web"), ":")[1]) > 128 {
+		t.Fatal("Docker tag limit exceeded")
+	}
+	stale := strings.Repeat("3", 40)
+	own := releaseImageTag(project, stale, "web")
+	foreign := releaseImageTag("foreign", stale, "web")
+	var removed []string
+	e := engineFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1.52/images/json" {
+			_ = json.NewEncoder(w).Encode([]Image{{RepoTags: []string{own, foreign, releaseImageTag(project, testCurrent, "web")}}})
+			return
+		}
+		ref := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1.52/images/"), "/json")
+		if ref != own {
+			t.Error("foreign namespace inspected or mutated", ref)
+		}
+		if r.Method == "DELETE" {
+			if r.URL.Query().Get("force") != "false" || r.URL.Query().Get("noprune") != "true" {
+				t.Error("unsafe scoped retirement")
+			}
+			removed = append(removed, ref)
+			w.WriteHeader(204)
+			return
+		}
+		image := Image{ID: "sha256:" + strings.Repeat("a", 64)}
+		// Even a forged matching owner label on the foreign namespace must not
+		// authorize its lookup/removal. The tag namespace is checked first.
+		image.Config.Labels = map[string]string{"frontiercloud.revision": stale, "frontiercloud.component": "web", "frontiercloud.runtime": "go", "frontiercloud.schema-generation": "2", "frontiercloud.project": project}
+		_ = json.NewEncoder(w).Encode(image)
+	})
+	e.Project = project
+	if err := e.Cleanup(context.Background(), testCurrent, testTarget); err != nil || len(removed) != 1 || removed[0] != own {
+		t.Fatal("scoped image cleanup changed ownership", err, removed)
+	}
+}

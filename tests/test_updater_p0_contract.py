@@ -42,6 +42,95 @@ def load_updater_module():
 
 
 class ReleaseImageRetentionTests(unittest.TestCase):
+    def test_scoped_image_tag_vector_and_cleanup_reject_other_namespace(self):
+        updater=load_updater_module()
+        updater.UPDATER_PROJECT="native-test"
+        self.assertEqual(updater.release_image_tag(CURRENT_SHA,"web"),f"frontiercloud-web:{CURRENT_SHA}-825a03693b16")
+        own=updater.release_image_tag(STALE_SHA,"web")
+        foreign=f"frontiercloud-web:{STALE_SHA}-000000000000"
+        image_api=MagicMock()
+        labels={"frontiercloud.project":"native-test","frontiercloud.component":"web","frontiercloud.revision":STALE_SHA}
+        image_api.list.return_value=[SimpleNamespace(tags=[own,foreign],attrs={"Config":{"Labels":labels}})]
+        updater.cleanup_release_images(SimpleNamespace(images=image_api),{CURRENT_SHA})
+        image_api.remove.assert_called_once_with(own,force=False,noprune=True)
+        self.assertEqual(updater.release_image_revision(SimpleNamespace(tags=[own])),STALE_SHA)
+
+    def test_explicit_project_cleanup_requires_complete_ownership_and_never_prunes(self):
+        updater = load_updater_module()
+        updater.UPDATER_PROJECT = "fc-private-reference"
+        image_api = MagicMock()
+        images = []
+        for project, component, revision in ((updater.UPDATER_PROJECT, "web", STALE_SHA),
+                ("foreign", "web", STALE_SHA), (updater.UPDATER_PROJECT, "nginx", STALE_SHA),
+                (updater.UPDATER_PROJECT, "web", CURRENT_SHA), ("", "", "")):
+            images.append(SimpleNamespace(tags=[f"frontiercloud-web:{STALE_SHA}"], attrs={
+                "Config": {"Labels": {"frontiercloud.project": project,
+                    "frontiercloud.component": component, "frontiercloud.revision": revision}}}))
+        image_api.list.return_value = images
+        updater.cleanup_release_images(SimpleNamespace(images=image_api), {CURRENT_SHA})
+        image_api.list.assert_called_once_with(filters={"label": "frontiercloud.project=fc-private-reference"})
+        image_api.remove.assert_called_once_with(f"frontiercloud-web:{STALE_SHA}", force=False, noprune=True)
+        updater.UPDATER_PROJECT = "../foreign"
+        image_api.reset_mock()
+        with self.assertRaises(RuntimeError):
+            updater.cleanup_release_images(SimpleNamespace(images=image_api), {CURRENT_SHA})
+        image_api.list.assert_not_called()
+
+    def test_cleanup_inventory_race_retains_images_without_failing_committed_release(self):
+        updater = load_updater_module()
+        for project in ("", "fc-private-reference"):
+            with self.subTest(project=project):
+                updater.UPDATER_PROJECT = project
+                images = MagicMock()
+                images.list.side_effect = updater.docker.errors.NotFound("private Engine response")
+                with patch.object(updater, "log") as logger:
+                    updater.cleanup_release_images(SimpleNamespace(images=images), {CURRENT_SHA})
+                images.remove.assert_not_called()
+                logger.assert_called_once_with("release image inventory skipped: NotFound")
+
+    def test_scoped_cleanup_never_inspects_foreign_project_collection(self):
+        updater = load_updater_module()
+        updater.UPDATER_PROJECT = "fc-private-reference"
+        images = MagicMock()
+        def inventory(**kwargs):
+            if kwargs != {"filters": {"label": "frontiercloud.project=fc-private-reference"}}:
+                raise updater.docker.errors.NotFound("foreign image disappeared during SDK inspection")
+            return []
+        images.list.side_effect = inventory
+        updater.cleanup_release_images(SimpleNamespace(images=images), {CURRENT_SHA})
+        images.list.assert_called_once_with(filters={"label": "frontiercloud.project=fc-private-reference"})
+        images.remove.assert_not_called()
+
+    def test_committed_release_success_survives_optional_inventory_failure(self):
+        updater = load_updater_module()
+        updater.UPDATER_PROJECT = "fc-private-reference"
+        engine = MagicMock()
+        engine.images.list.side_effect = updater.docker.errors.NotFound("foreign image disappeared")
+        with (patch.object(updater, "read_status", return_value={"current_sha": CURRENT_SHA, "previous_sha": PREVIOUS_SHA}),
+              patch.object(updater, "client", return_value=engine),
+              patch.object(updater, "service_container", return_value=MagicMock()),
+              patch.object(updater, "validate_target"), patch.object(updater, "FORCE_OPEN_FLAG"),
+              patch.object(updater, "maintenance") as fence, patch.object(updater, "write_status") as persist,
+              patch.object(updater, "SERVER_ACTIVE", False), patch.object(updater, "RUNTIME_SHA", CURRENT_SHA),
+              patch.object(updater, "log")):
+            updater.perform(CURRENT_SHA, "upgrade", False)
+        self.assertEqual(persist.call_args.kwargs["state"], "success")
+        self.assertEqual(persist.call_args.kwargs["current_sha"], CURRENT_SHA)
+        self.assertEqual(fence.call_args.args, (False,))
+        engine.images.remove.assert_not_called()
+        engine.close.assert_called_once()
+
+    def test_explicit_project_build_labels_both_components(self):
+        updater = load_updater_module()
+        updater.UPDATER_PROJECT = "fc-private-reference"
+        engine = MagicMock()
+        with patch.object(updater, "git", return_value="FROM python:3.14.7-slim"):
+            updater.build(engine, CURRENT_SHA)
+        for call, component in zip(engine.images.build.call_args_list, ("web", "nginx")):
+            self.assertEqual(call.kwargs["tag"],updater.release_image_tag(CURRENT_SHA,component))
+            self.assertEqual(call.kwargs["labels"], {"frontiercloud.project": updater.UPDATER_PROJECT,
+                "frontiercloud.component": component, "frontiercloud.revision": CURRENT_SHA})
+
     def test_cleanup_keeps_only_current_previous_and_non_release_images(self):
         updater = load_updater_module()
         images = [

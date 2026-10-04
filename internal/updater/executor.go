@@ -136,7 +136,7 @@ func (x *DockerExecutor) Execute(parent context.Context, request Request, before
 			return Outcome{}, e
 		}
 		if request.Manifest != nil || before.CurrentManifest != nil || before.PreviousManifest != nil {
-			for component, ref := range map[string]string{"web": webImage, "updater": "frontiercloud-updater:" + request.Target} {
+			for component, ref := range map[string]string{"web": webImage, "updater": releaseImageTag(x.Project, request.Target, "updater")} {
 				image, e := engine.Image(ctx, ref, request.Target, component)
 				if e != nil || image.Config.Labels["frontiercloud.release-manifest-version"] != "1" {
 					return Outcome{}, release.ErrManifest
@@ -248,7 +248,7 @@ func (x *DockerExecutor) Execute(parent context.Context, request Request, before
 	if x.Runtime == request.Target {
 		return Outcome{Current: request.Target, Previous: previous}, nil
 	}
-	updaterImage := "frontiercloud-updater:" + request.Target
+	updaterImage := releaseImageTag(x.Project, request.Target, "updater")
 	if _, err = engine.Image(ctx, updaterImage, request.Target, "updater"); errors.Is(err, ErrNotFound) {
 		updaterImage, err = engine.Build(ctx, x.Source, request.Target, "updater", "updater/Dockerfile.gin")
 	}
@@ -386,17 +386,34 @@ func (x *DockerExecutor) restore(ctx context.Context, e *Engine, s *privateStore
 	}
 	return nil
 }
-func (x *DockerExecutor) Recover(ctx context.Context, status Status) error {
+
+type recoveryFailure struct {
+	stage string
+	cause error
+}
+
+func (e *recoveryFailure) Error() string { return "native recovery proof failed" }
+func (e *recoveryFailure) Unwrap() error { return e.cause }
+
+func (x *DockerExecutor) Recover(ctx context.Context, status Status) (result error) {
+	stage := "engine"
+	defer func() {
+		if result != nil {
+			result = &recoveryFailure{stage: stage, cause: result}
+		}
+	}()
 	e, err := x.engine(ctx)
 	if err != nil {
 		return err
 	}
 	defer e.Close()
+	stage = "private-store"
 	s, err := x.private()
 	if err != nil {
 		return err
 	}
 	defer s.Close()
+	stage = "journals"
 	var journal replacement
 	journalErr := s.read("replacement.json", 16<<20, &journal)
 	var pending handoff
@@ -408,10 +425,12 @@ func (x *DockerExecutor) Recover(ctx context.Context, status Status) error {
 		return ErrState
 	}
 	if journalErr == nil || handoffErr == nil || release.Busy(status.State) || status.State == "success" {
+		stage = "release-fence"
 		if err = x.clearForceOpen(ctx); err != nil {
 			return err
 		}
 	}
+	stage = "replacement-journal"
 	if err = journalErr; err == nil {
 		if journal.Target != status.TargetSHA || (journal.Old != status.CurrentSHA && status.CurrentSHA != journal.Target) {
 			return ErrState
@@ -428,6 +447,7 @@ func (x *DockerExecutor) Recover(ctx context.Context, status Status) error {
 		return err
 	}
 	if status.State == "failed" && handoffErr == nil {
+		stage = "failed-runtime"
 		if pending.Target != status.CurrentSHA || status.RuntimeSHA != x.Runtime {
 			return ErrState
 		}
@@ -453,14 +473,17 @@ func (x *DockerExecutor) Recover(ctx context.Context, status Status) error {
 		}
 	}
 	if status.State == "success" || status.State == "restarting" {
+		stage = "runtime"
 		if x.Runtime != status.CurrentSHA || (status.State == "restarting" && x.Runtime != status.TargetSHA) {
 			return ErrState
 		}
 		for _, service := range []string{"web", "nginx", "updater"} {
+			stage = service + "-service"
 			c, err := e.Service(ctx, x.Project, service)
 			if err != nil {
 				return err
 			}
+			stage = service + "-image"
 			image, imageErr := e.Image(ctx, c.Image, status.CurrentSHA, service)
 			if imageErr != nil {
 				return imageErr
@@ -469,27 +492,33 @@ func (x *DockerExecutor) Recover(ctx context.Context, status Status) error {
 				return release.ErrManifest
 			}
 			if service == "web" {
+				stage = "web-health"
 				if c.State.Status != "running" || c.State.Health.Status != "healthy" {
 					return ErrState
 				}
 			}
 			if service == "nginx" {
+				stage = "nginx-readiness"
 				if err = e.NginxReady(ctx, c.ID); err != nil {
 					return err
 				}
 			}
+			stage = "updater-state"
 			if service == "updater" && c.State.Status != "running" {
 				return ErrState
 			}
 		}
+		stage = "handoff-journal"
 		var h handoff
 		if err = s.read("handoff.json", 16<<20, &h); err == nil {
 			if h.Target != status.CurrentSHA {
 				return ErrState
 			}
+			stage = "handoff-helper"
 			if err = x.retireHandoffHelper(ctx, e, h); err != nil {
 				return err
 			}
+			stage = "handoff-journal-remove"
 			if err = s.remove("handoff.json"); err != nil {
 				return err
 			}

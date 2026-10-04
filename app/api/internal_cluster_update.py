@@ -87,7 +87,10 @@ async def status(request: Request):
             return {"status": value["status"], "capabilities": p.read_capabilities(value)}
         except p.ProtocolError:
             pass
-    return {"status": {"state": "unavailable", "phase": "unavailable"}, "capabilities": []}
+    # An agent socket gap during immutable handoff is an unavailable probe,
+    # never evidence that the privately negotiated profile/capability changed.
+    # Preflight still rejects it; only active convergence retries HTTP 503.
+    raise HTTPException(503, "Follower updater temporarily unavailable")
 
 
 router.include_router(cluster_router)

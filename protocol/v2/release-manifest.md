@@ -39,7 +39,21 @@ upgrade. Rollback uses only the durable previous whole manifest and independentl
 verifies both historical artifacts; each updater also enforces local production
 ancestry. This optional file is metadata, not proof or a signature bypass.
 
+During convergence polling, temporary verified control HTTP 502/503/504 responses
+from a replacing/draining peer count as not yet converged, within the existing
+deadline. They never count as an acknowledgment or success. Authentication errors,
+malformed responses, capability/private-profile changes and authority/pin changes
+remain failures. Preflight and start dispatch do not inherit this polling retry.
+
+An authenticated Follower status endpoint returns HTTP 503 while its updater
+socket is unavailable, including immutable agent handoff. It must not return a
+successful empty-capability/profile observation for that gap. Both runtime
+endpoints retain their role/authentication checks before probing the agent.
+
 Without that setting, legacy same-SHA releases remain fail-closed across different
-publication branches. Publication-asset automation and real mixed-runtime fleet
-upgrade/restart acceptance are still pending. Parser/unit/RPC tests do not claim
-those acceptance gates have completed.
+publication branches. Actual private ten-node Go/SQLite and Python/MySQL Master
+fleets passed whole-release 1.0 confirmation, 2.0 replacement and 1.0 rollback,
+including both runtimes/stores, live agent proof and post-release core restart.
+This uses synthetic reviewed CI metadata for real private Git objects through
+the unchanged HTTPS verifier, not published production CI. Publication-asset
+automation remains separate; see `docs/go-only-completion.md` for acceptance evidence.

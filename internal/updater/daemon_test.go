@@ -19,6 +19,23 @@ import (
 const testCurrent = "1111111111111111111111111111111111111111"
 const testTarget = "2222222222222222222222222222222222222222"
 
+func TestRecoveryFailureClassificationIsBounded(t *testing.T) {
+	for _, test := range []struct {
+		err  error
+		want string
+	}{
+		{&recoveryFailure{stage: "handoff-helper", cause: &dockerFailure{operation: "container-inspect", status: 500}}, "recovery-handoff-helper/docker-container-inspect-500"},
+		{&recoveryFailure{stage: "web-health", cause: ErrState}, "recovery-web-health/state-proof"},
+		{&recoveryFailure{stage: "private-store", cause: errors.New("password=private credential")}, "recovery-private-store/operation"},
+		{&recoveryFailure{stage: "password=private credential", cause: ErrState}, "recovery-unknown/state-proof"},
+		{&recoveryFailure{stage: "journals", cause: &recoveryFailure{stage: "password=private credential", cause: ErrState}}, "recovery-journals/operation"},
+	} {
+		if got := safeFailureCode(test.err); got != test.want {
+			t.Fatal("unsafe or imprecise recovery classification", got)
+		}
+	}
+}
+
 type testExecutor struct {
 	entered    chan struct{}
 	wait       chan struct{}
@@ -122,6 +139,9 @@ func TestDaemonDurableConcurrentStartAndInterruptedRecovery(t *testing.T) {
 	}
 	if strings.Contains(d.Status().Detail, "secret") {
 		t.Fatal("leaked executor error")
+	}
+	if d.Status().Detail != "release failed (building/operation); maintenance retained" {
+		t.Fatal("failure stage must remain bounded and credential-free", d.Status().Detail)
 	}
 	d.Close()
 	if _, err := os.Stat(filepath.Join(flags, "enabled")); err != nil {

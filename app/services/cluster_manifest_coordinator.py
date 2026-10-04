@@ -13,7 +13,7 @@ from app.services.federation import protocol as p
 from app.services.federation import release_manifest as manifests
 from app.services.federation.runtime import runtime
 from app.services.federation.state import state
-from app.services.federation.transport import transport
+from app.services.federation.transport import ControlHTTPError, transport
 
 POLL_SECONDS = 4
 TIMEOUT_SECONDS = 900
@@ -95,6 +95,13 @@ async def converge(manifest: dict, mode: str) -> None:
                     value = await call(peer, "/internal/v1/cluster-update/status", {})
                 except (OSError, TimeoutError, httpx.HTTPError):
                     return False
+                except ControlHTTPError as exc:
+                    # Replacement/drain can temporarily gate status through
+                    # Nginx. Authentication, malformed payloads and private
+                    # profile/authority changes remain fail-closed.
+                    if exc.status_code in {502, 503, 504}:
+                        return False
+                    raise
                 branch = peer_profile(value, manifest)
                 if branch != profiles[key]:
                     raise p.ProtocolError("Follower private profile changed")

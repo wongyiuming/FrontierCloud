@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -91,13 +92,13 @@ func NewDaemon(ctx context.Context, directory, maintenanceDirectory, runtime, br
 				// Persist success before opening traffic. A crash before removal
 				// leaves a closed flag; the success path below rechecks recovery.
 			} else {
-				d.status.State, d.status.Phase, d.status.Detail = "failed", "interrupted", "updater recovery requires attention"
+				d.status.State, d.status.Phase, d.status.Detail = "failed", "interrupted", "updater recovery requires attention ("+safeFailureCode(err)+")"
 			}
 		} else {
 			err = executor.Recover(ctx, d.status)
 			d.status.State, d.status.Phase, d.status.Detail = "failed", "interrupted", "release interrupted; maintenance retained"
 			if err != nil {
-				d.status.Detail = "release interrupted; recovery requires attention"
+				d.status.Detail = "release interrupted; recovery requires attention (" + safeFailureCode(err) + ")"
 			}
 		}
 	}
@@ -108,7 +109,7 @@ func NewDaemon(ctx context.Context, directory, maintenanceDirectory, runtime, br
 		}
 		if !recovered {
 			if err = executor.Recover(ctx, d.status); err != nil {
-				d.status.Detail = "failed release recovery requires attention"
+				d.status.Detail = "failed release recovery requires attention (" + safeFailureCode(err) + ")"
 			}
 		}
 	}
@@ -271,7 +272,14 @@ func (d *Daemon) perform(ctx context.Context, r Request) {
 		if d.status.State == "restarting" && ctx.Err() != nil {
 			return
 		}
-		d.status.State, d.status.Phase, d.status.Detail = "failed", "failed", "release failed; maintenance retained"
+		phase := d.status.Phase
+		switch phase {
+		case "validating", "building", "replacing", "local-committed", "distributing", "updater-restart":
+		default:
+			phase = "unknown"
+		}
+		code := safeFailureCode(err)
+		d.status.State, d.status.Phase, d.status.Detail = "failed", "failed", "release failed ("+phase+"/"+code+"); maintenance retained"
 		d.persistLocked()
 		return
 	}
@@ -301,6 +309,45 @@ func (d *Daemon) perform(ctx context.Context, r Request) {
 		d.status.State, d.status.Phase, d.status.Detail = "failed", "failed", "release completion not durably acknowledged"
 		d.persistLocked()
 	}
+}
+
+func safeFailureCode(err error) string {
+	if recovery, ok := err.(*recoveryFailure); ok {
+		stage := "unknown"
+		switch recovery.stage {
+		case "engine", "private-store", "journals", "release-fence", "replacement-journal", "failed-runtime", "runtime", "web-service", "nginx-service", "updater-service", "web-image", "nginx-image", "updater-image", "web-health", "nginx-readiness", "updater-state", "handoff-journal", "handoff-helper", "handoff-journal-remove":
+			stage = recovery.stage
+		}
+		// Production recovery adds exactly one wrapper. Never reflect arbitrary
+		// error text, paths, commands or labels into the public agent status.
+		cause := recovery.cause
+		if _, nested := cause.(*recoveryFailure); nested {
+			return "recovery-" + stage + "/operation"
+		}
+		return "recovery-" + stage + "/" + safeFailureCode(cause)
+	}
+	var failure *dockerFailure
+	if errors.As(err, &failure) {
+		return "docker-" + failure.operation + "-" + strconv.Itoa(failure.status)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	if errors.Is(err, ErrNotFound) {
+		return "docker-object-missing"
+	}
+	if errors.Is(err, release.ErrManifest) {
+		return "manifest-proof"
+	}
+	if errors.Is(err, ErrState) {
+		return "state-proof"
+	}
+	if err != nil {
+		if code := map[string]string{"native helper failed": "helper", "release image provenance or schema mismatch": "image-proof", "Docker operation rejected": "docker", "Docker request failed": "docker", "invalid Docker build stream": "build-stream"}[err.Error()]; code != "" {
+			return code
+		}
+	}
+	return "operation"
 }
 
 func (d *Daemon) Serve(ctx context.Context) error {

@@ -26,7 +26,7 @@ route alone, an empty response, or a generic success response is not parity.
 - [x] Logical business export, mixed transfer and independent read-only preflight
 - [ ] Portable physical restore/promotion and historical cluster migration admission
 - [x] Native standalone updater, exact release proof, maintenance, rollback and cleanup
-- [ ] Actual mixed-profile whole-release execution/convergence
+- [x] Actual mixed-profile whole-release execution/convergence
 - [x] Only-Go default deployment contains no Python process or Python-dependent script
 - [x] Four isolated 1 Master / 3 Direct / 6 Relay private-CA integration validations
 
@@ -84,6 +84,7 @@ bash scripts/test-go-deployment.sh
 FRONTIERCLOUD_REVISION="$(git rev-parse HEAD)" bash scripts/test-native-default.sh
 bash scripts/test-go-updater.sh
 bash scripts/test-mixed-runtime.sh
+bash scripts/test-mixed-release.sh
 ```
 
 Do not select the original deployment's project, data, secrets or database for
@@ -97,6 +98,52 @@ default Go startup is not permission to overwrite historical state. Chronologica
 slice notes below describe their evidence and limitations at the recorded dates.
 
 ## Native whole-manifest wire revalidation (2026-10-04)
+
+Mixed whole-release integration initially exposed two real execution defects.
+A fresh ten-node fleet completed
+common 1.0 confirmation and actual 2.0 replacement through the real Master Admin
+endpoint and signed Follower control after fixing transient agent socket gaps.
+Rollback then exposed a reference SDK global-image inventory race: four peers
+failed inspecting the same retired foreign image although their target images
+were present and locally committed. Inventory is now filtered by full owner and
+optional cleanup failure retains images without failing a healthy generation.
+These fixes, shared-Engine tag isolation and fixture proxy-subnet discovery have
+regressions and now have successful serial real dual-direction acceptance.
+The serial rerun at `/tmp/fc-mixed-verify-f252b47a91384620a5364f072cc5f3c7.log`
+passed in 2272.17 seconds: Go/SQLite Master 1454.77s and Python/MySQL Master
+817.39s. Each fresh private-CA fleet had three Direct and six Relay Followers
+cycling both runtimes and stores. Both directions passed common 1.0 confirmation,
+actual 2.0 replacement and rollback to 1.0. Every peer proved the common whole
+digest, its privately selected artifact and the live/compiled agent SHA. Identity,
+relationships, account sessions, recordings and exact media ranges survived the
+release cycle. Outage/HTTPS-role recovery, all Web/Redis/MySQL restarts and all-owner
+recording/media deletion passed afterwards. The driver exited 0 after private
+fixture retirement; it did not reuse original volumes or issue original DB writes.
+Publication proof uses unchanged fixed HTTPS verification with a private-CA
+synthetic CI/review fixture for real private Git objects, not public production CI.
+The native build stage now contains its Docker recipes so compilation-budget
+contract tests also run during immutable image builds. Both agent and operator
+archive allowlists include those exact committed recipes, not working-tree files.
+Earlier standalone release proof below predates these changes. Failed release
+maintenance was retained, and original development nodes were not redeployed.
+
+### Shared development host resource incident (2026-10-04)
+
+Running three acceptance drivers concurrently exhausted the 14 GiB host. Kernel
+records confirmed OOM kills. Original Master, Direct-1, Relay-1 and Relay-5 MySQL
+processes automatically restarted once; all ten original Web processes remained
+running without restart. A subsequent read-only inspection found every original
+Web and MySQL healthy. This health check is not proof of business-data integrity.
+No original service was explicitly replaced, and no original database mutation
+was issued by the acceptance drivers. The incident was nevertheless an impact
+on the original environment and must not be described as "untouched".
+
+Only the identified disposable drivers, 58 owned test containers and 13 empty
+owned networks were stopped/retired. Their data and images were retained; no
+global prune, volume deletion or original-project cleanup was performed.
+Native image compilation now uses build-only `GOMAXPROCS=2` and `-p=1` without
+changing runtime defaults. Further full acceptance drivers run serially on this
+host, with memory and original-service health checked between runs.
 
 A fresh actual native stack exposed a missing control-socket branch: direct
 daemon/executor tests could accept whole manifests, while the compiled Unix
@@ -121,9 +168,9 @@ The complete actual four-stack driver exited successfully; local full Go
 tests/vet and the Python suite (589 tests, four skips) also passed. The expanded
 native CI driver runs both wire forms on both stores under a 65-minute job limit.
 
-This is local native whole-manifest execution, not Python artifact execution or
-ten-node mixed-profile convergence. The unchecked mixed whole-release and
-portable physical restore/admission gates above remain open.
+That earlier standalone proof alone did not establish Python artifact execution
+or ten-node convergence; the later serial dual-direction run above does.
+Portable physical restore/admission remains a separate, unchecked future gate.
 
 ## Current verified slice (2026-10-01)
 

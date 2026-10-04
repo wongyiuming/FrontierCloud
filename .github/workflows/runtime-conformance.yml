@@ -16,6 +16,7 @@ on:
       - 'scripts/test-go-updater.sh'
       - 'scripts/build-native-images.sh'
       - 'scripts/test-mixed-runtime.sh'
+      - 'scripts/test-mixed-release.sh'
       - 'scripts/test-native-default.sh'
       - 'static/**'
       - 'go.mod'

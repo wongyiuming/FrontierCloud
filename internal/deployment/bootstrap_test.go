@@ -36,6 +36,7 @@ func TestBootstrapArchivesExactCommitAndRejectsMutableSelections(t *testing.T) {
 		}
 	}
 	fixture := map[string]string{
+		"Dockerfile":     "FROM committed-native\n",
 		"Dockerfile.gin": "FROM committed-native\n", "updater/Dockerfile.gin": "FROM committed-updater\n",
 		"nginx/Dockerfile": "FROM committed-edge\n", "go.mod": "module fixture\n", "go.sum": "committed-sum\n",
 		"cmd/entry.txt": "committed\n", "internal/core.txt": "committed\n", "migrations/schema.txt": "committed\n",
@@ -80,6 +81,9 @@ printf '%s\n' "$*" >> "$BOOTSTRAP_CAPTURE/args"
 dest=$(mktemp -d "$BOOTSTRAP_CAPTURE/archive-XXXXXXXX")
 tar xf - -C "$dest"
 test "$(cat "$dest/cmd/entry.txt")" = committed
+test "$(cat "$dest/Dockerfile")" = FROM\ committed-native
+test "$(cat "$dest/Dockerfile.gin")" = FROM\ committed-native
+test "$(cat "$dest/updater/Dockerfile.gin")" = FROM\ committed-updater
 for excluded in .env data .git app updater/server.py cmd/untracked.txt; do
   test ! -e "$dest/$excluded"
 done

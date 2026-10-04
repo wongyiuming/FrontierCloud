@@ -9,8 +9,13 @@ COPY internal ./internal
 COPY protocol ./protocol
 COPY migrations ./migrations
 COPY static ./static
-RUN CGO_ENABLED=0 /usr/local/go/bin/go test ./... && \
-    CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath -ldflags="-s -w" -o /out/frontiercloud ./cmd/frontiercloud
+# Keep deployment contract tests executable in the build stage only.
+COPY Dockerfile Dockerfile.gin ./
+COPY updater/Dockerfile.gin ./updater/Dockerfile.gin
+# Bound per-build package/compiler parallelism. Several independent node agents
+# may build on one Engine; inheriting every host CPU can exhaust host memory.
+RUN GOMAXPROCS=2 CGO_ENABLED=0 /usr/local/go/bin/go test -p=1 ./... && \
+    GOMAXPROCS=2 CGO_ENABLED=0 /usr/local/go/bin/go build -p=1 -trimpath -ldflags="-s -w" -o /out/frontiercloud ./cmd/frontiercloud
 
 FROM debian:13.3-slim
 ARG REVISION

@@ -45,6 +45,22 @@ func engineFixture(t *testing.T, handler http.HandlerFunc) *Engine {
 	return &Engine{client: client, version: "/v1.52"}
 }
 
+func TestDockerFailureContainsOnlyFixedOperationAndStatus(t *testing.T) {
+	e := engineFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "private credential and arbitrary daemon body", 500)
+	})
+	err := e.call(context.Background(), "GET", "/images/private-tag/json", nil, nil)
+	var failure *dockerFailure
+	if !errors.As(err, &failure) || failure.operation != "image-inspect" || failure.status != 500 || err.Error() != "Docker operation rejected" {
+		t.Fatal("Docker failure taxonomy changed", err)
+	}
+	for path, want := range map[string]string{"/containers/json?filters=private": "container-list", "/containers/private/exec": "exec-create", "/exec/private/start": "exec-start", "/exec/private/json": "exec-inspect", "/unknown-private-resource": "request"} {
+		if got := dockerOperation(path); got != want {
+			t.Fatal("private data leaked through operation classifier", got)
+		}
+	}
+}
+
 func TestSnapshotPreservesSecurityMountsResourcesAndConfiguredAliases(t *testing.T) {
 	c := sampleContainer()
 	body, err := c.createBody("frontiercloud-web:" + testTarget)

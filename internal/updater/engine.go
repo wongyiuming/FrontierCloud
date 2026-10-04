@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,38 @@ import (
 var ErrNotFound = errors.New("Docker object not found")
 var dockerID = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var dockerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+
+type dockerFailure struct {
+	operation string
+	status    int
+}
+
+func (e *dockerFailure) Error() string { return "Docker operation rejected" }
+func dockerOperation(path string) string {
+	path, _, _ = strings.Cut(path, "?")
+	switch {
+	case path == "/images/json":
+		return "image-list"
+	case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
+		return "image-inspect"
+	case path == "/containers/json":
+		return "container-list"
+	case path == "/containers/create":
+		return "container-create"
+	case strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json"):
+		return "container-inspect"
+	case strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/exec"):
+		return "exec-create"
+	case strings.HasPrefix(path, "/exec/") && strings.HasSuffix(path, "/start"):
+		return "exec-start"
+	case strings.HasPrefix(path, "/exec/") && strings.HasSuffix(path, "/json"):
+		return "exec-inspect"
+	case path == "/build":
+		return "build"
+	default:
+		return "request"
+	}
+}
 
 // Engine only talks to the configured local Unix socket; no proxy, redirect,
 // remote host selection, shell interpolation or Docker CLI is involved.
@@ -98,7 +132,7 @@ func (e *Engine) request(ctx context.Context, method, path string, body io.Reade
 		if r.StatusCode == 404 {
 			return nil, ErrNotFound
 		}
-		return nil, errors.New("Docker operation rejected")
+		return nil, &dockerFailure{operation: dockerOperation(path), status: r.StatusCode}
 	}
 	return r, nil
 }
@@ -388,7 +422,7 @@ func (e *Engine) Build(ctx context.Context, source Source, target, component, do
 		return "", err
 	}
 	defer archive.Close()
-	tag := "frontiercloud-" + component + ":" + target
+	tag := releaseImageTag(e.Project, target, component)
 	labels, _ := json.Marshal(map[string]string{"frontiercloud.revision": target, "frontiercloud.component": component, "frontiercloud.runtime": "go", "frontiercloud.schema-generation": "2", "frontiercloud.project": e.Project})
 	args, _ := json.Marshal(map[string]string{"REVISION": target, "FRONTIERCLOUD_RUNTIME": "go"})
 	query := url.Values{"dockerfile": {dockerfile}, "t": {tag}, "rm": {"true"}, "forcerm": {"true"}, "labels": {string(labels)}, "buildargs": {string(args)}, "version": {"1"}}
@@ -536,7 +570,15 @@ func (e *Engine) Helper(ctx context.Context, snapshot Container, image, name str
 	return id, e.Remove(ctx, id)
 }
 
-var releaseTag = regexp.MustCompile(`^frontiercloud-(web|nginx|updater):([a-f0-9]{40})$`)
+func projectTagHash(project string) string {
+	digest := sha256.Sum256([]byte(project))
+	return hex.EncodeToString(digest[:6])
+}
+func releaseImageTag(project, target, component string) string {
+	return "frontiercloud-" + component + ":" + target + "-" + projectTagHash(project)
+}
+
+var releaseTag = regexp.MustCompile(`^frontiercloud-(web|nginx|updater):([a-f0-9]{40})(?:-([a-f0-9]{12}))?$`)
 
 func (e *Engine) Cleanup(ctx context.Context, current, previous string) error {
 	if !release.ValidSHA(current) || !dockerName.MatchString(e.Project) || (previous != "" && !release.ValidSHA(previous)) {
@@ -550,6 +592,9 @@ func (e *Engine) Cleanup(ctx context.Context, current, previous string) error {
 		for _, tag := range image.RepoTags {
 			match := releaseTag.FindStringSubmatch(tag)
 			if match == nil || match[2] == current || match[2] == previous {
+				continue
+			}
+			if match[3] != "" && match[3] != projectTagHash(e.Project) {
 				continue
 			}
 			// Remove only our exact release tag, never an ID/shared tag/parent, and

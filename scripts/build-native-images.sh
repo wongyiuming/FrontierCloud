@@ -11,7 +11,7 @@ test "$(git rev-parse --verify "$revision^{commit}")" = "$revision"
 git cat-file -e "$revision:Dockerfile.gin"
 git cat-file -e "$revision:updater/Dockerfile.gin"
 # Never send .env, data, keys, untracked files, .git or mutable source changes.
-paths=(Dockerfile.gin go.mod go.sum cmd internal migrations protocol static nginx updater/Dockerfile.gin)
+paths=(Dockerfile Dockerfile.gin go.mod go.sum cmd internal migrations protocol static nginx updater/Dockerfile.gin)
 for component in web updater nginx; do
   case "$component" in
     web) dockerfile=Dockerfile.gin ;;

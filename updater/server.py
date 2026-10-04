@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import pathlib
@@ -37,7 +38,7 @@ RELEASE_BRANCH = "main"
 UPDATER_PROJECT = os.environ.get("UPDATER_PROJECT", "").strip()
 RELEASE_MANIFEST_VERSION = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-RELEASE_IMAGE_TAG_RE = re.compile(r"^frontiercloud-(?:web|nginx):([0-9a-f]{40})$")
+RELEASE_IMAGE_TAG_RE = re.compile(r"^frontiercloud-(?:web|nginx):([0-9a-f]{40})(?:-([0-9a-f]{12}))?$")
 TASKS: queue.Queue[tuple[str, str, bool, dict | None]] = queue.Queue(maxsize=1)
 WRITE_LOCK = threading.Lock()
 START_LOCK = threading.Lock()
@@ -270,6 +271,11 @@ def wait_healthy(container, timeout: int = 240) -> None:
     raise TimeoutError(f"{container.name} did not become healthy")
 
 
+def release_image_tag(target: str, component: str) -> str:
+    suffix = "-" + hashlib.sha256(UPDATER_PROJECT.encode()).hexdigest()[:12] if UPDATER_PROJECT else ""
+    return f"frontiercloud-{component}:{target}{suffix}"
+
+
 def build(engine, target: str) -> tuple[str, str]:
     # The native checkout's root recipe is Go. Select the explicit reference
     # recipe from the exact target; old main history retains its root recipe.
@@ -280,17 +286,22 @@ def build(engine, target: str) -> tuple[str, str]:
         contents = git("show", f"{target}:{recipe}")
     if not re.search(r"(?m)^FROM python:[^\s]+", contents):
         raise RuntimeError("reviewed target has no Python reference runtime recipe")
-    web_tag = f"frontiercloud-web:{target}"
-    nginx_tag = f"frontiercloud-nginx:{target}"
+    web_tag = release_image_tag(target,"web")
+    nginx_tag = release_image_tag(target,"nginx")
+    ownership = {}
+    if UPDATER_PROJECT:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", UPDATER_PROJECT):
+            raise RuntimeError("invalid updater project")
+        ownership["frontiercloud.project"] = UPDATER_PROJECT
     log(f"building web image {target}")
     engine.images.build(
         path=str(ROOT), dockerfile=recipe, tag=web_tag, rm=True, forcerm=True,
-        labels={"frontiercloud.revision": target, "frontiercloud.component": "web"},
+        labels={**ownership, "frontiercloud.revision": target, "frontiercloud.component": "web"},
     )
     log(f"building nginx image {target}")
     engine.images.build(
         path=str(ROOT), dockerfile="nginx/Dockerfile", tag=nginx_tag, rm=True, forcerm=True,
-        labels={"frontiercloud.revision": target, "frontiercloud.component": "nginx"},
+        labels={**ownership, "frontiercloud.revision": target, "frontiercloud.component": "nginx"},
     )
     return web_tag, nginx_tag
 
@@ -308,15 +319,36 @@ def release_image_revision(image) -> str:
 
 
 def cleanup_release_images(engine, keep: set[str]) -> None:
+    if UPDATER_PROJECT and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", UPDATER_PROJECT):
+        raise RuntimeError("invalid updater project")
     retained = {item for item in keep if SHA_RE.fullmatch(item)}
-    for image in engine.images.list():
+    try:
+        # The SDK inspects every listed image before returning the collection.
+        # A different project retiring a stale image can make global listing
+        # fail after this node's healthy generation has already committed.
+        # Filter on the full owner before those SDK inspections; collection
+        # failure is optional cleanup, never release/convergence failure.
+        images = engine.images.list(filters={"label": f"frontiercloud.project={UPDATER_PROJECT}"}) if UPDATER_PROJECT else engine.images.list()
+    except Exception as exc:
+        log(f"release image inventory skipped: {type(exc).__name__}")
+        return
+    for image in images:
         for raw_tag in getattr(image, "tags", []) or []:
             tag = str(raw_tag)
             matched = RELEASE_IMAGE_TAG_RE.fullmatch(tag)
             if not matched or matched.group(1) in retained:
                 continue
+            if matched.group(2) and (not UPDATER_PROJECT or matched.group(2) != hashlib.sha256(UPDATER_PROJECT.encode()).hexdigest()[:12]):
+                continue
+            if UPDATER_PROJECT:
+                labels = (getattr(image, "attrs", {}) or {}).get("Config", {}).get("Labels") or {}
+                component = tag.split(":", 1)[0].removeprefix("frontiercloud-")
+                if (labels.get("frontiercloud.project") != UPDATER_PROJECT
+                        or labels.get("frontiercloud.component") != component
+                        or labels.get("frontiercloud.revision") != matched.group(1)):
+                    continue
             try:
-                engine.images.remove(tag, force=False, noprune=False)
+                engine.images.remove(tag, force=False, noprune=bool(UPDATER_PROJECT))
                 log(f"removed stale release image {tag}")
             except Exception as exc:
                 log(f"release image cleanup skipped {tag}: {type(exc).__name__}: {exc}")

@@ -35,7 +35,7 @@ func gitFixture(t *testing.T) (Source, string, string) {
 	run(repo, "config", "user.email", "native-test@example.invalid")
 	for _, name := range archivePaths {
 		path := filepath.Join(repo, filepath.FromSlash(name))
-		if strings.Contains(name, ".") {
+		if name == "Dockerfile" || strings.Contains(name, ".") {
 			os.MkdirAll(filepath.Dir(path), 0750)
 			if err := os.WriteFile(path, []byte("tracked "+name), 0600); err != nil {
 				t.Fatal(err)

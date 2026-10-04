@@ -14,12 +14,14 @@ import (
 )
 
 type manifestCaller struct {
-	mu                                               sync.Mutex
-	manifest                                         Manifest
-	modes                                            map[string]string
-	starts                                           int
-	failed, old, wrongArtifact, wrongManifest, unack bool
-	before                                           func()
+	mu                                                 sync.Mutex
+	manifest                                           Manifest
+	modes                                              map[string]string
+	starts                                             int
+	failed, old, wrongArtifact, wrongManifest, unack   bool
+	before                                             func()
+	unavailable, outage, dropCapability, changeProfile bool
+	probes                                             map[string]bool
 }
 
 func (c *manifestCaller) Call(ctx context.Context, r store.Relationship, route string, value any) (map[string]any, error) {
@@ -55,6 +57,18 @@ func (c *manifestCaller) Call(ctx context.Context, r store.Relationship, route s
 		}
 		return map[string]any{"accepted": true, "release_id": id}, nil
 	}
+	if c.starts > 0 {
+		if c.outage || c.unavailable && !c.probes[r.ID] {
+			if c.probes == nil {
+				c.probes = map[string]bool{}
+			}
+			c.probes[r.ID] = true
+			return nil, errors.New("node control HTTP 503")
+		}
+		if c.changeProfile {
+			branch = map[string]string{"main": "gin_main", "gin_main": "main"}[branch]
+		}
+	}
 	state := "success"
 	if c.failed {
 		state = "failed"
@@ -68,7 +82,7 @@ func (c *manifestCaller) Call(ctx context.Context, r store.Relationship, route s
 		current.ReleaseVersion = "other"
 	}
 	out := map[string]any{"status": map[string]any{"release_branch": branch, "state": state, "current_sha": sha, "current_manifest": current, "target_manifest": m}, "capabilities": []string{ManifestCapability}}
-	if c.old {
+	if c.old || c.dropCapability && c.starts > 0 {
 		delete(out, "capabilities")
 	}
 	return out, nil
@@ -77,7 +91,7 @@ func jsonValue(raw []byte) any { var value any; _ = json.Unmarshal(raw, &value);
 
 func TestManifestConvergenceDistinctPrivateArtifactsCapabilitiesAndWholeDigest(t *testing.T) {
 	m := sharedManifest(t)
-	for _, kind := range []string{"success", "old-peer", "failed", "wrong-artifact", "wrong-manifest", "unacknowledged", "reset"} {
+	for _, kind := range []string{"success", "handoff-socket", "handoff-outage", "capability-drop", "profile-change", "old-peer", "failed", "wrong-artifact", "wrong-manifest", "unacknowledged", "reset"} {
 		t.Run(kind, func(t *testing.T) {
 			nodes := &fixtureNodes{identity: store.NodeIdentity{ID: strings.Repeat("a", 32), Role: "Master"}}
 			caller := &manifestCaller{manifest: m, modes: map[string]string{}}
@@ -91,6 +105,14 @@ func TestManifestConvergenceDistinctPrivateArtifactsCapabilitiesAndWholeDigest(t
 				caller.modes[r.ID] = branch
 			}
 			switch kind {
+			case "handoff-socket":
+				caller.unavailable = true
+			case "handoff-outage":
+				caller.outage = true
+			case "capability-drop":
+				caller.dropCapability = true
+			case "profile-change":
+				caller.changeProfile = true
 			case "old-peer":
 				caller.old = true
 			case "failed":
@@ -105,18 +127,22 @@ func TestManifestConvergenceDistinctPrivateArtifactsCapabilitiesAndWholeDigest(t
 				caller.before = func() { nodes.mu.Lock(); nodes.identity.Role = "Standalone"; nodes.mu.Unlock() }
 			}
 			deadline := 2 * time.Second
-			if kind == "wrong-artifact" || kind == "wrong-manifest" {
+			if kind == "wrong-artifact" || kind == "wrong-manifest" || kind == "handoff-outage" {
 				deadline = 200 * time.Millisecond
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), deadline)
 			defer cancel()
 			coordinator := Coordinator{Nodes: nodes, Control: caller, Policy: Policy{"gin_main", "gin_dev"}}
 			err := coordinator.convergeManifest(ctx, m, "upgrade", time.Millisecond)
-			if (err == nil) != (kind == "success") {
+			success := kind == "success" || kind == "handoff-socket"
+			if (err == nil) != success {
 				t.Fatal(kind, err)
 			}
-			if kind == "success" && caller.starts != 9 {
+			if success && caller.starts != 9 {
 				t.Fatal("missing peers", caller.starts)
+			}
+			if kind == "handoff-socket" && len(caller.probes) != 9 {
+				t.Fatal("socket gap did not exercise every private profile")
 			}
 			if (kind == "old-peer" || kind == "reset") && caller.starts != 0 {
 				t.Fatal("dispatched before complete capability/authority preflight")

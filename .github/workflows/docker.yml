@@ -93,6 +93,21 @@ jobs:
       - name: Verify four actual private-CA mixed fleets with 3 Direct and 6 Relay
         run: bash scripts/test-mixed-runtime.sh
 
+  test-mixed-release:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/gin_dev') ||
+      (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/gin_')) ||
+      (github.event_name == 'merge_group' && github.event.merge_group.base_ref == 'refs/heads/gin_main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      group: mixed-release-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify real mixed-profile whole-release upgrade, handoff and rollback in both Master directions
+        run: bash scripts/test-mixed-release.sh
+
   promote-main:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
