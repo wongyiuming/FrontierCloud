@@ -9,6 +9,9 @@ reference_agent="frontiercloud-reference-agent-test:$prefix"
 printf 'Private acceptance workspace: %s\nPrivate acceptance project: %s\n' "$work" "$prefix"
 docker build -f Dockerfile.gin --target build -t "$driver" .
 docker build -f updater/Dockerfile -t "$reference_agent" .
+# The fleet creates these fixtures through the Engine API, which does not pull.
+docker pull mysql:8.4.11
+docker pull redis:7.4.11-alpine
 docker run --rm -e GOMAXPROCS=2 --name "$prefix-driver" \
   --label "frontiercloud.acceptance=$prefix" \
   --label "frontiercloud.updater-acceptance=$work" \

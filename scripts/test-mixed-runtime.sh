@@ -28,6 +28,10 @@ else
     test "$(docker image inspect --format '{{index .Config.Labels "frontiercloud.revision"}}' "$item")" = "$revision"
   done
 fi
+# Engine Create does not pull images. Provision the shared fixtures explicitly
+# so a fresh runner behaves like a development engine with cached images.
+docker pull mysql:8.4.11
+docker pull redis:7.4.11-alpine
 docker run --rm --name "$prefix-driver" --label "frontiercloud.acceptance=$prefix" \
   -v "$PWD:/src:ro" -v "$work:$work" \
   -v /var/run/docker.sock:/var/run/docker.sock \
