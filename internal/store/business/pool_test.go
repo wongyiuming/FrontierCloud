@@ -135,6 +135,30 @@ func TestMasterPromotionStableIdentityAllocationAndFollowerCapacity(t *testing.T
 			t.Fatalf("offline storage %+v", member)
 		}
 	}
+	// An imported Python Master can retain retired worker metadata. Updating
+	// a relationship must not erase it or re-enable the retired compute API.
+	legacyCapabilities := `["hash","probe","metadata"]`
+	if _, err = sqlDB.Exec("UPDATE cluster_compute_members SET enabled=1,worker_slots=4,available_slots=3,cpu_percent=29,memory_available_bytes=1024,capabilities=? WHERE member_id=?", legacyCapabilities, memberID); err != nil {
+		t.Fatal(err)
+	}
+	for _, online := range []bool{true, false} {
+		if err = nodes.RecordHeartbeat(ctx, v.ID, online, 8, map[string]any{"compute": map[string]any{"enabled": false, "worker_slots": 0}}, time.Now().Unix()); err != nil {
+			t.Fatal(err)
+		}
+		var enabled, slots, available, cpu int
+		var memory int64
+		var capabilities string
+		if err = sqlDB.QueryRow("SELECT enabled,worker_slots,available_slots,cpu_percent,memory_available_bytes,capabilities FROM cluster_compute_members WHERE member_id=?", memberID).Scan(&enabled, &slots, &available, &cpu, &memory, &capabilities); err != nil {
+			t.Fatal(err)
+		}
+		if enabled != 1 || slots != 4 || available != 3 || cpu != 29 || memory != 1024 || capabilities != legacyCapabilities {
+			t.Fatalf("heartbeat rewrote imported metadata: %d %d %d %d %d %q", enabled, slots, available, cpu, memory, capabilities)
+		}
+		desired, err = pool.MemberConfiguration(ctx, memberID)
+		if err != nil || desired.Compute.Enabled || desired.Compute.Slots != 0 {
+			t.Fatalf("historical flags enabled retired compute: %+v %v", desired, err)
+		}
+	}
 }
 
 func TestFollowerConfigurationPreservesReservationsAndBackupReady(t *testing.T) {

@@ -115,7 +115,11 @@ func (r *Repository) registerFollower(ctx context.Context, q queryer, v store.Re
 	if err = r.initializeAuxMembers(ctx, q, current.ID, current.UpdatedAt); err != nil {
 		return err
 	}
-	_, err = q.ExecContext(ctx, "UPDATE cluster_compute_members SET enabled=0,worker_slots=0,available_slots=0,updated_at=? WHERE member_id=?", current.UpdatedAt, current.ID)
+	// Heartbeats are observations, not permission to rewrite imported legacy
+	// configuration. New members already default to disabled above. Retired
+	// compute remains disabled in MemberConfiguration and the control API even
+	// when historical flags/slots are retained for lossless runtime migration.
+	_, err = q.ExecContext(ctx, "UPDATE cluster_compute_members SET updated_at=? WHERE member_id=?", current.UpdatedAt, current.ID)
 	return err
 }
 func (r *Repository) adoptLocal(ctx context.Context, q queryer, node store.NodeIdentity, physicalUsed, physicalFree int64, items []store.LocalMedia, allocation int64) error {
