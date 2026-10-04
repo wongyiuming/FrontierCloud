@@ -251,6 +251,7 @@ func (f *fleetJointRelease) execute(t *testing.T, ctx context.Context, e *Engine
 			m = f.source.next(t)
 			f.writeManifest(t, m)
 		}
+		releaseStarted := time.Now().Unix()
 		if step.mode == "upgrade" {
 			// Publication HEAD verification deliberately retains a one-minute
 			// forced-refresh floor. Await admission; never bypass its cache or
@@ -364,12 +365,93 @@ func (f *fleetJointRelease) execute(t *testing.T, ctx context.Context, e *Engine
 				}
 			}
 		}
-		t.Log("real mixed whole manifest, privately selected artifacts and compiled/live agent convergence", step.mode, m.ReleaseVersion)
+		// Agent/image convergence is not peer readiness. A simultaneous release
+		// can finish between a failed outbound probe and the next 30s heartbeat.
+		// Require actual fresh authenticated reachability and all original stores,
+		// without retrying or weakening the subsequent business-byte assertions.
+		readyDeadline := time.Now().Add(90 * time.Second)
+		for {
+			status := perform(sites[0], "GET", "/nodes", nil)
+			pool := perform(sites[0], "GET", "/storage-pool", nil)
+			if fleetBusinessReady(status, pool, identities, releaseStarted) {
+				break
+			}
+			if ctx.Err() != nil || time.Now().After(readyDeadline) {
+				t.Fatal("whole release did not recover fresh heartbeats and all original storage members", step.mode, m.ReleaseVersion)
+			}
+			time.Sleep(time.Second)
+		}
+		t.Log("real mixed whole manifest, privately selected artifacts, compiled/live agents and storage heartbeat convergence", step.mode, m.ReleaseVersion)
 	}
 	for _, m := range []*release.Manifest{f.initial, f.source.current} {
 		for _, a := range m.Artifacts {
 			f.publication.assertProofs(t, a.CommitSHA)
 		}
+	}
+}
+
+func fleetBusinessReady(status, pool map[string]any, identities []string, since int64) bool {
+	rows, ok := status["relationships"].([]any)
+	if !ok || len(rows) != len(identities)-1 {
+		return false
+	}
+	peers := map[string]bool{}
+	for _, raw := range rows {
+		row, ok := raw.(map[string]any)
+		if !ok {
+			return false
+		}
+		peer, _ := row["peer_id"].(string)
+		last, ok := row["last_heartbeat"].(json.Number)
+		stamp, err := last.Int64()
+		if !ok || err != nil || stamp < since || row["state"] != "active" || row["status"] != "online" || peer == "" || peers[peer] {
+			return false
+		}
+		peers[peer] = true
+	}
+	members, ok := pool["members"].([]any)
+	if !ok {
+		return false
+	}
+	stores := map[string]bool{}
+	for _, raw := range members {
+		member, ok := raw.(map[string]any)
+		if !ok {
+			return false
+		}
+		id, _ := member["member_id"].(string)
+		if id != "" && member["health"] == "online" {
+			stores[id] = true
+		}
+	}
+	for i, id := range identities {
+		if id == "" || !stores[id] || i > 0 && !peers[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestFleetBusinessReadyRequiresFreshReachabilityAndOriginalStores(t *testing.T) {
+	identities := []string{"master", "follower"}
+	relation := map[string]any{"peer_id": "follower", "state": "active", "status": "online", "last_heartbeat": json.Number("100")}
+	member := map[string]any{"member_id": "follower", "health": "online"}
+	status := map[string]any{"relationships": []any{relation}}
+	pool := map[string]any{"members": []any{map[string]any{"member_id": "master", "health": "online"}, member}}
+	if !fleetBusinessReady(status, pool, identities, 100) {
+		t.Fatal("fresh original fleet rejected")
+	}
+	for _, field := range []string{"status", "state", "last_heartbeat", "peer_id"} {
+		old := relation[field]
+		relation[field] = map[string]any{"status": "offline", "state": "revoked", "last_heartbeat": json.Number("99"), "peer_id": "replacement"}[field]
+		if fleetBusinessReady(status, pool, identities, 100) {
+			t.Fatal("unready or replaced peer accepted", field)
+		}
+		relation[field] = old
+	}
+	member["health"] = "offline"
+	if fleetBusinessReady(status, pool, identities, 100) {
+		t.Fatal("offline recording store accepted")
 	}
 }
 
