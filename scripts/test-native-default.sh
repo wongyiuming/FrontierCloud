@@ -78,7 +78,10 @@ for database in sqlite mysql; do
   compose stop web
   compose rm -f web
   ip_holder="$project-ip-holder"
-  docker run -d --name "$ip_holder" --network "${project}_default" --ip "$old_ip" \
+  # Let the Engine allocate the holder address. Engines with automatic IPAM
+  # reject --ip on their default subnet; consuming the next free address works
+  # with both first-free and sequential allocators. Assert actual change below.
+  docker run -d --name "$ip_holder" --network "${project}_default" \
     --entrypoint /bin/sleep "frontiercloud-go-nginx:$revision" 120 >/dev/null
   compose up -d --no-build --no-deps --wait --wait-timeout 180 web
   new_ip=$(docker inspect --format "{{with index .NetworkSettings.Networks \"${project}_default\"}}{{.IPAddress}}{{end}}" "$(compose ps -q web)")
