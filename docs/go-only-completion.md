@@ -121,6 +121,34 @@ recording/media deletion passed afterwards. The driver exited 0 after private
 fixture retirement; it did not reuse original volumes or issue original DB writes.
 Publication proof uses unchanged fixed HTTPS verification with a private-CA
 synthetic CI/review fixture for real private Git objects, not public production CI.
+After those mixed fleets retired, the four actual native standalone stacks passed
+serially again under the bounded race driver. Evidence is
+`/tmp/fc-native-verify-0920e22343c747159d979ea9dbea0b67.log`: SQLite single-SHA
+484.17s / whole-manifest 487.91s; MySQL single-SHA 493.05s / whole-manifest
+513.77s. Both driver invocations exited 0. These checks include non-root control
+socket access, exact image/runtime proof, absence of Python in Web/updater,
+rollback maintenance reopening and selected-store independence. Whole-manifest
+checks additionally retain history without replacing an unchanged native artifact
+and reject the wrong reviewed tree before service replacement.
+Finally, the operator's exact-commit allowlist rebuilt all three native images
+from private commit `42f58b345e7e9a01b1707abbfd231946ccb4f12f`. Default SQLite and
+root-plus-MySQL Compose stacks both passed native initializer/PID checks, absence
+of Python and updater Docker CLI, UID/GID/control-socket boundaries, immutable
+labels, SQLite mode 0600 / no MySQL service, MySQL / no authoritative SQLite file,
+and Redis/database/Web restart with the sealed identity receipt preserved.
+Evidence: `/tmp/fc-default-verify-f1de6462ca874d1b8cfef11a65523294.log`, exit 0.
+Only the newly created default-test projects and their disposable named volumes
+were retired; private host diagnostic directories and images remain recoverable.
+Final inspection found only the original ten development outer containers
+running, all original Web/MySQL healthy, unchanged restart counts, and no new
+kernel OOM record since the serial acceptance run began.
+
+The only-Go implementation gate is now satisfied for fresh native deployments.
+The unchecked physical restore/historical admission item is future migration
+work, not a claim that existing Python cluster volumes can already be switched.
+Schema migration, initializers and maintenance commands are native Go; changing
+`.env` is still not data migration. No production branch promotion, push or
+published CI/review proof was performed by these private acceptance fixtures.
 The native build stage now contains its Docker recipes so compilation-budget
 contract tests also run during immutable image builds. Both agent and operator
 archive allowlists include those exact committed recipes, not working-tree files.
@@ -172,7 +200,7 @@ That earlier standalone proof alone did not establish Python artifact execution
 or ten-node convergence; the later serial dual-direction run above does.
 Portable physical restore/admission remains a separate, unchecked future gate.
 
-## Current verified slice (2026-10-01)
+## Historical verified slice (2026-10-01)
 
 The Go runtime currently supports Standalone public media pages/catalog,
 local streaming with Nginx acceleration (or Go Range serving), playback

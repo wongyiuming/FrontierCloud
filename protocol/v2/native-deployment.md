@@ -67,8 +67,10 @@ exists in the Web/updater and MySQL does not create an authoritative SQLite DB.
 Compose build labels by themselves do not prove that a mutable build context
 matches the supplied SHA. Reviewed production artifacts require immutable Git
 archive builds and exact CI evidence; the updater already uses that boundary.
-Portable physical restore and actual mixed-profile release execution remain
-separate gates. Do not apply a fresh native profile to historical ten-node
+Actual mixed-profile release execution has since passed serial private Go/SQLite
+and Python/MySQL Master fleets, including upgrade, rollback and core restart;
+see `docs/go-only-completion.md`. Portable physical restore and historical
+admission remain separate future gates. Do not apply a fresh native profile to historical ten-node
 volumes to bypass admission or ownership proof.
 
 ## Native role restart provenance
