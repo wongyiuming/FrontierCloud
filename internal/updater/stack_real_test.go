@@ -182,9 +182,7 @@ func testRealNativeUpdaterStack(t *testing.T, whole bool) {
 				e.Remove(cleanup, c.ID)
 			}
 		}
-		for _, ref := range images {
-			e.call(cleanup, "DELETE", "/images/"+ref+"?force=false&noprune=true", nil, nil)
-		}
+		retireNativeFixtureImages(cleanup, e, images)
 		if networkID != "" {
 			e.call(cleanup, "DELETE", "/networks/"+networkID, nil, nil)
 		}
@@ -370,7 +368,7 @@ func testRealNativeUpdaterStack(t *testing.T, whole bool) {
 	target := git("rev-parse", "HEAD")
 	git("push", "origin", "gin_main")
 	for _, component := range []string{"web", "nginx", "updater"} {
-		images = append(images, "frontiercloud-"+component+":"+target)
+		images = append(images, releaseImageTag(prefix, target, component))
 	}
 	request := map[string]any{"action": "start", "target_sha": target, "mode": "upgrade", "hold_maintenance": false}
 	if whole {
@@ -473,4 +471,20 @@ func testRealNativeUpdaterStack(t *testing.T, whole bool) {
 		t.Fatal("SQLite fixture launched a MySQL service")
 	}
 	t.Log("native stack upgrade, immutable updater handoff and rollback verified", prefix, database)
+}
+
+func retireNativeFixtureImages(ctx context.Context, e *Engine, refs []string) {
+	for _, ref := range refs {
+		match := releaseTag.FindStringSubmatch(ref)
+		if match == nil || match[3] != projectTagHash(e.Project) {
+			continue
+		}
+		image, err := e.Image(ctx, ref, match[2], match[1])
+		if err != nil || image.Config.Labels["frontiercloud.project"] != e.Project {
+			continue
+		}
+		// Namespace alone is not ownership. Retire only the exact proven tag,
+		// never a shared ID, parent, volume or in-use image.
+		e.call(ctx, "DELETE", "/images/"+ref+"?force=false&noprune=true", nil, nil)
+	}
 }

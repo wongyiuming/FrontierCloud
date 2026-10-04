@@ -90,3 +90,42 @@ func TestProjectImageTagsStayBoundedAndCleanupCannotCrossNamespaces(t *testing.T
 		t.Fatal("scoped image cleanup changed ownership", err, removed)
 	}
 }
+
+func TestNativeFixtureRetirementRequiresNamespaceAndFullImmutableOwner(t *testing.T) {
+	project := "fc-native-stack-" + strings.Repeat("a", 24)
+	own := releaseImageTag(project, testTarget, "web")
+	wrongOwner := releaseImageTag(project, testTarget, "nginx")
+	missing := releaseImageTag(project, testTarget, "updater")
+	foreign := releaseImageTag("other-project", testTarget, "web")
+	var removed []string
+	e := engineFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		ref := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1.52/images/"), "/json")
+		if ref == foreign || ref == "frontiercloud-web:"+testTarget {
+			t.Error("foreign/legacy namespace inspected", ref)
+		}
+		if r.Method == "DELETE" {
+			if ref != own || r.URL.Query().Get("force") != "false" || r.URL.Query().Get("noprune") != "true" {
+				t.Error("fixture retirement crossed proven scope", ref)
+			}
+			removed = append(removed, ref)
+			w.WriteHeader(204)
+			return
+		}
+		if ref == missing {
+			w.WriteHeader(404)
+			return
+		}
+		match := releaseTag.FindStringSubmatch(ref)
+		image := Image{ID: "sha256:" + strings.Repeat("b", 64)}
+		image.Config.Labels = map[string]string{"frontiercloud.revision": match[2], "frontiercloud.component": match[1], "frontiercloud.runtime": "go", "frontiercloud.schema-generation": "2", "frontiercloud.project": project}
+		if ref == wrongOwner {
+			image.Config.Labels["frontiercloud.project"] = "other-project"
+		}
+		_ = json.NewEncoder(w).Encode(image)
+	})
+	e.Project = project
+	retireNativeFixtureImages(context.Background(), e, []string{own, wrongOwner, missing, foreign, "frontiercloud-web:" + testTarget})
+	if len(removed) != 1 || removed[0] != own {
+		t.Fatal("fixture retirement lacked exact owner proof", removed)
+	}
+}
