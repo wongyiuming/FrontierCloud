@@ -12,6 +12,7 @@ import (
 	"github.com/wongyiuming/FrontierCloud/internal/deployment"
 	"github.com/wongyiuming/FrontierCloud/internal/filelease"
 	"github.com/wongyiuming/FrontierCloud/internal/fsutil"
+	"github.com/wongyiuming/FrontierCloud/internal/maintenance"
 )
 
 const runtimeReceipt = ".native-runtime"
@@ -33,7 +34,41 @@ func (n *Identity) RecordNativeRuntime(ctx context.Context, directory string) er
 	return n.runtimeAdmission(ctx, directory, true)
 }
 
+// AdmitVerifiedMaster is an offline operator boundary, not a startup option.
+// The verifier must acquire an authoritative database write fence and compare
+// the full stopped source with a restored recovery artifact. Its release is
+// held through durable receipt publication. A closed local maintenance gate
+// alone does NOT fence legacy/remote writers. Neither nil nor failed proof can
+// grant authority, and existing foreign/malformed receipts remain fail-closed.
+func (n *Identity) AdmitVerifiedMaster(ctx context.Context, directory string, verify func(context.Context) (func(), error)) error {
+	if n == nil || n.Role != "Master" || verify == nil {
+		return ErrRuntimeAdmission
+	}
+	gate, err := maintenance.Open(directory)
+	if err != nil {
+		return err
+	}
+	defer gate.Close()
+	return gate.Inspect(ctx, func(ctx context.Context) error {
+		release, err := verify(ctx)
+		if release != nil {
+			defer release()
+		}
+		if err != nil {
+			return err
+		}
+		if release == nil {
+			return ErrRuntimeAdmission
+		}
+		return n.publishAdmission(ctx, directory, true, true)
+	})
+}
+
 func (n *Identity) runtimeAdmission(ctx context.Context, directory string, publish bool) error {
+	return n.publishAdmission(ctx, directory, publish, false)
+}
+
+func (n *Identity) publishAdmission(ctx context.Context, directory string, publish, verifiedMaster bool) error {
 	if n == nil || n.vault == nil || !ValidIdentifier(n.ID) || (n.Role != "Standalone" && n.Role != "Master" && n.Role != "Follower") {
 		return ErrRuntimeAdmission
 	}
@@ -102,7 +137,7 @@ func (n *Identity) runtimeAdmission(ctx context.Context, directory string, publi
 	prefix := "frontiercloud-native-runtime-v1\n" + string(binding)
 	raw, err := read(runtimeReceipt, 4096)
 	if errors.Is(err, os.ErrNotExist) {
-		if n.Role != "Standalone" {
+		if n.Role != "Standalone" && !(verifiedMaster && n.Role == "Master") {
 			return ErrRuntimeAdmission
 		}
 	} else if err != nil {

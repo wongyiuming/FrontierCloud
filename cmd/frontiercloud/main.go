@@ -78,6 +78,8 @@ func command(arguments []string) error {
 		return cleanupBackupCacheCommand(arguments[1:], os.Stdout)
 	case "maintenance":
 		return maintenanceCommand(arguments[1:], os.Stdout)
+	case "master-migration":
+		return masterMigrationCommand(arguments[1:], os.Stdout)
 	case "adopt-storage":
 		return adoptStorageCommand(arguments[1:], os.Stdout)
 	case "adopt-recordings":

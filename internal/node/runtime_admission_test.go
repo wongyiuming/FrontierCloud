@@ -39,6 +39,57 @@ func admissionFixture(t *testing.T) (string, *Identity) {
 	return dir, n
 }
 
+func TestOfflineMasterAdmissionRequiresClosedFenceSuccessfulHeldProof(t *testing.T) {
+	dir, n := admissionFixture(t)
+	n.Role = "Master"
+	ctx := context.Background()
+	called, released := false, false
+	proof := func(context.Context) (func(), error) {
+		called = true
+		return func() {
+			released = true
+			if err := n.CheckNativeRuntime(ctx, dir); err != nil {
+				t.Error("write fence released before durable receipt", err)
+			}
+		}, nil
+	}
+	if err := n.AdmitVerifiedMaster(ctx, dir, proof); err == nil || called {
+		t.Fatal("open gate granted migration authority")
+	}
+	g, err := maintenance.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	if err := g.Enter(ctx, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for _, verify := range []func(context.Context) (func(), error){nil, func(context.Context) (func(), error) { return nil, errors.New("mismatch") }, func(context.Context) (func(), error) { return nil, nil }} {
+		if err := n.AdmitVerifiedMaster(ctx, dir, verify); err == nil {
+			t.Fatal("unproven migration accepted")
+		}
+		if err := n.CheckNativeRuntime(ctx, dir); !errors.Is(err, ErrRuntimeAdmission) {
+			t.Fatal("failed proof published receipt", err)
+		}
+	}
+	if err := n.AdmitVerifiedMaster(ctx, dir, proof); err != nil || !called || !released {
+		t.Fatal("verified offline admission failed", err)
+	}
+	if enabled, err := g.Enabled(); err != nil || !enabled {
+		t.Fatal("admission reopened maintenance", err)
+	}
+	previous := n.ID
+	n.ID = strings.Repeat("f", 32)
+	if err := n.AdmitVerifiedMaster(ctx, dir, func(context.Context) (func(), error) { return func() {}, nil }); !errors.Is(err, ErrRuntimeAdmission) {
+		t.Fatal("migration overwrote foreign identity receipt", err)
+	}
+	n.ID = previous
+	n.Role = "Follower"
+	if err := n.AdmitVerifiedMaster(ctx, dir, proof); !errors.Is(err, ErrRuntimeAdmission) {
+		t.Fatal("Master migration admitted Follower", err)
+	}
+}
+
 func TestNativeRuntimeReceiptRequiresCompletedStartupAndPreservesRoleFence(t *testing.T) {
 	dir, n := admissionFixture(t)
 	ctx := context.Background()
