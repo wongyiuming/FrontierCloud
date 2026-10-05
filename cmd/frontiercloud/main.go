@@ -80,6 +80,8 @@ func command(arguments []string) error {
 		return maintenanceCommand(arguments[1:], os.Stdout)
 	case "master-migration":
 		return masterMigrationCommand(arguments[1:], os.Stdout)
+	case "master-to-sqlite":
+		return masterToSQLiteCommand(arguments[1:], os.Stdout)
 	case "adopt-storage":
 		return adoptStorageCommand(arguments[1:], os.Stdout)
 	case "adopt-recordings":
