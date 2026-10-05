@@ -119,58 +119,50 @@ These scripts create private fixtures, not permission to redeploy existing nodes
 
 ## 6. CI topology
 
-Main workflow:
+All hosted CI jobs have an explicit maximum of **three minutes**. Test jobs
+have a 150-second inner deadline; promotion/policy jobs stay at one or two
+minutes. Jobs run independently, without serial build/test chains.
 
-```text
-.github/workflows/docker.yml
+The source gate in `.github/workflows/docker.yml` checks repository/release
+policy, the one-core boundary, syntax and lightweight frontend contracts.
+`runtime-conformance.yml` validates protocol JSON and canonical schema assets.
+`scripts/check_ci_budget.py` rejects missing/extended/dynamic job timeouts,
+heavy integration commands and serial job chains. Regression tests cover it.
+
+Hosted CI does **not** build runtime images, launch MySQL/Redis/browser fixtures,
+or run private-CA ten-node mixed fleets, upgrades, rollbacks or race suites.
+Those checks execute directly on the operator-provided development host,
+**not** through a self-hosted Actions runner or a detached CI background job:
+
+```bash
+bash scripts/test-store-interop.sh
+bash scripts/test-go-business.sh
+bash scripts/test-go-deployment.sh
+FRONTIERCLOUD_REVISION="$(git rev-parse HEAD)" bash scripts/test-native-default.sh
+bash scripts/test-go-updater.sh
+bash scripts/test-mixed-runtime.sh
+bash scripts/test-mixed-release.sh
 ```
 
-Native `gin_dev` gates are `test-native` (real drivers/race, four Compose
-selections, immutable default bootstrap and both-store upgrade/handoff/rollback)
-and `test-mixed-runtime` (four fresh private-CA fleets, each 1 Master / 3 Direct /
-6 Relay, with actual control/media/recordings/backup and durable restarts).
-The reference gates below explicitly select Python/MySQL, never implicitly rely
-on a Python root Dockerfile:
+Use disposable, egress-isolated fixtures. Preserve the exact immutable source
+SHA, image digests, command logs, start/end times and actual results on that
+host. Existing production/development nodes are not disposable test fixtures.
+A fast green hosted CI run is **not** proof that these acceptance checks passed
+and is never sufficient by itself to authorize a production migration or merge.
+Reviewed source provenance, matching development-host acceptance evidence,
+backup/recovery proof and explicit operator approval remain release conditions.
 
-```text
-verify-promotion-query
-browser-ui
-test-cluster
-        |
-        +------+
-               v
-          test-compose
-```
+The previous native jobs with 65/120-minute limits and the 25-minute real-store
+job violated the operator's CI budget. They are removed, not shortened while
+silently retaining workloads that cannot fit. Original main/dev branch changes
+require the separately approved branch promotion; no merge is implicit here.
 
-### verify-promotion-query
+### One-core compute boundary
 
-Validates the exact `dev` SHA workflow query relied on by release verification.
-
-### browser-ui
-
-Starts a real application stack and runs Chromium regression tests. This protects real DOM behavior, visual/module ordering, browser interactions, and dynamic modules that source-string tests cannot reliably prove.
-
-### test-cluster
-
-Builds the same application across exactly three verified HTTPS nodes: one Master, one Direct Follower, and one Relay Follower. It exercises role fixing, pairing, heartbeat, Storage/transport behavior, control APIs, and Follower acceptance. The persistent 1 Master + 3 Direct + 6 Relay development environment is a separate destructive/CD acceptance surface and must not be copied into CI.
-
-### test-compose
-
-Runs/aggregates:
-
-- source configuration contracts;
-- frontend syntax;
-- Docker Compose build/start;
-- unit/runtime tests;
-- IP/edge/security tests;
-- public and Admin flows;
-- cleanup.
-
-## One-core compute boundary
-
-Burst and sustained high-load computation are outside FrontierCloud's product boundary. A change must be rejected if it adds runtime transcoding, compression, inference, bulk transformation, child-process execution, executor offload, or a compute-heavy dependency. There is no exception list or percentage allowance for these features.
-
-CI checks the boundary before building, runs Web with one CPU, and places a 120-second hard timeout around runtime tests. A timeout fails CI and the failure handler stops the Web fixture before final cleanup. After business flows, Web must fall below 20% of one core for five consecutive samples within 30 seconds. The wider wall-clock window accounts for `docker stats --no-stream` sampling latency and a late isolated scheduling spike without relaxing the five-consecutive-sample requirement. This recovery test detects a runaway or continuously worsening CPU condition; it does not make computation acceptable merely because one sample is below 20%.
+Run `scripts/check_cpu_boundary.py` in fast CI. Exercise runtime CPU recovery on
+the development host with bounded fixtures and `scripts/check_cpu_quiescence.py`.
+Linux load average, CPU utilization, memory PSI and swap usage are separate
+signals; a runtime-language change alone does not demonstrate pressure relief.
 
 ## 7. Exact-SHA rule
 

@@ -97,9 +97,8 @@ require('github.paginate' not in workflow,
 require('promote-gin-main:' in workflow and "pr?.merge_commit_sha === target" in workflow
         and "pr?.base?.ref === 'gin_main'" in workflow and "pr?.head?.ref === 'gin_dev'" in workflow,
         "Native promotion must require the exact reviewed native branch pair")
-require('test-native:' in workflow and 'bash scripts/test-go-deployment.sh' in workflow
-        and 'bash scripts/test-go-updater.sh' in workflow,
-        "Native source push must verify deployment selection and real Go updater")
+require('test-native:' in workflow and 'bash scripts/test-ci-source.sh' in workflow,
+        "Native source push must retain bounded source checks; full acceptance belongs on the development host")
 require("github.event_name != 'pull_request' || github.head_ref != 'dev'" not in workflow,
         "Full CI must not rerun automatically on main")
 
@@ -126,8 +125,9 @@ require('command: [init-secrets]' in compose and 'command: [init-media]' in comp
 require('RELEASE_BRANCH: ${RELEASE_BRANCH:-gin_main}' in compose
         and 'RELEASE_SOURCE_BRANCH: ${RELEASE_SOURCE_BRANCH:-gin_dev}' in compose,
         "Native default must retain the fixed native release profile")
-require('test-mixed-runtime:' in workflow and 'bash scripts/test-mixed-runtime.sh' in workflow,
-        "Native source CI must include all four real mixed-runtime fleets")
+from scripts.check_ci_budget import check_workflows
+require(not check_workflows(ROOT / '.github/workflows'),
+        "All CI jobs must stay within three minutes and exclude heavyweight acceptance")
 require('image: coturn/coturn:4.17.2-r0-alpine' in compose,
         "Coturn image must remain patch-pinned")
 require('image: redis:7-alpine' not in compose,

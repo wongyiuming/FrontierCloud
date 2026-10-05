@@ -44,10 +44,8 @@ concurrency:
 jobs:
   protocol-and-stores:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-      - name: Verify shared protocol and four database combinations
-        run: bash scripts/test-store-interop.sh
-      - name: Verify real Go business repositories and authentication
-        run: bash scripts/test-go-business.sh
+      - name: Bounded shared schema and protocol asset checks only
+        run: timeout --signal=TERM --kill-after=5s 150s python3 scripts/check_ci_assets.py
