@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 for database in sqlite mysql; do
   work=$(mktemp -d /tmp/fc-native-updater-XXXXXXXX)
   printf 'Private native updater fixture (%s): %s\n' "$database" "$work"
-  docker run --rm -e GOMAXPROCS=2 --label "frontiercloud.updater-acceptance=$work" -v "$PWD:/src:ro" \
+  docker run --rm --memory=2g -e GOMAXPROCS=2 --label "frontiercloud.updater-acceptance=$work" -v "$PWD:/src:ro" \
     -v /var/run/docker.sock:/var/run/docker.sock -v "$work:$work" \
     -e FRONTIERCLOUD_TEST_DOCKER_SOCKET=/var/run/docker.sock \
     -e FRONTIERCLOUD_TEST_UPDATER_WORKSPACE="$work" \

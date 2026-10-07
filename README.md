@@ -34,6 +34,11 @@ database selection does not migrate existing state. Historical Python cluster
 volumes remain fenced until a separately verified offline adoption/migration;
 do not apply this quick start to an existing cluster.
 
+Preserving an existing Follower's identity and media requires the separate
+[verified offline Follower migration](docs/offline-follower-to-sqlite.md), not
+reinitialization or re-pairing. Existing native MySQL Masters use the
+[separate SQLite conversion](docs/offline-master-to-sqlite.md).
+
 For HTTPS, copy the relevant switches from `.env.example`, enable TLS, set `SERVER_NAME`, and provide `certs/fullchain.pem` plus `certs/privkey.pem`. Fixed Master/Follower roles require certificate-verified HTTPS and fail closed when that contract is missing.
 
 Detailed configuration, generated-secret recovery, first Admin access, role initialization, and persistent-volume guidance live in [Deployment and Configuration](https://github.com/wongyiuming/FrontierCloud/wiki/Deployment-and-Configuration).

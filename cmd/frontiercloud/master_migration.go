@@ -31,6 +31,19 @@ import (
 // durable admission. Existing data, keys, relationships and intents are not
 // modified. The maintenance marker remains closed until explicit resume.
 func masterMigrationCommand(arguments []string, output io.Writer) error {
+	return offlineMigrationCommand(arguments, output, "Master")
+}
+
+// Followers get snapshot proof only: conversion publishes admission in the
+// separate SQLite target, never in the original legacy MySQL store.
+func followerMigrationCommand(arguments []string, output io.Writer) error {
+	if len(arguments) == 0 || arguments[0] != "snapshot" {
+		return errors.New("follower-migration requires snapshot; use follower-to-sqlite for verified target admission")
+	}
+	return offlineMigrationCommand(arguments, output, "Follower")
+}
+
+func offlineMigrationCommand(arguments []string, output io.Writer, expectedRole string) error {
 	if len(arguments) == 0 || (arguments[0] != "snapshot" && arguments[0] != "admit") {
 		return errors.New("master-migration requires snapshot or admit")
 	}
@@ -79,8 +92,8 @@ func masterMigrationCommand(arguments []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if identity.Role != "Master" || identity.ID != *expectedID {
-		return errors.New("existing Master identity mismatch")
+	if identity.Role != expectedRole || identity.ID != *expectedID {
+		return errors.New("existing " + expectedRole + " identity mismatch")
 	}
 	var recovered migrationproof.Snapshot
 	if action == "admit" {
@@ -123,7 +136,11 @@ func masterMigrationCommand(arguments []string, output io.Writer) error {
 		if err = validateMigrationState(ctx, conn, c.SecretsDirectory); err != nil {
 			return fail(err)
 		}
-		snapshot, err = migrationproof.Capture(ctx, conn, c.MySQLDatabase, c.DataRoot, c.SecretsDirectory)
+		capture := migrationproof.Capture
+		if expectedRole == "Follower" {
+			capture = migrationproof.CaptureFollower
+		}
+		snapshot, err = capture(ctx, conn, c.MySQLDatabase, c.DataRoot, c.SecretsDirectory)
 		if err != nil {
 			return fail(err)
 		}

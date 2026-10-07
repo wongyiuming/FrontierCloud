@@ -10,7 +10,7 @@ docker build -f Dockerfile.gin --target build -t "$driver" .
 # The fleet creates these fixtures through the Engine API, which does not pull.
 docker pull mysql:8.4.11
 docker pull redis:7.4.11-alpine
-docker run --rm -e GOMAXPROCS=2 --name "$prefix-driver" \
+docker run --rm --memory=2g -e GOMAXPROCS=2 --name "$prefix-driver" \
   --label "frontiercloud.acceptance=$prefix" \
   --label "frontiercloud.updater-acceptance=$work" \
   -v "$PWD:/src:ro" -v "$work:$work" \

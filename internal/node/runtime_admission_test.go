@@ -90,6 +90,64 @@ func TestOfflineMasterAdmissionRequiresClosedFenceSuccessfulHeldProof(t *testing
 	}
 }
 
+func TestOfflineFollowerAdmissionRequiresRestoredHeldProofAndStableIdentity(t *testing.T) {
+	dir, n := admissionFixture(t)
+	n.Role = "Follower"
+	ctx := context.Background()
+	called, released := false, false
+	proof := func(context.Context) (func(), error) {
+		called = true
+		return func() {
+			released = true
+			if err := n.CheckNativeRuntime(ctx, dir); err != nil {
+				t.Error("follower fence released before durable receipt", err)
+			}
+		}, nil
+	}
+	if err := n.AdmitVerifiedFollower(ctx, dir, proof); err == nil || called {
+		t.Fatal("open gate admitted legacy follower")
+	}
+	g, err := maintenance.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	if err = g.Enter(ctx, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for _, verify := range []func(context.Context) (func(), error){nil,
+		func(context.Context) (func(), error) { return nil, errors.New("restore mismatch") },
+		func(context.Context) (func(), error) { return nil, nil }} {
+		if err = n.AdmitVerifiedFollower(ctx, dir, verify); err == nil {
+			t.Fatal("unproven follower admitted")
+		}
+		if err = n.CheckNativeRuntime(ctx, dir); !errors.Is(err, ErrRuntimeAdmission) {
+			t.Fatal("failed proof published", err)
+		}
+	}
+	original := n.NodeIdentity
+	if err = n.AdmitVerifiedFollower(ctx, dir, func(context.Context) (func(), error) {
+		n.Role = "Master"
+		return func() {}, nil
+	}); !errors.Is(err, ErrRuntimeAdmission) {
+		t.Fatal("proof mutated admission role", err)
+	}
+	n.NodeIdentity = original
+	if err = n.AdmitVerifiedMaster(ctx, dir, proof); !errors.Is(err, ErrRuntimeAdmission) {
+		t.Fatal("wrong role API accepted", err)
+	}
+	if err = n.AdmitVerifiedFollower(ctx, dir, proof); err != nil || !called || !released {
+		t.Fatal("verified follower rejected", err)
+	}
+	if enabled, err := g.Enabled(); err != nil || !enabled {
+		t.Fatal("migration reopened traffic", err)
+	}
+	n.ID = strings.Repeat("f", 32)
+	if err = n.AdmitVerifiedFollower(ctx, dir, func(context.Context) (func(), error) { return func() {}, nil }); !errors.Is(err, ErrRuntimeAdmission) {
+		t.Fatal("foreign receipt overwritten", err)
+	}
+}
+
 func TestNativeRuntimeReceiptRequiresCompletedStartupAndPreservesRoleFence(t *testing.T) {
 	dir, n := admissionFixture(t)
 	ctx := context.Background()

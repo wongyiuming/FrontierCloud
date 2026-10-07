@@ -82,6 +82,10 @@ func command(arguments []string) error {
 		return masterMigrationCommand(arguments[1:], os.Stdout)
 	case "master-to-sqlite":
 		return masterToSQLiteCommand(arguments[1:], os.Stdout)
+	case "follower-migration":
+		return followerMigrationCommand(arguments[1:], os.Stdout)
+	case "follower-to-sqlite":
+		return followerToSQLiteCommand(arguments[1:], os.Stdout)
 	case "adopt-storage":
 		return adoptStorageCommand(arguments[1:], os.Stdout)
 	case "adopt-recordings":

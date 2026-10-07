@@ -322,6 +322,14 @@ func testFleetControl(t *testing.T, ctx context.Context, e *Engine, base, prefix
 			owner, canonical = fleetReleaseService(project, service)
 		}
 		host := map[string]any{"Binds": binds, "NetworkMode": sharedName, "Tmpfs": map[string]string{"/tmp": "size=64m,mode=1777"}, "RestartPolicy": map[string]string{"Name": "no"}}
+		// Bounds apply only to disposable fixture services, never deployed nodes.
+		host["Memory"] = int64(256 << 20)
+		if service == "mysql" {
+			host["Memory"] = int64(512 << 20)
+		}
+		if service == "redis" {
+			host["Memory"] = int64(128 << 20)
+		}
 		if strings.HasSuffix(service, "-web") {
 			host["NanoCpus"] = int64(1_000_000_000)
 		}

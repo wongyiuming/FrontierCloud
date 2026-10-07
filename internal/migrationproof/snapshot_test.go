@@ -78,3 +78,19 @@ func TestDecodeRequiresPinnedCompleteStrictProof(t *testing.T) {
 		t.Fatal("secret mismatch accepted")
 	}
 }
+
+func TestFollowerProofHasDistinctPinnedRoleFormat(t *testing.T) {
+	s := Snapshot{Format: FollowerFormat, NodeID: "11111111111111111111111111111111", Tables: []Table{{Name: "identity"}}, Data: []File{{Path: "media.mp3"}}, Secrets: []File{{Path: "admin_key"}}}
+	raw, _ := json.Marshal(s)
+	parsed, err := Decode(raw, digest(raw))
+	if err != nil || Compare(s, parsed) != nil {
+		t.Fatal(err)
+	}
+	parsed.Format = Format
+	if Compare(s, parsed) == nil {
+		t.Fatal("Master/Follower proof role conflated")
+	}
+	if _, err = Decode(raw, digest([]byte("other"))); err == nil {
+		t.Fatal("unpinned follower proof accepted")
+	}
+}

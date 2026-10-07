@@ -22,12 +22,12 @@ docker build -f Dockerfile.gin -t "$runtime_image" .
 docker network create "$network" >/dev/null
 docker volume create "$secrets" >/dev/null
 docker run --rm --user 0:0 -v "$secrets:/run/frontiercloud-secrets" "$runtime_image" init-secrets
-docker run -d --name "$mysql" --network "$network" --network-alias mysql \
+docker run -d --memory=512m --cpus=1 --name "$mysql" --network "$network" --network-alias mysql \
     -e MYSQL_DATABASE=fc_business -e MYSQL_USER=media_admin \
     -e MYSQL_PASSWORD_FILE=/run/frontiercloud-secrets/mysql_password \
     -e MYSQL_ROOT_PASSWORD_FILE=/run/frontiercloud-secrets/mysql_root_password \
     -v "$secrets:/run/frontiercloud-secrets:ro" mysql:8.4.11 >/dev/null
-docker run -d --name "$redis" --network "$network" --network-alias redis redis:7.4.11-alpine >/dev/null
+docker run -d --memory=128m --cpus=1 --name "$redis" --network "$network" --network-alias redis redis:7.4.11-alpine >/dev/null
 ready=false
 for _ in $(seq 1 90); do
     if docker exec "$mysql" sh -c 'MYSQL_PWD=$(cat /run/frontiercloud-secrets/mysql_password) mysql -h 127.0.0.1 -u media_admin -e "SELECT 1" fc_business' >/dev/null 2>&1; then
@@ -37,19 +37,19 @@ for _ in $(seq 1 90); do
     sleep 1
 done
 if [ "$ready" != true ]; then docker logs --tail 40 "$mysql"; exit 1; fi
-docker run --rm --network "$network" -v "$secrets:/run/frontiercloud-secrets:ro" \
+docker run --rm --memory=2g --cpus=2 -e GOMAXPROCS=2 --network "$network" -v "$secrets:/run/frontiercloud-secrets:ro" \
     -e FRONTIERCLOUD_TEST_MYSQL_HOST=mysql -e FRONTIERCLOUD_TEST_MYSQL_DATABASE=fc_business \
     -e FRONTIERCLOUD_TEST_MYSQL_USER=media_admin \
     -e FRONTIERCLOUD_TEST_MYSQL_PASSWORD_FILE=/run/frontiercloud-secrets/mysql_password \
     "$build_image" go test -count=1 -v ./internal/store/business
-docker run --rm --network "$network" -e FRONTIERCLOUD_TEST_REDIS_URL=redis://redis:6379/1 \
+docker run --rm --memory=2g --cpus=2 -e GOMAXPROCS=2 --network "$network" -e FRONTIERCLOUD_TEST_REDIS_URL=redis://redis:6379/1 \
     "$build_image" go test -count=1 -v ./internal/admin
-docker run --rm --network "$network" -e FRONTIERCLOUD_TEST_REDIS_URL=redis://redis:6379/2 \
+docker run --rm --memory=2g --cpus=2 -e GOMAXPROCS=2 --network "$network" -e FRONTIERCLOUD_TEST_REDIS_URL=redis://redis:6379/2 \
     "$build_image" go test -count=1 -v ./internal/httpapi
-docker run --rm --network "$network" -e FRONTIERCLOUD_TEST_REDIS_URL=redis://redis:6379/3 \
+docker run --rm --memory=2g --cpus=2 -e GOMAXPROCS=2 --network "$network" -e FRONTIERCLOUD_TEST_REDIS_URL=redis://redis:6379/3 \
     "$build_image" go test -count=1 -v ./internal/observation
-docker run --rm --network "$network" -e FRONTIERCLOUD_TEST_REDIS_URL=redis://redis:6379/4 \
+docker run --rm --cpus=2 --network "$network" -e FRONTIERCLOUD_TEST_REDIS_URL=redis://redis:6379/4 \
     -e GOMAXPROCS=2 --memory=2g "$build_image" go test -p=2 -race -count=1 -v ./cmd/frontiercloud
-docker run --rm --memory=3g -e GOMAXPROCS=2 "$build_image" go test -p=2 -race ./...
+docker run --rm --cpus=2 --memory=3g -e GOMAXPROCS=2 "$build_image" go test -p=2 -race ./...
 bash scripts/test-nginx-maintenance.sh
 printf '%s\n' 'PASS: real MySQL, Redis, native process drain, Nginx maintenance and Go race checks'

@@ -22,6 +22,7 @@ import (
 )
 
 const Format = "frontiercloud-offline-mysql-master-v1"
+const FollowerFormat = "frontiercloud-offline-mysql-follower-v1"
 
 type Table struct {
 	Name   string `json:"name"`
@@ -53,7 +54,17 @@ var nodeIdentifier = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // managed file including unreferenced history, and every secret. SHOW CREATE
 // retains indexes, constraints and next AUTO_INCREMENT; no tables are omitted.
 func Capture(ctx context.Context, conn *sql.Conn, database, data, secrets string) (Snapshot, error) {
-	s := Snapshot{Format: Format, Database: database}
+	return captureRole(ctx, conn, database, data, secrets, "Master", Format)
+}
+
+// CaptureFollower keeps the same exhaustive proof, with a separate role-bound
+// format so a restored Master cannot be used to admit a legacy Follower.
+func CaptureFollower(ctx context.Context, conn *sql.Conn, database, data, secrets string) (Snapshot, error) {
+	return captureRole(ctx, conn, database, data, secrets, "Follower", FollowerFormat)
+}
+
+func captureRole(ctx context.Context, conn *sql.Conn, database, data, secrets, expectedRole, format string) (Snapshot, error) {
+	s := Snapshot{Format: format, Database: database}
 	if !identifier.MatchString(database) {
 		return s, errors.New("invalid database identifier")
 	}
@@ -64,8 +75,8 @@ func Capture(ctx context.Context, conn *sql.Conn, database, data, secrets string
 	if err := conn.QueryRowContext(ctx, "SELECT node_id, `role`, endpoint FROM node_identity WHERE singleton=1").Scan(&s.NodeID, &role, &s.Endpoint); err != nil {
 		return s, err
 	}
-	if role != "Master" || !nodeIdentifier.MatchString(s.NodeID) || !strings.HasPrefix(s.Endpoint, "https://") {
-		return s, errors.New("existing HTTPS Master required")
+	if role != expectedRole || !nodeIdentifier.MatchString(s.NodeID) || !strings.HasPrefix(s.Endpoint, "https://") {
+		return s, errors.New("existing HTTPS " + expectedRole + " required")
 	}
 	var generation int
 	if err := conn.QueryRowContext(ctx, "SELECT generation FROM frontiercloud_schema WHERE singleton=1").Scan(&generation); err != nil || generation != 2 {
@@ -269,7 +280,7 @@ func Decode(raw []byte, expectedSHA string) (Snapshot, error) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return s, errors.New("trailing recovery proof data")
 	}
-	if s.Format != Format || !nodeIdentifier.MatchString(s.NodeID) || len(s.Tables) == 0 || len(s.Data) == 0 || len(s.Secrets) == 0 {
+	if (s.Format != Format && s.Format != FollowerFormat) || !nodeIdentifier.MatchString(s.NodeID) || len(s.Tables) == 0 || len(s.Data) == 0 || len(s.Secrets) == 0 {
 		return s, errors.New("incomplete recovery proof")
 	}
 	return s, nil

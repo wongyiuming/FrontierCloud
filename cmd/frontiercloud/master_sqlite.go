@@ -42,6 +42,14 @@ type sqliteTransferTable struct {
 var tablePattern = regexp.MustCompile("(?i)^CREATE TABLE(?: IF NOT EXISTS)?\\s+`?(\\w+)")
 
 func masterToSQLiteCommand(arguments []string, output io.Writer) error {
+	return mysqlToSQLiteCommand(arguments, output, "Master")
+}
+
+func followerToSQLiteCommand(arguments []string, output io.Writer) error {
+	return mysqlToSQLiteCommand(arguments, output, "Follower")
+}
+
+func mysqlToSQLiteCommand(arguments []string, output io.Writer, expectedRole string) error {
 	f := flag.NewFlagSet("master-to-sqlite", flag.ContinueOnError)
 	manifest := f.String("manifest", "", "independently restored same-MySQL recovery inventory")
 	proofSHA := f.String("proof-sha256", "", "exact SHA256 of that inventory")
@@ -92,6 +100,13 @@ func masterToSQLiteCommand(arguments []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
+	expectedFormat := migrationproof.Format
+	if expectedRole == "Follower" {
+		expectedFormat = migrationproof.FollowerFormat
+	}
+	if recovery.Format != expectedFormat {
+		return errors.New("restored proof role differs from migration target")
+	}
 	if _, err = os.Lstat(*report); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("report must not exist")
 	}
@@ -134,11 +149,18 @@ func masterToSQLiteCommand(arguments []string, output io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if identity.ID != *nodeID || identity.Role != "Master" {
-			return errors.New("source Master identity mismatch")
+		if identity.ID != *nodeID || identity.Role != expectedRole {
+			return errors.New("source " + expectedRole + " identity mismatch")
 		}
-		if err = identity.CheckNativeRuntime(ctx, c.DataRoot); err != nil {
-			return err
+		if expectedRole == "Master" {
+			if err = identity.CheckNativeRuntime(ctx, c.DataRoot); err != nil {
+				return err
+			}
+		} else if expectedRole != "Follower" {
+			return errors.New("unsupported offline migration role")
+		}
+		if recovery.NodeID != identity.ID {
+			return errors.New("restored proof identity differs from source")
 		}
 		conn, release, err := lockMigrationMySQL(ctx, c, *socket)
 		if err != nil {
@@ -155,7 +177,11 @@ func masterToSQLiteCommand(arguments []string, output io.Writer) error {
 		if err = validateMigrationState(ctx, conn, c.SecretsDirectory); err != nil {
 			return err
 		}
-		source, err := migrationproof.Capture(ctx, conn, c.MySQLDatabase, c.DataRoot, c.SecretsDirectory)
+		capture := migrationproof.Capture
+		if expectedRole == "Follower" {
+			capture = migrationproof.CaptureFollower
+		}
+		source, err := capture(ctx, conn, c.MySQLDatabase, c.DataRoot, c.SecretsDirectory)
 		if err != nil {
 			return err
 		}
@@ -278,7 +304,11 @@ func masterToSQLiteCommand(arguments []string, output io.Writer) error {
 			// through admission and durable report, even after this callback returns.
 			return func() {}, nil
 		}
-		if err = targetIdentity.AdmitVerifiedMaster(ctx, *root, verify); err != nil {
+		admit := targetIdentity.AdmitVerifiedMaster
+		if expectedRole == "Follower" {
+			admit = targetIdentity.AdmitVerifiedFollower
+		}
+		if err = admit(ctx, *root, verify); err != nil {
 			return err
 		}
 		if err = targetIdentity.CheckNativeRuntime(ctx, *root); err != nil {

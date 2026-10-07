@@ -44,6 +44,20 @@ func (n *Identity) AdmitVerifiedMaster(ctx context.Context, directory string, ve
 	if n == nil || n.Role != "Master" || verify == nil {
 		return ErrRuntimeAdmission
 	}
+	return n.admitVerifiedRole(ctx, directory, verify)
+}
+
+// AdmitVerifiedFollower is only for an independently restored, fenced offline
+// migration. It does not reset identity or trust a receipt from another store.
+func (n *Identity) AdmitVerifiedFollower(ctx context.Context, directory string, verify func(context.Context) (func(), error)) error {
+	if n == nil || n.Role != "Follower" || verify == nil {
+		return ErrRuntimeAdmission
+	}
+	return n.admitVerifiedRole(ctx, directory, verify)
+}
+
+func (n *Identity) admitVerifiedRole(ctx context.Context, directory string, verify func(context.Context) (func(), error)) error {
+	expected := n.NodeIdentity
 	gate, err := maintenance.Open(directory)
 	if err != nil {
 		return err
@@ -60,6 +74,9 @@ func (n *Identity) AdmitVerifiedMaster(ctx context.Context, directory string, ve
 		if release == nil {
 			return ErrRuntimeAdmission
 		}
+		if n.NodeIdentity != expected {
+			return ErrRuntimeAdmission
+		}
 		return n.publishAdmission(ctx, directory, true, true)
 	})
 }
@@ -68,7 +85,7 @@ func (n *Identity) runtimeAdmission(ctx context.Context, directory string, publi
 	return n.publishAdmission(ctx, directory, publish, false)
 }
 
-func (n *Identity) publishAdmission(ctx context.Context, directory string, publish, verifiedMaster bool) error {
+func (n *Identity) publishAdmission(ctx context.Context, directory string, publish, verifiedRole bool) error {
 	if n == nil || n.vault == nil || !ValidIdentifier(n.ID) || (n.Role != "Standalone" && n.Role != "Master" && n.Role != "Follower") {
 		return ErrRuntimeAdmission
 	}
@@ -137,7 +154,7 @@ func (n *Identity) publishAdmission(ctx context.Context, directory string, publi
 	prefix := "frontiercloud-native-runtime-v1\n" + string(binding)
 	raw, err := read(runtimeReceipt, 4096)
 	if errors.Is(err, os.ErrNotExist) {
-		if n.Role != "Standalone" && !(verifiedMaster && n.Role == "Master") {
+		if n.Role != "Standalone" && !(verifiedRole && (n.Role == "Master" || n.Role == "Follower")) {
 			return ErrRuntimeAdmission
 		}
 	} else if err != nil {

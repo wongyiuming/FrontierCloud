@@ -29,7 +29,7 @@ fi
 # so a fresh runner behaves like a development engine with cached images.
 docker pull mysql:8.4.11
 docker pull redis:7.4.11-alpine
-docker run --rm --name "$prefix-driver" --label "frontiercloud.acceptance=$prefix" \
+docker run --rm --memory=2g -e GOMAXPROCS=2 --name "$prefix-driver" --label "frontiercloud.acceptance=$prefix" \
   -v "$PWD:/src:ro" -v "$work:$work" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e FRONTIERCLOUD_TEST_DOCKER_SOCKET=/var/run/docker.sock \
