@@ -4,11 +4,19 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	sqlitestore "github.com/wongyiuming/FrontierCloud/internal/store/sqlite"
 	"github.com/wongyiuming/FrontierCloud/migrations"
 )
+
+func TestOfflineMySQLLockReadsLiveStatisticsBeforeFence(t *testing.T) {
+	expected := []string{"SET SESSION time_zone='+00:00'", "SET SESSION information_schema_stats_expiry=0", "FLUSH TABLES WITH READ LOCK"}
+	if got := migrationMySQLLockPlan(); !reflect.DeepEqual(got, expected) {
+		t.Fatal("offline reader must disable cached metadata before its authoritative fence", got)
+	}
+}
 
 func TestTransferAutoDDLPreservesAllCanonicalDefinitions(t *testing.T) {
 	statements, err := migrations.Statements("sqlite")

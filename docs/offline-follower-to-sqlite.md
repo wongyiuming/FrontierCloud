@@ -54,6 +54,12 @@ column metadata only in the isolated fixture, retaining every explicit charset
 and non-default collation. Require the resulting actual DDL/row/file/secret
 inventory to match the frozen source exactly; never normalize away a failed proof.
 
+The authoritative root reader also sets session-only
+`information_schema_stats_expiry=0` before its global read lock. MySQL's cached
+metadata can report NULL/0 for an empty auto-ID table whose live next value is 1.
+Read live engine metadata and preserve that exact floor; do not reset sequences
+or substitute a guessed counter to bypass transfer validation.
+
 Flags match `master-to-sqlite` documented in offline-master-to-sqlite.md:
 manifest, pinned proof SHA256, exact node ID, root MySQL socket, empty distinct
 target data root, same-parent hardlink alias, final container SQLite path,

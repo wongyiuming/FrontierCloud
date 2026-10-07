@@ -229,14 +229,21 @@ func lockMigrationMySQL(ctx context.Context, c config.Config, socket string) (*s
 		conn.Close()
 		db.Close()
 	}
-	if _, err = conn.ExecContext(ctx, "SET SESSION time_zone='+00:00'"); err == nil {
-		_, err = conn.ExecContext(ctx, "FLUSH TABLES WITH READ LOCK")
-	}
-	if err != nil {
-		release()
-		return nil, nil, err
+	for _, statement := range migrationMySQLLockPlan() {
+		if _, err = conn.ExecContext(ctx, statement); err != nil {
+			release()
+			return nil, nil, err
+		}
 	}
 	return conn, release, nil
+}
+
+func migrationMySQLLockPlan() []string {
+	// MySQL's default statistics cache can report NULL/0 AUTO_INCREMENT on a
+	// never-written table although its actual next value is 1. Migration must
+	// read engine metadata, not cache, and must never reset/invent an ID floor.
+	// This affects only our locked reader session, not server/global settings.
+	return []string{"SET SESSION time_zone='+00:00'", "SET SESSION information_schema_stats_expiry=0", "FLUSH TABLES WITH READ LOCK"}
 }
 
 func validateMigrationState(ctx context.Context, conn *sql.Conn, secrets string) error {
