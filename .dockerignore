@@ -26,3 +26,11 @@ frontiercloud.exe
 # Exclude local sensitive data.
 .env
 certs/
+
+# Non-executable Python references and test/script drivers are never runtime assets.
+app/
+main.py
+pyproject.toml
+tests/
+scripts/
+docs/

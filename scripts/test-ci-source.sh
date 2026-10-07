@@ -6,7 +6,7 @@ python3 scripts/check_ci_budget.py
 python3 scripts/check_cpu_boundary.py
 python3 scripts/check_release_policy.py
 python3 scripts/check_english_comments.py
-python3 -m unittest tests.test_ci_budget tests.test_repository_policy
+python3 -m unittest discover -s tests -p 'test_*.py'
 python3 scripts/check_ci_assets.py
 git diff --check
 for file in static/js/*.js; do node --check "$file"; done

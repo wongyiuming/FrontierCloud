@@ -38,7 +38,8 @@ func TestBootstrapArchivesExactCommitAndRejectsMutableSelections(t *testing.T) {
 	fixture := map[string]string{
 		"Dockerfile":     "FROM committed-native\n",
 		"Dockerfile.gin": "FROM committed-native\n", "updater/Dockerfile.gin": "FROM committed-updater\n",
-		"nginx/Dockerfile": "FROM committed-edge\n", "go.mod": "module fixture\n", "go.sum": "committed-sum\n",
+		"updater/Dockerfile": "FROM committed-updater\n",
+		"nginx/Dockerfile":   "FROM committed-edge\n", "go.mod": "module fixture\n", "go.sum": "committed-sum\n",
 		"cmd/entry.txt": "committed\n", "internal/core.txt": "committed\n", "migrations/schema.txt": "committed\n",
 		"protocol/contract.txt": "committed\n", "static/index.txt": "committed\n",
 		".env": "private-tracked-secret\n", "data/key": "private-tracked-key\n",

@@ -14,6 +14,8 @@ class CIBudgetTests(unittest.TestCase):
             self.assertTrue(inspect_workflow("name: test\njobs:\n  check:\n" + value, "fixture"))
 
     def test_heavywork_and_chains_cannot_hide_behind_short_timeout(self):
-        for step in ("bash scripts/test-mixed-runtime.sh", "docker build .", "nohup test &", "federation_stack.py", "bash scripts/test-go-updater.sh"):
+        for step in ("bash scripts/test-mixed-runtime.sh", "docker build .", "nohup test &", "federation_stack.py", "bash scripts/test-go-updater.sh",
+                     "bash scripts/test-native-api.sh", "bash scripts/test-native-matrix.sh",
+                     "bash scripts/test-native-release.sh"):
             self.assertTrue(inspect_workflow("name: test\njobs:\n  check:\n    timeout-minutes: 3\n    run: " + step, "fixture"))
         self.assertTrue(inspect_workflow("name: test\njobs:\n  check:\n    timeout-minutes: 3\n    needs: previous\n", "fixture"))

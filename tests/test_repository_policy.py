@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -91,19 +92,29 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
     def test_media_mutation_fence_requires_single_web_process(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
-        reference = (ROOT / "Dockerfile.python").read_text(encoding="utf-8")
         architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
-        combined = dockerfile + "\n" + compose + "\n" + reference
+        combined = dockerfile + "\n" + compose
 
         self.assertIn('ENTRYPOINT ["/app/frontiercloud"]', dockerfile)
         self.assertIn('CMD ["serve"]', dockerfile)
-        self.assertIn('CMD ["uvicorn", "main:app"', reference)
+        self.assertFalse((ROOT / "Dockerfile.python").exists())
+        self.assertFalse((ROOT / "docker-compose.python.yaml").exists())
         self.assertNotRegex(combined, re.compile(r"--workers(?:=|\s)", re.I))
         self.assertNotRegex(combined, re.compile(r"\bWEB_CONCURRENCY\b", re.I))
         self.assertNotRegex(combined, re.compile(r"\bgunicorn\b", re.I))
-        self.assertIn("single ASGI worker", architecture)
+        self.assertIn("single native Go process", architecture)
         self.assertIn("distributed lock", architecture)
         self.assertIn("media mutation", architecture.lower())
+
+    def test_wiki_is_external_and_python_is_not_a_deployment_profile(self):
+        tracked = subprocess.check_output(["git", "ls-files", "--", "docs/wiki"], cwd=ROOT)
+        self.assertEqual(tracked, b"")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("https://github.com/wongyiuming/FrontierCloud/wiki", readme)
+        self.assertIn("/docs/wiki/", (ROOT / ".gitignore").read_text(encoding="utf-8"))
+        for name in ("main.py", "updater/server.py"):
+            self.assertIn('raise SystemExit("Python deployment is prohibited.',
+                          (ROOT / name).read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

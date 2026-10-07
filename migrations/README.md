@@ -8,7 +8,7 @@ Schema generation 2 has one logical model and two reviewed physical snapshots:
   use `INTEGER PRIMARY KEY`, dates use UTC ISO text, and backup chunks use BLOB.
 
 Each JSON array entry is one SQL statement. There is no runtime SQL translation.
-Python reads these files; Go embeds these exact files into its binary. A schema
+Go embeds these exact files into its binary; Python files are retained as syntax references only. A schema
 change must update both backends and advance the same migration generation.
 Business identifiers and node protocol values never depend on physical row IDs.
 
@@ -22,20 +22,17 @@ and nonempty databases without a generation marker.
 Changing `DB_TYPE` selects a database; it does not copy or migrate business data.
 SQLite databases belong to a single host and must not be shared over NFS.
 
-## Rollout status
+## Native validation
 
-Go supports independent initialization (`frontiercloud migrate`), database health,
-and the protocol cryptographic primitives. Python supports both database connection
-policies, schema initialization, and the media-object repository. Other Python
-repositories and Go business handlers are still being ported. The existing Compose
-deployment therefore continues to use Python/MySQL until business parity is tested.
+Gin/Go implements business repositories, independent migration/health commands,
+and both database dialects. Default deployment is Gin + SQLite; the optional
+MySQL overlay selects the same logical schema on MySQL. Python deployment and
+live Python/Go database interoperability are no longer supported.
 
-Go foundation check:
+Run scripts/test-go-business.sh for real SQLite/MySQL transaction and schema
+coverage and scripts/test-native-api.sh for Python-driven Gin HTTP behavior.
+Five-node native fleet validation runs on the development host only; hosted CI
+checks canonical schema assets in-memory and stays within three minutes.
 
-```sh
-docker build -f Dockerfile.gin -t frontiercloud-gin .
-docker run --rm -e DB_TYPE=sqlite -v frontiercloud_sqlite:/data frontiercloud-gin migrate
-```
-
-Target deployment defaults remain Gin + SQLite. Runtime selection, the optional
-MySQL Compose service, Go updater, and mixed Direct/Relay topology tests are pending.
+Historical IDs, serialization and existing-state migration checks remain
+mandatory; removing a runtime does not permit resetting a production store.

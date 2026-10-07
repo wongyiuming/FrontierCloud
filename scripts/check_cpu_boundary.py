@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 import tomllib
 
@@ -64,12 +65,17 @@ def scan_source(source: str, name: str = "<source>") -> list[str]:
 
 
 def main() -> int:
-    paths = [ROOT / "main.py", *(ROOT / "app").rglob("*.py")]
-    violations = [
-        finding
-        for path in paths
-        for finding in scan_source(path.read_text(encoding="utf-8"), str(path.relative_to(ROOT)))
-    ]
+    violations = []
+    for path in (ROOT / "internal").rglob("*.go"):
+        relative = path.relative_to(ROOT).as_posix()
+        if path.name.endswith("_test.go") or relative.startswith("internal/updater/"):
+            continue
+        source = path.read_text(encoding="utf-8")
+        for forbidden in ('"os/exec"', '"compress/zlib"', '"compress/bzip2"', 'zip.Deflate'):
+            if forbidden in source:
+                violations.append(f"{relative}: prohibited native Web computation {forbidden}")
+        if re.search(r'"[^"\n]*(?:ffmpeg|ffprobe|tensorflow|onnxruntime)[^"\n]*"', source, re.I):
+            violations.append(f"{relative}: prohibited native Web compute dependency")
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     for dependency in project.get("project", {}).get("dependencies", []):
         package = dependency.split("[", 1)[0].split("=", 1)[0].strip().lower().replace("-", "_")

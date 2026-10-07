@@ -1,3 +1,6 @@
+"""Non-executable Python syntax reference; production runs the native Go binary."""
+raise SystemExit("Python deployment is prohibited. Use Dockerfile.gin and the native Go service.")
+
 import asyncio
 import json
 import logging

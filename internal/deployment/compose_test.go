@@ -56,48 +56,11 @@ type composeService struct {
 	} `json:"healthcheck"`
 }
 
-func TestActualReferenceSQLiteAndMySQLSelection(t *testing.T) {
-	dir := os.Getenv("FRONTIERCLOUD_TEST_COMPOSE_JSON_DIR")
-	if dir == "" {
-		t.Skip("actual reference Compose configurations not selected")
-	}
-	for _, kind := range []string{"sqlite", "mysql"} {
-		t.Run(kind, func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join(dir, "python-"+kind+".json"))
-			if err != nil || len(data) > 4*1024*1024 {
-				t.Fatal("bounded actual reference Compose required", err)
-			}
-			var spec struct {
-				Name     string                    `json:"name"`
-				Services map[string]composeService `json:"services"`
-			}
-			if err := json.Unmarshal(data, &spec); err != nil {
-				t.Fatal(err)
-			}
-			web, ok := spec.Services["web"]
-			if !ok || spec.Name == "" || web.Build.Dockerfile != "Dockerfile.python" || web.Environment["DB_TYPE"] != kind || web.Environment["RELEASE_BRANCH"] != "main" || web.Environment["RELEASE_SOURCE_BRANCH"] != "dev" || !reflect.DeepEqual(web.Healthcheck.Test, []string{"CMD", "python", "-m", "app.services.health_probe"}) {
-				t.Fatal("explicit reference runtime/profile/store changed")
-			}
-			_, mysql := spec.Services["mysql"]
-			updater := spec.Services["updater"]
-			if updater.Environment["UPDATER_PROJECT"] != spec.Name || updater.Environment["UPDATER_DATA_DIRECTORY"] != "/data" {
-				t.Fatal("reference updater project/data selector changed")
-			}
-			dependency, depends := web.DependsOn["mysql"]
-			if kind == "sqlite" && (mysql || depends) {
-				t.Fatal("reference SQLite requires MySQL")
-			}
-			if kind == "mysql" && (!mysql || !depends || dependency.Condition != "service_healthy") {
-				t.Fatal("reference MySQL omitted store readiness")
-			}
-			for _, service := range spec.Services {
-				for _, mount := range service.Volumes {
-					if mount.Target == "/var/run/docker.sock" && service.Build.Dockerfile == "Dockerfile.python" {
-						t.Fatal("reference Web gained Docker socket")
-					}
-				}
-			}
-		})
+func TestPythonDeploymentEntrypointsRemoved(t *testing.T) {
+	for _, name := range []string{"Dockerfile.python", "docker-compose.python.yaml"} {
+		if _, err := os.Stat(filepath.Join("..", "..", name)); !os.IsNotExist(err) {
+			t.Fatal("retired Python deployment entrypoint exists", name, err)
+		}
 	}
 }
 

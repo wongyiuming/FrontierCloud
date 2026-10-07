@@ -1,15 +1,12 @@
 # FrontierCloud Protocol v2
 
-Status: compatibility baseline for the existing Python runtime.
+Status: Go-only runtime protocol; historical wire/data formats remain stable.
 
-This document extracts the node-to-node contract from the Python runtime. It is
-the interoperability boundary for every FrontierCloud runtime and database
-backend. A runtime may use any internal architecture, but messages on this
-boundary MUST have the same bytes and semantics.
+This node-to-node contract is implemented by Gin/Go with SQLite or MySQL. Historical canonical vectors retain existing bytes and semantics; they are data-format evidence, not support for a live Python peer. Python deployment and Python/Go mixed-runtime acceptance are prohibited. Internal database choices must not change wire identity.
 
 The normative fixtures in `vectors/` are part of this specification. Where this
 document and an implementation disagree, a protocol change must update this
-document, the shared vectors, and compatibility tests together.
+document, the shared vectors, and native conformance tests together.
 
 ## 1. Scope and compatibility
 

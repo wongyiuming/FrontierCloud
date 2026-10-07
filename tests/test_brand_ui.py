@@ -1,10 +1,6 @@
-import re
-import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
-from app.services import brand_assets
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,13 +43,13 @@ class BrandUIContractTests(unittest.TestCase):
         self.assertNotIn("brand-foreground", index)
 
     def test_admin_logo_management_is_registered(self):
-        endpoints = (ROOT / "app" / "api" / "v1" / "endpoints.py").read_text(encoding="utf-8")
-        shell = (ROOT / "app" / "api" / "v1" / "admin_page_integrity.py").read_text(encoding="utf-8")
+        endpoints = (ROOT / "internal/httpapi/admin.go").read_text(encoding="utf-8") + (ROOT / "internal/httpapi/public.go").read_text(encoding="utf-8")
+        shell = (ROOT / "internal/httpapi/admin.go").read_text(encoding="utf-8")
         client = (ROOT / "static" / "js" / "brand-admin.js").read_text(encoding="utf-8")
 
-        self.assertIn('prefix="/media/brand"', endpoints)
-        self.assertIn('prefix="/media/admin/brand"', endpoints)
-        self.assertIn('prefix="/media/admin/upload/brand"', endpoints)
+        self.assertIn('"/api/v1/media/brand/logo/:kind"', endpoints)
+        self.assertIn('"/brand"', endpoints)
+        self.assertIn('"/upload/brand/:kind"', endpoints)
         self.assertIn("js/brand-admin.js", shell)
         self.assertIn("/api/v1/media/admin/upload/brand/", client)
         self.assertIn("method: 'POST'", client)
@@ -61,63 +57,13 @@ class BrandUIContractTests(unittest.TestCase):
         self.assertIn("/download", client)
         self.assertIn("删除后恢复内置默认", client)
 
-    def test_custom_logo_overrides_default_and_delete_restores_default(self):
-        default_dir = ROOT / "static" / "brand"
-        with tempfile.TemporaryDirectory() as directory:
-            custom_dir = Path(directory)
-            with patch.object(brand_assets, "DEFAULT_BRAND_DIR", default_dir), patch.object(
-                brand_assets, "CUSTOM_BRAND_DIR", custom_dir
-            ):
-                original = brand_assets.effective_logo("music")
-                self.assertEqual(original.source, "default")
-
-                payload = b"RIFF" + (20).to_bytes(4, "little") + b"WEBP" + b"x" * 16
-                changed = brand_assets.store_custom("music", payload)
-                self.assertEqual(changed.source, "custom")
-                self.assertTrue(changed.path.is_file())
-
-                self.assertTrue(brand_assets.delete_custom("music"))
-                restored = brand_assets.effective_logo("music")
-                self.assertEqual(restored.source, "default")
-
-    def test_public_logo_url_changes_with_content_and_is_long_lived(self):
-        default_dir = ROOT / "static" / "brand"
-        api_source = (ROOT / "app" / "api" / "v1" / "brand.py").read_text(encoding="utf-8")
-        self.assertIn('"Cache-Control": "public, max-age=31536000, immutable"', api_source)
-        self.assertIn("RedirectResponse", api_source)
-        self.assertNotIn('"Cache-Control": "no-cache, max-age=0"', api_source)
-
-        with tempfile.TemporaryDirectory() as directory:
-            custom_dir = Path(directory)
-            with patch.object(brand_assets, "DEFAULT_BRAND_DIR", default_dir), patch.object(
-                brand_assets, "CUSTOM_BRAND_DIR", custom_dir
-            ):
-                default_url = brand_assets.public_logo_url("music")
-                self.assertRegex(default_url, r"/logo/music\?v=[0-9a-f]{16}$")
-
-                payload_one = b"RIFF" + (20).to_bytes(4, "little") + b"WEBP" + b"a" * 16
-                brand_assets.store_custom("music", payload_one)
-                first_custom_url = brand_assets.public_logo_url("music")
-                self.assertNotEqual(first_custom_url, default_url)
-
-                payload_two = b"RIFF" + (20).to_bytes(4, "little") + b"WEBP" + b"b" * 16
-                brand_assets.store_custom("music", payload_two)
-                second_custom_url = brand_assets.public_logo_url("music")
-                self.assertNotEqual(second_custom_url, first_custom_url)
-                self.assertEqual(brand_assets.describe("music")["url"], second_custom_url)
-                self.assertTrue(re.fullmatch(r"[0-9a-f]{16}", brand_assets.describe("music")["version"]))
-
-    def test_upload_signature_and_size_validation(self):
-        self.assertEqual(
-            brand_assets.inspect_upload(b"\x89PNG\r\n\x1a\n" + b"x" * 20)[0],
-            ".png",
-        )
-        self.assertEqual(
-            brand_assets.inspect_upload(b"RIFF" + b"\x00" * 4 + b"WEBP" + b"x" * 20)[0],
-            ".webp",
-        )
-        with self.assertRaises(ValueError):
-            brand_assets.inspect_upload(b"not-an-image")
+    def test_native_logo_contract_has_runtime_regressions(self):
+        native = (ROOT / "internal/httpapi/brand.go").read_text(encoding="utf-8")
+        tests = (ROOT / "internal/httpapi/brand_test.go").read_text(encoding="utf-8")
+        self.assertIn("public, max-age=31536000, immutable", native)
+        self.assertIn("c.Redirect(307, logo.URL)", native)
+        self.assertIn("Test", tests)
+        self.assertTrue((ROOT / "internal/brand/service_test.go").is_file())
 
 
 if __name__ == "__main__":

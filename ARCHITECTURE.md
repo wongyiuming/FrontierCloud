@@ -81,7 +81,7 @@ All Master path mutations participate in one process-local reader/writer fence. 
 
 ### Process model for mutation safety
 
-The production Web service must remain a single process: one native Go service, or a **single ASGI worker** in the explicit Python reference profile. Python's media mutation fence is process-local; starting multiple Uvicorn/Gunicorn workers or setting `WEB_CONCURRENCY` would invalidate its serialization. Native mutation and recovery also retain cross-process OS leases, but this does not authorize horizontally replicated Web services or multiple independent business authorities.
+The production Web service must remain a single native Go process. Media mutation fences and recovery OS leases do not authorize horizontally replicated Web services or multiple independent business authorities. Python application sources are non-executable syntax references, not a supported deployment profile.
 
 Do not add multiple Web workers as a performance tweak. Multi-process or horizontally scaled Web execution requires replacing the process-local media mutation fence with a database-backed or distributed lock, plus new cross-process concurrency regressions, before deployment topology changes are allowed.
 
@@ -133,11 +133,13 @@ Compatible MP3 playback is one continuous browser media session: one audio eleme
 
 The browser keeps a bounded playback window rather than downloading an album into an unbounded SourceBuffer. Appends are backpressured by the playback clock, old ranges are pruned after a boundary, and `QuotaExceededError` retries the same bytes silently without marking a track as failed.
 
+All SourceBuffer appendBuffer and remove operations share one serialized queue. A network/body read interruption retries the same track at the exact byte offset, with bounded backoff and cancellation on a deliberate user switch. A waiting reader never completes a segment, skips a track, adds a runtime yellow warning, or starts a replacement player. Decoder/identity errors remain distinct and hold the current session for diagnosis; they are not mislabeled as a successful truncated read.
+
 The player exposes stable track-local duration and time over the global MSE timeline. A seek inside the current buffer moves that timeline directly. A seek outside it restarts the same logical track with an open-ended HTTP Range request near the requested byte position, preserves playing/paused state, and resumes a transiently interrupted range from the explicit base plus delivered bytes. It must not clamp the request to the buffered edge or show a playlist failure notice for a recoverable read.
 
 The initial continuous profile is MP3-only. Other accepted audio formats remain manually playable through the single-track fallback and are visibly skipped by automatic continuation. Video remains outside this architecture.
 
-The complete browser and release contract is documented in [`docs/audio-continuous-stream.md`](docs/audio-continuous-stream.md) and [`docs/wiki/Playback-Continuity.md`](docs/wiki/Playback-Continuity.md).
+The complete browser and release contract is documented in [`docs/audio-continuous-stream.md`](docs/audio-continuous-stream.md) and [`docs/wiki/Playback-Continuity.md`](https://github.com/wongyiuming/FrontierCloud/wiki/Playback-Continuity).
 
 ## 10. Admin GUI contract
 
@@ -161,8 +163,10 @@ Dynamic modules must join this same final DOM/visual order. Reordering code must
 
 The owner-authorized reconstruction adds one independent native release profile:
 
-- `dev` / `main` — Python reference implementation / reviewed release history;
-- `gin_dev` / `gin_main` — native Go implementation / reviewed release history.
+- `dev` / `main` — historical canonical source / reviewed release history, eligible only for native Go artifacts;
+- `gin_dev` / `gin_main` — current native Go reconstruction / reviewed release history.
+
+These are branch provenance pairs, not language selections. Consolidating gin_main into main or gin_dev into dev requires a separate owner decision; this change performs no merge.
 
 Absolute repository policy:
 
@@ -174,7 +178,17 @@ Absolute repository policy:
 
 GitHub-side ref creation cannot be fully prevented by a unit test. The repository-policy workflow detects non-canonical branch creation after the event, while true pre-creation prevention requires GitHub repository ruleset/administrative enforcement. The no-new-branch invariant must remain documented here, in `CONTRIBUTING.md`, and in the Wiki/ruleset configuration.
 
-## 12. Regression rule
+## 12. Supported runtime and validation
+
+Only Gin/Go may serve business APIs or run the updater. Default deployment is Gin + SQLite; the sole database alternative is Gin + MySQL. Changing DB_TYPE is not a database migration. Preserve historical keys, IDs, passwords, tokens, node relationships and backup serialization when adopting existing data; preserving data formats does not authorize a Python runtime.
+
+Python application sources remain explicitly non-executable examples for comparing syntax. Python is supported only as a test/script driver; tests call real Gin HTTP endpoints or inspect native source contracts, never import FastAPI/application services. No Python application, tests or scripts are packaged into the production Web build context.
+
+Heavy acceptance runs only on the prepared development host: five native nodes (one Master, two Direct, two Relay), repeated for Gin + SQLite and Gin + MySQL. No mixed Python/Go fleet or Python application acceptance remains. Hosted CI has an explicit three-minute hard limit per parallel job, no serial job chains, Docker builds, fleet, real database, or real-browser jobs. A timeout is a failure, not permission to extend the limit.
+
+Wiki operations guidance is maintained in the separate GitHub Wiki repository. Do not track docs/wiki in this repository.
+
+## 13. Regression rule
 
 When an invariant can be encoded as a test, encode it. When it cannot be reliably observed from repository code (for example, who is allowed to create a Git ref), document it explicitly and enforce it with GitHub repository settings where available.
 

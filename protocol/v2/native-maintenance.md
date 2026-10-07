@@ -86,7 +86,7 @@ rename history; use the explicit validated history drainage below before rollbac
 No current command establishes all-writer isolation, remaps identities and relationships, publishes a
 recovered database/filesystem atomically, or grants Master/Follower promotion.
 The existing startup refusal for incomplete cluster roles remains unchanged.
-Restore, recording-ledger adoption, updater replacement and mixed-runtime acceptance are
+Restore, recording-ledger adoption, updater replacement and native five-node acceptance are
 separate unfinished gates.
 
 ## Registered Follower storage adoption

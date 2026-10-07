@@ -70,7 +70,7 @@ func (s Source) Validate(ctx context.Context, target, mode string) error {
 	return err
 }
 
-var archivePaths = []string{"Dockerfile", "Dockerfile.gin", "go.mod", "go.sum", "cmd", "internal", "migrations", "protocol", "static", "nginx", "updater/Dockerfile.gin"}
+var archivePaths = []string{"Dockerfile", "Dockerfile.gin", "go.mod", "go.sum", "cmd", "internal", "migrations", "protocol", "static", "nginx", "updater/Dockerfile", "updater/Dockerfile.gin"}
 
 func (s Source) Archive(ctx context.Context, target string) (io.ReadCloser, error) {
 	if !release.ValidSHA(target) {

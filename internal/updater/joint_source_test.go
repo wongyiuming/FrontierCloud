@@ -14,7 +14,7 @@ import (
 	"github.com/wongyiuming/FrontierCloud/internal/release"
 )
 
-// The mixed release fixture needs separate writable clones. Sharing one mounted
+// The native release fixture needs separate writable clones. Sharing one mounted
 // Git checkout would let the reference reset race another node's fetch/build.
 // These private origins are not production repository/PR/CI publication proof.
 type jointSourceFixture struct {
@@ -24,7 +24,7 @@ type jointSourceFixture struct {
 	current           *release.Manifest
 }
 
-var jointSourcePaths = []string{"Dockerfile", "Dockerfile.gin", "Dockerfile.python", "go.mod", "go.sum", "main.py", "pyproject.toml", "cmd", "internal", "migrations", "protocol", "static", "nginx", "app", "tests", "updater/Dockerfile", "updater/Dockerfile.gin", "updater/server.py", "updater/release_evidence.py"}
+var jointSourcePaths = []string{"Dockerfile", "Dockerfile.gin", "go.mod", "go.sum", "cmd", "internal", "migrations", "protocol", "static", "nginx", "updater/Dockerfile", "updater/Dockerfile.gin"}
 
 func newJointSourceFixture(t *testing.T, ctx context.Context, source, root string, publication *nativePublicationFixture) *jointSourceFixture {
 	t.Helper()
@@ -78,7 +78,7 @@ func newJointSourceFixture(t *testing.T, ctx context.Context, source, root strin
 			_, err = io.Copy(output, input)
 			return errors.Join(err, output.Close())
 		}); err != nil {
-			t.Fatal("private mixed source copy", name, err)
+			t.Fatal("private native source copy", name, err)
 		}
 	}
 	fixture.git(t, "init", "-b", "gin_main")

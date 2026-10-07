@@ -1,5 +1,8 @@
 # Verified native MySQL Master to SQLite
 
+> Policy update (2026-10-07): only Gin/Go is deployable, with SQLite or MySQL. Python sources and old Python/mixed-runtime commands below describe historical migration/audit evidence, not supported deployment or current acceptance. Current tests target Gin; the development fleet is five native nodes and hosted CI is capped at three minutes. See [current validation](https://github.com/wongyiuming/FrontierCloud/wiki/Engineering-and-CI).
+
+
 This is an explicit, offline, second-stage operator migration, not an `.env`
 toggle, cluster release, general SQL dump translator or role reset. The running
 source must already have genuine native MySQL admission. Keep its store binding,

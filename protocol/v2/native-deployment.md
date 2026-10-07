@@ -1,12 +1,10 @@
-# Native default and explicit reference deployment
+# Go-only deployment
 
 The root `Dockerfile` and `docker-compose.yaml` now select native Go. The retained
 `Dockerfile.gin` / `docker-compose.gin.yaml` aliases are identical. The default
 SQLite profile has no MySQL service, volume or dependency; the optional
 `docker-compose.gin-mysql.yaml` overlay adds MySQL and its healthy dependency.
-The Python reference is explicit in `Dockerfile.python` and
-`docker-compose.python.yaml`. These selections are not permission to overwrite
-an existing cluster's database, identity or physical ownership.
+Python deployment is prohibited. app/ and Python entrypoint sources are non-executable syntax references only, excluded from native images. Database selection is not permission to overwrite an existing cluster's database, identity or physical ownership.
 
 In `.env`, select the runtime/database combination:
 
@@ -14,8 +12,6 @@ In `.env`, select the runtime/database combination:
 | --- | --- |
 | Go / SQLite (default) | `docker-compose.yaml` |
 | Go / MySQL | `docker-compose.yaml:docker-compose.gin-mysql.yaml` |
-| Python / SQLite | `docker-compose.python.yaml` |
-| Python / MySQL | `docker-compose.python.yaml:docker-compose.gin-mysql.yaml` |
 
 Use `;` instead of `:` as the separator on Windows. An external MySQL deployment
 can select `DB_TYPE=mysql` and a stable `MYSQL_HOST` without the service overlay.
@@ -67,11 +63,7 @@ exists in the Web/updater and MySQL does not create an authoritative SQLite DB.
 Compose build labels by themselves do not prove that a mutable build context
 matches the supplied SHA. Reviewed production artifacts require immutable Git
 archive builds and exact CI evidence; the updater already uses that boundary.
-Actual mixed-profile release execution has since passed serial private Go/SQLite
-and Python/MySQL Master fleets, including upgrade, rollback and core restart;
-see `docs/go-only-completion.md`. Portable physical restore and historical
-admission remain separate future gates. Do not apply a fresh native profile to historical ten-node
-volumes to bypass admission or ownership proof.
+Development acceptance now uses five native nodes (one Master, two Direct, two Relay), repeated for Gin/SQLite and Gin/MySQL. It runs only on the development host, never hosted CI. Historical migration admission and physical ownership proof remain separate requirements; see docs/go-only-completion.md.
 
 ## Native role restart provenance
 
@@ -84,12 +76,9 @@ foreign, malformed and non-regular receipts fail closed for cluster roles.
 No environment switch disables this check. A confirmed empty identity reset
 returns to Standalone and may republish its new identity after complete startup.
 
-Historical Python cluster identities without native provenance remain fenced;
+Historical cluster identities without native provenance remain fenced;
 storage/recording adoption alone does not issue a startup admission receipt.
-Offline historical migration admission remains a separate gate. Four newly
-created private-CA mixed fleets passed durable-role restart, real Redis AOF and
-MySQL restart, outage recovery, media/recording transport and logical cold-backup
-preflight on 2026-10-03. This does not authorize switching old Python identities.
+Offline historical migration admission remains an explicit, separately verified operation. Removing Python runtime support does not remove historical data-format checks or permit bypassing provenance.
 
 Nginx workers retain their own UID and use the fixed native media group 10001.
 Private recording directories are group-traversable; only hash/size-verified

@@ -85,7 +85,7 @@ Restoration must validate schema/records, capacity, identity mapping and physica
 ownership under a maintenance fence. In particular, missing local media cannot
 be invented from these metadata rows, and an old relationship identifier is not
 authorization to read another node. Safe restore/promotion, legacy ownership
-adoption, crash-cache cleanup and actual mixed-runtime backup interoperability
+adoption, crash-cache cleanup and actual native SQLite/MySQL backup transfer acceptance
 are not established merely by producing or receiving this artifact.
 
 ## Native read-only preflight

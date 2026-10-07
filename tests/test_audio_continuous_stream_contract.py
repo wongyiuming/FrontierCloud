@@ -14,9 +14,9 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.audio_page = (ROOT / "static/media/audio-player.html").read_text(encoding="utf-8")
         self.video_page = (ROOT / "static/media/video-player.html").read_text(encoding="utf-8")
         self.network = (ROOT / "static/js/network-observation.js").read_text(encoding="utf-8")
-        self.player_integrity = (ROOT / "app/services/player_directory_label_integrity.py").read_text(encoding="utf-8")
-        self.routing = (ROOT / "app/services/upload_site_routing.py").read_text(encoding="utf-8")
-        self.upload = (ROOT / "app/api/v1/admin_master_mutation_integrity.py").read_text(encoding="utf-8")
+        self.player_integrity = (ROOT / "internal/httpapi/public.go").read_text(encoding="utf-8")
+        self.routing = (ROOT / "internal/store/business/global_media.go").read_text(encoding="utf-8")
+        self.upload = (ROOT / "internal/httpapi/upload_session.go").read_text(encoding="utf-8")
 
     def test_old_pre_end_handoff_is_not_loaded_or_reintroduced(self):
         forbidden = (
@@ -38,10 +38,10 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.assertIn("PLAYER_KIND !== 'audio'", self.core)
 
     def test_continuous_stream_asset_is_content_versioned_at_render_time(self):
-        self.assertIn('LEGACY_CONTINUOUS_STREAM_SCRIPT', self.player_integrity)
-        self.assertIn('filename == "audio-player.html"', self.player_integrity)
-        self.assertIn('static_asset_url("js/audio-continuous-stream.js")', self.player_integrity)
-        self.assertIn("continuous_stream_url", self.player_integrity)
+        self.assertIn('func assetURL', self.player_integrity)
+        self.assertIn('name == "audio-player.html"', self.player_integrity)
+        self.assertIn('p.assets["js/audio-continuous-stream.js"]', self.player_integrity)
+        self.assertIn("sha256.Sum256", self.player_integrity)
 
     def test_mse_contract_is_one_mpeg_sequence_without_end_of_stream(self):
         self.assertIn("const MIME = 'audio/mpeg';", self.core)
@@ -84,6 +84,14 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.assertIn("quota_wait_count", self.core)
         self.assertNotIn("QuotaExceededError') this.markRuntimeSkip", self.core)
 
+    def test_runtime_failures_never_complete_or_skip_a_partial_track(self):
+        self.assertIn("serializeSourceBuffer(operation)", self.core)
+        self.assertIn("this.sourceBufferOperation = next.catch", self.core)
+        self.assertIn("this.blockedError", self.core)
+        self.assertNotIn("markRuntimeSkip", self.core)
+        self.assertNotIn("连续流读取中断", self.core)
+        self.assertNotIn("将提前进入下一首", self.core)
+
     def test_unbuffered_seek_restarts_from_a_range_instead_of_clamping(self):
         self.assertIn("const SEEK_RANGE_ALIGNMENT_BYTES = 64 * 1024;", self.core)
         self.assertIn("Range: `bytes=${seek.rangeStart}-`", self.core)
@@ -108,7 +116,7 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.assertIn("const hasWarning = entries.some", self.core)
         self.assertIn("if (!hasWarning && !existing) return;", self.core)
         self.assertNotIn("renderPlaylist = function renderContinuousAudioPlaylist", self.core)
-        self.assertEqual(self.core.count("decoratePlaylist();"), 2)
+        self.assertEqual(self.core.count("decoratePlaylist();"), 1)
 
     def test_only_mp3_is_auto_continuous_and_other_audio_is_visible_as_skipped(self):
         self.assertIn("mediaPath(media).endsWith('.mp3')", self.core)
@@ -125,13 +133,13 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
         self.assertNotIn("transcode", self.core.lower())
 
     def test_upload_affinity_is_immediate_parent_and_cannot_spill(self):
-        self.assertIn("media_folder_path", self.routing)
-        self.assertIn("media_folder_path(path) != folder", self.routing)
-        self.assertIn("folder_affinity_member", self.routing)
-        self.assertIn("该媒体文件夹绑定的存储节点当前不可写或容量不足", self.routing)
-        self.assertIn("该媒体文件夹的历史资源已分散在多个存储节点", self.routing)
-        self.assertIn("folder_path=folder_path", self.upload)
-        self.assertIn("storage_write_lock", self.upload)
+        self.assertIn("folder := path.Dir(name)", self.routing)
+        self.assertIn("path.Dir(existing) == folder", self.routing)
+        self.assertIn("v.ID != affinity", self.routing)
+        self.assertIn("no online writable member has enough capacity for this media folder", self.routing)
+        self.assertIn("historical media folder is spread across multiple storage members", self.routing)
+        self.assertIn("ReserveMasterUpload", self.upload)
+        self.assertIn("mutationAudit", self.upload)
 
 
 if __name__ == "__main__":

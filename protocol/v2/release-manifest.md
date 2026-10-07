@@ -16,7 +16,7 @@ policy. SQLite/MySQL does not enter artifact selection or wire identity.
 Manifests are at most 8192 bytes. Unknown fields/profiles, duplicate JSON fields,
 trailing input, malformed SHAs, boolean/floating protocol numbers, missing
 artifacts and unsupported protocol/schema are rejected. See the schema and
-shared Python/Go vectors for the exact wire format and canonical digest.
+historical canonical vectors verified by Go for the exact wire format and canonical digest.
 
 Parsing, a Master signature or a manifest digest alone is NOT publication proof.
 Each selected artifact requires independent exact production/source/tree
@@ -25,7 +25,7 @@ successful source push CI. An older success cannot supersede a newer failure.
 Rollback additionally requires historical artifact proof and production ancestry;
 it must not pick an unrelated local prior SHA or manufacture a previous manifest.
 
-Both runtimes now implement the parser/resolver, independently verified local
+The native Go runtime implements the parser/resolver, independently verified local
 artifact queue, durable joint history, authenticated whole-manifest dispatch and
 bounded common-digest/private-artifact convergence. Updater status RPC advertises
 the optional feature only when its agent supports it; it remains absent from the
@@ -47,13 +47,8 @@ remain failures. Preflight and start dispatch do not inherit this polling retry.
 
 An authenticated Follower status endpoint returns HTTP 503 while its updater
 socket is unavailable, including immutable agent handoff. It must not return a
-successful empty-capability/profile observation for that gap. Both runtime
+successful empty-capability/profile observation for that gap. Native
 endpoints retain their role/authentication checks before probing the agent.
 
 Without that setting, legacy same-SHA releases remain fail-closed across different
-publication branches. Actual private ten-node Go/SQLite and Python/MySQL Master
-fleets passed whole-release 1.0 confirmation, 2.0 replacement and 1.0 rollback,
-including both runtimes/stores, live agent proof and post-release core restart.
-This uses synthetic reviewed CI metadata for real private Git objects through
-the unchanged HTTPS verifier, not published production CI. Publication-asset
-automation remains separate; see `docs/go-only-completion.md` for acceptance evidence.
+publication branches. Current development acceptance uses five native nodes for Gin/SQLite and Gin/MySQL, including whole-manifest upgrade/rollback, live agent proof and post-release restart. It uses synthetic reviewed CI metadata for real private Git objects through the unchanged HTTPS verifier, not published production CI. No Python artifact may be deployed. Publication-asset automation remains separate; see docs/go-only-completion.md.

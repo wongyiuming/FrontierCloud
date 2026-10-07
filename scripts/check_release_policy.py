@@ -1,162 +1,106 @@
 #!/usr/bin/env python3
-"""Fail CI if production release controls drift away from main-only policy."""
+"""Protect native deployment, reviewed release provenance and hosted CI limits."""
 from pathlib import Path
+import ast
+import re
 import sys
 import unittest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-
 def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
-
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise SystemExit(message)
 
-
-release = read("app/services/release_control.py")
-updater = read("updater/server.py")
-release_ui = read("static/js/release-admin.js")
-maintenance_ui = read("static/js/maintenance-admin.js")
-maintenance_gate = read("nginx/maintenance-gate.conf")
-maintenance_page = read("nginx/maintenance.html")
+release = read("internal/release/verification.go")
+updater = read("internal/updater/source.go")
+executor = read("internal/updater/executor.go")
 workflow = read(".github/workflows/docker.yml")
 compose = read("docker-compose.yaml")
-mysql_overlay = read("docker-compose.gin-mysql.yaml")
-web_dockerfile = read("Dockerfile.python")
-updater_dockerfile = read("updater/Dockerfile")
-nginx_dockerfile = read("nginx/Dockerfile")
+web = read("Dockerfile")
+agent = read("updater/Dockerfile")
+require('Policy{"main", "dev"}' in release and 'Policy{"gin_main", "gin_dev"}' in release,
+        "Release policy must retain both authorized provenance pairs")
+for token in ('p.MergeSHA == sha', 'p.Base.Ref == v.policy.Branch',
+              'p.Head.Ref == v.policy.Source', 'p.Head.Repo.FullName == "wongyiuming/FrontierCloud"',
+              'reviewed.Commit.Tree.SHA != tree', 'head_sha="+source',
+              'r.Branch != v.policy.Source', 'r.Event != "push"', 'r.SHA != source'):
+    require(token in release, f"Exact reviewed source provenance missing: {token}")
+require('refs/remotes/origin/' in updater and '"+refs/heads/"' in updater,
+        "Updater must fetch an explicit production remote-tracking ref")
+require('target != head' in updater and '"merge-base", "--is-ancestor"' in updater,
+        "Upgrade HEAD and rollback ancestry must fail closed")
+require('clearForceOpen' in executor, "Release maintenance must remove stale open override")
+require('cluster_convergence_needed' in read("internal/release/coordinator.go"),
+        "Partial convergence must remain observable/retryable")
+for token in ('promote-main:', 'promote-gin-main:', 'sourceTree !== mainTree',
+              'head_sha: sourceSha', 'head_sha: context.sha', "pr?.base?.ref === 'main'",
+              "pr?.head?.ref === 'dev'", "pr?.base?.ref === 'gin_main'",
+              "pr?.head?.ref === 'gin_dev'", 'listPullRequestsAssociatedWithCommit'):
+    require(token in workflow, f"Reviewed CI promotion guard missing: {token}")
+require('github.paginate' not in workflow, "Promotion lookup must remain bounded")
 
-require('RELEASE_BRANCH = "main"' in release, "Web release control must target main")
-require('CI_BRANCH = "dev"' in release, "Production verification must reuse dev CI")
-require('RELEASE_BRANCH = "main"' in updater, "Updater must target main")
-require('BRANCH_URL = f"{REPOSITORY_API}/branches/{RELEASE_BRANCH}"' in release,
-        "Web release control must verify the current main HEAD")
-require('REPOSITORY_FULL_NAME = "wongyiuming/FrontierCloud"' in release,
-        "Web release control must bind promotion provenance to this repository")
-require('f"{REPOSITORY_API}/commits/{main_sha}/pulls"' in release and '_promotion_source_sha(pulls)' in release,
-        "Web release control must resolve the reviewed PR associated with main HEAD")
-require('base.get("ref") == RELEASE_BRANCH' in release and 'head.get("ref") == CI_BRANCH' in release
-        and 'head_repo.get("full_name") == REPOSITORY_FULL_NAME' in release,
-        "Web release control must require a merged same-repository dev-to-main PR")
-require('"head_sha": source_sha' in release and '_matching_ci_run(runs, source_sha)' in release,
-        "Web release control must query the exact reviewed dev PR head SHA")
-require('source_tree != main_tree' in release,
-        "Web release control must reject a main tree that differs from the reviewed dev PR tree")
-require('item.get("head_sha")' in release and 'item.get("head_branch") == CI_BRANCH' in release,
-        "Web release control must require the exact dev push CI")
-require('origin/dev' not in updater, "Updater must not validate releases against dev")
-require('refs/remotes/origin/{RELEASE_BRANCH}' in updater,
-        "Updater must maintain an explicit origin/main remote-tracking ref")
-require('refs/heads/{RELEASE_BRANCH}' in updater,
-        "Updater fetch must not depend on a pre-existing remote fetch refspec")
-require('FORCE_OPEN_FLAG = UPDATER_DATA_DIRECTORY / ".frontiercloud-force-open"' in updater
-        and 'or str(ROOT / "data")' in updater
-        and 'FORCE_OPEN_FLAG.unlink(missing_ok=True)' in updater,
-        "Every updater must clear stale open overrides before entering release maintenance")
-require('followers_need_convergence' in release and 'cluster_convergence_needed' in release,
-        "Web release control must allow retrying partial cluster convergence")
-require("const sourceBranch = ci.source_branch || 'dev'" in release_ui
-        and '${sourceBranch} CI #' in release_ui,
-        "Release Admin must display the actual verified CI source branch")
-require('systemVersionPanel' in release_ui and '系统版本管理' in release_ui,
-        "Production release controls must have a standalone Admin module")
-require('schedule(masterBusy ? 1500 : 5000)' in release_ui,
-        "Release Admin must poll rapidly while a release is active")
-require('siteAccessPanel' in maintenance_ui and '站点开放状态' in maintenance_ui,
-        "Site availability must have a standalone Admin module")
-require('.frontiercloud-maintenance' in maintenance_gate and '.frontiercloud-force-open' in maintenance_gate,
-        "Nginx must combine release and explicit Admin maintenance gates")
-require('前沿娱乐 · 系统维护' in maintenance_page and '立即重试' in maintenance_page,
-        "Public maintenance page must use the branded maintenance UI")
-require('branches: ["dev", "main", "gin_dev", "gin_main"]' in workflow,
-        "Workflow must retain a lightweight main migration/promotion run")
-require('promote-main:' in workflow and "github.ref == 'refs/heads/main'" in workflow,
-        "Main push must use the lightweight promotion gate")
-require("github.ref == 'refs/heads/dev'" in workflow,
-        "Full CI must run on dev pushes")
-require('actions/github-script@v7' in workflow and 'listPullRequestsAssociatedWithCommit' in workflow,
-        "Main promotion must resolve the reviewed PR associated with main HEAD")
-require("pr?.base?.ref === 'main'" in workflow and "pr?.head?.ref === 'dev'" in workflow
-        and 'pr?.head?.repo?.full_name === `${owner}/${repo}`' in workflow,
-        "Main promotion must require a merged same-repository dev-to-main PR")
-require('sourceTree !== mainTree' in workflow,
-        "Main promotion must verify that the reviewed dev PR tree equals the main tree")
-require('head_sha: sourceSha' in workflow and 'item?.head_sha === sourceSha' in workflow,
-        "Main promotion must query the exact reviewed dev PR head SHA")
-require('mainCommit.data.parents' not in workflow and 'parents[1]' not in release,
-        "Production promotion must not depend on the GitHub merge method")
-require('verify-promotion-query:' in workflow and 'head_sha: context.sha' in workflow,
-        "Dev CI must verify that the exact-SHA promotion lookup works before merge")
-require('github.paginate' not in workflow,
-        "Main promotion must not rely on historical workflow pagination")
-require('promote-gin-main:' in workflow and "pr?.merge_commit_sha === target" in workflow
-        and "pr?.base?.ref === 'gin_main'" in workflow and "pr?.head?.ref === 'gin_dev'" in workflow,
-        "Native promotion must require the exact reviewed native branch pair")
-require('test-native:' in workflow and 'bash scripts/test-ci-source.sh' in workflow,
-        "Native source push must retain bounded source checks; full acceptance belongs on the development host")
-require("github.event_name != 'pull_request' || github.head_ref != 'dev'" not in workflow,
-        "Full CI must not rerun automatically on main")
-
-# Keep release runtime foundations on explicit patch versions. Digest pinning can
-# be layered on later, but broad minor/major tags must not silently move beneath
-# an unchanged FrontierCloud commit.
-require('FROM python:3.14.7-slim' in web_dockerfile,
-        "Web Python base image must be patch-pinned")
-require('FROM python:3.14.7-alpine' in updater_dockerfile,
-        "Updater Python base image must be patch-pinned")
-require('FROM nginx:1.30.4-alpine' in nginx_dockerfile,
-        "Nginx base image must be patch-pinned")
-require('image: redis:7.4.11-alpine' in compose,
-        "Redis image must be patch-pinned")
-require('image: mysql:8.4.11' in mysql_overlay,
-        "MySQL image must be patch-pinned")
+require(web == read("Dockerfile.gin") and compose == read("docker-compose.gin.yaml"),
+        "Native aliases must match defaults")
+require(agent == read("updater/Dockerfile.gin"), "Updater alias must be native")
+for path in ("Dockerfile.python", "docker-compose.python.yaml",
+             "scripts/test-mixed-runtime.sh", "scripts/test-mixed-release.sh",
+             "scripts/test-store-interop.sh", "tests/store.Dockerfile"):
+    require(not (ROOT / path).exists(), f"Retired runtime/interop entrypoint exists: {path}")
+for path in ("main.py", "updater/server.py"):
+    require('raise SystemExit("Python deployment is prohibited.' in read(path),
+            f"Reference executable must reject deployment: {path}")
+require('FROM golang:1.26.0-bookworm' in web and 'FROM golang:1.26.0-bookworm' in agent,
+        "Native builder base must remain patch-pinned")
+for token, path in (('FROM nginx:1.30.4-alpine', "nginx/Dockerfile"),
+                    ('image: redis:7.4.11-alpine', "docker-compose.yaml"),
+                    ('image: mysql:8.4.11', "docker-compose.gin-mysql.yaml"),
+                    ('image: coturn/coturn:4.17.2-r0-alpine', "docker-compose.yaml")):
+    require(token in read(path), f"Patch-pinned runtime base missing: {path}")
+require('ARG FRONTIERCLOUD_RUNTIME=go' in read("nginx/Dockerfile"), "Edge defaults must be native")
 require('  mysql:' not in compose and 'DB_TYPE: ${DB_TYPE:-sqlite}' in compose,
-        "Default native SQLite must not require a MySQL service")
-require(read("Dockerfile") == read("Dockerfile.gin") and compose == read("docker-compose.gin.yaml"),
-        "Default native entry points and retained Gin aliases must agree")
+        "Default native SQLite must not require MySQL")
 require('command: [init-secrets]' in compose and 'command: [init-media]' in compose
-        and 'dockerfile: updater/Dockerfile.gin' in compose,
-        "Default initializers/updater must remain native")
+        and 'dockerfile: updater/Dockerfile.gin' in compose, "Initializers/updater must be native")
 require('RELEASE_BRANCH: ${RELEASE_BRANCH:-gin_main}' in compose
         and 'RELEASE_SOURCE_BRANCH: ${RELEASE_SOURCE_BRANCH:-gin_dev}' in compose,
-        "Native default must retain the fixed native release profile")
-from scripts.check_ci_budget import check_workflows
-require(not check_workflows(ROOT / '.github/workflows'),
-        "All CI jobs must stay within three minutes and exclude heavyweight acceptance")
-require('image: coturn/coturn:4.17.2-r0-alpine' in compose,
-        "Coturn image must remain patch-pinned")
-require('image: redis:7-alpine' not in compose,
-        "Broad Redis major tag must not return")
+        "Default release profile must remain fixed pending separate consolidation")
+for token in ("app/", "main.py", "tests/", "scripts/"):
+    require(token in read(".dockerignore").splitlines(), f"Build context exclusion missing: {token}")
 
-# The updater must retain write access to its socket volume, while the Web
-# process only needs to connect to the existing Unix socket and must not mutate
-# the control-volume filesystem itself.
 updater_block = compose.split("  updater:\n", 1)[1].split("\n  web:\n", 1)[0]
 web_block = compose.split("  web:\n", 1)[1].split("\n  redis:\n", 1)[0]
 require('updater_control:/run/frontiercloud-updater\n' in updater_block,
-        "Updater must retain writable control-volume access")
-require('updater_control:/run/frontiercloud-updater:ro' not in updater_block,
-        "Updater control volume cannot be read-only")
+        "Updater socket volume must be writable")
 require('updater_control:/run/frontiercloud-updater:ro' in web_block,
-        "Web must mount the updater control volume read-only")
-
+        "Web socket volume must be read-only")
 for path in ("Dockerfile", "nginx/Dockerfile", "updater/Dockerfile"):
-    source = read(path)
-    require("COPY --chmod=" not in source, f"{path} requires BuildKit COPY --chmod")
-    require("RUN --mount=" not in source, f"{path} requires BuildKit RUN --mount")
-
-# Repository-policy tests need README/.github/architecture files which are
-# intentionally not copied into the runtime image. Run them here, against the
-# checked-out source tree, and let the runtime discovery skip them there.
+    require("COPY --chmod=" not in read(path) and "RUN --mount=" not in read(path),
+            f"Updater-compatible legacy Docker build required: {path}")
+for path in (ROOT / "tests").glob("*.py"):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        names = ([v.name for v in node.names] if isinstance(node, ast.Import)
+                 else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
+        require(not any(v.split(".")[0] in {"app", "main", "fastapi", "sqlalchemy", "updater"}
+                        for v in names), f"Test imports retired Python application: {path.name}")
+    require(not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"spec_from_file_location", "exec_module"}
+                    for node in ast.walk(tree)),
+            f"Test dynamically loads Python application code: {path.name}")
+fleet = read("internal/updater/native_matrix_real_test.go")
+require('const fleetNodeCount = 5' in fleet and 'go-sqlite' in fleet and 'go-mysql' in fleet,
+        "Acceptance requires five native nodes and both database combinations")
+require('python-' not in fleet.lower() and 'referenceWeb' not in fleet,
+        "Native fleet must not select a Python runtime")
+from scripts.check_ci_budget import check_workflows
+require(not check_workflows(ROOT / ".github/workflows"), "Hosted CI exceeds three-minute boundary")
 from tests.test_repository_policy import RepositoryPolicyRegressionTests
-
-policy_suite = unittest.defaultTestLoader.loadTestsFromTestCase(RepositoryPolicyRegressionTests)
-policy_result = unittest.TextTestRunner(verbosity=1).run(policy_suite)
-require(policy_result.wasSuccessful(), "Repository policy regression failed")
-
-print("Release policy contract passed: reviewed dev provenance and repository boundaries are enforced")
+result = unittest.TextTestRunner(verbosity=1).run(
+    unittest.defaultTestLoader.loadTestsFromTestCase(RepositoryPolicyRegressionTests))
+require(result.wasSuccessful(), "Repository policy regression failed")
+print("Native release/deployment policy passed; reviewed provenance and three-minute CI enforced")

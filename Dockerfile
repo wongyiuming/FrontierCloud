@@ -11,7 +11,7 @@ COPY migrations ./migrations
 COPY static ./static
 # Keep deployment contract tests executable in the build stage only.
 COPY Dockerfile Dockerfile.gin ./
-COPY updater/Dockerfile.gin ./updater/Dockerfile.gin
+COPY updater/Dockerfile updater/Dockerfile.gin ./updater/
 # Bound per-build package/compiler parallelism. Several independent node agents
 # may build on one Engine; inheriting every host CPU can exhaust host memory.
 RUN GOMAXPROCS=2 CGO_ENABLED=0 /usr/local/go/bin/go test -p=1 ./... && \

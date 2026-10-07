@@ -1,7 +1,7 @@
 FROM nginx:1.30.4-alpine
 
 ARG REVISION
-ARG FRONTIERCLOUD_RUNTIME=python
+ARG FRONTIERCLOUD_RUNTIME=go
 LABEL frontiercloud.revision=$REVISION frontiercloud.component="nginx" \
       frontiercloud.runtime=$FRONTIERCLOUD_RUNTIME frontiercloud.schema-generation="2"
 

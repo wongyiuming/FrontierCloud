@@ -90,11 +90,7 @@ same release on one Engine. The full project label and exact revision/component
 provenance remain mandatory; the short namespace is not authorization by itself.
 Existing unsuffixed bootstrap images remain admissible by immutable image proof.
 Cleanup ignores foreign namespaces even if their labels claim the local owner.
-The explicit Python reference updater uses the same namespace vector and bounded,
-non-forced tag-only cleanup. Neither implementation prunes shared parents.
-The reference SDK inventory is filtered by full project ownership before its
-per-image inspections. An inventory failure retains images and skips optional
-cleanup; it cannot turn an already committed healthy generation into failure.
+Python updater sources are non-executable syntax references only. The native updater alone enforces namespace-scoped, bounded, non-forced tag cleanup; it never prunes shared parents. An inventory failure retains images and skips optional cleanup without turning a healthy committed generation into failure.
 
 Native image compilation bounds package parallelism to one and compiler runtime
 parallelism to two (`-p=1`, build-command-only `GOMAXPROCS=2`). These limits are
@@ -122,8 +118,8 @@ commit boundaries and immutable agent handoff. Linux real-driver/race checks and
 real Docker archive/build/helper/container replacement tests have passed. The
 full native disposable-stack upgrade/handoff/rollback test also passed, including
 unprivileged Web access to the group-restricted socket. This uses a fresh private
-Git origin and a separate Standalone project, not production CI or ten-node
-mixed-runtime acceptance; do not interpret it as either of those gates.
+Git origin and a separate Standalone project, not production CI or five-node
+native-fleet acceptance; do not interpret it as either of those gates.
 The additional actual whole-manifest stacks passed on SQLite and MySQL on
 2026-10-04. They use the unchanged compiled control wire and fixed HTTPS verifier
 against a private-CA synthetic publication fixture for real private Git objects.
@@ -131,11 +127,4 @@ They cover wrong-tree rejection before replacement, whole history when only the
 other profile changes, and manifest retention through upgrade/handoff/rollback.
 The other profile's artifact is not executed by this local native proof.
 The isolated fixtures do not explicitly redeploy original development nodes.
-The shared-host resource incident and later successful serial mixed-release
-acceptance are recorded in `docs/go-only-completion.md`; original MySQL processes
-were impacted by the incident, so that environment must not be called untouched.
-The native default and newly
-created mixed-fleet durable-role startup/restart gates are documented separately
-in `native-deployment.md`. This standalone updater proof does not establish
-actual mixed-profile whole-release execution, historical migration admission
-or portable physical restore.
+Historical reconstruction results are archived under docs/audits/go-reconstruction-through-2026-10-05.md. Current acceptance is five native nodes, repeated for Gin/SQLite and Gin/MySQL, on the development host only. Hosted CI remains bounded to three minutes and never executes these stacks. Native default and role restart boundaries are in native-deployment.md. Standalone updater proof alone does not establish whole-fleet convergence, historical migration admission or portable physical restore.

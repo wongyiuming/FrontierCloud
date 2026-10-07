@@ -1,7 +1,27 @@
-FROM python:3.14.7-alpine
+FROM golang:1.26.0-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN /usr/local/go/bin/go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+COPY protocol ./protocol
+COPY migrations ./migrations
+ARG REVISION
+RUN test -n "$REVISION" && \
+    GOMAXPROCS=2 CGO_ENABLED=0 /usr/local/go/bin/go build -p=1 -trimpath \
+    -ldflags="-s -w -X main.Revision=$REVISION" \
+    -o /out/frontiercloud-updater ./cmd/frontiercloud-updater
 
-RUN apk add --no-cache ca-certificates git \
-    && python -m pip install --no-cache-dir docker==7.1.0 cryptography==50.0.1
-
+FROM debian:13.3-slim
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates git openssh-client && \
+    rm -rf /var/lib/apt/lists/*
+ARG REVISION
+LABEL frontiercloud.revision=$REVISION frontiercloud.component="updater" \
+      frontiercloud.runtime="go" frontiercloud.schema-generation="2" \
+      frontiercloud.release-manifest-version="1"
+COPY --from=build /out/frontiercloud-updater /app/frontiercloud-updater
 WORKDIR /workspace
-CMD ["python", "/workspace/updater/server.py"]
+USER 0:0
+ENTRYPOINT ["/app/frontiercloud-updater"]
+CMD ["serve"]

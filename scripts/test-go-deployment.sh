@@ -21,10 +21,8 @@ export COMPOSE_PROJECT_NAME="fc-go-config-$$"
 export DB_TYPE=sqlite SQLITE_PATH=/app/data/frontiercloud.db
 COMPOSE_FILE=docker-compose.yaml docker compose --env-file /dev/null config --format json > "$work/sqlite.json"
 COMPOSE_FILE=docker-compose.yaml:docker-compose.gin-mysql.yaml docker compose --env-file /dev/null config --format json > "$work/mysql.json"
-COMPOSE_FILE=docker-compose.python.yaml docker compose --env-file /dev/null config --format json > "$work/python-sqlite.json"
-COMPOSE_FILE=docker-compose.python.yaml:docker-compose.gin-mysql.yaml docker compose --env-file /dev/null config --format json > "$work/python-mysql.json"
 docker run --rm -v "$PWD:/src:ro" -v "$work:/compose-check:ro" \
     -e FRONTIERCLOUD_TEST_COMPOSE_JSON_DIR=/compose-check \
     frontiercloud-go:business-test \
     go test -count=1 -v ./internal/deployment
-printf '%s\n' 'PASS: actual Go/Python x SQLite/MySQL Compose selection'
+printf '%s\n' 'PASS: actual native Go x SQLite/MySQL Compose selection'

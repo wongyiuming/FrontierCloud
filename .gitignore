@@ -71,3 +71,6 @@ certs/*.pem
 
 # VS Code
 .vscode/
+
+# Wiki belongs to the separate GitHub Wiki repository.
+/docs/wiki/

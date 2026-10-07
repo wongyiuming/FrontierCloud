@@ -2,6 +2,8 @@
 """Release agent: git + Docker Engine only, without the Compose CLI or systemd."""
 from __future__ import annotations
 
+raise SystemExit("Python deployment is prohibited. Use the native Go updater.")
+
 import copy
 import hashlib
 import json
