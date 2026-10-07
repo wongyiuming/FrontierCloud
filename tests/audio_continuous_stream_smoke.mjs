@@ -160,6 +160,47 @@ assert.equal(
     'quota pressure must retry the same append after silent capacity backpressure',
 );
 
+// Natural transitions invoke pruning from timeupdate while look-ahead appends
+// are awaiting capacity. Both callers must share the same operation queue.
+const operations = [];
+const listeners = new Map();
+let low = 0;
+const target = {
+    updating: false,
+    buffered: {length: 1, start: () => low, end: () => 400},
+    addEventListener(name, callback) {
+        if (!listeners.has(name)) listeners.set(name, new Set());
+        listeners.get(name).add(callback);
+    },
+    removeEventListener(name, callback) { listeners.get(name)?.delete(callback); },
+    run(kind) {
+        assert.equal(this.updating, false, 'append/remove must never overlap');
+        this.updating = true;
+        operations.push(kind);
+        setImmediate(() => {
+            this.updating = false;
+            if (kind === 'remove') low = 316 - 0.08;
+            for (const callback of [...(listeners.get('updateend') || [])]) callback();
+        });
+    },
+    appendBuffer() { this.run('append'); },
+    remove() { this.run('remove'); },
+};
+const serial = Object.create(windowObject.__ContinuousAudioSession.prototype);
+const active = {index: 1, start: 316, end: null};
+Object.assign(serial, {closed: false, generation: 8, sourceBuffer: target, segments: [active], activeSegment: active, lastPrunedBefore: 0});
+serial.waitForAppendCapacity = async () => {};
+context.art = {video: {currentTime: 320}};
+windowObject.__setContinuousSessionForTest(serial);
+await Promise.all([
+    serial.appendBytes(new Uint8Array([1])),
+    serial.pruneBeforeActive(),
+    serial.pruneBeforeActive(),
+    serial.appendBytes(new Uint8Array([2])),
+]);
+assert.equal(operations.filter(v => v === 'append').length, 2);
+assert.equal(operations.filter(v => v === 'remove').length, 1, 'queued duplicate pruning must recheck ranges');
+
 // A slow Direct transfer must deliver partial batches while its next read is
 // pending, without consuming that read twice or changing byte order.
 context.currentMediaList = [{type: 'audio', media_path: 'music/direct/song.mp3', url: '/fixture'}];
@@ -229,6 +270,24 @@ await large.candidate.appendTrack(0);
 assert.equal(large.batches[0].length, 65536);
 assert.ok(large.batches.every(bytes => bytes.length <= 512 * 1024), 'MSE append size must not depend on native fetch chunk size');
 assert.deepEqual(Buffer.concat(large.batches), Buffer.from(largeChunk));
+
+let errorRead = 0;
+const broken = transferCandidate({
+    read: async () => errorRead++ === 0 ? {done: false, value: largeChunk} : {done: true},
+    cancel: async () => {},
+}, largeChunk.length);
+let appendCalls = 0;
+broken.candidate.sourceBuffer = {};
+broken.candidate.appendBytes = async () => {
+    if (appendCalls++ > 0) throw Object.assign(new Error('decoder state failure'), {name:'InvalidStateError'});
+};
+await assert.rejects(broken.candidate.appendTrack(0), /decoder state failure/);
+assert.equal(broken.candidate.segments[0].end, null, 'an interrupted track must never become an early completed boundary');
+broken.candidate.fail(Object.assign(new Error('decoder state failure'), {name:'InvalidStateError'}));
+assert.equal(broken.candidate.closed, false, 'runtime failure must hold the same session');
+assert.equal(broken.candidate.blockedError.name, 'InvalidStateError');
+assert.equal(context.currentMediaList[0].continuous_stream_runtime_skip, undefined);
+assert.doesNotMatch(source, /markRuntimeSkip|连续流读取中断|将提前进入下一首/);
 
 const stopController = new AbortController();
 const stopping = Object.create(windowObject.__ContinuousAudioSession.prototype);

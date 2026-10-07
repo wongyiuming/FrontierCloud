@@ -14,3 +14,4 @@ node tests/admin_ui_smoke.mjs
 node tests/player_cache_smoke.mjs
 node tests/network_observation_smoke.mjs
 node tests/audio_continuous_stream_smoke.mjs
+node tests/audio_continuous_fetch_retry_smoke.mjs

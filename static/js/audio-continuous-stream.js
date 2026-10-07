@@ -344,6 +344,7 @@
             this.mediaSource = new MediaSource();
             this.objectUrl = URL.createObjectURL(this.mediaSource);
             this.sourceBuffer = null;
+            this.sourceBufferOperation = Promise.resolve();
             this.segments = [];
             this.activeSegment = null;
             this.appendPromise = null;
@@ -497,8 +498,21 @@
             throw new Error('stale session');
         }
 
+        serializeSourceBuffer(operation) {
+            // Appends and removals share one queue. Waiting for updateend before
+            // awaiting capacity is not a lock: timeupdate can begin a removal.
+            const previous = this.sourceBufferOperation || Promise.resolve();
+            const next = previous.catch(() => {}).then(async () => {
+                if (this.closed || session !== this) throw new Error('stale session');
+                await this.waitUpdateEnd();
+                return operation();
+            });
+            this.sourceBufferOperation = next.catch(() => {});
+            return next;
+        }
+
         appendBufferOnce(chunk) {
-            return new Promise((resolve, reject) => {
+            return this.serializeSourceBuffer(() => new Promise((resolve, reject) => {
                 const cleanup = () => {
                     this.sourceBuffer.removeEventListener('updateend', onUpdateEnd);
                     this.sourceBuffer.removeEventListener('error', onFailure);
@@ -515,7 +529,7 @@
                     cleanup();
                     reject(error);
                 }
-            });
+            }));
         }
 
         async appendBytes(value) {
@@ -538,24 +552,11 @@
             throw new Error('stale session');
         }
 
-        markRuntimeSkip(index, reason) {
-            const media = currentMediaList?.[index];
-            if (!media) return;
-            media.continuous_stream_runtime_skip = true;
-            media.continuous_stream_skip_reason = reason || '连续流读取失败 · 自动续播跳过';
-            legacy.renderPlaylist();
-            decoratePlaylist();
-            setPlaylistActive(currentIndex);
-        }
-
         nextAppendIndex() {
             if (!this.order.length) return null;
-            for (let guard = 0; guard < this.order.length; guard += 1) {
-                const index = this.order[this.orderPosition % this.order.length];
-                this.orderPosition = (this.orderPosition + 1) % this.order.length;
-                if (!currentMediaList[index]?.continuous_stream_runtime_skip) return index;
-            }
-            return null;
+            const index = this.order[this.orderPosition % this.order.length];
+            this.orderPosition = (this.orderPosition + 1) % this.order.length;
+            return index;
         }
 
         async appendTrack(index) {
@@ -580,27 +581,23 @@
                 });
             } catch (_error) {
                 if (this.closed || session !== this) return false;
-                this.markRuntimeSkip(index, '连续流读取失败 · 自动续播跳过');
-                return false;
+                throw new Error('audio request failed after retry');
             }
             if (!response.ok || !response.body) {
-                this.markRuntimeSkip(index, '连续流读取失败 · 自动续播跳过');
-                return false;
+                throw new Error('audio response unavailable');
             }
 
             const responseLength = Number(response.headers.get('Content-Length') || 0);
             const range = responseContentRange(response.headers);
             const totalBytes = range?.total || seek?.totalBytes || responseLength;
             if (totalBytes > MAX_TRACK_BYTES) {
-                this.markRuntimeSkip(index, '文件过大，不进入连续流 · 自动续播跳过');
                 response.body.cancel?.().catch?.(() => {});
-                return false;
+                throw new Error('audio response exceeds byte guard');
             }
             const contentType = String(response.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
             if (contentType && !['audio/mpeg', 'audio/mp3', 'application/octet-stream'].includes(contentType)) {
-                this.markRuntimeSkip(index, '媒体响应格式不兼容连续流 · 自动续播跳过');
                 response.body.cancel?.().catch?.(() => {});
-                return false;
+                throw new Error('audio response format is incompatible');
             }
 
             const start = this.bufferedEnd();
@@ -691,10 +688,7 @@
                     if (done) break;
                     bytes += value.byteLength;
                     if (bytes > MAX_TRACK_BYTES) {
-                        segment.partial = true;
-                        this.markRuntimeSkip(index, '文件过大，连续流仅保留已缓冲部分');
-                        await reader.cancel();
-                        break;
+                        throw new Error('audio response exceeds byte guard');
                     }
                     // Fetch chunk sizes are browser-controlled and may be several
                     // MiB after backpressure. Bound each individual MSE append.
@@ -712,8 +706,9 @@
                 }
                 await flush();
             } catch (error) {
-                if (this.closed || session !== this) throw error;
-                segment.partial = true;
+                // An incomplete segment is not a completed song. Never shorten
+                // its boundary or append a different song after an error.
+                throw error;
             } finally {
                 // Cancel partially consumed responses on switch or decoder failure.
                 void reader.cancel().catch(() => {});
@@ -722,15 +717,11 @@
             const end = this.bufferedEnd();
             if (end <= start + 0.01) {
                 this.segments = this.segments.filter(item => item !== segment);
-                this.markRuntimeSkip(index, '连续流无法解析该文件 · 自动续播跳过');
-                return false;
+                throw new Error('audio response produced no decodable frames');
             }
             segment.end = end;
             segment.duration = Math.max(0, end - start);
             latchPresentationDuration(segment, segment.duration);
-            if (segment.partial) {
-                this.markRuntimeSkip(index, '连续流读取中断 · 将提前进入下一首');
-            }
             art?._syncTime?.();
             art?._syncBuffered?.();
             return true;
@@ -742,7 +733,7 @@
         }
 
         async ensureLookahead() {
-            if (this.appendPromise || this.closed || session !== this) return this.appendPromise;
+            if (this.appendPromise || this.closed || this.blockedError || session !== this) return this.appendPromise;
             this.appendPromise = (async () => {
                 let failures = 0;
                 while (!this.closed && session === this && this.futureSegmentCount() < LOOKAHEAD_TRACKS) {
@@ -767,22 +758,25 @@
 
         async pruneBeforeActive() {
             if (!this.activeSegment || !this.sourceBuffer || this.sourceBuffer.updating || !art?.video) return;
-            const globalTime = Number(art.video.currentTime) || 0;
-            if (globalTime < this.activeSegment.start + PRUNE_AFTER_SECONDS) return;
-            const removeEnd = Math.max(0, this.activeSegment.start - BOUNDARY_EPSILON);
-            if (removeEnd <= this.lastPrunedBefore + 0.1) return;
-            const ranges = this.sourceBuffer.buffered;
-            if (!ranges?.length || ranges.start(0) >= removeEnd) return;
-            try {
-                const done = waitForEvent(this.sourceBuffer, 'updateend', ['error', 'abort']);
-                this.sourceBuffer.remove(0, removeEnd);
-                await done;
-                this.lastPrunedBefore = removeEnd;
-                this.segments = this.segments.filter(segment => segment === this.activeSegment
-                    || segment.end === null || segment.end > removeEnd + BOUNDARY_EPSILON);
-            } catch (_error) {
-                // Pruning is an optimization; playback must not depend on it.
-            }
+            return this.serializeSourceBuffer(async () => {
+                if (!this.activeSegment || !art?.video) return;
+                const globalTime = Number(art.video.currentTime) || 0;
+                if (globalTime < this.activeSegment.start + PRUNE_AFTER_SECONDS) return;
+                const removeEnd = Math.max(0, this.activeSegment.start - BOUNDARY_EPSILON);
+                if (removeEnd <= this.lastPrunedBefore + 0.1) return;
+                const ranges = this.sourceBuffer.buffered;
+                if (!ranges?.length || ranges.start(0) >= removeEnd) return;
+                try {
+                    const done = waitForEvent(this.sourceBuffer, 'updateend', ['error', 'abort']);
+                    this.sourceBuffer.remove(0, removeEnd);
+                    await done;
+                    this.lastPrunedBefore = removeEnd;
+                    this.segments = this.segments.filter(segment => segment === this.activeSegment
+                        || segment.end === null || segment.end > removeEnd + BOUNDARY_EPSILON);
+                } catch (_error) {
+                    // Pruning is an optimization; playback must not depend on it.
+                }
+            });
         }
 
         syncTrackFromVideo() {
@@ -817,6 +811,13 @@
 
         fail(error) {
             if (this.closed || session !== this) return;
+            if (this.sourceBuffer && this.segments.length) {
+                // Keep the current media session and unfinished business track.
+                // Decoder/state errors are not transport retries or auto-next.
+                this.blockedError = {name: error?.name || 'Error', message: String(error?.message || error)};
+                console.warn('FrontierCloud audio pipeline held', this.blockedError);
+                return;
+            }
             const index = currentIndex;
             this.stop();
             const media = currentMediaList?.[index];
@@ -981,6 +982,7 @@
             buffered_tracks: session?.segments?.length || 0,
             buffered_ahead_seconds: session?.bufferedAhead() || 0,
             quota_wait_count: session?.quotaWaitCount || 0,
+            pipeline_error: session?.blockedError || null,
         }),
     };
 })();

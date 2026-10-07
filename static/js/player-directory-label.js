@@ -61,13 +61,17 @@
             if (!generationIsCurrent(generation) || signal?.aborted) throw stalePlaybackError();
             const delay = retryDelay(attempt);
             await new Promise((resolve, reject) => {
-                const timer = window.setTimeout(resolve, delay);
-                if (!signal) return;
+                const finish = () => {
+                    signal?.removeEventListener('abort', abort);
+                    resolve();
+                };
                 const abort = () => {
                     window.clearTimeout(timer);
+                    signal?.removeEventListener('abort', abort);
                     reject(signal.reason || stalePlaybackError());
                 };
-                signal.addEventListener('abort', abort, {once: true});
+                const timer = window.setTimeout(finish, delay);
+                signal?.addEventListener('abort', abort, {once: true});
             });
             if (!generationIsCurrent(generation) || signal?.aborted) throw stalePlaybackError();
         }
@@ -89,18 +93,22 @@
             return match ? Number(match[1]) : 0;
         }
 
-        async function requestUntilReadable(input, init, offset, generation) {
+        async function requestUntilReadable(input, init, offset, generation, identity = null) {
             let attempt = 0;
             while (generationIsCurrent(generation) && !init?.signal?.aborted) {
                 let response = null;
                 try {
                     const headers = new Headers(init?.headers || {});
                     if (offset > 0) headers.set('Range', `bytes=${offset}-`);
+                    if (offset > 0 && identity?.etag) headers.set('If-Range', identity.etag);
                     response = await nativeFetch(input, {...init, headers});
                     if (response.ok && response.body) {
                         if (offset === 0) return response;
                         const range = contentRange(response.headers);
-                        if (response.status === 206 && range?.start === offset) return response;
+                        const sameTotal = !identity?.total || range?.total === identity.total;
+                        const etag = response.headers.get('ETag');
+                        const sameObject = !identity?.etag || etag === identity.etag;
+                        if (response.status === 206 && range?.start === offset && sameTotal && sameObject) return response;
                     }
                 } catch (_error) {
                     // Network failures are transient for continuous-audio prefetch.
@@ -121,11 +129,26 @@
             if (!mediaStreamRequest(input, init)) return nativeFetch(input, init);
 
             const generation = currentPlaybackGeneration();
+            const controller = new AbortController();
+            const callerSignal = init.signal;
+            const abort = () => controller.abort(callerSignal?.reason);
+            if (callerSignal?.aborted) abort();
+            else callerSignal?.addEventListener('abort', abort, {once: true});
+            init = {...init, signal: controller.signal};
+            const release = () => callerSignal?.removeEventListener('abort', abort);
             const initialOffset = requestedRangeOffset(init);
-            const first = await requestUntilReadable(input, init, initialOffset, generation);
+            let first;
+            try {
+                first = await requestUntilReadable(input, init, initialOffset, generation);
+            } catch (error) {
+                release();
+                throw error;
+            }
             const exposedHeaders = new Headers(first.headers);
             const initialRange = contentRange(first.headers);
             let totalBytes = initialRange?.total || Number(first.headers.get('Content-Length') || 0);
+            const etag = first.headers.get('ETag');
+            const identity = {total: totalBytes, etag: etag && !etag.startsWith('W/') ? etag : null};
             if (totalBytes > 0) exposedHeaders.set('Content-Length', String(Math.max(0, totalBytes - initialOffset)));
 
             let reader = first.body.getReader();
@@ -137,6 +160,7 @@
                     while (!closed) {
                         if (!generationIsCurrent(generation) || init?.signal?.aborted) {
                             closed = true;
+                            release();
                             controller.error(stalePlaybackError());
                             return;
                         }
@@ -150,18 +174,27 @@
                             }
                             if (!totalBytes || offset >= totalBytes) {
                                 closed = true;
+                                release();
                                 controller.close();
                                 return;
                             }
                         } catch (_error) {
                             if (!generationIsCurrent(generation) || init?.signal?.aborted) {
                                 closed = true;
+                                release();
                                 controller.error(stalePlaybackError());
                                 return;
                             }
                         }
 
-                        const resumed = await requestUntilReadable(input, init, offset, generation);
+                        try { await reader.cancel(); } catch (_error) { /* response already failed */ }
+                        reader.releaseLock?.();
+                        await waitForRetry(0, generation, init.signal);
+                        const resumed = await requestUntilReadable(input, init, offset, generation, identity);
+                        if (closed || init.signal.aborted) {
+                            await resumed.body.cancel();
+                            return;
+                        }
                         const range = contentRange(resumed.headers);
                         if (range?.total > 0) totalBytes = range.total;
                         reader = resumed.body.getReader();
@@ -170,6 +203,8 @@
                 },
                 async cancel(reason) {
                     closed = true;
+                    controller.abort(stalePlaybackError());
+                    release();
                     try {
                         await reader.cancel(reason);
                     } catch (_error) {
