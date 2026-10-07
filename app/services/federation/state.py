@@ -13,6 +13,7 @@ from sqlalchemy import delete, func, insert, select, update
 
 from app.core.config import SECRET_DIR
 from app.core.db import engine
+from app.store.database import write_transaction
 from . import protocol as p
 from . import schema as s
 from app.core.logging_config import request_id_context, trace_id_context
@@ -71,7 +72,7 @@ class State:
     async def initialize(self):
         if self._vault is None:
             self._vault = Fernet(vault_key(SECRET_DIR))
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             row = (await conn.execute(select(s.identity).where(s.identity.c.singleton == 1))).mappings().first()
             if row is None:
                 row = dict(singleton=1, node_id=uuid.uuid4().hex, role="Standalone", endpoint="",
@@ -86,6 +87,23 @@ class State:
             from app.services import resource_pool
             await resource_pool.adopt_master_local_media(self.node, self.database)
 
+    async def read_existing_identity(self) -> dict:
+        """Read authority without creating keys, nodes, pool rows or migrations."""
+        async with self.database.connect() as conn:
+            row = (await conn.execute(select(s.identity).where(s.identity.c.singleton == 1))).mappings().first()
+        if row is None or row["role"] not in {"Standalone", "Master", "Follower"}:
+            raise p.ProtocolError("Existing node identity is unavailable")
+        return dict(row)
+
+    async def load_existing_identity(self) -> None:
+        if self._vault is None:
+            # read_bytes must fail if the existing vault is absent; never use
+            # vault_key here, which may generate a replacement secret.
+            self._vault = Fernet((SECRET_DIR / "node-vault.key").read_bytes())
+        row = await self.read_existing_identity()
+        self.unseal(row["private_key"])
+        self.node = row
+
     def identity(self, challenge: str) -> dict:
         if not p.IDENTIFIER.fullmatch(challenge):
             raise p.ProtocolError("Invalid identity challenge")
@@ -93,7 +111,7 @@ class State:
         return p.sign(private, {"node_id": self.node["node_id"], "role": self.node["role"],
                                "endpoint": self.node["endpoint"], "public_key": p.public_key(private),
                                "challenge": challenge, "protocol": p.PROTOCOL_VERSION,
-                               "app_version": p.APP_VERSION})
+                               "app_version": p.APP_VERSION, "capabilities": list(p.BASELINE_CAPABILITIES)})
 
     async def log(self, conn, action: str, actor: str, relationship: str | None = None, **detail):
         request_id, trace_id = request_id_context.get(), trace_id_context.get()
@@ -109,7 +127,7 @@ class State:
         if role not in ("Master", "Follower"):
             raise p.ProtocolError("Role must be Master or Follower")
         endpoint = p.endpoint(endpoint)
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             row = await self.lock(conn)
             if row["role"] != "Standalone":
                 raise p.ProtocolError("节点角色已固定；仅显式重新初始化可重置")
@@ -130,7 +148,7 @@ class State:
             await resource_pool.adopt_master_local_media(self.node, self.database)
 
     async def reset(self, actor: str, confirmation: str):
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             row = await self.lock(conn)
             if confirmation != row["node_id"]:
                 raise p.ProtocolError("请准确输入当前节点 ID 确认重新初始化")
@@ -184,7 +202,7 @@ class State:
 
     async def create_pair(self, actor: str) -> dict:
         now, nonce, token = int(time.time()), uuid.uuid4().hex, secrets.token_urlsafe(48)
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             row = await self.lock(conn)
             if row["role"] != "Follower":
                 raise p.ProtocolError("Only Follower can issue pairing packages")
@@ -208,7 +226,7 @@ class State:
             created_at=int(time.time()))
 
     async def prepare(self, identifier: str, peer: dict, credential: str, actor: str):
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             row = await self.lock(conn)
             if row["role"] != "Master":
                 raise p.ProtocolError("Only Master can import a package")
@@ -225,7 +243,7 @@ class State:
     async def consume(self, package: dict, identifier: str, master: dict, credential: str):
         if not p.IDENTIFIER.fullmatch(identifier) or len(p.decode(credential)) != 48:
             raise p.ProtocolError("Invalid pairing credentials")
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             row = await self.lock(conn)
             if row["role"] != "Follower" or package["node_id"] != row["node_id"]:
                 raise p.ProtocolError("Pair package does not belong to this Follower")
@@ -252,7 +270,7 @@ class State:
             await self.log(conn, "pair-consumed", master["node_id"], identifier)
 
     async def activate(self, identifier: str, actor: str):
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             await self.lock(conn)
             row = (await conn.execute(select(s.relationships).where(s.relationships.c.relationship_id == identifier))).mappings().first()
             if not row or row["state"] == "revoked":
@@ -266,7 +284,7 @@ class State:
                 await resource_pool.register_follower({**dict(row), "state": "active"}, conn=conn)
 
     async def revoke(self, identifier: str, actor: str, *, peer_confirmed=False):
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             node = await self.lock(conn)
             relation = (await conn.execute(select(s.relationships).where(
                 s.relationships.c.relationship_id == identifier).with_for_update())).mappings().first()
@@ -302,7 +320,7 @@ class State:
     async def set_mode(self, identifier: str, mode: str, actor: str):
         if mode not in ("Relay", "Direct"):
             raise p.ProtocolError("Mode must be Relay or Direct")
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             node = await self.lock(conn)
             if node["role"] != "Master":
                 raise p.ProtocolError("Only Master selects transport")
@@ -319,7 +337,7 @@ class State:
     async def accept_mode(self, identifier: str, mode: str, actor: str):
         if mode not in ("Relay", "Direct"):
             raise p.ProtocolError("Invalid relationship mode")
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             node = await self.lock(conn)
             if node["role"] != "Follower":
                 raise p.ProtocolError("Only Follower accepts an upstream's mode")
@@ -336,7 +354,7 @@ class State:
             raise p.ProtocolError("Relationship not active")
         now = int(time.time())
         nonce = p.verify_auth(self.unseal(row["credential"]), headers, method, path, body, now)
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             await self.lock(conn)
             # Recheck revocation under the same lock as nonce insertion.
             current = (await conn.execute(select(s.relationships.c.state).where(s.relationships.c.relationship_id == row["relationship_id"]))).scalar_one()
@@ -353,7 +371,7 @@ class State:
         return row
 
     async def heartbeat(self, identifier: str, success: bool, rtt: int = 0, summary: dict | None = None):
-        async with self.database.begin() as conn:
+        async with write_transaction(self.database) as conn:
             await self.lock(conn)
             row = (await conn.execute(select(s.relationships).where(s.relationships.c.relationship_id == identifier))).mappings().first()
             if not row or row["state"] != "active":

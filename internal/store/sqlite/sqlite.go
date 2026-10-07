@@ -1,0 +1,170 @@
+// Package sqlite implements the SQLite authoritative store backend.
+package sqlite
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/wongyiuming/FrontierCloud/internal/store"
+	"github.com/wongyiuming/FrontierCloud/internal/store/business"
+	"github.com/wongyiuming/FrontierCloud/internal/store/schema"
+
+	_ "modernc.org/sqlite"
+)
+
+// Store owns a SQLite connection pool configured for multiple runtime workers.
+type Store struct {
+	database *sql.DB
+}
+
+// Open creates or opens a SQLite database with the FrontierCloud durability and
+// concurrency baseline applied to every pooled connection.
+func Open(path string) (*Store, error) {
+	return open(context.Background(), path, false, false)
+}
+
+// OpenReadOnly cannot create an absent authoritative database, even if it is
+// removed after an operator's existence check. It never changes journal mode.
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	return open(ctx, path, true, true)
+}
+
+// OpenExisting opens a maintenance writer without creating a missing store.
+func OpenExisting(ctx context.Context, path string) (*Store, error) {
+	return open(ctx, path, false, true)
+}
+
+func open(ctx context.Context, path string, readOnly, existing bool) (*Store, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if path == "" {
+		return nil, errors.New("SQLite path is empty")
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve SQLite path: %w", err)
+	}
+	if !existing {
+		if err := os.MkdirAll(filepath.Dir(absolute), 0o750); err != nil {
+			return nil, fmt.Errorf("create SQLite directory: %w", err)
+		}
+	}
+	// Authoritative SQLite contains sealed credentials and account hashes. The
+	// edge's recording read group must never inherit read access to this store.
+	// Precreate a private inode rather than letting the driver use its 0644
+	// default; native writers also repair the exact existing selected file.
+	if !readOnly {
+		flags := os.O_RDWR
+		if !existing {
+			flags |= os.O_CREATE
+		}
+		before, statErr := os.Lstat(absolute)
+		if statErr == nil && !before.Mode().IsRegular() {
+			return nil, errors.New("SQLite store must be a regular file")
+		}
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return nil, statErr
+		}
+		file, err := os.OpenFile(absolute, flags, 0600)
+		if err != nil {
+			return nil, err
+		}
+		opened, openErr := file.Stat()
+		current, currentErr := os.Lstat(absolute)
+		if openErr != nil || currentErr != nil || !current.Mode().IsRegular() || !os.SameFile(opened, current) || statErr == nil && !os.SameFile(before, opened) {
+			file.Close()
+			return nil, errors.New("SQLite store changed while opening")
+		}
+		modeErr := file.Chmod(0600)
+		if modeErr == nil {
+			modeErr = file.Sync()
+		}
+		if err = errors.Join(modeErr, file.Close()); err != nil {
+			return nil, err
+		}
+	}
+	uriPath := filepath.ToSlash(absolute)
+	// A Windows volume needs file:///C:/..., not file://C:/... (authority).
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	databaseURL := &url.URL{Scheme: "file", Path: uriPath}
+	query := databaseURL.Query()
+	query.Set("_busy_timeout", "5000")
+	query.Set("_defensive", "1")
+	query.Set("_foreign_keys", "on")
+	if readOnly {
+		query.Set("mode", "ro")
+	} else {
+		if existing {
+			query.Set("mode", "rw")
+		}
+		if !existing {
+			query.Set("_journal_mode", "WAL")
+		}
+	}
+	query.Set("_synchronous", "NORMAL")
+	databaseURL.RawQuery = query.Encode()
+
+	database, err := sql.Open("sqlite", databaseURL.String())
+	if err != nil {
+		return nil, fmt.Errorf("open SQLite: %w", err)
+	}
+	database.SetMaxOpenConns(4)
+	database.SetMaxIdleConns(4)
+	store := &Store{database: database}
+	if err := store.Ping(ctx); err != nil {
+		_ = database.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func (store *Store) Backend() string {
+	return "sqlite"
+}
+
+func (store *Store) Initialize(ctx context.Context) error {
+	return schema.Initialize(ctx, store.database, store.Backend())
+}
+
+func (store *Store) Ping(ctx context.Context) error {
+	if err := store.database.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping SQLite: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) Close() error {
+	return store.database.Close()
+}
+
+func (s *Store) Media() store.MediaRepository          { return business.New(s.database, s.Backend()) }
+func (s *Store) Nodes() store.NodeRepository           { return business.New(s.database, s.Backend()) }
+func (s *Store) Pool() store.PoolRepository            { return business.New(s.database, s.Backend()) }
+func (s *Store) Karaoke() store.KaraokeRepository      { return business.New(s.database, s.Backend()) }
+func (s *Store) Recordings() store.RecordingRepository { return business.New(s.database, s.Backend()) }
+func (s *Store) Backups() store.BackupRepository       { return business.New(s.database, s.Backend()) }
+func (s *Store) Maintenance() store.MaintenanceRepository {
+	return business.New(s.database, s.Backend())
+}
+func (s *Store) Admin() store.AdminRepository { return business.New(s.database, s.Backend()) }
+
+func (s *Store) Observations() store.ObservationRepository {
+	return business.New(s.database, s.Backend())
+}
+
+func (s *Store) Security() store.SecurityRepository { return business.New(s.database, s.Backend()) }
+
+// Database is intentionally package-local infrastructure access. Handlers must
+// depend on domain store interfaces rather than this connection pool.
+func (store *Store) Database() *sql.DB {
+	return store.database
+}

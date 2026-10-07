@@ -8,6 +8,7 @@
     const MAX_TRACK_BYTES = 128 * 1024 * 1024;
     const FIRST_APPEND_BYTES = 64 * 1024;
     const APPEND_BATCH_BYTES = 512 * 1024;
+    const APPEND_MAX_WAIT_MS = 1000;
     const DURATION_PROBE_BYTES = 128 * 1024;
     const MAX_BUFFER_AHEAD_SECONDS = 30;
     const SEEK_RANGE_ALIGNMENT_BYTES = 64 * 1024;
@@ -191,6 +192,20 @@
         return merged;
     }
 
+    async function readBeforeFlushDeadline(read, delay) {
+        let timer;
+        try {
+            return await Promise.race([
+                read,
+                new Promise(resolve => {
+                    timer = window.setTimeout(() => resolve(null), Math.max(0, delay));
+                }),
+            ]);
+        } finally {
+            window.clearTimeout(timer);
+        }
+    }
+
     function readUint32(bytes, offset) {
         if (offset < 0 || offset + 4 > bytes.length) return 0;
         return ((bytes[offset] << 24) >>> 0)
@@ -329,10 +344,12 @@
             this.mediaSource = new MediaSource();
             this.objectUrl = URL.createObjectURL(this.mediaSource);
             this.sourceBuffer = null;
+            this.sourceBufferOperation = Promise.resolve();
             this.segments = [];
             this.activeSegment = null;
             this.appendPromise = null;
             this.closed = false;
+            this.fetchController = new AbortController();
             this.startIndex = startIndex;
             this.lastPrunedBefore = 0;
             this.quotaWaitCount = 0;
@@ -481,8 +498,21 @@
             throw new Error('stale session');
         }
 
+        serializeSourceBuffer(operation) {
+            // Appends and removals share one queue. Waiting for updateend before
+            // awaiting capacity is not a lock: timeupdate can begin a removal.
+            const previous = this.sourceBufferOperation || Promise.resolve();
+            const next = previous.catch(() => {}).then(async () => {
+                if (this.closed || session !== this) throw new Error('stale session');
+                await this.waitUpdateEnd();
+                return operation();
+            });
+            this.sourceBufferOperation = next.catch(() => {});
+            return next;
+        }
+
         appendBufferOnce(chunk) {
-            return new Promise((resolve, reject) => {
+            return this.serializeSourceBuffer(() => new Promise((resolve, reject) => {
                 const cleanup = () => {
                     this.sourceBuffer.removeEventListener('updateend', onUpdateEnd);
                     this.sourceBuffer.removeEventListener('error', onFailure);
@@ -499,7 +529,7 @@
                     cleanup();
                     reject(error);
                 }
-            });
+            }));
         }
 
         async appendBytes(value) {
@@ -522,24 +552,11 @@
             throw new Error('stale session');
         }
 
-        markRuntimeSkip(index, reason) {
-            const media = currentMediaList?.[index];
-            if (!media) return;
-            media.continuous_stream_runtime_skip = true;
-            media.continuous_stream_skip_reason = reason || '连续流读取失败 · 自动续播跳过';
-            legacy.renderPlaylist();
-            decoratePlaylist();
-            setPlaylistActive(currentIndex);
-        }
-
         nextAppendIndex() {
             if (!this.order.length) return null;
-            for (let guard = 0; guard < this.order.length; guard += 1) {
-                const index = this.order[this.orderPosition % this.order.length];
-                this.orderPosition = (this.orderPosition + 1) % this.order.length;
-                if (!currentMediaList[index]?.continuous_stream_runtime_skip) return index;
-            }
-            return null;
+            const index = this.order[this.orderPosition % this.order.length];
+            this.orderPosition = (this.orderPosition + 1) % this.order.length;
+            return index;
         }
 
         async appendTrack(index) {
@@ -559,29 +576,28 @@
             let response;
             try {
                 const headers = seek?.rangeStart > 0 ? {Range: `bytes=${seek.rangeStart}-`} : undefined;
-                response = await fetch(media.url, {credentials: 'same-origin', headers});
+                response = await fetch(media.url, {
+                    credentials: 'same-origin', headers, signal: this.fetchController.signal,
+                });
             } catch (_error) {
-                this.markRuntimeSkip(index, '连续流读取失败 · 自动续播跳过');
-                return false;
+                if (this.closed || session !== this) return false;
+                throw new Error('audio request failed after retry');
             }
             if (!response.ok || !response.body) {
-                this.markRuntimeSkip(index, '连续流读取失败 · 自动续播跳过');
-                return false;
+                throw new Error('audio response unavailable');
             }
 
             const responseLength = Number(response.headers.get('Content-Length') || 0);
             const range = responseContentRange(response.headers);
             const totalBytes = range?.total || seek?.totalBytes || responseLength;
             if (totalBytes > MAX_TRACK_BYTES) {
-                this.markRuntimeSkip(index, '文件过大，不进入连续流 · 自动续播跳过');
                 response.body.cancel?.().catch?.(() => {});
-                return false;
+                throw new Error('audio response exceeds byte guard');
             }
             const contentType = String(response.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
             if (contentType && !['audio/mpeg', 'audio/mp3', 'application/octet-stream'].includes(contentType)) {
-                this.markRuntimeSkip(index, '媒体响应格式不兼容连续流 · 自动续播跳过');
                 response.body.cancel?.().catch?.(() => {});
-                return false;
+                throw new Error('audio response format is incompatible');
             }
 
             const start = this.bufferedEnd();
@@ -609,6 +625,8 @@
             let bytes = 0;
             let pending = [];
             let pendingBytes = 0;
+            let pendingSince = 0;
+            let nextRead = null;
             let firstAppend = true;
 
             const flush = async () => {
@@ -616,6 +634,7 @@
                 const merged = concatChunks(pending, pendingBytes);
                 pending = [];
                 pendingBytes = 0;
+                pendingSince = 0;
                 if (!presentationDuration(segment)) {
                     const estimate = estimateMp3Duration(merged, totalBytes);
                     if (estimate > 0) {
@@ -654,38 +673,55 @@
 
             try {
                 while (!this.closed && session === this) {
-                    const {done, value} = await reader.read();
+                    if (!nextRead) nextRead = reader.read();
+                    // Retain the same read when a flush deadline wins. Issuing a
+                    // second read here would lose or reorder the next bytes.
+                    const result = pendingBytes
+                        ? await readBeforeFlushDeadline(nextRead, APPEND_MAX_WAIT_MS - (Date.now() - pendingSince))
+                        : await nextRead;
+                    if (result === null) {
+                        await flush();
+                        continue;
+                    }
+                    nextRead = null;
+                    const {done, value} = result;
                     if (done) break;
                     bytes += value.byteLength;
                     if (bytes > MAX_TRACK_BYTES) {
-                        segment.partial = true;
-                        this.markRuntimeSkip(index, '文件过大，连续流仅保留已缓冲部分');
-                        await reader.cancel();
-                        break;
+                        throw new Error('audio response exceeds byte guard');
                     }
-                    pending.push(value);
-                    pendingBytes += value.byteLength;
-                    const threshold = firstAppend ? FIRST_APPEND_BYTES : APPEND_BATCH_BYTES;
-                    if (pendingBytes >= threshold) await flush();
+                    // Fetch chunk sizes are browser-controlled and may be several
+                    // MiB after backpressure. Bound each individual MSE append.
+                    let offset = 0;
+                    while (offset < value.byteLength) {
+                        const threshold = firstAppend ? FIRST_APPEND_BYTES : APPEND_BATCH_BYTES;
+                        const length = Math.min(threshold - pendingBytes, value.byteLength - offset);
+                        if (!pendingBytes) pendingSince = Date.now();
+                        pending.push(value.subarray(offset, offset + length));
+                        pendingBytes += length;
+                        offset += length;
+                        if (pendingBytes >= threshold) await flush();
+                    }
+                    if (pendingBytes && Date.now() - pendingSince >= APPEND_MAX_WAIT_MS) await flush();
                 }
                 await flush();
             } catch (error) {
-                if (this.closed || session !== this) throw error;
-                segment.partial = true;
+                // An incomplete segment is not a completed song. Never shorten
+                // its boundary or append a different song after an error.
+                throw error;
+            } finally {
+                // Cancel partially consumed responses on switch or decoder failure.
+                void reader.cancel().catch(() => {});
             }
 
             const end = this.bufferedEnd();
             if (end <= start + 0.01) {
                 this.segments = this.segments.filter(item => item !== segment);
-                this.markRuntimeSkip(index, '连续流无法解析该文件 · 自动续播跳过');
-                return false;
+                throw new Error('audio response produced no decodable frames');
             }
             segment.end = end;
             segment.duration = Math.max(0, end - start);
             latchPresentationDuration(segment, segment.duration);
-            if (segment.partial) {
-                this.markRuntimeSkip(index, '连续流读取中断 · 将提前进入下一首');
-            }
             art?._syncTime?.();
             art?._syncBuffered?.();
             return true;
@@ -697,7 +733,7 @@
         }
 
         async ensureLookahead() {
-            if (this.appendPromise || this.closed || session !== this) return this.appendPromise;
+            if (this.appendPromise || this.closed || this.blockedError || session !== this) return this.appendPromise;
             this.appendPromise = (async () => {
                 let failures = 0;
                 while (!this.closed && session === this && this.futureSegmentCount() < LOOKAHEAD_TRACKS) {
@@ -722,22 +758,25 @@
 
         async pruneBeforeActive() {
             if (!this.activeSegment || !this.sourceBuffer || this.sourceBuffer.updating || !art?.video) return;
-            const globalTime = Number(art.video.currentTime) || 0;
-            if (globalTime < this.activeSegment.start + PRUNE_AFTER_SECONDS) return;
-            const removeEnd = Math.max(0, this.activeSegment.start - BOUNDARY_EPSILON);
-            if (removeEnd <= this.lastPrunedBefore + 0.1) return;
-            const ranges = this.sourceBuffer.buffered;
-            if (!ranges?.length || ranges.start(0) >= removeEnd) return;
-            try {
-                const done = waitForEvent(this.sourceBuffer, 'updateend', ['error', 'abort']);
-                this.sourceBuffer.remove(0, removeEnd);
-                await done;
-                this.lastPrunedBefore = removeEnd;
-                this.segments = this.segments.filter(segment => segment === this.activeSegment
-                    || segment.end === null || segment.end > removeEnd + BOUNDARY_EPSILON);
-            } catch (_error) {
-                // Pruning is an optimization; playback must not depend on it.
-            }
+            return this.serializeSourceBuffer(async () => {
+                if (!this.activeSegment || !art?.video) return;
+                const globalTime = Number(art.video.currentTime) || 0;
+                if (globalTime < this.activeSegment.start + PRUNE_AFTER_SECONDS) return;
+                const removeEnd = Math.max(0, this.activeSegment.start - BOUNDARY_EPSILON);
+                if (removeEnd <= this.lastPrunedBefore + 0.1) return;
+                const ranges = this.sourceBuffer.buffered;
+                if (!ranges?.length || ranges.start(0) >= removeEnd) return;
+                try {
+                    const done = waitForEvent(this.sourceBuffer, 'updateend', ['error', 'abort']);
+                    this.sourceBuffer.remove(0, removeEnd);
+                    await done;
+                    this.lastPrunedBefore = removeEnd;
+                    this.segments = this.segments.filter(segment => segment === this.activeSegment
+                        || segment.end === null || segment.end > removeEnd + BOUNDARY_EPSILON);
+                } catch (_error) {
+                    // Pruning is an optimization; playback must not depend on it.
+                }
+            });
         }
 
         syncTrackFromVideo() {
@@ -772,6 +811,13 @@
 
         fail(error) {
             if (this.closed || session !== this) return;
+            if (this.sourceBuffer && this.segments.length) {
+                // Keep the current media session and unfinished business track.
+                // Decoder/state errors are not transport retries or auto-next.
+                this.blockedError = {name: error?.name || 'Error', message: String(error?.message || error)};
+                console.warn('FrontierCloud audio pipeline held', this.blockedError);
+                return;
+            }
             const index = currentIndex;
             this.stop();
             const media = currentMediaList?.[index];
@@ -786,6 +832,7 @@
         stop() {
             if (this.closed) return;
             this.closed = true;
+            this.fetchController.abort();
             window.clearTimeout(this.seekTimer);
             if (session === this) session = null;
             if (activeObjectUrl === this.objectUrl) activeObjectUrl = null;
@@ -922,6 +969,7 @@
         lookahead_tracks: LOOKAHEAD_TRACKS,
         max_track_bytes: MAX_TRACK_BYTES,
         append_batch_bytes: APPEND_BATCH_BYTES,
+        append_max_wait_ms: APPEND_MAX_WAIT_MS,
         first_append_bytes: FIRST_APPEND_BYTES,
         max_buffer_ahead_seconds: MAX_BUFFER_AHEAD_SECONDS,
         supported: browserSupportsContinuousAudio,
@@ -934,6 +982,7 @@
             buffered_tracks: session?.segments?.length || 0,
             buffered_ahead_seconds: session?.bufferedAhead() || 0,
             quota_wait_count: session?.quotaWaitCount || 0,
+            pipeline_error: session?.blockedError || null,
         }),
     };
 })();

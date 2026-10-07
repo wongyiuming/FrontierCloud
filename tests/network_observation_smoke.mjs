@@ -5,12 +5,11 @@ import vm from 'node:vm';
 const script = fs.readFileSync(new URL('../static/js/network-observation.js', import.meta.url), 'utf8');
 const diagnosticsScript = fs.readFileSync(new URL('../static/js/playback-continuity-diagnostics.js', import.meta.url), 'utf8');
 const continuityDesign = fs.readFileSync(new URL('../docs/audio-continuous-stream.md', import.meta.url), 'utf8');
-const continuityWiki = fs.readFileSync(new URL('../docs/wiki/Playback-Continuity.md', import.meta.url), 'utf8');
-const wikiSidebar = fs.readFileSync(new URL('../docs/wiki/_Sidebar.md', import.meta.url), 'utf8');
+const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 new vm.Script(diagnosticsScript);
 assert.doesNotMatch(script, /playback-continuity-handoff|PlaybackContinuityHandoff|loadPlaybackContinuityCore/);
 
-for (const document of [continuityDesign, continuityWiki]) {
+for (const document of [continuityDesign]) {
     assert.match(document, /audio\/mpeg/);
     assert.match(document, /sequence/i);
     assert.match(document, /MP3/i);
@@ -20,7 +19,7 @@ for (const document of [continuityDesign, continuityWiki]) {
 }
 assert.match(continuityDesign, /no T-200 ms timer/i);
 assert.match(continuityDesign, /no second standby media element/i);
-assert.match(wikiSidebar, /\[Playback Continuity\]\(Playback-Continuity\)/);
+assert.match(readme, /https:\/\/github.com\/wongyiuming\/FrontierCloud\/wiki\/Playback-Continuity/);
 
 for (const embedded of [true, false]) {
     const configurations = [];

@@ -2,7 +2,10 @@
 """Release agent: git + Docker Engine only, without the Compose CLI or systemd."""
 from __future__ import annotations
 
+raise SystemExit("Python deployment is prohibited. Use the native Go updater.")
+
 import copy
+import hashlib
 import json
 import os
 import pathlib
@@ -10,10 +13,19 @@ import queue
 import re
 import socketserver
 import subprocess
+import sys
 import threading
+import tempfile
 import time
 
 import docker
+
+# The updater runs as an absolute script; import only the pure protocol/proof
+# modules, never application configuration, SQL drivers or runtime startup.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from app.services.federation import protocol as protocol
+from app.services.federation import release_manifest as manifests
+from updater.release_evidence import verify_artifact
 
 ROOT = pathlib.Path("/workspace")
 CONTROL_DIR = pathlib.Path("/run/frontiercloud-updater")
@@ -22,11 +34,14 @@ STATUS_PATH = CONTROL_DIR / "status.json"
 REPLACEMENT_PATH = CONTROL_DIR / "replacement.json"
 MAINTENANCE_DIR = pathlib.Path("/run/frontiercloud-maintenance")
 MAINTENANCE_FLAG = MAINTENANCE_DIR / "enabled"
-FORCE_OPEN_FLAG = ROOT / "data" / ".frontiercloud-force-open"
+UPDATER_DATA_DIRECTORY = pathlib.Path(os.environ.get("UPDATER_DATA_DIRECTORY") or str(ROOT / "data"))
+FORCE_OPEN_FLAG = UPDATER_DATA_DIRECTORY / ".frontiercloud-force-open"
 RELEASE_BRANCH = "main"
+UPDATER_PROJECT = os.environ.get("UPDATER_PROJECT", "").strip()
+RELEASE_MANIFEST_VERSION = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-RELEASE_IMAGE_TAG_RE = re.compile(r"^frontiercloud-(?:web|nginx):([0-9a-f]{40})$")
-TASKS: queue.Queue[tuple[str, str, bool]] = queue.Queue(maxsize=1)
+RELEASE_IMAGE_TAG_RE = re.compile(r"^frontiercloud-(?:web|nginx):([0-9a-f]{40})(?:-([0-9a-f]{12}))?$")
+TASKS: queue.Queue[tuple[str, str, bool, dict | None]] = queue.Queue(maxsize=1)
 WRITE_LOCK = threading.Lock()
 START_LOCK = threading.Lock()
 SERVER_ACTIVE = False
@@ -76,10 +91,55 @@ def write_status(**changes) -> dict:
         current["release_branch"] = RELEASE_BRANCH
         current["updated_at"] = int(time.time())
         CONTROL_DIR.mkdir(parents=True, exist_ok=True)
-        temporary = STATUS_PATH.with_suffix(".tmp")
-        temporary.write_text(json.dumps(current, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-        os.replace(temporary, STATUS_PATH)
+        descriptor, name = tempfile.mkstemp(prefix=".status-", dir=CONTROL_DIR)
+        temporary = pathlib.Path(name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                json.dump(current, stream, ensure_ascii=False, separators=(",", ":"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, STATUS_PATH)
+            if os.name != "nt":
+                directory = os.open(CONTROL_DIR, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+        finally:
+            temporary.unlink(missing_ok=True)
         return current
+
+
+def manifest_changes(current: dict, manifest: dict | None, target: str, mode: str) -> dict:
+    """Joint release history is independent of this implementation's SHA history."""
+    changes = {}
+    previous = current.get("current_manifest")
+    if manifest is not None:
+        manifest = manifests.parse(protocol.canonical(manifest))
+        if previous is None or manifests.identifier(previous) != manifests.identifier(manifest):
+            changes["previous_manifest"] = copy.deepcopy(previous) if mode == "upgrade" else None
+            changes["current_manifest"] = manifest
+    elif target != current.get("current_sha") and previous is not None:
+        changes["previous_manifest"] = copy.deepcopy(previous) if mode == "upgrade" else None
+        changes["current_manifest"] = None
+    return changes
+
+
+def require_manifest_web(container) -> None:
+    container.reload()
+    labels = (container.image.attrs.get("Config") or {}).get("Labels") or {}
+    if labels.get("frontiercloud.release-manifest-version") != "1":
+        raise ValueError("Web image lacks manifest capability")
+
+
+def validate_manifest_state(current: dict) -> None:
+    for field, sha in (("target_manifest", "target_sha"), ("current_manifest", "current_sha"), ("previous_manifest", None)):
+        value = current.get(field)
+        if value is None:
+            continue
+        artifact = manifests.select(value, RELEASE_BRANCH, "dev")
+        if sha is not None and artifact["commit_sha"] != current.get(sha):
+            raise ValueError("Persisted manifest does not match local artifact")
 
 
 def maintenance(enabled: bool, target: str = "") -> None:
@@ -97,6 +157,18 @@ def client():
 
 
 def service_container(engine, service: str):
+    if service not in {"web", "nginx", "secrets-init", "media-init"}:
+        raise RuntimeError("unsupported reference service")
+    if UPDATER_PROJECT:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", UPDATER_PROJECT):
+            raise RuntimeError("invalid reference project identity")
+        rows = engine.containers.list(all=True, filters={"label": [
+            f"com.docker.compose.project={UPDATER_PROJECT}",
+            f"com.docker.compose.service={service}",
+        ]})
+        if len(rows) != 1:
+            raise RuntimeError(f"expected exactly one project-owned {service} container")
+        return rows[0]
     fixed = SERVICE_NAMES.get(service)
     if fixed:
         return engine.containers.get(fixed)
@@ -201,18 +273,61 @@ def wait_healthy(container, timeout: int = 240) -> None:
     raise TimeoutError(f"{container.name} did not become healthy")
 
 
+def wait_nginx_ready(container, timeout: int = 60) -> None:
+    """Docker start precedes template rendering; nginx -t alone is not readiness."""
+    deadline = time.monotonic() + timeout
+    command = ["/bin/sh", "-c",
+        'test -f /etc/nginx/runtime/public-listen.conf && nginx -t && '
+        'pid=$(cat /var/run/nginx.pid) && kill -0 "$pid"']
+    while time.monotonic() < deadline:
+        container.reload()
+        state = container.attrs.get("State") or {}
+        if state.get("Status") in {"dead", "exited"}:
+            raise RuntimeError("nginx release startup failed")
+        if state.get("Status") == "running":
+            try:
+                result = container.exec_run(command, demux=True)
+            except Exception:
+                # A process can exit between inspect and exec. Reinspect rather
+                # than accepting start acknowledgement or a default config.
+                result = None
+            if result is not None and result.exit_code == 0:
+                return
+        time.sleep(1)
+    raise TimeoutError("nginx release readiness deadline reached")
+
+
+def release_image_tag(target: str, component: str) -> str:
+    suffix = "-" + hashlib.sha256(UPDATER_PROJECT.encode()).hexdigest()[:12] if UPDATER_PROJECT else ""
+    return f"frontiercloud-{component}:{target}{suffix}"
+
+
 def build(engine, target: str) -> tuple[str, str]:
-    web_tag = f"frontiercloud-web:{target}"
-    nginx_tag = f"frontiercloud-nginx:{target}"
+    # The native checkout's root recipe is Go. Select the explicit reference
+    # recipe from the exact target; old main history retains its root recipe.
+    recipe = "Dockerfile.python"
+    contents = git("show", f"{target}:{recipe}", check=False)
+    if not contents:
+        recipe = "Dockerfile"
+        contents = git("show", f"{target}:{recipe}")
+    if not re.search(r"(?m)^FROM python:[^\s]+", contents):
+        raise RuntimeError("reviewed target has no Python reference runtime recipe")
+    web_tag = release_image_tag(target,"web")
+    nginx_tag = release_image_tag(target,"nginx")
+    ownership = {}
+    if UPDATER_PROJECT:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", UPDATER_PROJECT):
+            raise RuntimeError("invalid updater project")
+        ownership["frontiercloud.project"] = UPDATER_PROJECT
     log(f"building web image {target}")
     engine.images.build(
-        path=str(ROOT), dockerfile="Dockerfile", tag=web_tag, rm=True, forcerm=True,
-        labels={"frontiercloud.revision": target, "frontiercloud.component": "web"},
+        path=str(ROOT), dockerfile=recipe, tag=web_tag, rm=True, forcerm=True,
+        labels={**ownership, "frontiercloud.revision": target, "frontiercloud.component": "web"},
     )
     log(f"building nginx image {target}")
     engine.images.build(
         path=str(ROOT), dockerfile="nginx/Dockerfile", tag=nginx_tag, rm=True, forcerm=True,
-        labels={"frontiercloud.revision": target, "frontiercloud.component": "nginx"},
+        labels={**ownership, "frontiercloud.revision": target, "frontiercloud.component": "nginx"},
     )
     return web_tag, nginx_tag
 
@@ -230,15 +345,36 @@ def release_image_revision(image) -> str:
 
 
 def cleanup_release_images(engine, keep: set[str]) -> None:
+    if UPDATER_PROJECT and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", UPDATER_PROJECT):
+        raise RuntimeError("invalid updater project")
     retained = {item for item in keep if SHA_RE.fullmatch(item)}
-    for image in engine.images.list():
+    try:
+        # The SDK inspects every listed image before returning the collection.
+        # A different project retiring a stale image can make global listing
+        # fail after this node's healthy generation has already committed.
+        # Filter on the full owner before those SDK inspections; collection
+        # failure is optional cleanup, never release/convergence failure.
+        images = engine.images.list(filters={"label": f"frontiercloud.project={UPDATER_PROJECT}"}) if UPDATER_PROJECT else engine.images.list()
+    except Exception as exc:
+        log(f"release image inventory skipped: {type(exc).__name__}")
+        return
+    for image in images:
         for raw_tag in getattr(image, "tags", []) or []:
             tag = str(raw_tag)
             matched = RELEASE_IMAGE_TAG_RE.fullmatch(tag)
             if not matched or matched.group(1) in retained:
                 continue
+            if matched.group(2) and (not UPDATER_PROJECT or matched.group(2) != hashlib.sha256(UPDATER_PROJECT.encode()).hexdigest()[:12]):
+                continue
+            if UPDATER_PROJECT:
+                labels = (getattr(image, "attrs", {}) or {}).get("Config", {}).get("Labels") or {}
+                component = tag.split(":", 1)[0].removeprefix("frontiercloud-")
+                if (labels.get("frontiercloud.project") != UPDATER_PROJECT
+                        or labels.get("frontiercloud.component") != component
+                        or labels.get("frontiercloud.revision") != matched.group(1)):
+                    continue
             try:
-                engine.images.remove(tag, force=False, noprune=False)
+                engine.images.remove(tag, force=False, noprune=bool(UPDATER_PROJECT))
                 log(f"removed stale release image {tag}")
             except Exception as exc:
                 log(f"release image cleanup skipped {tag}: {type(exc).__name__}: {exc}")
@@ -280,7 +416,7 @@ def restore_local(engine, snapshots: dict[str, dict], old_sha: str) -> None:
             elif service == "web":
                 wait_healthy(restored)
             elif service == "nginx":
-                restored.exec_run(["nginx", "-t"], demux=True)
+                wait_nginx_ready(restored)
         except Exception as exc:
             log(f"restore {service} failed: {type(exc).__name__}: {exc}")
     if old_sha and SHA_RE.fullmatch(old_sha):
@@ -348,10 +484,26 @@ def request_runtime_restart(target: str, previous_sha: str) -> None:
 
 def complete_pending_restart() -> bool:
     current = read_status()
+    validate_manifest_state(current)
     if current.get("state") != "restarting":
         return False
     target = str(current.get("target_sha") or "")
-    if target and target == RUNTIME_SHA:
+    compatible = True
+    if any(current.get(field) is not None for field in ("target_manifest", "current_manifest", "previous_manifest")):
+        engine = None
+        try:
+            engine = client()
+            web = service_container(engine, "web")
+            require_manifest_web(web)
+            if release_image_revision(web.image) != target:
+                raise ValueError("Web artifact differs from persisted release")
+            wait_healthy(web)
+        except Exception:
+            compatible = False
+        finally:
+            if engine is not None:
+                engine.close()
+    if target and target == RUNTIME_SHA and compatible:
         maintenance(False)
         write_status(
             state="success", phase="complete", current_sha=target,
@@ -368,7 +520,7 @@ def complete_pending_restart() -> bool:
     return True
 
 
-def perform(target: str, mode: str, hold_maintenance: bool) -> None:
+def perform(target: str, mode: str, hold_maintenance: bool, manifest: dict | None = None) -> None:
     current = read_status()
     old_sha = str(current.get("current_sha") or initial_sha())
     previous_sha = str(current.get("previous_sha") or "")
@@ -378,19 +530,35 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
         current_sha=old_sha, previous_sha=previous_sha, detail="", started_at=started,
         updater_runtime_sha=RUNTIME_SHA,
     )
-    FORCE_OPEN_FLAG.unlink(missing_ok=True)
-    maintenance(True, target)
     engine = None
     snapshots: dict[str, dict] = {}
     local_replaced = False
     restart_runtime = False
     try:
+        if manifest is not None:
+            artifact = manifests.select(manifest, RELEASE_BRANCH, "dev")
+            if artifact["commit_sha"] != target:
+                raise ValueError("Master selected the wrong private artifact")
+            verify_artifact(manifest, RELEASE_BRANCH)
+        FORCE_OPEN_FLAG.unlink(missing_ok=True)
+        maintenance(True, target)
         validate_target(target, mode)
+        has_manifest = manifest is not None or any(current.get(field) is not None for field in ("current_manifest", "previous_manifest"))
+        if has_manifest:
+            # The mutable reference runtime restarts from this tracked source.
+            # Refuse a downlevel source before resetting/replacing any service.
+            if "RELEASE_MANIFEST_VERSION = 1" not in git("show", target + ":updater/server.py", timeout=20):
+                raise ValueError("Target updater cannot recover manifest state")
+            git("cat-file", "-e", target + ":updater/release_evidence.py", timeout=20)
         engine = client()
         if target != old_sha:
             write_status(phase="building")
             git("reset", "--hard", target, timeout=60)
             web_image, nginx_image = build(engine, target)
+            if has_manifest:
+                labels = engine.images.get(web_image).attrs.get("Config", {}).get("Labels") or {}
+                if labels.get("frontiercloud.release-manifest-version") != "1":
+                    raise ValueError("Target Web image lacks manifest capability")
             for service in ("secrets-init", "media-init", "web", "nginx"):
                 try:
                     snapshots[service] = snapshot(service_container(engine, service))
@@ -407,23 +575,24 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
             web = replace(engine, snapshots["web"], web_image)
             wait_healthy(web)
             nginx = replace(engine, snapshots["nginx"], nginx_image)
-            result = nginx.exec_run(["nginx", "-t"], demux=True)
-            if result.exit_code != 0:
-                raise RuntimeError("nginx configuration check failed")
+            wait_nginx_ready(nginx)
             local_replaced = True
             previous_sha = old_sha if mode == "upgrade" else ""
-            write_status(current_sha=target, previous_sha=previous_sha)
+            write_status(current_sha=target, previous_sha=previous_sha, **manifest_changes(current, manifest, target, mode))
             REPLACEMENT_PATH.unlink(missing_ok=True)
         else:
             web = service_container(engine, "web")
+            if has_manifest:
+                require_manifest_web(web)
+            write_status(**manifest_changes(current, manifest, target, mode))
             local_replaced = True
 
         if hold_maintenance:
             write_status(state="distributing", phase="distributing")
-            result = web.exec_run(
-                ["python", "-m", "app.services.cluster_update_coordinator", target, mode],
-                demux=True,
-            )
+            command = ["python", "-m", "app.services.cluster_update_coordinator", target, mode]
+            if manifest is not None:
+                command = ["python", "-m", "app.services.cluster_manifest_coordinator", protocol.encode(protocol.canonical(manifest)), mode]
+            result = web.exec_run(command, demux=True)
             if result.exit_code != 0:
                 stdout, stderr = result.output if isinstance(result.output, tuple) else (b"", result.output or b"")
                 detail = ((stderr or b"") + b"\n" + (stdout or b"")).decode("utf-8", errors="replace")
@@ -458,9 +627,9 @@ def perform(target: str, mode: str, hold_maintenance: bool) -> None:
 
 def worker() -> None:
     while True:
-        target, mode, hold = TASKS.get()
+        target, mode, hold, manifest = TASKS.get()
         try:
-            perform(target, mode, hold)
+            perform(target, mode, hold, manifest)
         finally:
             TASKS.task_done()
 
@@ -468,26 +637,42 @@ def worker() -> None:
 class Handler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         try:
-            request = json.loads(self.rfile.readline(8192))
+            raw = self.rfile.readline(8192)
+            if not raw.endswith(b"\n"):
+                raise ValueError("invalid bounded updater request")
+            request = json.loads(raw, object_pairs_hook=manifests._pairs)
+            if not isinstance(request, dict) or set(request) - {"action", "target_sha", "mode", "hold_maintenance", "release_manifest"}:
+                raise ValueError("invalid updater fields")
             action = str(request.get("action") or "status")
             if action == "status":
-                response = {"ok": True, "status": read_status()}
+                current = read_status()
+                validate_manifest_state(current)
+                response = {"ok": True, "status": current, "capabilities": [manifests.MANIFEST_CAPABILITY]}
             elif action == "start":
                 target = str(request.get("target_sha") or "")
                 mode = str(request.get("mode") or "upgrade")
                 hold = bool(request.get("hold_maintenance", False))
+                manifest = None
+                if "release_manifest" in request:
+                    if "target_sha" in request:
+                        raise ValueError("Master cannot select a manifest artifact")
+                    manifest = manifests.parse(protocol.canonical(request["release_manifest"]))
+                    target = manifests.select(manifest, RELEASE_BRANCH, "dev")["commit_sha"]
                 if not SHA_RE.fullmatch(target) or mode not in {"upgrade", "rollback"}:
                     raise ValueError("invalid release request")
                 with START_LOCK:
                     current = read_status()
+                    validate_manifest_state(current)
                     if current.get("state") in {"queued", "running", "distributing", "restarting"} or TASKS.full():
                         response = {"ok": False, "reason": "release already running", "status": current}
                     else:
                         # Publish intent before waking the worker; concurrent starts
                         # cannot both pass and queued cannot overwrite running.
-                        write_status(state="queued", phase="queued", target_sha=target, mode=mode, detail="")
-                        TASKS.put_nowait((target, mode, hold))
+                        write_status(state="queued", phase="queued", target_sha=target, mode=mode, detail="", target_manifest=manifest)
+                        TASKS.put_nowait((target, mode, hold, manifest))
                         response = {"ok": True, "accepted": True, "target_sha": target, "mode": mode}
+                        if manifest is not None:
+                            response["release_id"] = manifests.identifier(manifest)
             else:
                 raise ValueError("unknown updater action")
         except queue.Full:

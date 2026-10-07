@@ -1,0 +1,4065 @@
+{
+  "components": {
+    "schemas": {
+      "AuthPayload": {
+        "properties": {
+          "captcha": {
+            "anyOf": [
+              {
+                "maxLength": 12,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captcha"
+          },
+          "challenge": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Challenge"
+          },
+          "password": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          },
+          "webrtc_addresses": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Webrtc Addresses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "AuthPayload",
+        "type": "object"
+      },
+      "Body_elevate_api_v1_media_admin_elevate_post": {
+        "properties": {
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "Body_elevate_api_v1_media_admin_elevate_post",
+        "type": "object"
+      },
+      "Body_upload_item_api_v1_media_admin_upload_item_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "relative_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Path"
+          },
+          "site_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Type"
+          },
+          "target_dir": {
+            "default": "",
+            "title": "Target Dir",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_item_api_v1_media_admin_upload_item_post",
+        "type": "object"
+      },
+      "Body_upload_logo_api_v1_media_admin_upload_brand__kind__post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_logo_api_v1_media_admin_upload_brand__kind__post",
+        "type": "object"
+      },
+      "Body_upload_lyric_api_v1_media_admin_upload_lyric_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "relative_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Path"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_lyric_api_v1_media_admin_upload_lyric_post",
+        "type": "object"
+      },
+      "DirectoryPriorityChange": {
+        "properties": {
+          "path": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "value": {
+            "maximum": 500.0,
+            "minimum": -7.0,
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "value"
+        ],
+        "title": "DirectoryPriorityChange",
+        "type": "object"
+      },
+      "DirectoryRename": {
+        "properties": {
+          "new_name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "New Name",
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "new_name"
+        ],
+        "title": "DirectoryRename",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "KaraokeContext": {
+        "properties": {
+          "cover_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Url"
+          },
+          "has_lyrics": {
+            "title": "Has Lyrics",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "lyrics_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lyrics Url"
+          },
+          "stream_url": {
+            "title": "Stream Url",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "audio",
+              "video"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "type",
+          "stream_url",
+          "has_lyrics",
+          "lyrics_url",
+          "cover_url"
+        ],
+        "title": "KaraokeContext",
+        "type": "object"
+      },
+      "MaintenanceChange": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "MaintenanceChange",
+        "type": "object"
+      },
+      "MediaPriorityChange": {
+        "properties": {
+          "media_path": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Media Path",
+            "type": "string"
+          },
+          "resource_id": {
+            "anyOf": [
+              {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Id"
+          },
+          "value": {
+            "maximum": 500.0,
+            "minimum": -7.0,
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "media_path",
+          "value"
+        ],
+        "title": "MediaPriorityChange",
+        "type": "object"
+      },
+      "Mode": {
+        "properties": {
+          "mode": {
+            "pattern": "^(Relay|Direct)$",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "Mode",
+        "type": "object"
+      },
+      "NetworkObservation": {
+        "properties": {
+          "addresses": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Addresses",
+            "type": "array"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure"
+          }
+        },
+        "title": "NetworkObservation",
+        "type": "object"
+      },
+      "PairImport": {
+        "properties": {
+          "package": {
+            "additionalProperties": true,
+            "title": "Package",
+            "type": "object"
+          }
+        },
+        "required": [
+          "package"
+        ],
+        "title": "PairImport",
+        "type": "object"
+      },
+      "PasswordPayload": {
+        "properties": {
+          "current_password": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Current Password",
+            "type": "string"
+          },
+          "new_password": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "New Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "PasswordPayload",
+        "type": "object"
+      },
+      "PlaybackReport": {
+        "properties": {
+          "duration": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 86400.0,
+            "title": "Duration",
+            "type": "number"
+          },
+          "media_path": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Media Path",
+            "type": "string"
+          },
+          "playback_session_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Playback Session Id",
+            "type": "string"
+          },
+          "played_seconds": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 86400.0,
+            "title": "Played Seconds",
+            "type": "number"
+          },
+          "resource_id": {
+            "anyOf": [
+              {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Id"
+          }
+        },
+        "required": [
+          "media_path",
+          "playback_session_id",
+          "played_seconds",
+          "duration"
+        ],
+        "title": "PlaybackReport",
+        "type": "object"
+      },
+      "Promotion": {
+        "properties": {
+          "endpoint": {
+            "maxLength": 512,
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "local_capacity_gib": {
+            "anyOf": [
+              {
+                "maximum": 10240.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Capacity Gib"
+          },
+          "role": {
+            "pattern": "^(Master|Follower)$",
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "endpoint"
+        ],
+        "title": "Promotion",
+        "type": "object"
+      },
+      "Reinitialization": {
+        "properties": {
+          "confirmation": {
+            "maxLength": 32,
+            "title": "Confirmation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation"
+        ],
+        "title": "Reinitialization",
+        "type": "object"
+      },
+      "ResourceSettings": {
+        "properties": {
+          "backup_enabled": {
+            "default": false,
+            "title": "Backup Enabled",
+            "type": "boolean"
+          },
+          "storage_capacity_gib": {
+            "maximum": 10240.0,
+            "minimum": 0.0,
+            "title": "Storage Capacity Gib",
+            "type": "integer"
+          },
+          "storage_enabled": {
+            "default": false,
+            "title": "Storage Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "storage_capacity_gib"
+        ],
+        "title": "ResourceSettings",
+        "type": "object"
+      },
+      "SiteTypeUploadReservation": {
+        "properties": {
+          "filename": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "relative_path": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Path"
+          },
+          "site_type": {
+            "enum": [
+              "primary",
+              "direct",
+              "relay"
+            ],
+            "title": "Site Type",
+            "type": "string"
+          },
+          "size_bytes": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 10737418240.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "target_dir": {
+            "maxLength": 1024,
+            "title": "Target Dir",
+            "type": "string"
+          }
+        },
+        "required": [
+          "site_type",
+          "target_dir",
+          "filename",
+          "size_bytes"
+        ],
+        "title": "SiteTypeUploadReservation",
+        "type": "object"
+      },
+      "TicketPayload": {
+        "properties": {
+          "content_type": {
+            "maxLength": 96,
+            "minLength": 1,
+            "title": "Content Type",
+            "type": "string"
+          },
+          "media": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media"
+          },
+          "size_bytes": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 1073741824.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "size_bytes",
+          "content_type"
+        ],
+        "title": "TicketPayload",
+        "type": "object"
+      },
+      "UserAction": {
+        "properties": {
+          "action": {
+            "pattern": "^(ban|unban|delete|quota)$",
+            "title": "Action",
+            "type": "string"
+          },
+          "quota_mib": {
+            "anyOf": [
+              {
+                "maximum": 10485760.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quota Mib"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "UserAction",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "FrontierCloud Media Service",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "operationId": "health_check_api_v1_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health Check"
+      }
+    },
+    "/api/v1/karaoke/account": {
+      "delete": {
+        "operationId": "delete_account_api_v1_karaoke_account_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Delete Account",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/captcha": {
+      "get": {
+        "operationId": "captcha_api_v1_karaoke_account_captcha_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Captcha",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/login": {
+      "post": {
+        "operationId": "login_api_v1_karaoke_account_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/logout": {
+      "post": {
+        "operationId": "logout_api_v1_karaoke_account_logout_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/password": {
+      "post": {
+        "operationId": "change_password_api_v1_karaoke_account_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Password",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/recordings": {
+      "get": {
+        "operationId": "recordings_api_v1_karaoke_account_recordings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Recordings",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/recordings/ticket": {
+      "post": {
+        "operationId": "create_ticket_api_v1_karaoke_account_recordings_ticket_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Ticket",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/recordings/{recording_id}": {
+      "delete": {
+        "operationId": "delete_recording_api_v1_karaoke_account_recordings__recording_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recording_id",
+            "required": true,
+            "schema": {
+              "title": "Recording Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Recording",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/recordings/{recording_id}/content": {
+      "put": {
+        "operationId": "relay_upload_api_v1_karaoke_account_recordings__recording_id__content_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recording_id",
+            "required": true,
+            "schema": {
+              "title": "Recording Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Relay Upload",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/recordings/{recording_id}/finalize": {
+      "post": {
+        "operationId": "finalize_api_v1_karaoke_account_recordings__recording_id__finalize_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recording_id",
+            "required": true,
+            "schema": {
+              "title": "Recording Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Finalize",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/recordings/{recording_id}/pending": {
+      "delete": {
+        "operationId": "cancel_pending_api_v1_karaoke_account_recordings__recording_id__pending_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recording_id",
+            "required": true,
+            "schema": {
+              "title": "Recording Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Pending",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/register": {
+      "post": {
+        "operationId": "register_api_v1_karaoke_account_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/account/status": {
+      "get": {
+        "operationId": "status_api_v1_karaoke_account_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Status",
+        "tags": [
+          "KaraokeUsers"
+        ]
+      }
+    },
+    "/api/v1/karaoke/context": {
+      "get": {
+        "operationId": "context_api_v1_karaoke_context_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "media",
+            "required": true,
+            "schema": {
+              "maxLength": 512,
+              "minLength": 80,
+              "pattern": "^[A-Za-z0-9_-]+={0,2}$",
+              "title": "Media",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KaraokeContext"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Context",
+        "tags": [
+          "Karaoke"
+        ]
+      }
+    },
+    "/api/v1/media": {
+      "get": {
+        "operationId": "get_media_index_page_api_v1_media_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Media Index Page",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/": {
+      "get": {
+        "operationId": "get_media_index_page_api_v1_media__get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Media Index Page",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/admin/brand": {
+      "get": {
+        "operationId": "logo_status_api_v1_media_admin_brand_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logo Status",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/brand/": {
+      "get": {
+        "operationId": "logo_status_api_v1_media_admin_brand__get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logo Status",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/brand/{kind}": {
+      "delete": {
+        "operationId": "delete_logo_api_v1_media_admin_brand__kind__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Logo",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/brand/{kind}/download": {
+      "get": {
+        "operationId": "download_logo_api_v1_media_admin_brand__kind__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Logo",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/delete": {
+      "post": {
+        "operationId": "delete_objects_api_v1_media_admin_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Objects",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/directory-priorities": {
+      "get": {
+        "operationId": "directory_priorities_api_v1_media_admin_directory_priorities_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Scope",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Directory Priorities",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/directory-priority": {
+      "post": {
+        "operationId": "directory_priority_api_v1_media_admin_directory_priority_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectoryPriorityChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Directory Priority",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/directory/rename": {
+      "post": {
+        "operationId": "rename_directory_api_v1_media_admin_directory_rename_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectoryRename"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rename Directory",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/download": {
+      "get": {
+        "operationId": "download_objects_api_v1_media_admin_download_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "paths",
+            "required": true,
+            "schema": {
+              "title": "Paths",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Objects",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/elevate": {
+      "post": {
+        "operationId": "elevate_api_v1_media_admin_elevate_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_elevate_api_v1_media_admin_elevate_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Elevate",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/hide": {
+      "post": {
+        "operationId": "hide_objects_api_v1_media_admin_hide_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Hide Objects",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/key/rotate": {
+      "post": {
+        "operationId": "admin_key_rotate_api_v1_media_admin_key_rotate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Key Rotate",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/key/temporary": {
+      "post": {
+        "operationId": "admin_temporary_key_api_v1_media_admin_key_temporary_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Temporary Key",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/logout": {
+      "post": {
+        "operationId": "logout_api_v1_media_admin_logout_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/lyrics/auto-relate": {
+      "post": {
+        "operationId": "lyric_auto_relate_api_v1_media_admin_lyrics_auto_relate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lyric Auto Relate",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/lyrics/catalog": {
+      "get": {
+        "operationId": "lyric_catalog_api_v1_media_admin_lyrics_catalog_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "track_path",
+            "required": false,
+            "schema": {
+              "default": "music",
+              "maxLength": 1024,
+              "title": "Track Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lyric_path",
+            "required": false,
+            "schema": {
+              "default": "lyrics",
+              "maxLength": 1024,
+              "title": "Lyric Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "track_q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 100,
+              "title": "Track Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lyric_q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 100,
+              "title": "Lyric Q",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lyric Catalog",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/lyrics/relations": {
+      "post": {
+        "operationId": "lyric_relations_api_v1_media_admin_lyrics_relations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lyric Relations",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/media-priority": {
+      "get": {
+        "operationId": "media_priority_api_v1_media_admin_media_priority_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 100,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "media_type",
+            "required": false,
+            "schema": {
+              "default": "",
+              "pattern": "^(|audio|video)$",
+              "title": "Media Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 1024,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Media Priority",
+        "tags": [
+          "MediaAdmin"
+        ]
+      },
+      "post": {
+        "operationId": "update_media_priority_api_v1_media_admin_media_priority_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaPriorityChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Media Priority",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/network/observations": {
+      "get": {
+        "operationId": "network_observations_api_v1_media_admin_network_observations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "public_ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 45,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Public Ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "webrtc_ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 45,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Webrtc Ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "match_mode",
+            "required": false,
+            "schema": {
+              "default": "exact",
+              "pattern": "^(exact|fuzzy)$",
+              "title": "Match Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "pairs",
+              "pattern": "^(pairs|public|webrtc)$",
+              "title": "View",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Network Observations",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes": {
+      "get": {
+        "operationId": "status_api_v1_media_admin_nodes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Status",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes/observability": {
+      "get": {
+        "operationId": "observability_api_v1_media_admin_nodes_observability_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Observability",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes/pair": {
+      "post": {
+        "operationId": "import_package_api_v1_media_admin_nodes_pair_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairImport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Package",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes/pair-package": {
+      "post": {
+        "operationId": "pairing_package_api_v1_media_admin_nodes_pair_package_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Pairing Package",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes/promote": {
+      "post": {
+        "operationId": "promote_api_v1_media_admin_nodes_promote_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Promotion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Promote",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes/reinitialize": {
+      "post": {
+        "operationId": "reinitialize_api_v1_media_admin_nodes_reinitialize_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Reinitialization"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reinitialize",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes/release": {
+      "get": {
+        "operationId": "release_status_api_v1_media_admin_nodes_release_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "refresh_ci",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh Ci",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Status",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes/release/rollback": {
+      "post": {
+        "operationId": "release_rollback_api_v1_media_admin_nodes_release_rollback_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Release Rollback",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes/release/upgrade": {
+      "post": {
+        "operationId": "release_upgrade_api_v1_media_admin_nodes_release_upgrade_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Release Upgrade",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes/{identifier}/mode": {
+      "post": {
+        "operationId": "change_mode_api_v1_media_admin_nodes__identifier__mode_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "title": "Identifier",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Mode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Mode",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes/{identifier}/resources": {
+      "post": {
+        "operationId": "resource_settings_api_v1_media_admin_nodes__identifier__resources_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "title": "Identifier",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Settings",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/nodes/{identifier}/revoke": {
+      "post": {
+        "operationId": "revoke_node_api_v1_media_admin_nodes__identifier__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "title": "Identifier",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Node",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/playback-continuity-diagnostics": {
+      "delete": {
+        "operationId": "clear_api_v1_media_admin_playback_continuity_diagnostics_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Clear",
+        "tags": [
+          "MediaAdmin"
+        ]
+      },
+      "get": {
+        "operationId": "snapshot_api_v1_media_admin_playback_continuity_diagnostics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Snapshot",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/security/blocks": {
+      "get": {
+        "operationId": "security_blocks_api_v1_media_admin_security_blocks_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 45,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "match_mode",
+            "required": false,
+            "schema": {
+              "default": "exact",
+              "pattern": "^(exact|fuzzy)$",
+              "title": "Match Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ip_order",
+            "required": false,
+            "schema": {
+              "default": "asc",
+              "pattern": "^(asc|desc)$",
+              "title": "Ip Order",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_order",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(ip_asc|ip_desc|last_attack_desc|last_attack_asc)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sort Order"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Security Blocks",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/security/permanent-ban": {
+      "post": {
+        "operationId": "security_permanent_ban_api_v1_media_admin_security_permanent_ban_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Security Permanent Ban",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/security/reban": {
+      "post": {
+        "operationId": "security_reban_api_v1_media_admin_security_reban_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Security Reban",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/security/unban": {
+      "post": {
+        "operationId": "security_unban_api_v1_media_admin_security_unban_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Security Unban",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/security/whitelist": {
+      "post": {
+        "operationId": "security_whitelist_api_v1_media_admin_security_whitelist_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Security Whitelist",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/security/whitelist/remove": {
+      "post": {
+        "operationId": "security_whitelist_remove_api_v1_media_admin_security_whitelist_remove_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Security Whitelist Remove",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/site/maintenance": {
+      "get": {
+        "operationId": "maintenance_status_api_v1_media_admin_site_maintenance_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Maintenance Status",
+        "tags": [
+          "MediaAdmin"
+        ]
+      },
+      "post": {
+        "operationId": "maintenance_change_api_v1_media_admin_site_maintenance_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaintenanceChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Maintenance Change",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/status": {
+      "get": {
+        "operationId": "admin_status_api_v1_media_admin_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Admin Status",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/storage-pool": {
+      "get": {
+        "operationId": "storage_pool_api_v1_media_admin_storage_pool_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Storage Pool",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/tree": {
+      "get": {
+        "operationId": "admin_tree_api_v1_media_admin_tree_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Tree",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/tree/search": {
+      "get": {
+        "operationId": "admin_tree_search_api_v1_media_admin_tree_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Tree Search",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/upload/brand/{kind}": {
+      "post": {
+        "operationId": "upload_logo_api_v1_media_admin_upload_brand__kind__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_logo_api_v1_media_admin_upload_brand__kind__post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Logo",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/upload/item": {
+      "post": {
+        "operationId": "upload_item_api_v1_media_admin_upload_item_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_item_api_v1_media_admin_upload_item_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Item",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/upload/lyric": {
+      "post": {
+        "description": "Publish an LRC only when its managed-object record commits atomically.\n\nThe physical file is staged/published first. Object registration and the\nsuccess audit then share one MySQL transaction. A failure before that\ntransaction commits removes the file; failures in cache invalidation after\ncommit never remove a durable, registered lyric.",
+        "operationId": "upload_lyric_api_v1_media_admin_upload_lyric_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_lyric_api_v1_media_admin_upload_lyric_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Lyric",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/upload/session": {
+      "post": {
+        "operationId": "create_upload_session_api_v1_media_admin_upload_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteTypeUploadReservation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Upload Session",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/upload/session/{upload_id}": {
+      "delete": {
+        "operationId": "cancel_upload_session_api_v1_media_admin_upload_session__upload_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Upload Session",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/upload/session/{upload_id}/bytes": {
+      "put": {
+        "operationId": "upload_session_bytes_api_v1_media_admin_upload_session__upload_id__bytes_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Session Bytes",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/upload/session/{upload_id}/finalize": {
+      "post": {
+        "operationId": "finalize_direct_upload_api_v1_media_admin_upload_session__upload_id__finalize_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "title": "Upload Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Finalize Direct Upload",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/users": {
+      "get": {
+        "operationId": "list_users_api_v1_media_admin_users_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Users",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/admin/users/{user_id}": {
+      "post": {
+        "operationId": "mutate_user_api_v1_media_admin_users__user_id__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mutate User",
+        "tags": [
+          "MediaAdmin"
+        ]
+      }
+    },
+    "/api/v1/media/catalog/categories": {
+      "get": {
+        "operationId": "get_media_categories_data_api_v1_media_catalog_categories_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "media_type",
+            "required": true,
+            "schema": {
+              "pattern": "^(music|video)$",
+              "title": "Media Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_hidden",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Hidden",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Media Categories Data",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/catalog/media": {
+      "get": {
+        "operationId": "get_media_catalog_data_api_v1_media_catalog_media_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "media_type",
+            "required": true,
+            "schema": {
+              "pattern": "^(music|video)$",
+              "title": "Media Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "playback_session_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Playback Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_hidden",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Hidden",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Media Catalog Data",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/lyrics": {
+      "get": {
+        "operationId": "get_lyrics_page_api_v1_media_lyrics_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "track",
+            "required": true,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Track",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Lyrics Page",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/lyrics/content": {
+      "get": {
+        "operationId": "get_lyrics_content_api_v1_media_lyrics_content_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "track",
+            "required": true,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Track",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Lyrics Content",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/music": {
+      "get": {
+        "operationId": "get_music_categories_page_api_v1_media_music_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_hidden",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Hidden",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Music Categories Page",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/music/category": {
+      "get": {
+        "operationId": "get_music_player_page_api_v1_media_music_category_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_hidden",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Hidden",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direct",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Direct",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Music Player Page",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/network-observation": {
+      "post": {
+        "operationId": "report_network_observation_api_v1_media_network_observation_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NetworkObservation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report Network Observation",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/playback": {
+      "post": {
+        "operationId": "report_playback_api_v1_media_playback_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaybackReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report Playback",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/playback-continuity-diagnostics": {
+      "post": {
+        "operationId": "submit_api_v1_media_playback_continuity_diagnostics_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Submit",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/refresh": {
+      "get": {
+        "operationId": "refresh_media_interface_api_v1_media_refresh_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Refresh Media Interface",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/stream": {
+      "get": {
+        "operationId": "stream_media_file_api_v1_media_stream_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "file_path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "File Path"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Media File",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/video": {
+      "get": {
+        "operationId": "get_video_categories_page_api_v1_media_video_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_hidden",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Hidden",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Video Categories Page",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    },
+    "/api/v1/media/video/category": {
+      "get": {
+        "operationId": "get_video_player_page_api_v1_media_video_category_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_hidden",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Hidden",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direct",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Direct",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Video Player Page",
+        "tags": [
+          "MediaCenter"
+        ]
+      }
+    }
+  }
+}

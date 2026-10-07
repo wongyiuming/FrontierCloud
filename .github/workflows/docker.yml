@@ -6,12 +6,72 @@ permissions:
 
 on:
   push:
-    branches: ["dev", "main"]
+    branches: ["dev", "main", "gin_dev", "gin_main"]
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
 
 jobs:
+  promote-gin-main:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/gin_main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify exact reviewed native tree and newest source push
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const target = context.sha;
+            const commit = await github.rest.repos.getCommit({ owner, repo, ref: target });
+            const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner, repo, commit_sha: target, per_page: 100,
+            });
+            const pulls = Array.isArray(associated.data) ? associated.data : [];
+            const sources = [...new Set(pulls.filter(pr =>
+              pr?.merged_at && pr?.merge_commit_sha === target &&
+              pr?.base?.ref === 'gin_main' && pr?.head?.ref === 'gin_dev' &&
+              pr?.head?.repo?.full_name === `${owner}/${repo}` &&
+              /^[0-9a-f]{40}$/.test(pr?.head?.sha || '')
+            ).map(pr => pr.head.sha))];
+            if (pulls.length >= 100 || sources.length !== 1) {
+              core.setFailed('Native HEAD has no unique exact merged same-repository gin_dev -> gin_main PR');
+              return;
+            }
+            const source = sources[0];
+            const reviewed = await github.rest.repos.getCommit({ owner, repo, ref: source });
+            if (reviewed.data.sha !== source || reviewed.data.commit.tree.sha !== commit.data.commit.tree.sha) {
+              core.setFailed('Native production tree differs from its reviewed source tree');
+              return;
+            }
+            const result = await github.rest.actions.listWorkflowRuns({
+              owner, repo, workflow_id: 'docker.yml', event: 'push', head_sha: source, per_page: 20,
+            });
+            const runs = Array.isArray(result.data?.workflow_runs) ? result.data.workflow_runs : [];
+            const matching = runs.filter(run => run?.head_sha === source && run?.head_branch === 'gin_dev' && run?.event === 'push');
+            matching.sort((a, b) => b.run_number - a.run_number);
+            const newest = matching[0];
+            if (!newest || newest.status !== 'completed' || newest.conclusion !== 'success') {
+              core.setFailed('Newest exact native source push CI has not succeeded');
+              return;
+            }
+            core.notice(`gin_main ${target} promotes gin_dev ${source}, CI #${newest.run_number}`);
+
+  test-native:
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/gin_dev' || github.ref == 'refs/heads/dev')) ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    concurrency:
+      group: source-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bounded source, policy and frontend checks only
+        run: timeout --signal=TERM --kill-after=5s 150s bash scripts/test-ci-source.sh
+
   promote-main:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -113,336 +173,3 @@ jobs:
               return;
             }
             core.notice(`promotion query resolves dev ${context.sha} as CI #${run.run_number}`);
-
-  browser-ui:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'merge_group' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/dev')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    concurrency:
-      group: ${{ github.workflow }}-browser-ui-${{ github.event_name }}-${{ github.head_ref || github.ref }}
-      cancel-in-progress: true
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Prepare disposable UI fixture
-        run: |
-          mkdir -p certs data/media/music/ui-regression
-          openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
-            -keyout certs/privkey.pem \
-            -out certs/fullchain.pem \
-            -subj "/CN=ui.frontiercloud.local" \
-            -addext "subjectAltName=DNS:ui.frontiercloud.local,DNS:nginx" \
-            -addext "basicConstraints=critical,CA:TRUE"
-          echo '127.0.0.1 ui.frontiercloud.local' | sudo tee -a /etc/hosts
-          cat <<'EOF' > .env
-          TLS_ENABLED=true
-          INSTANCE_NAME=frontiercloud-ui-regression
-          SERVER_NAME=ui.frontiercloud.local
-          PUBLIC_BIND_ADDRESS=0.0.0.0
-          HTTP_PORT=18080
-          HTTPS_PORT=18443
-          EOF
-          python3 - <<'PY'
-          import math
-          import struct
-          import wave
-          from pathlib import Path
-
-          target = Path("data/media/music/ui-regression/fixture.wav")
-          with wave.open(str(target), "wb") as output:
-              output.setparams((1, 2, 8000, 0, "NONE", "not compressed"))
-              frames = b"".join(
-                  struct.pack("<h", int(2500 * math.sin(2 * math.pi * 440 * index / 8000)))
-                  for index in range(8000 * 3)
-              )
-              output.writeframes(frames)
-          PY
-      - name: Install browser test dependency
-        run: |
-          python3 -m venv /tmp/frontiercloud-ui-regression
-          /tmp/frontiercloud-ui-regression/bin/pip install playwright==1.62.0
-          test -x /usr/bin/google-chrome
-          SPKI=$(openssl x509 -in certs/fullchain.pem -pubkey -noout \
-            | openssl pkey -pubin -outform der \
-            | openssl dgst -sha256 -binary \
-            | base64 -w0)
-          cat > /tmp/frontiercloud-ui-chrome <<EOF
-          #!/bin/sh
-          exec /usr/bin/google-chrome --ignore-certificate-errors-spki-list=$SPKI "\$@"
-          EOF
-          chmod +x /tmp/frontiercloud-ui-chrome
-      - name: Start real application stack
-        run: docker compose up -d --build --remove-orphans --wait --wait-timeout 180
-      - name: Run Chromium UI regression
-        env:
-          BASE_URL: https://ui.frontiercloud.local:18443
-          PLAYWRIGHT_CHROMIUM_EXECUTABLE: /tmp/frontiercloud-ui-chrome
-          NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/certs/fullchain.pem
-          SSL_CERT_FILE: ${{ github.workspace }}/certs/fullchain.pem
-        run: |
-          ADMIN_KEY=$(docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/admin_key')
-          export ADMIN_KEY
-          /tmp/frontiercloud-ui-regression/bin/python tests/browser_ui_regression.py
-      - name: Show service logs on failure
-        if: failure()
-        run: docker compose logs --no-color --tail=120 web nginx
-      - name: Stop and clean UI fixture
-        if: always()
-        run: |
-          sudo rm -f data/.frontiercloud-maintenance
-          docker compose down --volumes --remove-orphans
-
-  test-cluster:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'merge_group' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/dev')
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    concurrency:
-      group: ${{ github.workflow }}-cluster-${{ github.event_name }}-${{ github.head_ref || github.ref }}
-      cancel-in-progress: true
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Install isolated cluster test dependencies
-        run: |
-          python3 -m venv /tmp/frontiercloud-cluster-test
-          /tmp/frontiercloud-cluster-test/bin/pip install httpx==0.28.1 playwright==1.62.0
-          test -x /usr/bin/google-chrome
-          command -v tc
-      - name: Build the same application for every node
-        run: |
-          docker build -t frontiercloud-acceptance-web .
-          docker build -t frontiercloud-acceptance-nginx -f nginx/Dockerfile .
-          docker build -t frontiercloud-updater -f updater/Dockerfile .
-      - name: Run verified local HTTPS topology and browser acceptance
-        env:
-          PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
-        run: /tmp/frontiercloud-cluster-test/bin/python tests/federation_stack.py --output /tmp/federation-acceptance.json
-      - name: Keep acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: federation-acceptance
-          path: /tmp/federation-acceptance.json
-
-  test-compose:
-    needs: [verify-promotion-query, browser-ui, test-cluster]
-    if: >-
-      always() &&
-      (github.event_name == 'workflow_dispatch' ||
-       github.event_name == 'merge_group' ||
-       (github.event_name == 'push' && github.ref == 'refs/heads/dev'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    concurrency:
-      group: ${{ github.workflow }}-compose-${{ github.event_name }}-${{ github.head_ref || github.ref }}
-      cancel-in-progress: true
-
-    steps:
-      - name: Enforce upstream release gates
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "${{ needs.browser-ui.result }}" = "success"
-          test "${{ needs.test-cluster.result }}" = "success"
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/dev" ]]; then
-            test "${{ needs.verify-promotion-query.result }}" = "success"
-          fi
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Prepare CI certificates and configuration
-        run: |
-          mkdir -p certs data/media/music/ci-multiple
-          sudo chown -R 10001:10001 data
-          openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
-            -keyout certs/privkey.pem \
-            -out certs/fullchain.pem \
-            -subj "/CN=ci.frontiercloud.local" \
-            -addext "subjectAltName=DNS:ci.frontiercloud.local,DNS:nginx" \
-            -addext "basicConstraints=critical,CA:TRUE"
-          sudo cp certs/fullchain.pem /usr/local/share/ca-certificates/frontiercloud-ci.crt
-          sudo update-ca-certificates
-          echo '127.0.0.1 ci.frontiercloud.local' | sudo tee -a /etc/hosts
-          cat <<'EOF' > .env
-          TLS_ENABLED=true
-          INSTANCE_NAME=frontiercloud-ci
-          SERVER_NAME=ci.frontiercloud.local
-          EOF
-
-      - name: Validate configuration and frontend syntax
-        run: |
-          python3 scripts/check_cpu_boundary.py
-          python3 scripts/validate_env_contract.py
-          python3 scripts/check_release_policy.py
-          docker compose config --quiet
-          python3 scripts/check_english_comments.py
-          node --check static/js/admin.js
-          node --check static/js/player.js
-          node --check static/js/media-browser.js
-          node --check static/js/nodes.js
-          node --check static/js/lyrics.js
-          node --check static/js/karaoke.js
-          node --check static/js/lyrics-window.js
-          node --check static/js/karaoke-ui.js
-          node tests/admin_ui_smoke.mjs
-          node tests/player_cache_smoke.mjs
-          node tests/network_observation_smoke.mjs
-
-      - name: Build and start services
-        run: |
-          docker compose up -d --build --remove-orphans --wait --wait-timeout 180
-          docker update --cpus 1.0 "$(docker compose ps -q web)"
-
-      - name: Run source configuration tests
-        run: |
-          python3 -m unittest -v \
-            tests/test_backup_compute_retirement.py \
-            tests/test_cpu_boundary.py \
-            tests/test_deployment_contract.py \
-            tests/test_federation_contract.py \
-            tests/test_updater_p0_contract.py
-
-      - name: Run unit and runtime tests
-        run: |
-          mapfile -t runtime_tests < <(
-            find tests -maxdepth 1 -type f -name 'test_*.py' \
-              ! -name 'test_backup_compute_retirement.py' \
-              ! -name 'test_cpu_boundary.py' \
-              ! -name 'test_deployment_contract.py' \
-              ! -name 'test_federation_contract.py' \
-              ! -name 'test_updater_p0_contract.py' \
-              -printf '/app/%p\n' | sort
-          )
-          timeout --signal=TERM --kill-after=5s 120s \
-            docker compose exec -T web python -m unittest -v "${runtime_tests[@]}"
-          docker compose exec -T nginx nginx -t
-          docker compose exec -T redis redis-cli ping | grep PONG
-          docker compose exec -T mysql sh -c 'MYSQL_PWD=$(cat /run/frontiercloud-secrets/mysql_password) mysqladmin ping -h 127.0.0.1 -umedia_admin --silent'
-
-      - name: Test IP summaries and edge enforcement against the running stack
-        run: |
-          docker compose exec -T web python -m tests.security_mysql_smoke
-          docker compose exec -T web python -m tests.sql_concurrency_smoke
-          python3 tests/security_stack_smoke.py
-
-      - name: Test public and admin flows
-        run: |
-          curl -fsSL https://ci.frontiercloud.local/ | grep "前沿娱乐"
-          curl -fsSL https://ci.frontiercloud.local/karaoke/ | grep "卡拉OK"
-          curl -fsSL https://ci.frontiercloud.local/karaoke/ | grep '/static/js/karaoke.js?v='
-          curl -fsSI https://ci.frontiercloud.local/karaoke/ | grep -qi 'permissions-policy: camera=(), microphone=(self), geolocation=()'
-          curl -fsSI 'https://ci.frontiercloud.local/static/js/karaoke.js?v=0000000000000000' | tr -d '\r' | grep -qi '^cache-control: public, max-age=31536000, immutable$'
-          curl -fsSI 'https://ci.frontiercloud.local/static/js/player.js?v=0000000000000000' | tr -d '\r' | grep -qi '^cache-control: public, max-age=31536000, immutable$'
-          curl -fsSI 'https://ci.frontiercloud.local/static/js/player.js' | tr -d '\r' | grep -qi '^cache-control: no-cache$'
-          curl -fsS https://ci.frontiercloud.local/health/live | grep '"status":"healthy"'
-          curl -fsS https://ci.frontiercloud.local/health/ready | grep '"status":"ready"'
-          generated_metrics_token=$(docker compose exec -T web sh -c 'cat /run/frontiercloud-secrets/metrics_token')
-          curl -fsS https://ci.frontiercloud.local/metrics \
-            -H "Authorization: Bearer $generated_metrics_token" | grep 'frontiercloud_http_requests_total'
-          curl -fsS https://ci.frontiercloud.local/api/v1/media/ | grep "前沿娱乐"
-          test "$(curl -sS -o /dev/null -w '%{http_code}' https://ci.frontiercloud.local/api/v1/media/admin/)" = 401
-
-          ADMIN_KEY=$(docker compose exec -T web python -c "from app.core.config import ADMIN_KEY_FILE; print(ADMIN_KEY_FILE.read_text().strip())")
-          curl -fsS -c /tmp/admin-cookies.txt -X POST https://ci.frontiercloud.local/api/v1/media/admin/elevate \
-            --data-urlencode "token=$ADMIN_KEY" | grep '"status":"ok"'
-          CSRF_TOKEN=$(awk '$6 == "__Host-admin-csrf" {print $7}' /tmp/admin-cookies.txt)
-
-          printf 'RIFF0000WAVEfmt ' > /tmp/ci-one.wav
-          printf 'RIFF1111WAVEfmt ' > /tmp/ci-two.wav
-          curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -F 'site_type=primary' -F 'target_dir=' -F 'relative_path=music/ci-folder/one.wav' -F 'file=@/tmp/ci-one.wav;type=audio/wav' \
-            https://ci.frontiercloud.local/api/v1/media/admin/upload/item | grep 'music/ci-folder/one.wav'
-          curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -F 'site_type=primary' -F 'target_dir=music/ci-multiple' -F 'file=@/tmp/ci-one.wav;type=audio/wav' \
-            https://ci.frontiercloud.local/api/v1/media/admin/upload/item | grep 'music/ci-multiple/ci-one.wav'
-          curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -F 'site_type=primary' -F 'target_dir=music/ci-multiple' -F 'file=@/tmp/ci-two.wav;type=audio/wav' \
-            https://ci.frontiercloud.local/api/v1/media/admin/upload/item | grep 'music/ci-multiple/ci-two.wav'
-          curl -fsS -b /tmp/admin-cookies.txt \
-            'https://ci.frontiercloud.local/api/v1/media/admin/download?paths=%5B%22music%2Fci-multiple%2Fci-one.wav%22%5D' \
-            -o /tmp/ci-downloaded.wav
-          cmp /tmp/ci-one.wav /tmp/ci-downloaded.wav
-          test "$(docker compose exec -T redis redis-cli GET media:catalog:v2:generation)" -ge 3
-          curl -fsS 'https://ci.frontiercloud.local/api/v1/media/music/category?path=music%2Fci-folder' | grep 'frontierCloudPlayerCatalog'
-          curl -fsS 'https://ci.frontiercloud.local/api/v1/media/catalog/media?media_type=music&path=music%2Fci-folder&playback_session_id=ci' | grep 'one'
-          test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-            https://ci.frontiercloud.local/api/v1/media/preference)" = 404
-          curl -fsS -b /tmp/admin-cookies.txt \
-            'https://ci.frontiercloud.local/api/v1/media/admin/media-priority?media_type=audio&path=music%2Fci-folder' | grep 'music/ci-folder/one.wav'
-          curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -H 'Content-Type: application/json' \
-            -d '{"media_path":"music/ci-folder/one.wav","value":123}' \
-            https://ci.frontiercloud.local/api/v1/media/admin/media-priority | grep '"preference":123'
-          curl -fsS -D /tmp/media-headers.txt \
-            'https://ci.frontiercloud.local/api/v1/media/stream?file_path=music%2Fci-folder%2Fone.wav' \
-            -o /tmp/ci-streamed.wav
-          cmp /tmp/ci-one.wav /tmp/ci-streamed.wav
-          grep -qi '^cache-control: public, max-age=86400' /tmp/media-headers.txt
-          test "$(grep -ci '^cache-control:' /tmp/media-headers.txt)" = 1
-          grep -qi '^x-content-type-options: nosniff' /tmp/media-headers.txt
-          grep -qi '^strict-transport-security: max-age=31536000' /tmp/media-headers.txt
-          test "$(curl -sS -H 'Range: bytes=0-3' -o /tmp/ci-range.bin -w '%{http_code}' \
-            'https://ci.frontiercloud.local/api/v1/media/stream?file_path=music%2Fci-folder%2Fone.wav')" = 206
-          test "$(wc -c < /tmp/ci-range.bin)" = 4
-          head -c 70000 /dev/zero > /tmp/oversized-body.bin
-          test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
-            --data-binary @/tmp/oversized-body.bin \
-            https://ci.frontiercloud.local/api/v1/media/network-observation)" = 413
-          printf '[00:01.00]测试歌词第一行\n[00:05.25]测试歌词第二行\n' > /tmp/ci-lyrics.lrc
-          curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -F 'file=@/tmp/ci-lyrics.lrc;type=text/plain' \
-            https://ci.frontiercloud.local/api/v1/media/admin/upload/lyric | grep 'lyrics/ci-lyrics.lrc'
-          curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -H 'Content-Type: application/json' \
-            -d '{"origin_kind":"track","origin_path":"music/ci-folder/one.wav","linked_paths":["lyrics/ci-lyrics.lrc"]}' \
-            https://ci.frontiercloud.local/api/v1/media/admin/lyrics/relations | grep '"relations":1'
-          curl -fsS -b /tmp/admin-cookies.txt \
-            https://ci.frontiercloud.local/api/v1/media/admin/lyrics/catalog | grep 'lyrics/ci-lyrics.lrc'
-          curl -fsSG --data-urlencode 'track=music/ci-folder/one.wav' \
-            https://ci.frontiercloud.local/api/v1/media/lyrics | grep '测试歌词第一行'
-          curl -fsSG --data-urlencode 'track=music/ci-folder/one.wav' \
-            https://ci.frontiercloud.local/api/v1/media/lyrics/content | grep '测试歌词第二行'
-          docker compose exec -T redis redis-cli --scan \
-            --pattern 'media:catalog:v2:*:tracks-v2:*' | grep 'media:catalog:v2:'
-          curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -H 'Content-Type: application/json' -d '{"mode":"random"}' \
-            https://ci.frontiercloud.local/api/v1/media/admin/key/rotate | grep '"admin_key"'
-
-          for attempt in $(seq 1 6); do
-            docker compose exec -T web python -c \
-              "import asyncio; from app.services.ip_security import record_invalid_api; asyncio.run(record_invalid_api('203.0.113.77','GET','/etc/passwd','ci-scanner'))"
-          done
-          docker compose exec -T redis redis-cli GET security:auto-ban:203.0.113.77 | grep '203.0.113.77'
-          curl -fsS -b /tmp/admin-cookies.txt \
-            https://ci.frontiercloud.local/api/v1/media/admin/security/blocks | grep '203.0.113.77'
-          curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -H 'Content-Type: application/json' -d '{"ip":"203.0.113.77"}' \
-            https://ci.frontiercloud.local/api/v1/media/admin/security/unban | grep '"status":"ok"'
-          test -z "$(docker compose exec -T redis redis-cli GET security:auto-ban:203.0.113.77)"
-          curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -H 'Content-Type: application/json' -d '{"ip":"203.0.113.77","note":"CI"}' \
-            https://ci.frontiercloud.local/api/v1/media/admin/security/whitelist | grep '"status":"ok"'
-          docker compose exec -T redis redis-cli SISMEMBER security:ip-whitelist 203.0.113.77 | grep '^1$'
-          curl -fsS -b /tmp/admin-cookies.txt -H "X-CSRF-Token: $CSRF_TOKEN" \
-            -H 'Content-Type: application/json' -d '{"ip":"203.0.113.77"}' \
-            https://ci.frontiercloud.local/api/v1/media/admin/security/whitelist/remove | grep '"status":"ok"'
-
-      - name: Require one-core CPU recovery
-        run: python3 scripts/check_cpu_quiescence.py "$(docker compose ps -q web)" --threshold 20 --consecutive 5 --timeout 30
-
-      - name: Show service logs on failure
-        if: failure()
-        run: |
-          docker compose logs --no-color
-          docker compose stop -t 3 web
-
-      - name: Stop and clean CI services
-        if: always()
-        run: docker compose down --volumes --remove-orphans

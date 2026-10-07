@@ -1,6 +1,6 @@
 # FrontierCloud
 
-FrontierCloud is a self-hosted media browsing, continuous-audio playback, karaoke, cluster-storage, backup, and administration system. FastAPI currently provides the business/control plane, native browser JavaScript provides the UI, and Docker Compose runs the service stack.
+FrontierCloud is a self-hosted media browsing, continuous-audio playback, karaoke, cluster-storage, backup, and administration system. Go (Gin) provides the default business/control plane with SQLite; MySQL is the only database alternative. Python application sources are non-executable syntax references; Python remains available for test/script drivers only. Browser JavaScript, Nginx, Redis and coturn retain their existing roles.
 
 The core product model is deliberately small: one business Master owns business truth, Followers provide Storage and/or Backup resources, and every managed media object has one complete physical owner.
 
@@ -17,17 +17,31 @@ The core product model is deliberately small: one business Master owns business 
 
 ## Quick start
 
-HTTP Standalone mode needs no `.env` file:
+For a fresh HTTP Standalone node, build the exact committed native source. No
+Python or MySQL service is required:
 
 ```bash
-docker compose up -d --build --wait
+export FRONTIERCLOUD_REVISION="$(git rev-parse HEAD)"
+bash scripts/build-native-images.sh "$FRONTIERCLOUD_REVISION"
+docker compose up -d --no-build --wait
 ```
 
 Open `http://localhost`. The startup initializer creates the managed media tree under `data/media` and the persistent runtime secrets required by the stack.
 
+The two supported `.env` deployment selections are documented in
+[Native deployment](protocol/v2/native-deployment.md). Changing the runtime or
+database selection does not migrate existing state. Historical Python cluster
+volumes remain fenced until a separately verified offline adoption/migration;
+do not apply this quick start to an existing cluster.
+
+Preserving an existing Follower's identity and media requires the separate
+[verified offline Follower migration](docs/offline-follower-to-sqlite.md), not
+reinitialization or re-pairing. Existing native MySQL Masters use the
+[separate SQLite conversion](docs/offline-master-to-sqlite.md).
+
 For HTTPS, copy the relevant switches from `.env.example`, enable TLS, set `SERVER_NAME`, and provide `certs/fullchain.pem` plus `certs/privkey.pem`. Fixed Master/Follower roles require certificate-verified HTTPS and fail closed when that contract is missing.
 
-Detailed configuration, generated-secret recovery, first Admin access, role initialization, and persistent-volume guidance live in [Deployment and Configuration](docs/wiki/Deployment-and-Configuration.md).
+Detailed configuration, generated-secret recovery, first Admin access, role initialization, and persistent-volume guidance live in [Deployment and Configuration](https://github.com/wongyiuming/FrontierCloud/wiki/Deployment-and-Configuration).
 
 ## Documentation map
 
@@ -37,23 +51,28 @@ The three top-level documents have separate jobs:
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — authority, storage, mutation, playback, security, and release invariants that implementation must preserve.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — repository topology, change discipline, required checks, and promotion procedure.
 
-Operational and subsystem detail belongs in the project Wiki sources:
+Operational and subsystem detail belongs in the separate GitHub Wiki (not tracked in this repository):
 
-- [Wiki home](docs/wiki/Home.md)
-- [Deployment and configuration](docs/wiki/Deployment-and-Configuration.md)
-- [Operations and troubleshooting](docs/wiki/Operations-and-Troubleshooting.md)
-- [Cluster and resource model](docs/wiki/Cluster-and-Resource-Model.md)
-- [Media and storage](docs/wiki/Media-and-Storage.md)
-- [Playback continuity](docs/wiki/Playback-Continuity.md)
-- [Engineering and CI](docs/wiki/Engineering-and-CI.md)
-- [Release and database migrations](docs/wiki/Release-and-Database-Migrations.md)
-- [Command reference](docs/wiki/Command-Reference.md)
-- [Audit and validation](docs/wiki/Audit-and-Validation.md)
+- [Wiki home](https://github.com/wongyiuming/FrontierCloud/wiki/Home)
+- [Deployment and configuration](https://github.com/wongyiuming/FrontierCloud/wiki/Deployment-and-Configuration)
+- [Operations and troubleshooting](https://github.com/wongyiuming/FrontierCloud/wiki/Operations-and-Troubleshooting)
+- [Cluster and resource model](https://github.com/wongyiuming/FrontierCloud/wiki/Cluster-and-Resource-Model)
+- [Media and storage](https://github.com/wongyiuming/FrontierCloud/wiki/Media-and-Storage)
+- [Playback continuity](https://github.com/wongyiuming/FrontierCloud/wiki/Playback-Continuity)
+- [Engineering and CI](https://github.com/wongyiuming/FrontierCloud/wiki/Engineering-and-CI)
+- [Release and database migrations](https://github.com/wongyiuming/FrontierCloud/wiki/Release-and-Database-Migrations)
+- [Command reference](https://github.com/wongyiuming/FrontierCloud/wiki/Command-Reference)
+- [Audit and validation](https://github.com/wongyiuming/FrontierCloud/wiki/Audit-and-Validation)
 
 The published GitHub Wiki is available at [github.com/wongyiuming/FrontierCloud/wiki](https://github.com/wongyiuming/FrontierCloud/wiki).
 
+Development-host acceptance uses five Go nodes (one Master, two Direct, two Relay), repeated for SQLite and MySQL. Hosted CI stays within three minutes and does not run fleet, database or browser acceptance.
+
 ## Repository delivery
 
-FrontierCloud has exactly two canonical branches: `dev` for implementation and complete CI, and `main` for reviewed release history. Do not create additional branches. The only valid promotion PR is same-repository `dev -> main`; after merge, fast-forward `dev` to the resulting `main` commit before the next change.
+The authorized profiles are `gin_dev -> gin_main` for native Go and `dev -> main`
+for canonical release history. Both permit only Go artifacts; branch consolidation is a separate owner decision. Do not create additional branches. Each promotion must
+be same-repository, reviewed and backed by exact source CI; synchronize its
+implementation branch after merge. Database selection never changes release profile.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing cross-cutting behavior.

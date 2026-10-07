@@ -63,7 +63,12 @@ def _matching_ci_run(runs: list[dict], source_sha: str) -> dict | None:
     """Return the exact dev push CI run for one reviewed PR head commit."""
     if not SHA_RE.fullmatch(source_sha):
         return None
-    for item in runs:
+    # Do not rely on API response order: an older success must not supersede
+    # the newest failed/running push for the exact reviewed source commit.
+    def run_number(item):
+        value = item.get("run_number") if isinstance(item, dict) else None
+        return value if type(value) is int and value > 0 else 0
+    for item in sorted(runs, key=run_number, reverse=True):
         if not isinstance(item, dict):
             continue
         if (
@@ -405,14 +410,21 @@ async def follower_release_statuses() -> list[dict]:
         return []
     relations = [row for row in await state.list_relationships()
                  if row["direction"] == "downstream" and row["state"] == "active"]
+    if len(relations) > 1000:
+        raise RuntimeError("Release selection exceeds 1000 Followers")
+    slots = asyncio.Semaphore(4)
 
     async def one(relation: dict) -> dict:
         base = {"relationship_id": relation["relationship_id"], "peer_id": relation["peer_id"],
                 "peer_endpoint": relation["peer_endpoint"]}
         try:
-            value = await runtime.call(relation, "/internal/v1/cluster-update/status", {})
+            async with slots:
+                value = await runtime.call(relation, "/internal/v1/cluster-update/status", {})
             status = value.get("status") if isinstance(value, dict) else None
-            return {**base, "reachable": True, "status": status if isinstance(status, dict) else {}}
+            out = {**base, "reachable": True, "status": status if isinstance(status, dict) else {}}
+            if isinstance(value, dict) and "capabilities" in value:
+                out["capabilities"] = value["capabilities"]
+            return out
         except Exception as exc:
             return {**base, "reachable": False, "status": {}, "detail": type(exc).__name__}
 
@@ -443,6 +455,9 @@ def followers_need_convergence(followers: list[dict], target: str) -> bool:
 
 
 async def release_status(*, refresh_ci: bool = False) -> dict:
+    if settings.RELEASE_MANIFEST_PATH:
+        from app.services.release_manifest_control import release_status as manifest_status
+        return await manifest_status()
     local, ci = await asyncio.gather(agent_status(), ci_status(force=refresh_ci))
     followers = await follower_release_statuses()
     target = str(ci.get("sha") or "")
@@ -467,6 +482,9 @@ async def release_status(*, refresh_ci: bool = False) -> dict:
 
 
 async def start_upgrade() -> dict:
+    if settings.RELEASE_MANIFEST_PATH:
+        from app.services.release_manifest_control import start
+        return await start("upgrade")
     if state.node.get("role") != "Master":
         raise RuntimeError("Only Master can start a cluster release")
     # The status page has normally verified the exact immutable target already.
@@ -492,6 +510,9 @@ async def start_upgrade() -> dict:
 
 
 async def start_rollback() -> dict:
+    if settings.RELEASE_MANIFEST_PATH:
+        from app.services.release_manifest_control import start
+        return await start("rollback")
     if state.node.get("role") != "Master":
         raise RuntimeError("Only Master can roll back the cluster")
     local = await agent_status()

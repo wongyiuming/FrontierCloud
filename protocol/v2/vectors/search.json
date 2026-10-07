@@ -1,0 +1,200 @@
+{
+  "format": "frontiercloud-protocol-vector",
+  "version": 1,
+  "protocol": 2,
+  "source": "Python pypinyin 0.55.0 and OpenCC 1.4.2 reference",
+  "cases": [
+    {
+      "value": "暗湧",
+      "compact": "暗湧",
+      "pinyin": "anyong",
+      "aliases": "anyong 暗涌 暗湧"
+    },
+    {
+      "value": "暗涌",
+      "compact": "暗涌",
+      "pinyin": "anyong",
+      "aliases": "anyong 暗涌 暗湧"
+    },
+    {
+      "value": "黃耀明",
+      "compact": "黃耀明",
+      "pinyin": "huangyaoming",
+      "aliases": "huangyaoming 黃耀明 黄耀明"
+    },
+    {
+      "value": "人山人海",
+      "compact": "人山人海",
+      "pinyin": "renshanrenhai",
+      "aliases": "renshanrenhai 人山人海"
+    },
+    {
+      "value": "重庆音乐",
+      "compact": "重庆音乐",
+      "pinyin": "chongqingyinyue",
+      "aliases": "chongqingyinyue zhongqingyinle 重庆音乐 重慶音樂"
+    },
+    {
+      "value": "重慶音樂",
+      "compact": "重慶音樂",
+      "pinyin": "zhongqingyinle",
+      "aliases": "chongqingyinyue zhongqingyinle 重庆音乐 重慶音樂"
+    },
+    {
+      "value": "重庆重阳重量",
+      "compact": "重庆重阳重量",
+      "pinyin": "chongqingchongyangzhongliang",
+      "aliases": "chongqingchongyangzhongliang zhongqingzhongyangzhongliang 重庆重阳重量 重慶重陽重量"
+    },
+    {
+      "value": "银行行长行走",
+      "compact": "银行行长行走",
+      "pinyin": "yinhanghangzhangxingzou",
+      "aliases": "yinhanghangzhangxingzou yinxingxingzhangxingzou 銀行行長行走 银行行长行走"
+    },
+    {
+      "value": "長安長大",
+      "compact": "長安長大",
+      "pinyin": "zhanganzhangda",
+      "aliases": "changanzhangda zhanganzhangda 長安長大 长安长大"
+    },
+    {
+      "value": "地久天长",
+      "compact": "地久天长",
+      "pinyin": "dijiutianchang",
+      "aliases": "dijiutianchang dijiutianzhang 地久天長 地久天长"
+    },
+    {
+      "value": "绿女略虐",
+      "compact": "绿女略虐",
+      "pinyin": "lvnvlvenve",
+      "aliases": "lvnvlvenve 綠女略虐 绿女略虐"
+    },
+    {
+      "value": "〇乐",
+      "compact": "〇乐",
+      "pinyin": "lingle",
+      "aliases": "lingle 〇乐 〇樂"
+    },
+    {
+      "value": "Straße ＡＢＣ１２３ ①²³½ Ⅷ",
+      "compact": "strasseabc12312312viii",
+      "pinyin": "Straße ＡＢＣ１２３ ①²³½ Ⅷ",
+      "aliases": "strasseabc12312312viii"
+    },
+    {
+      "value": "İIıiΣσς",
+      "compact": "iiıiσσσ",
+      "pinyin": "İIıiΣσς",
+      "aliases": "iiıiσσσ"
+    },
+    {
+      "value": "ǜüêế嗯哪",
+      "compact": "ǜüêế嗯哪",
+      "pinyin": "ǜüêếnna",
+      "aliases": "ǜüêếnna ǜüêế嗯哪"
+    },
+    {
+      "value": "你好，世界！",
+      "compact": "你好世界",
+      "pinyin": "nihao，shijie！",
+      "aliases": "nihaoshijie 你好世界"
+    },
+    {
+      "value": "music/暗湧/黃耀明+人山人海.mp3",
+      "compact": "music暗湧黃耀明人山人海mp3",
+      "pinyin": "music/anyong/huangyaoming+renshanrenhai.mp3",
+      "aliases": "musicanyonghuangyaomingrenshanrenhaimp3 music暗涌黄耀明人山人海mp3 music暗湧黃耀明人山人海mp3"
+    },
+    {
+      "value": "abc重庆.def",
+      "compact": "abc重庆def",
+      "pinyin": "abcchongqing.def",
+      "aliases": "abcchongqingdef abczhongqingdef abc重庆def abc重慶def"
+    },
+    {
+      "value": "漢字異體測試：著作頭髮後臺乾坤",
+      "compact": "漢字異體測試著作頭髮後臺乾坤",
+      "pinyin": "hanziyiticeshi：zhuzuotoufahoutaiqiankun",
+      "aliases": "hanziyiticeshizhuzuotoufahoutaiqiankun 汉字异体测试著作头发后台乾坤 漢字異體測試著作頭髮後臺乾坤"
+    },
+    {
+      "value": "一丁不识",
+      "compact": "一丁不识",
+      "pinyin": "yidingbushi",
+      "aliases": "yidingbushi 一丁不識 一丁不识"
+    },
+    {
+      "value": "重重叠叠",
+      "compact": "重重叠叠",
+      "pinyin": "chongchongdiedie",
+      "aliases": "chongchongdiedie 重重叠叠 重重疊疊"
+    },
+    {
+      "value": "长长久久",
+      "compact": "长长久久",
+      "pinyin": "changchangjiujiu",
+      "aliases": "changchangjiujiu zhangzhangjiujiu 長長久久 长长久久"
+    },
+    {
+      "value": "便宜方便",
+      "compact": "便宜方便",
+      "pinyin": "pianyifangbian",
+      "aliases": "pianyifangbian 便宜方便"
+    },
+    {
+      "value": "朝朝暮暮",
+      "compact": "朝朝暮暮",
+      "pinyin": "zhaozhaomumu",
+      "aliases": "zhaozhaomumu 朝朝暮暮"
+    },
+    {
+      "value": "曾经曾祖",
+      "compact": "曾经曾祖",
+      "pinyin": "cengjingzengzu",
+      "aliases": "cengjingzengzu 曾經曾祖 曾经曾祖"
+    },
+    {
+      "value": "快乐音乐乐队",
+      "compact": "快乐音乐乐队",
+      "pinyin": "kuaileyinyueyuedui",
+      "aliases": "kuaileyinleledui kuaileyinyueyuedui 快乐音乐乐队 快樂音樂樂隊"
+    },
+    {
+      "value": "西藏藏品宝藏",
+      "compact": "西藏藏品宝藏",
+      "pinyin": "xizangcangpinbaozang",
+      "aliases": "xizangcangpinbaocang xizangcangpinbaozang 西藏藏品宝藏 西藏藏品寶藏"
+    },
+    {
+      "value": "单于单词单姓",
+      "compact": "单于单词单姓",
+      "pinyin": "chanyudancishanxing",
+      "aliases": "chanyudancishanxing danyudancidanxing 单于单词单姓 單于單詞單姓"
+    },
+    {
+      "value": "安徽六安",
+      "compact": "安徽六安",
+      "pinyin": "anhuiluan",
+      "aliases": "anhuiluan 安徽六安"
+    },
+    {
+      "value": "不胜其烦",
+      "compact": "不胜其烦",
+      "pinyin": "bushengqifan",
+      "aliases": "bushengqifan 不勝其煩 不胜其烦"
+    },
+    {
+      "value": "# - _ +",
+      "compact": "",
+      "pinyin": "# - _ +",
+      "aliases": ""
+    },
+    {
+      "value": "天地玄黄宇宙洪荒",
+      "compact": "天地玄黄宇宙洪荒",
+      "pinyin": "tiandixuanhuangyuzhouhonghuang",
+      "aliases": "tiandixuanhuangyuzhouhonghuang 天地玄黃宇宙洪荒 天地玄黄宇宙洪荒"
+    }
+  ]
+}

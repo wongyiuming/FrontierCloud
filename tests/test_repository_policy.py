@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -28,19 +29,21 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
     def test_main_prs_are_dev_to_main_only(self):
         workflow = (ROOT / ".github/workflows/repository-policy.yml").read_text(encoding="utf-8")
         self.assertIn('pull_request:', workflow)
-        self.assertIn('branches: ["main"]', workflow)
+        self.assertIn('branches: ["main", "gin_main"]', workflow)
         self.assertIn('HEAD_REF: ${{ github.head_ref }}', workflow)
         self.assertIn('HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}', workflow)
         self.assertIn('BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}', workflow)
-        self.assertIn('[[ "$HEAD_REF" != "dev" || "$HEAD_REPO" != "$BASE_REPO" ]]', workflow)
-        self.assertIn('same-repository dev -> main', workflow)
+        self.assertIn('main) expected_source=dev ;;', workflow)
+        self.assertIn('gin_main) expected_source=gin_dev ;;', workflow)
+        self.assertIn('[[ "$HEAD_REF" != "$expected_source" || "$HEAD_REPO" != "$BASE_REPO" ]]', workflow)
+        self.assertIn('same-repository dev -> main or gin_dev -> gin_main', workflow)
 
     def test_noncanonical_branch_creation_is_detected(self):
         workflow = (ROOT / ".github/workflows/repository-policy.yml").read_text(encoding="utf-8")
         self.assertRegex(workflow, r"(?m)^  create:\s*$")
         self.assertIn("github.ref_type == 'branch'", workflow)
         self.assertIn('CREATED_REF: ${{ github.ref_name }}', workflow)
-        self.assertIn('[[ "$CREATED_REF" != "dev" && "$CREATED_REF" != "main" ]]', workflow)
+        self.assertIn('[[ "$CREATED_REF" != "dev" && "$CREATED_REF" != "main" && "$CREATED_REF" != "gin_dev" && "$CREATED_REF" != "gin_main" ]]', workflow)
         self.assertIn("new branches are prohibited", workflow)
 
     def test_no_new_branch_rule_is_explicit_and_release_flow_is_two_branch(self):
@@ -51,6 +54,7 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
             self.assertIn("dev", content)
             self.assertIn("main", content)
             self.assertIn("dev -> main", content)
+            self.assertIn("gin_dev -> gin_main", content)
             self.assertIn("fast-forward", content)
         self.assertIn("only development branch", contributing)
         self.assertIn("never force-rewrite", architecture)
@@ -91,13 +95,26 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
         architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
         combined = dockerfile + "\n" + compose
 
-        self.assertIn('CMD ["uvicorn", "main:app"', dockerfile)
+        self.assertIn('ENTRYPOINT ["/app/frontiercloud"]', dockerfile)
+        self.assertIn('CMD ["serve"]', dockerfile)
+        self.assertFalse((ROOT / "Dockerfile.python").exists())
+        self.assertFalse((ROOT / "docker-compose.python.yaml").exists())
         self.assertNotRegex(combined, re.compile(r"--workers(?:=|\s)", re.I))
         self.assertNotRegex(combined, re.compile(r"\bWEB_CONCURRENCY\b", re.I))
         self.assertNotRegex(combined, re.compile(r"\bgunicorn\b", re.I))
-        self.assertIn("single ASGI worker", architecture)
+        self.assertIn("single native Go process", architecture)
         self.assertIn("distributed lock", architecture)
         self.assertIn("media mutation", architecture.lower())
+
+    def test_wiki_is_external_and_python_is_not_a_deployment_profile(self):
+        tracked = subprocess.check_output(["git", "ls-files", "--", "docs/wiki"], cwd=ROOT)
+        self.assertEqual(tracked, b"")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("https://github.com/wongyiuming/FrontierCloud/wiki", readme)
+        self.assertIn("/docs/wiki/", (ROOT / ".gitignore").read_text(encoding="utf-8"))
+        for name in ("main.py", "updater/server.py"):
+            self.assertIn('raise SystemExit("Python deployment is prohibited.',
+                          (ROOT / name).read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

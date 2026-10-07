@@ -1,0 +1,8 @@
+{
+	"format":"frontiercloud-protocol-vector",
+	"version":1,
+	"protocol":2,
+  "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "plaintext": "{\"id\":\"abc\",\"kind\":\"standalone\",\"v\":1}",
+  "token": "gAAAAABlU_EAAAECAwQFBgcICQoLDA0OD7KNYY3UyWA6YIf6_XFmuBkl2eS-2o-YTKJwPeY1th8K-l7tj99bizsuiwJvj7WS4SqycEItj96-tGnbYLBJtNfmKH6T3LMlaEW1uKNnpcCJ"
+}

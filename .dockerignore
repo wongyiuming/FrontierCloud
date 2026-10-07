@@ -7,11 +7,17 @@
 venv
 ENV
 data
+!internal/search/data/
+!internal/search/data/**
 scripts/auto_download
 
 # Exclude Python bytecode.
 __pycache__
 *.pyc
+
+# Exclude local Go build artifacts and caches.
+frontiercloud.exe
+.gocache
 
 # Exclude IDE configuration.
 .idea
@@ -20,3 +26,11 @@ __pycache__
 # Exclude local sensitive data.
 .env
 certs/
+
+# Non-executable Python references and test/script drivers are never runtime assets.
+app/
+main.py
+pyproject.toml
+tests/
+scripts/
+docs/

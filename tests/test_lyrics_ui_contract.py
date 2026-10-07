@@ -32,15 +32,15 @@ class LyricsUiContractTests(unittest.TestCase):
         self.assertNotIn("#overlayLines .fullscreen-lyric-line", karaoke_ui)
 
     def test_default_lyric_is_runtime_generated_and_startup_backfilled(self):
-        lyrics = (ROOT / "app/services/lyrics.py").read_text(encoding="utf-8")
-        main = (ROOT / "main.py").read_text(encoding="utf-8")
-        deletion = (ROOT / "app/api/v1/admin_delete_integrity.py").read_text(encoding="utf-8")
+        lyrics = (ROOT / "internal/media/lyrics.go").read_text(encoding="utf-8")
+        main = (ROOT / "internal/media/service.go").read_text(encoding="utf-8")
+        deletion = (ROOT / "internal/media/delete.go").read_text(encoding="utf-8")
 
-        self.assertIn("DEFAULT_LYRIC_PATH = \"lyrics/default.lrc\"", lyrics)
+        self.assertIn("const defaultLyric = \"lyrics/default.lrc\"", lyrics)
         self.assertIn("建设中，暂无歌词", lyrics)
-        self.assertIn("ensure_default_lyric_file", lyrics)
-        self.assertIn("initialize_default_lyrics", main)
-        self.assertIn("系统默认歌词为保留对象，不能删除", deletion)
+        self.assertIn("ensureDefaultLyric", lyrics)
+        self.assertIn("ensureDefaultLyric", main)
+        self.assertIn("defaultLyric", deletion)
 
 
 if __name__ == "__main__":

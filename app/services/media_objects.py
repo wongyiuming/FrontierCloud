@@ -5,10 +5,11 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any, Iterable, Iterator
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.db import engine
+from app.store.database import write_transaction
+from app.store.media_objects import media_objects_repository
 
 
 OBJECT_KINDS = frozenset({"audio", "video", "lyric"})
@@ -35,17 +36,7 @@ async def _legacy_id_has_business_data(
     object_kind: str,
     legacy_id: str,
 ) -> bool:
-    if object_kind == "lyric":
-        statement = "SELECT EXISTS(SELECT 1 FROM media_lyric_links WHERE lyric_id=:media_id)"
-    else:
-        statement = """
-            SELECT (
-                EXISTS(SELECT 1 FROM media_playback_stats WHERE media_id=:media_id)
-                OR EXISTS(SELECT 1 FROM media_playback_events WHERE media_id=:media_id)
-                OR EXISTS(SELECT 1 FROM media_lyric_links WHERE media_id=:media_id)
-            )
-        """
-    return bool(await conn.scalar(text(statement), {"media_id": legacy_id}))
+    return await media_objects_repository(conn).legacy_has_data(object_kind, legacy_id)
 
 
 async def ensure_object(
@@ -58,13 +49,8 @@ async def ensure_object(
         raise ValueError("Invalid media object kind")
     normalized = normalize_object_path(relative_path)
     locator = _path_locator(normalized)
-    existing = await conn.scalar(
-        text("""
-            SELECT media_id FROM media_objects
-            WHERE path_locator=:path_locator AND BINARY media_path=BINARY :media_path
-        """),
-        {"path_locator": locator, "media_path": normalized},
-    )
+    repository = media_objects_repository(conn)
+    existing = await repository.find_path(locator, normalized)
     if existing:
         return str(existing)
 
@@ -75,28 +61,11 @@ async def ensure_object(
         else secrets.token_hex(32)
     )
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    await conn.execute(
-        text("""
-            INSERT IGNORE INTO media_objects
-            (media_id, object_kind, media_path, path_locator, created_at, updated_at)
-            VALUES (:media_id, :object_kind, :media_path, :path_locator, :now, :now)
-        """),
-        {
-            "media_id": media_id,
-            "object_kind": object_kind,
-            "media_path": normalized,
-            "path_locator": locator,
-            "now": now,
-        },
-    )
-    resolved = await conn.scalar(
-        text("""
-            SELECT media_id FROM media_objects
-            WHERE path_locator=:path_locator AND BINARY media_path=BINARY :media_path
-            FOR SHARE
-        """),
-        {"path_locator": locator, "media_path": normalized},
-    )
+    await repository.register({
+        "media_id": media_id, "object_kind": object_kind, "media_path": normalized,
+        "path_locator": locator, "now": now,
+    })
+    resolved = await repository.find_path(locator, normalized, current=True)
     if not resolved:
         raise RuntimeError("Could not register media object")
     return str(resolved)
@@ -122,14 +91,8 @@ async def ensure_objects(items: Iterable[tuple[str, str]], database=None) -> dic
         found: dict[str, str] = {}
         locators = {_path_locator(path): path for path in paths}
         for locator_chunk in chunks(sorted(locators)):
-            placeholders = ", ".join(f":locator_{index}" for index in range(len(locator_chunk)))
-            params = {f"locator_{index}": value for index, value in enumerate(locator_chunk)}
-            result = await conn.execute(text(
-                "SELECT media_id, media_path, path_locator FROM media_objects "
-                f"WHERE path_locator IN ({placeholders}) ORDER BY path_locator"
-                + (" FOR SHARE" if current else "")
-            ), params)
-            for row in result.mappings().all():
+            rows = await media_objects_repository(conn).find_locators(locator_chunk, current=current)
+            for row in rows:
                 path = str(row["media_path"])
                 if locators.get(str(row["path_locator"])) == path:
                     found[path] = str(row["media_id"])
@@ -137,25 +100,13 @@ async def ensure_objects(items: Iterable[tuple[str, str]], database=None) -> dic
 
     paths = sorted(requested_by_path, key=_path_locator)
     database = database or engine
-    async with database.begin() as conn:
+    async with write_transaction(database) as conn:
         resolved = await lookup(conn, paths)
         missing = [path for path in paths if path not in resolved]
         legacy_ids = {path: legacy_object_id(path) for path in missing}
         business_ids: set[str] = set()
         for id_chunk in chunks(list(legacy_ids.values())):
-            placeholders = ", ".join(f":media_{index}" for index in range(len(id_chunk)))
-            params = {f"media_{index}": value for index, value in enumerate(id_chunk)}
-            result = await conn.execute(text(f"""
-                SELECT media_id AS object_id FROM media_playback_stats
-                WHERE media_id IN ({placeholders})
-                UNION SELECT media_id FROM media_playback_events
-                WHERE media_id IN ({placeholders})
-                UNION SELECT media_id FROM media_lyric_links
-                WHERE media_id IN ({placeholders})
-                UNION SELECT lyric_id FROM media_lyric_links
-                WHERE lyric_id IN ({placeholders})
-            """), params)
-            business_ids.update(str(row[0]) for row in result.fetchall())
+            business_ids.update(await media_objects_repository(conn).legacy_business_ids(id_chunk))
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         registrations = [
@@ -169,13 +120,8 @@ async def ensure_objects(items: Iterable[tuple[str, str]], database=None) -> dic
             for path in missing
         ]
         if registrations:
-            await conn.execute(text("""
-                INSERT IGNORE INTO media_objects
-                (media_id, object_kind, media_path, path_locator, created_at, updated_at)
-                VALUES (:media_id, :object_kind, :media_path, :path_locator, :now, :now)
-            """), registrations)
-            # INSERT IGNORE may wait for another transaction's registration.
-            # A current read sees that winner even under REPEATABLE READ.
+            await media_objects_repository(conn).register(registrations)
+            # Read the winner of a concurrent path registration.
             resolved.update(await lookup(conn, missing, current=True))
         if len(resolved) != len(paths):
             raise RuntimeError("Could not register every media object")
@@ -203,12 +149,4 @@ async def object_by_id(media_id: str) -> dict[str, str] | None:
     if len(media_id) != 64 or any(character not in "0123456789abcdef" for character in media_id):
         return None
     async with engine.connect() as conn:
-        row = (await conn.execute(
-            text("""
-                SELECT media_id, object_kind, media_path
-                FROM media_objects
-                WHERE media_id=:media_id
-            """),
-            {"media_id": media_id},
-        )).mappings().first()
-    return dict(row) if row else None
+        return await media_objects_repository(conn).find_id(media_id)

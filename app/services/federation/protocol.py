@@ -34,6 +34,33 @@ class ProtocolError(ValueError):
     pass
 
 
+BASELINE_CAPABILITIES = (
+    "backup-v2", "media-v2", "node-auth-v2", "recordings-v2", "storage-v2",
+)
+CAPABILITY_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def read_capabilities(message: dict) -> list[str]:
+    """Only use after protocol-v2 signature/HMAC verification; no runtime hints."""
+    if "capabilities" not in message:
+        return list(BASELINE_CAPABILITIES)
+    values = message["capabilities"]
+    if not isinstance(values, list) or len(values) > 64:
+        raise ProtocolError("Invalid capability list")
+    if any(not isinstance(value, str) or not CAPABILITY_NAME.fullmatch(value) for value in values):
+        raise ProtocolError("Invalid capability name")
+    if len(set(values)) != len(values):
+        raise ProtocolError("Duplicate capability")
+    return sorted(values)
+
+
+def negotiate_capabilities(message: dict, *required: str) -> list[str]:
+    selected = sorted(set(read_capabilities(message)).intersection(BASELINE_CAPABILITIES))
+    if any(feature not in selected for feature in required):
+        raise ProtocolError("Required protocol capability unavailable")
+    return selected
+
+
 def encode(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 

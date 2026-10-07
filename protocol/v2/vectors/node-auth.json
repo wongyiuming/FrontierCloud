@@ -1,0 +1,17 @@
+{
+  "format": "frontiercloud-protocol-vector",
+  "version": 1,
+  "protocol": 2,
+  "credential": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5v",
+  "relationship": "11111111111111111111111111111111",
+  "timestamp": "1700000000",
+  "nonce": "22222222222222222222222222222222",
+  "method": "POST",
+  "path": "/internal/v1/heartbeat?probe=2",
+  "body": "{\"mode\":\"Relay\",\"resources\":{\"storage\":true},\"text\":\"节点\"}",
+  "body_base64url": "eyJtb2RlIjoiUmVsYXkiLCJyZXNvdXJjZXMiOnsic3RvcmFnZSI6dHJ1ZX0sInRleHQiOiLoioLngrkifQ",
+  "body_sha256": "613099848636b62d80365ed34907f136137b02eb50a969b5bf050ce43427932f",
+  "signing_input": "11111111111111111111111111111111\n1700000000\n22222222222222222222222222222222\nPOST\n/internal/v1/heartbeat?probe=2\n613099848636b62d80365ed34907f136137b02eb50a969b5bf050ce43427932f",
+  "signature_hex": "c74bd3e0f692bded293fcfc99469897e8c6812641a8d2819b5612b671bfd3cc7"
+}
+

@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from app.core.client_ip import is_security_exempt, normalize_ip
 from app.core.db import engine
+from app.store.ip_security import timestamp
 
 SNAPSHOT_PATH = Path("data/.ip-security/active-bans.tsv")
 
@@ -22,7 +23,7 @@ def write_snapshot(rows, whitelist, path: Path = SNAPSHOT_PATH) -> None:
         if ip in allowed or is_security_exempt(ip):
             continue
         expiry = (0 if row["ban_kind"] == "permanent" else
-                  int(row["expires_at"].replace(tzinfo=timezone.utc).timestamp()))
+                  int(timestamp(row["expires_at"]).replace(tzinfo=timezone.utc).timestamp()))
         bans[ip] = expiry
     addresses = sorted(bans, key=lambda ip: (ipaddress.ip_address(ip).version,
                                             int(ipaddress.ip_address(ip))))

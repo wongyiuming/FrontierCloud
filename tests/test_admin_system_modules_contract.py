@@ -1,9 +1,7 @@
 from pathlib import Path
 import unittest
 
-from fastapi import FastAPI
-
-from app.api.v1 import endpoints as api_endpoints
+import json
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,14 +13,14 @@ class AdminSystemModulesContractTests(unittest.TestCase):
 
     def test_release_management_is_a_standalone_realtime_module(self):
         release = self.read("static/js/release-admin.js")
-        page = self.read("app/api/v1/admin_page_integrity.py")
+        page = self.read("internal/httpapi/admin.go")
         css = self.read("static/css/admin-system-modules.css")
         self.assertIn("systemVersionPanel", release)
         self.assertIn("系统版本管理", release)
         self.assertIn("集群实时进度", release)
         self.assertIn("release-node-list", release)
         self.assertIn("schedule(masterBusy ? 1500 : 5000)", release)
-        self.assertIn('static_asset_url("js/release-admin.js")', page)
+        self.assertIn('"js/release-admin.js"', page)
         self.assertIn("#nodeReleasePanel { display: none !important; }", css)
 
     def test_expanded_admin_module_owns_the_viewport(self):
@@ -33,20 +31,16 @@ class AdminSystemModulesContractTests(unittest.TestCase):
         self.assertIn("scrollIntoView", focus)
 
     def test_site_maintenance_is_independently_visible_and_controllable(self):
-        api = self.read("app/api/v1/admin_site.py")
-        service = self.read("app/services/site_control.py")
+        api = self.read("internal/httpapi/site.go")
+        service = self.read("internal/sitecontrol/service.go")
         client = self.read("static/js/maintenance-admin.js")
-        application = FastAPI()
-        application.include_router(api_endpoints.router, prefix="/api/v1")
-        maintenance = application.openapi().get("paths", {}).get(
-            "/api/v1/media/admin/site/maintenance", {}
-        )
-
-        self.assertIn('router = APIRouter(prefix="/site")', api)
+        maintenance = json.loads(self.read("protocol/v2/openapi.json"))["paths"]["/api/v1/media/admin/site/maintenance"]
+        self.assertIn('group.GET("/maintenance"', api)
+        self.assertIn('group.POST("/maintenance"', api)
         self.assertIn("get", maintenance)
         self.assertIn("post", maintenance)
-        self.assertIn("FORCE_OPEN", service)
-        self.assertIn("版本发布正在执行", service)
+        self.assertIn(".frontiercloud-force-open", service)
+        self.assertIn("release", service)
         self.assertIn("站点开放状态", client)
         self.assertIn("进入维护", client)
         self.assertIn("结束维护", client)

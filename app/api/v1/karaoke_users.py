@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.store.database import write_transaction
+
 import asyncio
 import json
 import re
@@ -118,7 +120,7 @@ async def change_password(request: Request, payload: PasswordPayload):
         await accounts.audit(request, user["user_id"], "password-change", "failure",
                              detail={"reason": "password-policy"})
         raise HTTPException(400, str(exc)) from exc
-    async with state.database.begin() as conn:
+    async with write_transaction(state.database) as conn:
         await conn.execute(update(ks.users).where(ks.users.c.user_id == user["user_id"])
                            .values(password_hash=encoded, updated_at=int(time.time())))
         await accounts.audit(request, user["user_id"], "password-change", "success", conn=conn)
@@ -213,7 +215,7 @@ async def _recording_stat(row: dict) -> dict:
 
 
 async def _cleanup_stale_pending(user_id: str, now: int) -> None:
-    async with state.database.begin() as conn:
+    async with write_transaction(state.database) as conn:
         stale = (await conn.execute(select(ks.recordings).where(
             ks.recordings.c.user_id == user_id,
             ks.recordings.c.state == "pending",
@@ -230,7 +232,7 @@ async def _cleanup_stale_pending(user_id: str, now: int) -> None:
             removed = True
         except Exception:
             pass
-        async with state.database.begin() as conn:
+        async with write_transaction(state.database) as conn:
             current = (await conn.execute(select(ks.recordings).where(
                 ks.recordings.c.recording_id == stale_row["recording_id"],
                 ks.recordings.c.user_id == user_id,
@@ -268,7 +270,7 @@ async def create_ticket(request: Request, payload: TicketPayload):
     now, recording_id = int(time.time()), uuid.uuid4().hex
     filename = _safe_filename(title, user["username"], recording_id, payload.content_type.split(";", 1)[0].lower())
     await _cleanup_stale_pending(user["user_id"], now)
-    async with state.database.begin() as conn:
+    async with write_transaction(state.database) as conn:
         locked = (await conn.execute(select(ks.users).where(ks.users.c.user_id == user["user_id"])
                                      .with_for_update())).mappings().one()
         if locked["status"] != "active" or locked["used_bytes"] + payload.size_bytes > locked["quota_bytes"]:
@@ -346,7 +348,7 @@ async def finalize(recording_id: str, request: Request):
     metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
     title = str(metadata.get("title") or row["title"])[:255]
     lyric_entries = metadata.get("lyrics") if isinstance(metadata.get("lyrics"), list) else row["lyrics"]
-    async with state.database.begin() as conn:
+    async with write_transaction(state.database) as conn:
         locked = (await conn.execute(select(ks.recordings).where(ks.recordings.c.recording_id == recording_id)
                                      .with_for_update())).mappings().one()
         if locked["state"] == "pending":
@@ -375,7 +377,7 @@ async def cancel_pending(recording_id: str, request: Request):
     if row["state"] != "pending":
         raise HTTPException(409, "录音已完成，不能取消预留")
     await _remove_recording_bytes(row)
-    async with state.database.begin() as conn:
+    async with write_transaction(state.database) as conn:
         locked = (await conn.execute(select(ks.recordings).where(
             ks.recordings.c.recording_id == recording_id,
             ks.recordings.c.user_id == user["user_id"],
@@ -455,7 +457,7 @@ async def delete_recording(recording_id: str, request: Request):
     user = await _user(request, True)
     row, member, relation = await _recording_and_placement(recording_id, user["user_id"])
     await _remove_recording_bytes(row)
-    async with state.database.begin() as conn:
+    async with write_transaction(state.database) as conn:
         locked = (await conn.execute(select(ks.recordings).where(
             ks.recordings.c.recording_id == recording_id,
             ks.recordings.c.user_id == user["user_id"],
@@ -486,7 +488,7 @@ async def delete_account(request: Request, response: Response):
             ks.recordings.c.user_id == user["user_id"]))).mappings()]
     for recording in existing:
         await _remove_recording_bytes(recording)
-    async with state.database.begin() as conn:
+    async with write_transaction(state.database) as conn:
         locked = (await conn.execute(select(ks.users).where(
             ks.users.c.user_id == user["user_id"]
         ).with_for_update())).mappings().first()

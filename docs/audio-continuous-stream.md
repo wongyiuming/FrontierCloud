@@ -78,9 +78,33 @@ The following are P0 release contracts:
 - the first append is intentionally small enough for fast startup, while later appends are larger to reduce main-thread and SourceBuffer churn;
 - normal MSE fetches may use the browser HTTP cache and must not force `cache: no-store`;
 - an all-compatible MP3 catalog must not perform a second per-row DOM decoration scan after the normal playlist render;
-- compatibility warning DOM work is performed only when an incompatible/runtime-skipped item actually exists.
+- compatibility warning DOM work is performed only when an incompatible-format item actually exists.
 
-The current first-append target is 64 KiB and the regular append batch target is 512 KiB. These are implementation constants and may be tuned only together with browser regression tests.
+The current first-append target is 64 KiB and the regular append batch target is 512 KiB. Received bytes wait at most one second for a batch to fill before being submitted to the backpressured append pipeline. This prevents a slow Direct transfer from starving the decoder while playable bytes sit in JavaScript. The pending network read is retained across a timed flush; it must never be duplicated or reordered. Browser-controlled chunks are split at the batch limits, so a multi-MiB read cannot bypass playback-clock backpressure. Stopping a session aborts its in-flight transfer. These are implementation constants and may be tuned only together with browser regression tests.
+
+## Serialized writes and interruption policy
+
+Both appendBuffer and remove use the same promise queue, held until updateend.
+A prior waitUpdateEnd followed by an asynchronous capacity wait is not a lock:
+timeupdate can start removal between that wait and appendBuffer.
+
+A recoverable network/header/body failure keeps reading the same logical track.
+The wrapper resumes from the exact delivered byte offset with 350ms to 3000ms
+bounded backoff, checks Content-Range and object identity where available, and
+cancels old transfers when a deliberate user switch aborts the session. There is
+no retry-count limit that automatically skips the track. Already buffered audio
+may continue until it runs out; then playback waits in place. Finite buffering
+cannot guarantee uninterrupted audio during an arbitrarily long outage.
+
+A network or decoder failure must never finalize a partial segment, set a
+runtime-skip catalog flag, display a yellow interruption row, or append a later
+track as a substitute. Decoder/state errors are diagnosed separately and hold the
+session rather than silently claiming a truncated track completed. Initialization
+failure alone may use the established unsupported-MSE single-track fallback.
+
+The 30-second limit is playback-clock backpressure, not a promise that two
+complete songs have been downloaded. One 512KiB append can take the current
+range above this threshold; it is rechecked before the next append.
 
 ## Track boundary semantics
 
@@ -141,7 +165,7 @@ music/Artist/Disc-2/* -> Direct Follower B
 
 `Disc-2` is free to choose the least-pressured ready Direct member when its first upload is reserved.
 
-Affinity is derived from existing `global_media_objects` plus live, unexpired upload reservations. No separate folder-to-node table is introduced.
+Affinity is derived from existing `global_media_objects` plus unresolved durable upload reservations (expiry alone does not prove bytes are gone). No separate folder-to-node table is introduced.
 
 A bound folder never silently spills to another same-type member. If its owner is offline, read-only, missing, or too full, the upload fails. A request using a different site type from the existing folder owner also fails.
 
@@ -177,6 +201,9 @@ The release must protect at least the following:
 - a retry after an explicit seek Range resumes from the ranged base offset plus delivered bytes;
 - active-track presentation duration is write-once and never grows with `bufferedEnd()`, `HTMLMediaElement.duration`, or `MediaSource.duration`;
 - MSE writes are batched rather than one append per fetch chunk;
+- append and remove operations never overlap;
+- repeated 503/body interruption resumes the same offset, without runtime warning or skip;
+- cancellation prevents stale requests from contaminating the new session;
 - all-MP3 playlists take the no-extra-decoration fast path;
 - incompatible formats are visibly marked and skipped by automatic continuation;
 - manual single-track fallback remains available;
@@ -185,4 +212,4 @@ The release must protect at least the following:
 - child folders independently use normal fair placement on their first reservation;
 - video pages do not load the audio continuous-stream core.
 
-The normal source tests, runtime tests, real Chromium UI regression, multi-node HTTPS acceptance, Compose gates, security checks, and Admin/Public flow tests remain mandatory.
+Lightweight policy and JS smoke tests run in bounded hosted CI. Native runtime, database, real Chromium, five-node HTTPS, Compose and Admin/Public acceptance run on the development host only. See the [2026-10-07 incident report](audits/2026-10-07-audio-sourcebuffer.md).

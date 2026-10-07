@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontiercloud.local/protocol/v2/schemas/heartbeat.json",
+  "title": "FrontierCloud Protocol v2 heartbeat request",
+  "type": "object",
+  "properties": {
+    "mode": {"enum": ["Relay", "Direct"]},
+    "resources": {"type": "object"},
+    "capabilities": {"type":"array","maxItems":64,"uniqueItems":true,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,63}$"}}
+  },
+  "additionalProperties": true
+}
+

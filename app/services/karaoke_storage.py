@@ -1,6 +1,8 @@
 """Bounded recording-file operations on a configured Follower."""
 from __future__ import annotations
 
+from app.store.database import write_transaction
+
 import hashlib
 import asyncio
 import json
@@ -115,7 +117,7 @@ async def receive(request: Request, relation: dict, value: dict) -> dict:
         from sqlalchemy import select, update
         from app.services.federation import schema as fs
         from app.services import resource_pool
-        async with state.database.begin() as conn:
+        async with write_transaction(state.database) as conn:
             member = (await conn.execute(select(fs.storage_members).where(
                 fs.storage_members.c.member_id == state.node["node_id"]).with_for_update())).mappings().first()
             logical = (int(member["allocated_bytes"]) - int(member["used_bytes"])
@@ -170,7 +172,7 @@ async def receive(request: Request, relation: dict, value: dict) -> dict:
                 from sqlalchemy import func, update
                 from app.services.federation import schema as fs
                 from app.services import resource_pool
-                async with state.database.begin() as conn:
+                async with write_transaction(state.database) as conn:
                     await conn.execute(update(fs.storage_members).where(
                         fs.storage_members.c.member_id == state.node["node_id"]
                     ).values(reserved_bytes=func.greatest(
@@ -187,7 +189,7 @@ async def receive(request: Request, relation: dict, value: dict) -> dict:
         if local_reserved:
             from sqlalchemy import func, update
             from app.services.federation import schema as fs
-            async with state.database.begin() as conn:
+            async with write_transaction(state.database) as conn:
                 await conn.execute(update(fs.storage_members).where(
                     fs.storage_members.c.member_id == state.node["node_id"]
                 ).values(reserved_bytes=func.greatest(

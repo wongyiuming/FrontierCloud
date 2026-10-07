@@ -1,6 +1,8 @@
 """One bounded control loop per participating node; no media forwarding."""
 from __future__ import annotations
 
+from app.store.database import write_transaction
+
 import asyncio
 import base64
 import logging
@@ -126,7 +128,7 @@ class Runtime:
         await self.call(relation, "/internal/v1/revoke", {})
         from sqlalchemy import update
         from . import schema as s
-        async with state.database.begin() as conn:
+        async with write_transaction(state.database) as conn:
             await state.lock(conn)
             await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == relation["relationship_id"],
                 s.relationships.c.state == "revoked").values(summary={"revocation_acknowledged": True}))
@@ -160,9 +162,11 @@ class Runtime:
                 # an older Follower also stops workers during a rolling upgrade.
                 resources["compute"] = {"enabled": False, "worker_slots": 0}
                 value = {"mode": relation["mode"], "resources": resources}
+            value["capabilities"] = list(p.BASELINE_CAPABILITIES)
             summary = await self.call(relation, "/internal/v1/heartbeat", value)
             if summary.get("protocol") != p.PROTOCOL_VERSION:
                 raise p.ProtocolError("Heartbeat protocol mismatch")
+            summary["capabilities"] = p.read_capabilities(summary)
             rtt_ms = int((time.monotonic() - start) * 1000)
             summary["heartbeat"] = heartbeat_summary(relation.get("summary") or {}, rtt_ms)
             await state.heartbeat(identifier, True, rtt_ms, summary)

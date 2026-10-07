@@ -22,6 +22,8 @@ from app.core.db import engine
 from app.core.redis import redis_client
 from app.core.logging_config import request_id_context, trace_id_context
 from app.services.edge_security import publish_edge_snapshot
+from app.store.database import write_transaction
+from app.store import ip_security as security_store
 
 
 VIOLATION_PREFIX = "security:invalid-api:"
@@ -116,10 +118,10 @@ async def _security_state_guard(ip: str | None = None):
 async def _hydrate_ip_security_cache() -> None:
     """Replace the Redis projection with one coherent MySQL snapshot."""
     now = _utcnow()
-    async with engine.begin() as conn:
+    async with write_transaction(engine) as conn:
         # Full recovery alone takes the generation row lock. Ordinary writers
         # can otherwise update independent addresses concurrently.
-        await conn.scalar(text("SELECT generation FROM ip_security_projection WHERE singleton=1 FOR UPDATE"))
+        await conn.scalar(security_store.locked_query(conn, "SELECT generation FROM ip_security_projection WHERE singleton=1 FOR UPDATE"))
         whitelist_rows = await conn.execute(text("SELECT ip_address FROM ip_permanent_whitelist"))
         ban_rows = await conn.execute(text("""
             SELECT ip_address, trigger_count, window_started_at, banned_at, expires_at,
@@ -132,7 +134,10 @@ async def _hydrate_ip_security_cache() -> None:
         whitelist = [str(row[0]) for row in whitelist_rows.fetchall()]
         active_bans: dict[str, dict[str, Any]] = {}
         for row in ban_rows.mappings().all():
-            active_bans.setdefault(str(row["ip_address"]), dict(row))
+            event = dict(row)
+            for field in ("window_started_at", "banned_at", "expires_at"):
+                event[field] = security_store.timestamp(event[field])
+            active_bans.setdefault(str(row["ip_address"]), event)
 
         stale_ban_keys = [key async for key in redis_client.scan_iter(match=BAN_PREFIX + "*")]
         pipe = redis_client.pipeline(transaction=True)
@@ -192,7 +197,7 @@ async def _refresh_edge_projection() -> None:
     async with engine.connect() as conn:
         generation = await conn.scalar(text("SELECT generation FROM ip_security_projection WHERE singleton=1"))
     await publish_edge_snapshot()
-    async with engine.begin() as conn:
+    async with write_transaction(engine) as conn:
         await conn.execute(text("""
             UPDATE ip_security_projection SET published_generation=:generation
             WHERE singleton=1 AND generation >= :generation
@@ -242,11 +247,7 @@ async def _refresh_after_failed_mutation() -> None:
 
 async def _lock_ip_state(conn: AsyncConnection, ip: str) -> None:
     """Take the durable per-IP row lock for the rest of the MySQL transaction."""
-    await conn.execute(text("""
-        INSERT INTO ip_security_locks (ip_address)
-        VALUES (:ip)
-        ON DUPLICATE KEY UPDATE ip_address=VALUES(ip_address)
-    """), {"ip": ip})
+    await security_store.lock_ip(conn, ip)
 
 
 async def _audit_ip(conn: AsyncConnection, ip: str, action: str,
@@ -262,18 +263,12 @@ async def _audit_ip(conn: AsyncConnection, ip: str, action: str,
            "session": session, "now": now,
            "request_id": request_id_context.get() or None, "trace_id": trace_id_context.get() or None})
     if action == "invalid_api":
-        await conn.execute(text("""
-            INSERT INTO ip_security_summary (ip_address, attack_count, last_attack_at)
-            VALUES (:ip, 1, :now)
-            ON DUPLICATE KEY UPDATE
-                attack_count=attack_count + 1,
-                last_attack_at=GREATEST(COALESCE(last_attack_at, VALUES(last_attack_at)), VALUES(last_attack_at))
-        """), {"ip": ip, "now": now})
+        await security_store.increment_attack(conn, ip, now)
 
 
 async def _project_ip(ip: str) -> None:
     """Refresh just this address, never SCAN or rewrite unrelated bans."""
-    async with engine.begin() as conn:
+    async with write_transaction(engine) as conn:
         await _lock_ip_state(conn, ip)
         block = await _mysql_block_fallback(ip, conn=conn)
         whitelisted = await conn.scalar(text(
@@ -330,7 +325,7 @@ async def _run_state_transaction(
         except RedisError:
             pass
         try:
-            async with engine.begin() as conn:
+            async with write_transaction(engine) as conn:
                 result = await operation(conn)
                 if ip is not None:
                     await conn.execute(text(
@@ -387,6 +382,9 @@ async def _mysql_block_fallback(ip: str, *, conn: AsyncConnection | None = None)
         row = result.mappings().first()
         if not row:
             return None
+        row = dict(row)
+        for field in ("window_started_at", "banned_at", "expires_at"):
+            row[field] = security_store.timestamp(row[field])
         return {
             "ip": str(row["ip_address"]),
             "trigger_count": int(row["trigger_count"]),
@@ -450,7 +448,7 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
     async def create_ban(conn: AsyncConnection) -> tuple[str, datetime] | None:
         nonlocal count, window_started_at
         await _lock_ip_state(conn, ip)
-        if await conn.scalar(text(
+        if await conn.scalar(security_store.locked_query(conn,
             "SELECT 1 FROM ip_permanent_whitelist WHERE ip_address=:ip LIMIT 1 FOR UPDATE"
         ), {"ip": ip}):
             return None
@@ -476,6 +474,7 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
             ) AS recent
         """), {"ip": ip, "cutoff": now - timedelta(seconds=settings.SECURITY_INVALID_API_WINDOW),
                  "limit": settings.SECURITY_INVALID_API_LIMIT + 1})
+        earliest = security_store.timestamp(earliest)
         if isinstance(earliest, datetime):
             window_started_at = earliest
         await conn.execute(text("""
@@ -483,13 +482,13 @@ async def record_invalid_api(ip: str, method: str, path: str, user_agent: str) -
             SET status='expired'
             WHERE ip_address=:ip AND status='active' AND expires_at <= :now
         """), {"ip": ip, "now": now})
-        whitelisted = await conn.scalar(text("""
+        whitelisted = await conn.scalar(security_store.locked_query(conn, """
             SELECT 1 FROM ip_permanent_whitelist
             WHERE ip_address=:ip LIMIT 1 FOR UPDATE
         """), {"ip": ip})
         if whitelisted:
             return None
-        active = await conn.scalar(text("""
+        active = await conn.scalar(security_store.locked_query(conn, """
             SELECT 1 FROM ip_auto_ban_events
             WHERE ip_address=:ip AND status='active' AND expires_at > :now
             LIMIT 1 FOR UPDATE
@@ -574,13 +573,13 @@ async def manual_ban_ip(ip_value: str, session_hash: str, reason: str) -> dict[s
             SET status='expired'
             WHERE ip_address=:ip AND status='active' AND expires_at <= :now
         """), {"ip": ip, "now": now})
-        whitelisted = await conn.scalar(text("""
+        whitelisted = await conn.scalar(security_store.locked_query(conn, """
             SELECT 1 FROM ip_permanent_whitelist
             WHERE ip_address=:ip LIMIT 1 FOR UPDATE
         """), {"ip": ip})
         if whitelisted:
             raise ValueError("Whitelisted addresses cannot be banned")
-        active = await conn.scalar(text("""
+        active = await conn.scalar(security_store.locked_query(conn, """
             SELECT 1 FROM ip_auto_ban_events
             WHERE ip_address=:ip AND status='active' AND expires_at > :now
             LIMIT 1 FOR UPDATE
@@ -627,13 +626,13 @@ async def manual_permanent_ban_ip(ip_value: str, session_hash: str, reason: str)
 
     async def create_permanent_ban(conn: AsyncConnection) -> int:
         await _lock_ip_state(conn, ip)
-        whitelisted = await conn.scalar(text("""
+        whitelisted = await conn.scalar(security_store.locked_query(conn, """
             SELECT 1 FROM ip_permanent_whitelist
             WHERE ip_address=:ip LIMIT 1 FOR UPDATE
         """), {"ip": ip})
         if whitelisted:
             raise ValueError("Whitelisted addresses cannot be banned")
-        already_permanent = await conn.scalar(text("""
+        already_permanent = await conn.scalar(security_store.locked_query(conn, """
             SELECT 1 FROM ip_auto_ban_events
             WHERE ip_address=:ip AND status='active' AND ban_kind='permanent'
             LIMIT 1 FOR UPDATE
@@ -678,12 +677,7 @@ async def add_whitelist(ip_value: str, session_hash: str, note: str = "") -> str
 
     async def whitelist_and_release(conn: AsyncConnection) -> None:
         await _lock_ip_state(conn, ip)
-        await conn.execute(text("""
-            INSERT INTO ip_permanent_whitelist
-            (ip_address, created_at, created_by_session_hash, note)
-            VALUES (:ip, :now, :session, :note)
-            ON DUPLICATE KEY UPDATE note=:note
-        """), {"ip": ip, "now": now, "session": session_hash, "note": note[:255]})
+        await security_store.put_whitelist(conn, {"ip": ip, "now": now, "session": session_hash, "note": note[:255]})
         await conn.execute(text("""
             UPDATE ip_auto_ban_events
             SET status='whitelisted', released_at=:now, released_by_session_hash=:session
@@ -834,7 +828,7 @@ async def list_security_summary(
     whitelist = []
     for row in rows:
         status = str(row["status"])
-        last_attack_at = row.get("last_attack_at")
+        last_attack_at = security_store.timestamp(row.get("last_attack_at"))
         if isinstance(last_attack_at, datetime):
             last_attack_at = last_attack_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
         if status == "whitelisted":

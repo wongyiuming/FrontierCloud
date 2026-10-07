@@ -7,6 +7,6 @@ Wants=network-online.target
 Type=oneshot
 User=root
 WorkingDirectory=/root/frontiercloud-dev
-ExecStart=/root/frontiercloud-dev/venv/bin/python /root/frontiercloud-dev/dev_control.py reconcile
+ExecStart=/root/frontiercloud-dev/venv/bin/python /root/frontiercloud-dev/repo/scripts/ops/dev_control.py reconcile
 TimeoutStartSec=45min
 UMask=0077

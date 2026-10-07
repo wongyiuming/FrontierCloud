@@ -1,6 +1,8 @@
 """Master-owned Karaoke accounts, sessions, quotas, and durable audit."""
 from __future__ import annotations
 
+from app.store.database import write_transaction
+
 import asyncio
 import hashlib
 import hmac
@@ -16,7 +18,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, Request, Response
 from redis.exceptions import RedisError
 from sqlalchemy import delete, insert, select, update
-from sqlalchemy.dialects.mysql import insert as mysql_insert
+from app.store.karaoke_accounts import ensure_registration_day
 from sqlalchemy.exc import IntegrityError
 
 from app.core.client_ip import resolve_client_identity
@@ -172,7 +174,7 @@ async def audit(request: Request, user_id: str | None, action: str, result: str,
     if conn is not None:
         await conn.execute(insert(ks.audit).values(**values))
     else:
-        async with state.database.begin() as transaction:
+        async with write_transaction(state.database) as transaction:
             await transaction.execute(insert(ks.audit).values(**values))
 
 
@@ -204,10 +206,8 @@ async def _registration_counts(ip: str) -> tuple[int, int]:
 
 async def _record_registration_failure(ip: str) -> int:
     now, day = int(time.time()), _registration_day()
-    async with state.database.begin() as conn:
-        await conn.execute(mysql_insert(ks.registration_daily).values(
-            client_ip=ip, day_key=day, failure_count=0, success_count=0, updated_at=now,
-        ).prefix_with("IGNORE"))
+    async with write_transaction(state.database) as conn:
+        await ensure_registration_day(conn, ip, day, now)
         row = (await conn.execute(select(ks.registration_daily).where(
             ks.registration_daily.c.client_ip == ip, ks.registration_daily.c.day_key == day,
         ).with_for_update())).mappings().one()
@@ -271,11 +271,9 @@ async def register(request: Request, response: Response, username: str, password
         name, key = normalize_username(username)
         encoded = await hash_password(password)
         now, user_id = int(time.time()), uuid.uuid4().hex
-        async with state.database.begin() as conn:
+        async with write_transaction(state.database) as conn:
             day = _registration_day()
-            await conn.execute(mysql_insert(ks.registration_daily).values(
-                client_ip=ip, day_key=day, failure_count=0, success_count=0, updated_at=now,
-            ).prefix_with("IGNORE"))
+            await ensure_registration_day(conn, ip, day, now)
             daily = (await conn.execute(select(ks.registration_daily).where(
                 ks.registration_daily.c.client_ip == ip, ks.registration_daily.c.day_key == day,
             ).with_for_update())).mappings().one()
