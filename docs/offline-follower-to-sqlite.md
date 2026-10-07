@@ -41,6 +41,19 @@ with independent bounded resumption on disconnect. Resume the Master immediately
 its signature expires after 30 minutes. Adopt media receipts first, then recordings,
 under the closed Follower lease with exact signature, bytes, hashes and usage checks.
 
+`adopt-storage --wait-seconds` includes the complete physical hash scan. Its
+default remains 300 seconds; for a large existing disk on a small CPU, explicitly
+allow up to 1800 seconds. The maintenance lease remains held throughout; this
+does not extend public HTTP deadlines or relax identity/accounting/file checks.
+Master recording export and ordinary drain limits are unchanged.
+
+MySQL's verified SHOW CREATE TABLE issue #110825 can make an independently
+restored dump print redundant CHARACTER SET clauses after implicit COLLATE
+becomes explicit. Keep the raw dump intact. Reproduce the original implicit
+column metadata only in the isolated fixture, retaining every explicit charset
+and non-default collation. Require the resulting actual DDL/row/file/secret
+inventory to match the frozen source exactly; never normalize away a failed proof.
+
 Flags match `master-to-sqlite` documented in offline-master-to-sqlite.md:
 manifest, pinned proof SHA256, exact node ID, root MySQL socket, empty distinct
 target data root, same-parent hardlink alias, final container SQLite path,

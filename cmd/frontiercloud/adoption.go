@@ -24,8 +24,12 @@ func adoptStorageCommand(arguments []string, output io.Writer) error {
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || !node.ValidIdentifier(*relationship) || !node.ValidIdentifier(*confirmation) || *wait < 1 || *wait > 300 {
-		return errors.New("adopt-storage requires relationship, confirm-node-id and wait-seconds from 1 through 300")
+	// Unlike a runtime drain, this offline command hashes every owned media byte.
+	// Large retained volumes on a small CPU can exceed five minutes. Keep the
+	// default short, but permit an explicit bounded thirty-minute scan while the
+	// same closed maintenance lease and all accounting/identity checks stay held.
+	if flags.NArg() != 0 || !node.ValidIdentifier(*relationship) || !node.ValidIdentifier(*confirmation) || *wait < 1 || *wait > 1800 {
+		return errors.New("adopt-storage requires relationship, confirm-node-id and wait-seconds from 1 through 1800")
 	}
 	settings, err := config.Load()
 	if err != nil {
