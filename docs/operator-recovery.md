@@ -81,6 +81,14 @@ Changing a hostname is an authenticated endpoint migration, not an identity rese
 Restore ACME private and published state together; initialization recreates its
 local socket. See [automatic TLS](automatic-tls-python.md) for old external pairs.
 
+Restore success includes a durability barrier after each file's contents,
+ownership, permissions and archived timestamp are applied. New control bind
+roots also synchronize every newly created ancestor's parent entry, through the
+first existing directory. A failed barrier reports failure and leaves the target
+stopped; partial restored state remains protected by the nonempty-target guard.
+Inspect it before choosing another empty destination; do not resume traffic on
+the strength of files merely being present.
+
 First start the backed-up release and verify recovery. For migration, keep the
 hard fence and recovery set, select reviewed new images, and use normal Compose
 startup. Marked schema migrations run in order and fail closed for unknown/future

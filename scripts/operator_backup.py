@@ -534,7 +534,16 @@ def restore_archive(path: Path, destination: Path, inventory: dict):
     absolute(destination, exists=False)
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise BackupError("restore destination is not empty")
-    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Keep the creation chain: fsyncing only the restored root does not persist
+    # the directory entries that link a new bind root into its new ancestors.
+    created = []
+    ancestor = destination
+    while not ancestor.exists():
+        created.append(ancestor)
+        ancestor = ancestor.parent
+    for directory in reversed(created):
+        absolute(directory, exists=False)
+        directory.mkdir(mode=0o700)
     with tarfile.open(path, "r:") as archive:
         directories = []
         for entry in archive:
@@ -550,10 +559,11 @@ def restore_archive(path: Path, destination: Path, inventory: dict):
                 while chunk := source.read(1024 * 1024):
                     restored.write(chunk)
                 restored.flush()
-                os.fsync(restored.fileno())
                 os.fchown(restored.fileno(), entry.uid, entry.gid)
                 os.fchmod(restored.fileno(), entry.mode)
-            os.utime(target, (entry.mtime, entry.mtime), follow_symlinks=False)
+                os.utime(restored.fileno(), (entry.mtime, entry.mtime))
+                # The final barrier includes contents and all restored metadata.
+                os.fsync(restored.fileno())
         for target, entry in reversed(directories):
             os.chown(target, entry.uid, entry.gid, follow_symlinks=False)
             os.chmod(target, entry.mode, follow_symlinks=False)
@@ -563,6 +573,8 @@ def restore_archive(path: Path, destination: Path, inventory: dict):
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
+    for directory in created:  # Deepest parent first, through the existing one.
+        fsync_directory(directory.parent)
 
 
 def backup(plan: Plan, output: Path) -> dict:
@@ -714,13 +726,14 @@ def restore(plan: Plan, snapshot: Path) -> dict:
             sql_restore(connection, snapshot / "all-tables.sql")
             if sqlite_facts(connection) != value["facts"]:
                 raise BackupError("restored SQLite facts differ")
-        os.chown(target, value["uid"], value["gid"], follow_symlinks=False)
-        os.chmod(target, value["mode"], follow_symlinks=False)
-        descriptor = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptor = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
         try:
+            os.fchown(descriptor, value["uid"], value["gid"])
+            os.fchmod(descriptor, value["mode"])
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+        fsync_directory(target.parent)
     plan.assert_cold()
     return manifest
 

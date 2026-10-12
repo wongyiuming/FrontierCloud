@@ -5,11 +5,10 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import text
 
 from app.api.internal_nodes import require_https
 from app.api.v1.admin import require_session
-from app.services import control_audit, lyrics
+from app.services import control_audit
 from app.services.business_lifecycle import initialize_business_services
 from app.services.federation import protocol as p
 from app.services.federation.runtime import runtime
@@ -48,25 +47,10 @@ def checked(exc):
 
 
 async def ensure_follower_business_empty() -> None:
-    """Ignore only the immutable system fallback lyric when checking business emptiness."""
+    """Apply the same business admission contract as native Storage startup."""
     from app.api.v1.media import MEDIA_ROOT
-
-    for root_name in ("music", "vido", "lyrics"):
-        root = MEDIA_ROOT / root_name
-        if not root.exists():
-            continue
-        for item in root.rglob("*"):
-            if not item.is_file():
-                continue
-            relative = item.relative_to(MEDIA_ROOT).as_posix()
-            if relative == lyrics.DEFAULT_LYRIC_PATH and not item.is_symlink():
-                continue
-            raise p.ProtocolError("Standalone 仍有媒体或歌词；请先执行显式纳管迁移，不能直接固定为 Follower")
-
-    async with state.database.connect() as conn:
-        for table in ("karaoke_users", "karaoke_recordings"):
-            if int(await conn.scalar(text(f"SELECT COUNT(*) FROM {table}")) or 0):
-                raise p.ProtocolError("Standalone 仍有 卡拉OK业务数据；请先迁移，不能直接固定为 Follower")
+    from app.services.business_lifecycle import ensure_follower_business_empty as admission
+    await admission(state.database, media_root=MEDIA_ROOT)
 
 
 @router.get("")
@@ -113,7 +97,7 @@ async def _certificate_view():
     except Exception:
         return {'enabled': True, 'hostname': settings.SERVER_NAME, 'state': 'FAILED',
                 'controller_running': False, 'https_ready': False, 'serving_matches': False,
-                'managed': True, 'auto_renew': True, 'last_error': 'Automatic certificate controller unavailable'}
+                'managed': True, 'auto_renew': True, 'last_error': 'controller_unavailable'}
 
 
 class CertificateDownload(BaseModel):

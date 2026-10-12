@@ -18,6 +18,7 @@ from app.services.federation import protocol as p
 from app.services.federation import schema as s
 from app.services.federation.state import state
 from app.services.media_manager import MEDIA_ROOT, MediaManager, SIGNATURES
+from app.services.media_publication_recovery import sync_hierarchy
 from app.services.upload_claims import UploadBusy, claim, chunks, digest_file
 
 router = APIRouter()
@@ -195,6 +196,11 @@ async def _proof(original, path, expected=None, *, encrypted=False):
                 head = stream.read(4096)
             if not SIGNATURES.get(target.suffix.lower(), lambda _data: False)(head):
                 raise HTTPException(409, "Recovered plaintext content does not match its extension")
+        # A dead writer may have published before syncing bytes or parent entries.
+        # The durable reservation becomes complete only after both are persisted.
+        with target.open("rb") as stream:
+            os.fsync(stream.fileno())
+        sync_hierarchy(MEDIA_ROOT.resolve(), target.parent)
         await _complete(original, path, int(row["expected_bytes"]))
     return {"object_id": original, "state": "complete", **result}
 
@@ -234,7 +240,7 @@ async def storage_upload(request: Request, original: str):
                     raise HTTPException(400, "媒体内容与扩展名不匹配")
                 MediaManager._validate_media_destination(target)
                 os.replace(temporary, target)
-                _sync_directory(target.parent)
+                sync_hierarchy(MEDIA_ROOT.resolve(), target.parent)
                 await _complete(original, path, expected)
                 return JSONResponse({"object_id": original, "state": "complete", "size_bytes": written, "sha256": digest.hexdigest(), "etag": f'"{digest.hexdigest()}"'}, headers=cors)
             except BaseException:

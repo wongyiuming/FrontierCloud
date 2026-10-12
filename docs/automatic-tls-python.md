@@ -29,6 +29,24 @@ Compose health distinguishes controller liveness from HTTPS/business readiness.
 No pairing package is generated before real HTTPS verification; its five-minute
 single-consumption lifetime starts after that verification.
 
+Native Storage fixes a new, empty datastore as Follower. For an initialized
+Standalone datastore, startup first performs a read-only admission check before
+database migrations, media recovery or any persistent role change. Media or
+recording files, database-only media/lyrics relations, upload state, Karaoke
+accounts, recordings and business audit history prevent automatic conversion.
+The immutable `lyrics/default.lrc`, node identity/key caches and ordinary Admin
+control audits are allowed and retained. A rejected datastore stays Standalone;
+do not delete its media, tables or secrets to force admission. Resume its normal
+business deployment and use an explicit data migration when it contains business
+data.
+
+An existing Follower at the configured endpoint keeps its identity, pairing and
+owned files and proceeds through normal checked database upgrades. An older
+Standalone schema must first complete its supported upgrade through the normal
+business deployment; only a verified current schema with no business data may
+then become Storage. Unknown, partial or unreadable schemas and endpoint/role
+mismatches are refused rather than treated as fresh empty installations.
+
 Business Nginx continues to terminate HTTPS. Its Python edge helper can execute
 only its own `nginx -t` / `nginx -s reload`, under a local reload lock. It validates
 the issuer's protected publication receipt, loads the complete pair, validates
