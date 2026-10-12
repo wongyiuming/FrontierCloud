@@ -12,17 +12,43 @@ from urllib.parse import quote, urlsplit
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from fastapi.routing import APIRoute
+from pydantic import BaseModel, Field, StrictInt
 from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.services import karaoke_accounts as accounts
 from app.services import karaoke_schema as ks
+from app.services import media_crypto, recording_crypto
 from app.services.federation import protocol as p
 from app.services.federation.runtime import runtime
 from app.services.federation.state import state
 from app.services.federation import schema as fs
 
-router = APIRouter(prefix="/account")
+class RecordingRoute(APIRoute):
+    def get_route_handler(self):
+        original = super().get_route_handler()
+        async def bounded(request: Request):
+            if request.method == "POST" and self.path.endswith("/recordings/ticket"):
+                maximum = recording_crypto.MAX_METADATA_BYTES + 8192
+                declared = request.headers.get("content-length", "")
+                # Reject oversized declarations before requesting any body, but
+                # always count actual chunks: headers cannot establish the bound.
+                digits = declared.lstrip("0") or "0"
+                if declared.isascii() and declared.isdecimal() and (len(digits) > 10 or int(digits) > maximum):
+                    raise HTTPException(413, "录音歌词快照消息超过限制", headers={"Cache-Control":"private, no-store"})
+                chunks, length = [], 0
+                async for chunk in request.stream():
+                    length += len(chunk)
+                    if length > maximum:
+                        raise HTTPException(413, "录音歌词快照消息超过限制", headers={"Cache-Control":"private, no-store"})
+                    chunks.append(chunk)
+                request._body=b"".join(chunks)
+            return await original(request)
+        return bounded
+
+
+router = APIRouter(prefix="/account", route_class=RecordingRoute)
 MAX_RECORDING_BYTES = 1024 ** 3
 ALLOWED_TYPES = {"audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "application/octet-stream"}
 
@@ -41,10 +67,13 @@ class PasswordPayload(BaseModel):
 
 
 class TicketPayload(BaseModel):
-    size_bytes: int = Field(gt=0, le=MAX_RECORDING_BYTES)
+    size_bytes: StrictInt = Field(gt=0, le=MAX_RECORDING_BYTES)
     content_type: str = Field(min_length=1, max_length=96)
     media: str | None = Field(None, min_length=80, max_length=512)
     title: str | None = Field(None, max_length=255)
+    lyrics: list[dict] | None = Field(None, max_length=10000)
+    encrypted_lyrics: dict | None = None
+    preparation_token: str = Field("", max_length=2048)
 
 
 async def _user(request: Request, mutation=False):
@@ -138,17 +167,16 @@ def _safe_filename(title: str, username: str, recording_id: str, content_type: s
 async def _media_metadata(media: str | None, title: str | None, request: Request) -> tuple[str, list[dict]]:
     if not media:
         return str(title or "上传录音")[:255], []
-    from app.api.v1.karaoke import _resolve
     from app.services import lyrics
-    from app.services.federation import routing
-    resolved = await _resolve(media, request)
+    # Ticket owns the shared media fence through reservation commit. Do not
+    # acquire a nested lease here, which can deadlock behind a queued rename.
+    resolved = await recording_crypto._source_object(media)
     name = Path(resolved["path"]).stem[:255]
     entries = []
-    if resolved["has_lyrics"]:
-        if resolved.get("identifier"):
-            entries = await routing.lyric_entries(resolved["identifier"])
-        else:
-            _path, entries = await lyrics.load_for_track(resolved["path"])
+    if resolved["kind"] == "audio":
+        encrypted = await media_crypto._encrypted_lyric(resolved["path"], resolved["resource_id"])
+        if encrypted is None:
+            _path, entries = await lyrics.load_for_media(resolved["media_id"])
     return name, entries
 
 
@@ -177,10 +205,15 @@ async def _recording_and_placement(recording_id: str, user_id: str) -> tuple[dic
 
 
 def _capability(relation: dict, row: dict, operation: str) -> str:
+    _lyrics, snapshot, expected = recording_crypto.decode_lyrics(row["lyrics"])
+    descriptor = expected["expected_encrypted_lyrics"] if expected else snapshot["encryption"] if snapshot else None
+    digest = expected["encrypted_lyrics_sha256"] if expected else recording_crypto.metadata_sha256(
+        {"title": row["title"], "lyrics": [], "encrypted_lyrics": snapshot}) if snapshot else ""
     return p.recording_token(state.unseal(relation["credential"]), relation["relationship_id"],
                              state.node["node_id"], row["user_id"], row["recording_id"], operation,
                              int(time.time()), size=int(row["size_bytes"]),
-                             content_type=row["content_type"], filename=row["filename"])
+                             content_type=row["content_type"], filename=row["filename"],
+                             encrypted_lyrics_encryption=descriptor, encrypted_lyrics_sha256=digest)
 
 
 async def _member_and_relation(member_id: str) -> tuple[dict, dict | None]:
@@ -243,6 +276,7 @@ async def _cleanup_stale_pending(user_id: str, now: int) -> None:
                 ).values(state="pending", updated_at=now))
                 continue
             size = int(current["size_bytes"])
+            await media_crypto.forget_encryption(conn, current["recording_id"], object_kind="recording_lyric")
             await conn.execute(delete(ks.recordings).where(
                 ks.recordings.c.recording_id == current["recording_id"]
             ))
@@ -257,6 +291,20 @@ async def _cleanup_stale_pending(user_id: str, now: int) -> None:
 @router.post("/recordings/ticket")
 async def create_ticket(request: Request, payload: TicketPayload):
     user = await _user(request, True)
+    from app.services.media_manager import ensure_media_mutations_ready, media_mutation_lock
+    async with media_mutation_lock.shared():
+        ensure_media_mutations_ready()
+        try:
+            return await _create_ticket(request, payload, user)
+        except media_crypto.SessionError as exc:
+            raise HTTPException(401, "录音歌词加密授权已失效，请重新准备快照") from exc
+        except media_crypto.MetadataError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except IntegrityError as exc:
+            raise HTTPException(409, "录音或加密快照身份已被占用，请重新准备") from exc
+
+
+async def _create_ticket(request: Request, payload: TicketPayload, user: dict):
     if payload.content_type.split(";", 1)[0].lower() not in ALLOWED_TYPES:
         raise HTTPException(415, "只允许上传受支持的录音音频")
     from app.services import resource_pool
@@ -265,6 +313,29 @@ async def create_ticket(request: Request, payload: TicketPayload):
     except p.ProtocolError as exc:
         raise HTTPException(507, str(exc)) from exc
     title, lyrics = await _media_metadata(payload.media, payload.title, request)
+    title = payload.title.strip() if payload.title and payload.title.strip() else title
+    stored_lyrics, descriptor = lyrics, None
+    encrypted_source = None
+    if payload.media:
+        source = await recording_crypto._source_object(payload.media)
+        if source["kind"] == "audio":
+            encrypted_source = await media_crypto._encrypted_lyric(source["path"], source["resource_id"])
+    if encrypted_source is not None:
+        from app.api.v1.media_crypto import available, browser_binding, same_origin
+        await available(request)
+        same_origin(request)
+        if payload.encrypted_lyrics is None or payload.lyrics:
+            raise media_crypto.MetadataError("加密歌词必须提供浏览器加密的录音快照")
+        snapshot = recording_crypto.encrypted_snapshot(payload.encrypted_lyrics)
+        descriptor = media_crypto.Metadata.from_dict(snapshot["encryption"])
+        browser = browser_binding(request, Response(), create=False)
+        binding = recording_crypto.preparation_binding(user["user_id"], browser, payload.media, encrypted_source["encryption"].file_id)
+        media_crypto.manager.verify_preparation(binding, payload.preparation_token, descriptor)
+        stored_lyrics = recording_crypto.reservation(snapshot, title, payload.size_bytes)
+    elif payload.encrypted_lyrics is not None or payload.preparation_token:
+        raise media_crypto.MetadataError("加密快照需要当前加密歌词来源")
+    elif payload.lyrics is not None:
+        stored_lyrics = recording_crypto.lyric_array(payload.lyrics)
     now, recording_id = int(time.time()), uuid.uuid4().hex
     filename = _safe_filename(title, user["username"], recording_id, payload.content_type.split(";", 1)[0].lower())
     await _cleanup_stale_pending(user["user_id"], now)
@@ -292,8 +363,9 @@ async def create_ticket(request: Request, payload: TicketPayload):
             storage_member_id=member["member_id"],
             filename=filename, content_type=payload.content_type.split(";", 1)[0].lower(),
             size_bytes=payload.size_bytes, sha256=None, state="pending", title=title,
-            lyrics=lyrics, created_at=now, updated_at=now,
+            lyrics=stored_lyrics, created_at=now, updated_at=now,
         ))
+        await media_crypto.put_encryption(conn, recording_id, descriptor, object_kind="recording_lyric")
         await accounts.audit(request, user["user_id"], "recording-reserve", "success", detail={
             "recording_id": recording_id, "size_bytes": payload.size_bytes, "storage_member_id": member["member_id"],
         }, conn=conn)
@@ -313,7 +385,11 @@ async def relay_upload(recording_id: str, request: Request):
         raise HTTPException(409, "录音上传状态或节点传输方式已变化")
     if relation is None:
         from app.services import karaoke_storage
+        _lyrics, snapshot, expected = recording_crypto.decode_lyrics(row["lyrics"])
         value = {"size": int(row["size_bytes"]), "u": row["user_id"], "i": recording_id}
+        if expected:
+            value.update(encrypted_lyrics_encryption=expected["expected_encrypted_lyrics"],
+                         encrypted_lyrics_sha256=expected["encrypted_lyrics_sha256"])
         return JSONResponse(await karaoke_storage.receive(request, {
             "relationship_id": member["member_id"], "allocated_capacity_bytes": int(member["allocated_bytes"]),
         }, value))
@@ -322,9 +398,16 @@ async def relay_upload(recording_id: str, request: Request):
                "Content-Length": str(row["size_bytes"]), "Accept-Encoding": "identity"}
     timeout = httpx.Timeout(330, connect=8)
     async with httpx.AsyncClient(verify=ssl.create_default_context(), trust_env=False, timeout=timeout) as client:
+        from app.services.upload_claims import chunks
         async with client.stream("PUT", relation["peer_endpoint"] + f"/internal/v1/recordings/{recording_id}",
-                                 headers=headers, content=request.stream()) as upstream:
-            body = await upstream.aread()
+                                 headers=headers, content=chunks(request)) as upstream:
+            body_parts, response_size = [], 0
+            async for part in upstream.aiter_bytes():
+                response_size += len(part)
+                if response_size > p.MAX_LYRIC_RESPONSE_BYTES:
+                    raise HTTPException(502, "录音存储节点返回内容超过限制")
+                body_parts.append(part)
+            body = b"".join(body_parts)
             if upstream.status_code != 200:
                 raise HTTPException(502, f"录音存储节点上传失败（HTTP {upstream.status_code}）")
     return JSONResponse(json.loads(body))
@@ -344,12 +427,27 @@ async def finalize(recording_id: str, request: Request):
     if actual <= 0 or actual > int(row["size_bytes"]) or not re.fullmatch(r"[a-f0-9]{64}", sha256):
         raise HTTPException(502, "录音存储节点返回无效文件状态")
     metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    if not recording_crypto.receipt_matches(row, metadata):
+        raise HTTPException(409, "录音文件的歌词快照与预留不一致")
+    metadata = recording_crypto.metadata(metadata) if metadata else {}
+    if metadata.get("encrypted_lyrics"):
+        try:
+            recording_crypto.reservation(metadata["encrypted_lyrics"], metadata["title"], actual)
+        except media_crypto.MetadataError as exc:
+            raise HTTPException(502, "录音实际大小无法容纳完整的加密歌词快照") from exc
     title = str(metadata.get("title") or row["title"])[:255]
-    lyric_entries = metadata.get("lyrics") if isinstance(metadata.get("lyrics"), list) else row["lyrics"]
+    lyric_entries = ({"encrypted_lyrics": metadata["encrypted_lyrics"]} if metadata.get("encrypted_lyrics")
+                     else metadata.get("lyrics") if isinstance(metadata.get("lyrics"), list) else row["lyrics"])
     async with state.database.begin() as conn:
         locked = (await conn.execute(select(ks.recordings).where(ks.recordings.c.recording_id == recording_id)
                                      .with_for_update())).mappings().one()
         if locked["state"] == "pending":
+            if not recording_crypto.receipt_matches(dict(locked), metadata):
+                raise HTTPException(409, "录音预留已变化")
+            _lyrics, snapshot, _expected = recording_crypto.decode_lyrics(lyric_entries)
+            stored_descriptor = await media_crypto.encryption_for_id(conn, recording_id, object_kind="recording_lyric")
+            if stored_descriptor != (media_crypto.Metadata.from_dict(snapshot["encryption"]) if snapshot else None):
+                raise HTTPException(409, "录音歌词加密身份不一致")
             difference = actual - int(locked["size_bytes"])
             await conn.execute(update(ks.users).where(ks.users.c.user_id == user["user_id"])
                                .values(used_bytes=ks.users.c.used_bytes + difference, updated_at=int(time.time())))
@@ -400,8 +498,15 @@ async def cancel_pending(recording_id: str, request: Request):
 
 
 def _recording_json(row) -> dict:
-    return {key: row[key] for key in ("recording_id", "filename", "content_type", "size_bytes",
-                                      "sha256", "title", "lyrics", "created_at")}
+    result = {key: row[key] for key in ("recording_id", "filename", "content_type", "size_bytes",
+                                      "sha256", "title", "created_at")}
+    lyrics, snapshot, expected = recording_crypto.decode_lyrics(row["lyrics"])
+    if expected:
+        raise media_crypto.MetadataError("Pending recording cannot be presented as ready")
+    result["lyrics"] = lyrics
+    if snapshot:
+        result["encrypted_lyrics"] = snapshot
+    return result
 
 
 @router.get("/recordings")

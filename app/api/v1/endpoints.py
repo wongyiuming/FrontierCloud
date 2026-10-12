@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.api.v1.admin import router as admin_router
+from app.api.v1.admin_priority import router as priority_order_router
 from app.api.v1.admin_cluster_integrity import router as cluster_admin_router
 from app.api.v1.admin_delete_integrity import router as delete_integrity_router
 from app.api.v1.admin_directories import router as admin_directories_router
@@ -114,6 +115,7 @@ router.include_router(_without_paths(karaoke_users_router, _KARAOKE_OVERRIDE_PAT
 _include_admin(brand_upload_router, prefix="/media/admin/upload/brand")
 _include_admin(brand_admin_router, prefix="/media/admin/brand")
 _include_admin(site_admin_router)
+_include_admin(priority_order_router)
 _include_admin(upload_guard_router)
 _include_admin(master_mutation_router)
 _include_admin(_without_paths(masterlocal_recovery_router, _MASTERLOCAL_OVERRIDE_PATHS))

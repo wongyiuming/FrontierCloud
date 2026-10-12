@@ -105,7 +105,6 @@ async def folder_affinity_member(folder_path: str, database) -> str | None:
             s.upload_sessions.c.media_path,
         ).where(
             s.upload_sessions.c.state == "reserved",
-            s.upload_sessions.c.expires_at > now,
             s.upload_sessions.c.media_path.startswith(prefix, autoescape=True),
         ))).mappings().all()
 

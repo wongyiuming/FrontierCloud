@@ -20,6 +20,8 @@ const LYRIC_WINDOW_OFFSETS = [-1, 0, 1, 2, 3];
 const DIRECT_SEEK_ZONE_START = 0.75;
 const PRELOAD_MAX_BYTES = 128 * 1024 * 1024;
 const PRELOAD_START_SECONDS = 5;
+const cryptoPreparedCatalogs = new WeakSet();
+let cryptoCatalogSequence = 0;
 
 
 const PLAYER_ICONS = {
@@ -480,6 +482,7 @@ function checkAndPreloadNext(currentTime) {
     const start = duration > 0 ? Math.min(PRELOAD_START_SECONDS, duration / 4) : PRELOAD_START_SECONDS;
     if (currentTime < start) return;
     const next = currentMediaList[nextMediaIndex()];
+    if (next.encryption || next.encrypted) return;
     // Keep speculative memory bounded; video continues to use normal streaming.
     if (next.type !== 'audio') return;
     let attempt = 0;
@@ -773,6 +776,11 @@ async function loadInlineLyrics(media) {
         });
         if (!response.ok) throw new Error('Lyrics unavailable');
         const data = await response.json();
+        if (data.encrypted) {
+            if (!window.FrontierMediaCrypto) throw new Error('浏览器解密组件未加载');
+            const text = await window.FrontierMediaCrypto.textFor(data.lyric_path || data.file_path, data.encryption?.file_id);
+            data.entries = window.FrontierMediaCrypto.parseLyrics(text);
+        }
         const entries = Array.isArray(data.entries) ? data.entries
             .map(entry => ({time: Number(entry?.time), text: String(entry?.text || '')}))
             .filter(entry => Number.isFinite(entry.time) && entry.time >= 0 && entry.text)
@@ -911,8 +919,13 @@ function isGestureControl(target) {
     ));
 }
 
+function playerGestureRect(playerSection) {
+    // Fullscreen changes the player bounds, not its layout ancestor.
+    return (art?.container || playerSection).getBoundingClientRect();
+}
+
 function verticalPlayerRatio(event, playerSection) {
-    const rect = playerSection.getBoundingClientRect();
+    const rect = playerGestureRect(playerSection);
     return Math.min(1, Math.max(0, (event.clientY - rect.top) / Math.max(1, rect.height)));
 }
 
@@ -920,7 +933,7 @@ function seekToHorizontalPosition(clientX, playerSection) {
     if (!art) return;
     const duration = Number(art.duration || 0);
     if (!duration) return;
-    const rect = playerSection.getBoundingClientRect();
+    const rect = playerGestureRect(playerSection);
     const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
     art.currentTime = duration * ratio;
 }
@@ -1015,10 +1028,11 @@ function initAudioGestureControl() {
     }, true);
 
     playerSection.addEventListener('click', event => {
+        // Controls own their clicks, including the progress bar's pointer seek.
+        if (isGestureControl(event.target)) return;
         if (Date.now() < suppressClickUntil) return;
 
         const isDirectSeekZone = verticalPlayerRatio(event, playerSection) >= DIRECT_SEEK_ZONE_START;
-        if (!isDirectSeekZone && isGestureControl(event.target)) return;
 
         event.stopPropagation();
         event.preventDefault();
@@ -1102,6 +1116,8 @@ function initVideoGestureControl() {
     });
 
     playerSection.addEventListener('click', event => {
+        // Controls own their clicks, including the progress bar's pointer seek.
+        if (isGestureControl(event.target)) return;
         if (Date.now() < suppressClickUntil) {
             event.stopPropagation();
             event.preventDefault();
@@ -1183,7 +1199,7 @@ function renderPlaylist() {
     const matches = currentMediaList
         .map((item, index) => ({item, index}));
     listContainer.innerHTML = matches.map(({item, index}) => `
-        <li class="media-item ${index === currentIndex ? 'active' : ''}" data-index="${index}" data-media-id="${escapeHTML(item.media_id)}" onclick="selectMedia(${index})">
+        <li class="media-item ${index === currentIndex ? 'active' : ''}" data-index="${index}" data-media-id="${escapeHTML(item.media_id)}">
             <img src="${escapeHTML(item.cover)}" alt="cover">
             <div class="media-info">
                 <div class="media-title" title="${escapeHTML(item.title)}">${escapeHTML(middleEllipsis(item.title, 40))}</div>
@@ -1199,6 +1215,21 @@ function mediaIdentity(item) {
 
 function applyMediaCatalog(entries) {
     if (!Array.isArray(entries)) return;
+    const generation = ++cryptoCatalogSequence;
+    if (entries.some(media => media.encryption || media.encrypted) && !cryptoPreparedCatalogs.has(entries)) {
+        if (!window.FrontierMediaCrypto) {
+            document.getElementById('mediaList').textContent = '浏览器解密组件未加载';
+            return;
+        }
+        void window.FrontierMediaCrypto.prepareCatalog(entries).then(() => {
+            if (generation !== cryptoCatalogSequence) return;
+            cryptoPreparedCatalogs.add(entries);
+            applyMediaCatalog(entries);
+        }).catch(error => {
+            if (generation === cryptoCatalogSequence) document.getElementById('mediaList').textContent = error.message;
+        });
+        return;
+    }
     const selectedIdentity = mediaIdentity(currentMediaList?.[currentIndex]);
     currentMediaList = entries;
     if (!entries.length) {
@@ -1232,6 +1263,13 @@ async function loadPlayerCatalog() {
 
 window.addEventListener('DOMContentLoaded', () => {
     const listContainer = document.getElementById('mediaList');
+    // Delegation survives asynchronous catalog refreshes and strict script CSP.
+    listContainer.addEventListener('click', event => {
+        const item = event.target.closest('.media-item[data-index]');
+        if (!item || !listContainer.contains(item)) return;
+        const index = Number(item.dataset.index);
+        if (Number.isInteger(index) && index >= 0 && index < currentMediaList.length) selectMedia(index);
+    });
     listContainer.innerHTML = '<li style="padding:20px;color:#888;text-align:center;">正在加载媒体目录…</li>';
     document.getElementById('lyricsLink')?.addEventListener('click', openFullscreenLyrics);
     document.getElementById('karaokeLink')?.addEventListener('click', openKaraoke);
@@ -1269,6 +1307,8 @@ window.addEventListener('resize', () => {
 });
 
 function selectMedia(index) {
+    const media = currentMediaList?.[index];
+    if (media?.encryption || media?.encrypted) window.FrontierMediaCrypto?.resetFault(media.media_path || media.path);
     const targetElement = document.querySelector(`.media-item[data-index="${index}"]`);
     const items = document.querySelectorAll('.media-item');
     items.forEach(item => item.classList.remove('active'));

@@ -54,6 +54,8 @@ async def finalize_recording_delete(user_id: str, recording_id: str, *, request=
         if row["state"] != "deleting":
             return False
         size = int(row["size_bytes"])
+        from app.services.media_crypto import forget_encryption
+        await forget_encryption(conn, recording_id, object_kind="recording_lyric")
         await conn.execute(delete(ks.recordings).where(
             ks.recordings.c.recording_id == recording_id
         ))

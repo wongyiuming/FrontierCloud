@@ -4,6 +4,38 @@
     min-width: 150px;
 }
 
+.upload-storage-mode-dialog {
+    width: min(430px, calc(100vw - 48px));
+    padding: 24px;
+    color: #d7e1e7;
+    background: #15212a;
+    border: 1px solid #536773;
+    border-radius: 12px;
+}
+.upload-storage-mode-dialog::backdrop { background: rgba(0, 0, 0, .64); }
+.upload-storage-mode-dialog h3 { margin: 0 0 12px; }
+.upload-storage-mode-dialog p { font-size: 14px; line-height: 1.7; color: #aabcc6; }
+.upload-storage-mode-dialog > div { display: flex; gap: 12px; margin: 20px 0; }
+.upload-storage-mode-dialog button {
+    min-height: 42px;
+    padding: 8px 18px;
+    color: #d7e1e7;
+    background: #253b48;
+    border: 1px solid #627d8b;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.upload-storage-mode-dialog button:focus-visible { outline: 2px solid #a9cedf; outline-offset: 3px; }
+.media-encryption-badge {
+    flex: 0 0 auto;
+    padding: 2px 7px;
+    border: 1px solid #627b89;
+    border-radius: 999px;
+    color: #a6beca;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
 .media-site-badge {
     display: inline-flex;
     align-items: center;

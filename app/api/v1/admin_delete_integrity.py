@@ -71,6 +71,8 @@ async def retry_pending_media(media_id: str) -> bool:
 
         now = int(time.time())
         async with node_state.database.begin() as conn:
+            from app.services import media_crypto
+            await media_crypto.forget_encryption(conn, row["media_id"])
             await conn.execute(text("DELETE FROM media_lyric_links WHERE media_id=:id"), {"id": row["media_id"]})
             await conn.execute(text("DELETE FROM media_playback_events WHERE media_id=:id"), {"id": row["media_id"]})
             await conn.execute(text("DELETE FROM media_playback_stats WHERE media_id=:id"), {"id": row["media_id"]})
@@ -126,8 +128,9 @@ async def reconcile_upload_path(path: str) -> None:
         ).order_by(s.upload_sessions.c.created_at.desc()))).mappings().first()
     if not upload:
         return
-    if upload["state"] == "reserved" and int(upload["expires_at"]) <= now:
-        if await cluster._cleanup_upload_session(str(upload["upload_id"]), allow_unindexed_local=True):
+    if upload["state"] == "reserved" and resource_pool.upload_expired(upload, now):
+        if await cluster._cleanup_upload_session(
+                str(upload["upload_id"]), allow_unindexed_local=True, expired_only=True):
             return
         raise HTTPException(409, "同路径旧上传已过期，但存储对象尚未完成清理，请稍后重试")
     if upload["state"] == "reserved":

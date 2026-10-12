@@ -1,5 +1,11 @@
 # Audit and Validation
 
+The earlier dated reports below describe historical releases. Their Updater/CD
+procedures are retired and must not be used with the final Python release.
+Current exact-source evidence is recorded in
+[the final acceptance ledger](../python-final-parity.md).
+
+
 ## September 2026 four-area review
 
 The current review covers functionality, performance, security and audit behavior. Priority means operational urgency for this project; it is not a CVSS score.

@@ -54,6 +54,20 @@ async def record_health_result(success: bool, *, timestamp: float | None = None,
 
 def request_health() -> bool:
     try:
+        if settings.DEPLOYMENT_MODE == "only_stroge":
+            import http.client
+            import socket
+            import ssl
+            # Loopback routing with the real DNS SNI and system trust verification.
+            connection = http.client.HTTPSConnection(settings.SERVER_NAME, settings.STORAGE_PORT,
+                                                     timeout=3, context=ssl.create_default_context())
+            connection._create_connection = lambda _address, timeout, _source: socket.create_connection(
+                ("127.0.0.1", settings.STORAGE_PORT), timeout=timeout)
+            try:
+                connection.request("GET", "/health/ready")
+                return connection.getresponse().status == 200
+            finally:
+                connection.close()
         with urllib.request.urlopen(HEALTH_URL, timeout=3) as response:
             return response.status == 200
     except Exception:

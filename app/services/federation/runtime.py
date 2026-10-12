@@ -133,6 +133,9 @@ class Runtime:
             await state.log(conn, "revocation-acknowledged", "peer", relation["relationship_id"])
 
     async def tick(self, relation: dict):
+        from app.services.site_control import hard_fence_active
+        if hard_fence_active():
+            return
         identifier = relation["relationship_id"]
         if relation["state"] == "revoked":
             await self.notify_revocation(relation)
@@ -175,6 +178,9 @@ class Runtime:
 
     def schedule_backup(self, relation: dict) -> None:
         """Run backup transport outside the heartbeat loop, one task per relation."""
+        from app.services.site_control import hard_fence_active
+        if hard_fence_active():
+            return
         identifier = relation["relationship_id"]
         current = self.backup_tasks.get(identifier)
         if current and not current.done():
@@ -202,6 +208,9 @@ class Runtime:
 
     async def maybe_backup(self, relation: dict):
         from app.services import resource_pool
+        from app.services.site_control import hard_fence_active
+        if hard_fence_active():
+            return
         member = next((item for item in await resource_pool.list_members(state.database)
                        if item["member_id"] == relation["peer_id"]), None)
         if not member or not member["backup"].get("enabled"):
@@ -216,6 +225,8 @@ class Runtime:
         generation, artifact, checksum = await resource_pool.build_business_backup(state.database)
         started = False
         try:
+            if hard_fence_active():
+                return
             # New followers clean any orphaned receiving generation before this
             # attempt. Older followers may not expose /abort yet, so this is best-effort.
             try:
@@ -250,23 +261,25 @@ class Runtime:
             while True:
                 self.wakeup.clear()
                 try:
-                    await state.cleanup_playback_events()
-                    if state.node["role"] == "Master":
-                        from app.services import resource_pool
-                        await resource_pool.retry_pending_deletes(state)
-                    relations = await state.list_relationships(include_revoked=True)
-                    pending = [row for row in relations if row["state"] == "revoked" and not row["summary"].get("revocation_acknowledged")]
-                    if state.node["role"] == "Standalone" and not pending:
-                        break
-                    semaphore = asyncio.Semaphore(4)
-                    async def checked_tick(relation):
-                        async with semaphore:
-                            try:
-                                await self.tick(relation)
-                            except Exception as exc:
-                                logger.warning("Node control operation deferred: %s", type(exc).__name__,
-                                               extra={"context": {"relationship_id": relation["relationship_id"]}})
-                    await asyncio.gather(*(checked_tick(row) for row in relations if row["state"] != "revoked" or row in pending))
+                    from app.services.site_control import hard_fence_active
+                    if not hard_fence_active():
+                        await state.cleanup_playback_events()
+                        if state.node["role"] == "Master":
+                            from app.services import resource_pool
+                            await resource_pool.retry_pending_deletes(state)
+                        relations = await state.list_relationships(include_revoked=True)
+                        pending = [row for row in relations if row["state"] == "revoked" and not row["summary"].get("revocation_acknowledged")]
+                        if state.node["role"] == "Standalone" and not pending:
+                            break
+                        semaphore = asyncio.Semaphore(4)
+                        async def checked_tick(relation):
+                            async with semaphore:
+                                try:
+                                    await self.tick(relation)
+                                except Exception as exc:
+                                    logger.warning("Node control operation deferred: %s", type(exc).__name__,
+                                                   extra={"context": {"relationship_id": relation["relationship_id"]}})
+                        await asyncio.gather(*(checked_tick(row) for row in relations if row["state"] != "revoked" or row in pending))
                 except Exception as exc:
                     logger.warning("Node resource control deferred: %s", type(exc).__name__)
                 try:

@@ -223,10 +223,13 @@ function updateToolbar() {
     $('download').disabled = !count;
     $('delete').disabled = !count;
     const selectedRows = [...document.querySelectorAll('.tree-row.selected')];
+    const mutationPending = selectedRows.some(row => row.dataset.mutationState);
+    $('download').disabled = !count || mutationPending;
+    $('delete').disabled = !count || mutationPending;
     const canHide = count && selectionKind === 'directory'
         && selectedRows.length === count
         && selectedRows.every(row => row.dataset.hideable === 'true');
-    $('hide').disabled = !canHide;
+    $('hide').disabled = !canHide || mutationPending;
     if (count && selectionKind === 'directory') {
         const rows = [...document.querySelectorAll('.tree-row.selected')];
         $('hide').textContent = rows.every(row => row.dataset.hidden === 'true') ? '恢复' : '隐藏';
@@ -331,12 +334,13 @@ async function renderTree() {
         row.dataset.path = item.path;
         row.dataset.hidden = String(item.hidden);
         row.dataset.hideable = String(item.hideable === true);
+        row.dataset.mutationState = item.mutation_state || '';
         const pathDetail = scopedSearch
             ? `<small class="tree-path">媒体路径 ${expandableFilename(`/${item.path.split('/').slice(1).join('/')}`, 72)}</small>`
             : '';
         row.innerHTML = `<span class="kind">${item.kind === 'directory' ? '📁' : '📄'}</span>`
             + `<span class="tree-label"><span class="name" title="${escapeHtml(item.name)}">${expandableFilename(item.name, 52)}</span>${pathDetail}</span>`
-            + `<small>${item.kind === 'file' ? formatSize(item.size) : ''}</small>`;
+            + `<small>${item.mutation_state ? `改名恢复中 → ${escapeHtml(item.rename_target || '')}` : item.kind === 'file' ? formatSize(item.size) : ''}</small>`;
         bindExpandableFilenames(row);
         row.onclick = event => {
             event.stopPropagation();
@@ -1051,6 +1055,32 @@ function prioritySectionLabel(text, count) {
     return label;
 }
 
+function attachPriorityNumber(control) {
+    const slider = control.querySelector('input[type="range"]');
+    const numeric = document.createElement('input');
+    numeric.type = 'number'; numeric.className = 'priority-number';
+    numeric.min = slider.min; numeric.max = slider.max; numeric.step = '1';
+    numeric.value = slider.value; numeric.inputMode = 'numeric';
+    numeric.required = true;
+    numeric.setAttribute('aria-label', `${slider.getAttribute('aria-label')}精确数值`);
+    const input = slider.oninput;
+    slider.oninput = () => { input?.(); numeric.value = slider.value; };
+    const change = slider.onchange;
+    slider.onchange = async () => {
+        numeric.disabled = true;
+        try { await change(); }
+        finally { numeric.value = slider.value; numeric.disabled = false; }
+    };
+    numeric.onchange = async () => {
+        if (!numeric.checkValidity()) { numeric.reportValidity(); numeric.value = slider.value; return; }
+        slider.value = numeric.value;
+        control.querySelector('output').textContent = slider.value;
+        await slider.onchange();
+    };
+    numeric.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); numeric.blur(); } };
+    control.append(numeric);
+}
+
 function priorityDirectoryButton(directory) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -1071,6 +1101,8 @@ function priorityDirectoryButton(directory) {
 function priorityMediaRow(item, data) {
     const row = document.createElement('div');
     row.className = 'priority-row';
+    row.dataset.priorityPath = item.media_path;
+    row.dataset.priorityKind = 'media';
     const resourceId = item.resource_id || null;
     const fileName = item.media_path.split('/').pop() || item.title;
     const preference = Number(item.preference || 0);
@@ -1102,6 +1134,7 @@ function priorityMediaRow(item, data) {
             item.preference = committed;
             slider.value = String(committed);
             output.textContent = String(committed);
+            await loadMediaPriority(true);
         } catch (error) {
             slider.value = String(committed);
             output.textContent = String(committed);
@@ -1110,6 +1143,7 @@ function priorityMediaRow(item, data) {
             slider.disabled = false;
         }
     };
+    attachPriorityNumber(row.querySelector('.priority-control'));
     return row;
 }
 

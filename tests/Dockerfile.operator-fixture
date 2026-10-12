@@ -1,0 +1,5 @@
+FROM frontiercloud-python-archive:db-test-tools
+WORKDIR /app
+COPY . /app
+RUN chmod 0755 /app && chmod -R a+rX /app/app /app/scripts /app/tests && chmod 0644 /app/main.py
+USER 10001:10001

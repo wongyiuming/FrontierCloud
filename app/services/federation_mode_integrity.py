@@ -6,6 +6,8 @@ cannot change transport until that reservation is completed or cancelled.
 """
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from sqlalchemy import func, select
 
 from app.services import resource_pool
@@ -30,6 +32,12 @@ async def _set_mode_with_upload_fence(original, store: State, identifier: str,
         return await original(store, identifier, mode, actor)
 
     relation = await store.relationship(identifier)
+    if mode == "Direct":
+        endpoint = urlsplit(str(relation.get("peer_endpoint", "")))
+        if endpoint.scheme != "https" or (endpoint.port or 443) != 443:
+            raise p.ProtocolError(
+                "Direct 节点必须使用经过验证的 HTTPS 443 入口；高端口 Relay 部署不能直接切换"
+            )
     if relation.get("mode") == mode:
         return await original(store, identifier, mode, actor)
 

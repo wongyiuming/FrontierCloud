@@ -92,7 +92,7 @@ class MediaDeleteIntegrityTests(unittest.IsolatedAsyncioTestCase):
                 upload_id="e" * 32, storage_member_id=self.member_id, media_id="f" * 64,
                 media_path=path, path_locator=locator, object_kind="video",
                 expected_bytes=1024, state="reserved", expires_at=int(time.time()) + 600,
-                created_at=1, updated_at=1,
+                created_at=int(time.time()), updated_at=int(time.time()),
             ))
         with patch.object(integrity, "node_state", self.state):
             with self.assertRaises(HTTPException) as raised:

@@ -167,11 +167,13 @@ class UploadSiteRoutingTests(unittest.IsolatedAsyncioTestCase):
     def test_master_upload_model_requires_site_type(self):
         with self.assertRaises(ValidationError):
             master_mutation.SiteTypeUploadReservation(
+                storage_mode="plain",
                 target_dir="music/artist",
                 filename="song.mp3",
                 size_bytes=3,
             )
         payload = master_mutation.SiteTypeUploadReservation(
+            storage_mode="plain",
             site_type="direct",
             target_dir="music/artist",
             filename="song.mp3",
@@ -189,6 +191,7 @@ class _SharedLock:
 class MasterUploadSiteRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_route_resolves_folder_affinity_before_existing_reservation_pipeline(self):
         payload = master_mutation.SiteTypeUploadReservation(
+            storage_mode="plain",
             site_type="relay",
             target_dir="music/artist",
             filename="song.mp3",
@@ -232,7 +235,8 @@ class UploadSiteUiContractTests(unittest.TestCase):
         self.assertIn("counts.direct", source)
         self.assertIn("counts.relay", source)
         self.assertIn("available_bytes", source)
-        self.assertIn("prepareReservation(index + 1)", source)
+        self.assertIn("takeReservation(index, encrypted)", source)
+        self.assertIn("storageMode === 'encrypted' && !encrypted", source)
         self.assertIn("heldReservations", source)
 
     def test_historical_media_uses_transport_to_render_site_type(self):
@@ -254,7 +258,7 @@ class UploadSiteUiContractTests(unittest.TestCase):
 
     def test_cluster_acceptance_uses_site_types_not_member_pinning(self):
         acceptance = (ROOT / "tests/federation_stack.py").read_text(encoding="utf-8")
-        self.assertIn('def upload_media(self, blob, filename, *, site_type):', acceptance)
+        self.assertIn('def upload_media(self, blob, filename, *, site_type,', acceptance)
         self.assertIn('"site_type": site_type', acceptance)
         self.assertIn('site_type="relay"', acceptance)
         self.assertIn('site_type="direct"', acceptance)

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -122,7 +123,8 @@ def _sync_media_directory(directory: Path) -> None:
 
 
 def ensure_media_mutations_ready() -> None:
-    if MEDIA_ROOT in _RECOVERY_REQUIRED_ROOTS:
+    from app.services.media_publication_recovery import pending
+    if MEDIA_ROOT in _RECOVERY_REQUIRED_ROOTS or pending(MEDIA_ROOT):
         raise HTTPException(
             status_code=503,
             detail="媒体事务等待恢复，请在数据库恢复后重启 Web 服务",
@@ -244,7 +246,7 @@ class MediaManager:
         return bool(checker and checker(head))
 
     @staticmethod
-    async def upload_one(upload: UploadFile, target_dir: Path, *, audit: MutationAudit | None = None) -> str:
+    async def upload_one(upload: UploadFile, target_dir: Path, *, audit: MutationAudit | None = None, encryption=None) -> str:
         name = MediaManager.validate_name(upload.filename or "")
         ext = Path(name).suffix.lower()
         if ext not in ALLOWED_EXTS:
@@ -259,13 +261,21 @@ class MediaManager:
         if destination.exists():
             raise HTTPException(status_code=409, detail="上传失败，目标位置已存在同名文件")
         MediaManager._validate_media_destination(destination)
+        maximum = settings.ADMIN_MAX_UPLOAD_FILE_SIZE
+        if encryption is not None:
+            if encryption.plaintext_size > maximum:
+                raise HTTPException(413, "上传失败，文件过大")
+            maximum = encryption.ciphertext_size
 
         # Stage under MEDIA_ROOT so folder uploads do not create persistent
         # directories until their complete payload has passed validation.
         fd, tmp_name = tempfile.mkstemp(prefix=".upload-", suffix=".part", dir=str(MEDIA_ROOT))
-        os.close(fd)
+        if os.name != "nt":
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         tmp = Path(tmp_name)
         total = 0
+        digest = hashlib.sha256()
         head = b""
         published = False
         created_dirs: list[Path] = []
@@ -278,13 +288,16 @@ class MediaManager:
                     if not head:
                         head = chunk[:4096]
                     total += len(chunk)
-                    if total > settings.ADMIN_MAX_UPLOAD_FILE_SIZE:
+                    digest.update(chunk)
+                    if total > maximum:
                         raise HTTPException(status_code=413, detail="上传失败，文件过大")
                     await asyncio.to_thread(out.write, chunk)
                 out.flush()
                 await asyncio.to_thread(os.fsync, out.fileno())
-            if total == 0 or not MediaManager._signature_ok(ext, head):
+            if total == 0 or (encryption is None and not MediaManager._signature_ok(ext, head)):
                 raise HTTPException(status_code=400, detail="上传失败，文件内容不是受支持的媒体格式")
+            if encryption is not None and total != encryption.ciphertext_size:
+                raise HTTPException(400, "Ciphertext size does not match its preparation")
             async with media_mutation_lock:
                 ensure_media_mutations_ready()
                 if destination.exists():
@@ -297,26 +310,54 @@ class MediaManager:
                 while missing != MEDIA_ROOT and not missing.exists():
                     created_dirs.append(missing)
                     missing = missing.parent
-                target_dir.mkdir(parents=True, exist_ok=True)
+                from app.services import media_publication_recovery as publication
+                relative = destination.relative_to(MEDIA_ROOT).as_posix()
 
-                # mkstemp creates files as 0600. The Nginx container uses a
-                # different unprivileged UID and must be able to read media.
-                tmp.chmod(0o644)
-                try:
-                    os.link(tmp, destination)
-                except FileExistsError as exc:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="上传失败，目标位置已存在同名文件",
-                    ) from exc
-                published = True
+                async def publish_and_register():
+                    nonlocal published
+                    journal = None
+                    committed = False
+                    try:
+                        if encryption is not None or audit is not None:
+                            journal = publication.create(MEDIA_ROOT, relative, tmp, None, encryption,
+                                                         size=total, digest=digest.hexdigest())
+                        target_dir.mkdir(parents=True, exist_ok=True)
+                        # Nginx has a different unprivileged UID.
+                        tmp.chmod(0o644)
+                        try:
+                            os.link(tmp, destination)
+                        except FileExistsError as exc:
+                            raise HTTPException(409, "上传失败，目标位置已存在同名文件") from exc
+                        published = True
+                        _sync_media_directory(destination.parent)
+                        for directory in created_dirs:
+                            _sync_media_directory(directory.parent)
+                        if journal is not None:
+                            await publication.register(engine, journal, audit)
+                            committed = True
+                            publication.finish(MEDIA_ROOT, journal)
+                    except BaseException as exc:
+                        if committed or isinstance(exc, publication.PublicationCommitUnknown):
+                            _RECOVERY_REQUIRED_ROOTS.add(MEDIA_ROOT)
+                            raise
+                        try:
+                            if published:
+                                destination.unlink()
+                                _sync_media_directory(destination.parent)
+                                published = False
+                            if journal is not None:
+                                publication.finish(MEDIA_ROOT, journal)
+                        except BaseException:
+                            _RECOVERY_REQUIRED_ROOTS.add(MEDIA_ROOT)
+                            raise
+                        raise
+                await _finish_media_cleanup(asyncio.create_task(publish_and_register()))
                 parts = MediaManager._layout_parts(destination)
                 if len(parts) == 3:
                     _refresh_flat_layout_after_publish(target_dir)
-            if audit is not None:
-                await audit(None, "success", 1, {"path": destination.relative_to(MEDIA_ROOT).as_posix()})
             return str(destination.relative_to(MEDIA_ROOT).as_posix())
         finally:
+            os.close(fd)
             tmp.unlink(missing_ok=True)
             if not published:
                 for directory in created_dirs:
@@ -331,8 +372,13 @@ class MediaManager:
         relative_path: str | None = None,
         *,
         audit: MutationAudit | None = None,
+        encryption=None,
+        registration=None,
     ) -> str:
         from app.services.lyrics import parse_lrc_bytes
+
+        if encryption is not None and encryption.plaintext_size > LYRIC_MAX_BYTES:
+            raise HTTPException(413, "歌词超过 2 MiB 限制")
 
         relative = MediaManager.normalize_relative(relative_path) if relative_path else None
         name = MediaManager.validate_name(relative or upload.filename or "")
@@ -349,7 +395,9 @@ class MediaManager:
             raise HTTPException(status_code=409, detail="上传失败，已存在同名歌词")
 
         fd, tmp_name = tempfile.mkstemp(prefix=".upload-", suffix=".part", dir=str(MEDIA_ROOT))
-        os.close(fd)
+        if os.name != "nt":
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         tmp = Path(tmp_name)
         published = False
         created_dirs: list[Path] = []
@@ -360,12 +408,16 @@ class MediaManager:
                 if not chunk:
                     break
                 payload.extend(chunk)
-                if len(payload) > LYRIC_MAX_BYTES:
+                if len(payload) > (encryption.ciphertext_size if encryption is not None else LYRIC_MAX_BYTES):
                     raise HTTPException(status_code=413, detail="歌词文件不得超过 2 MiB")
-            try:
-                parse_lrc_bytes(bytes(payload))
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if encryption is not None:
+                if encryption.plaintext_size > LYRIC_MAX_BYTES or len(payload) != encryption.ciphertext_size:
+                    raise HTTPException(400, "Encrypted lyric size is invalid")
+            else:
+                try:
+                    parse_lrc_bytes(bytes(payload))
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
             with tmp.open("wb") as out:
                 out.write(payload)
                 out.flush()
@@ -382,17 +434,54 @@ class MediaManager:
                 while missing != LYRICS_ROOT and not missing.exists():
                     created_dirs.append(missing)
                     missing = missing.parent
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                tmp.chmod(0o644)
-                try:
-                    os.link(tmp, destination)
-                except FileExistsError as exc:
-                    raise HTTPException(status_code=409, detail="上传失败，已存在同名歌词") from exc
-                published = True
-            if audit is not None:
-                await audit(None, "success", 1, {"path": destination.relative_to(MEDIA_ROOT).as_posix()})
+                from app.services import media_publication_recovery as publication
+                relative = destination.relative_to(MEDIA_ROOT).as_posix()
+
+                async def publish_and_register():
+                    nonlocal published
+                    journal = None
+                    committed = False
+                    try:
+                        if registration is not None:
+                            journal = publication.create(MEDIA_ROOT, relative, tmp, payload, encryption)
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        tmp.chmod(0o644)
+                        try:
+                            os.link(tmp, destination)
+                        except FileExistsError as exc:
+                            raise HTTPException(status_code=409, detail="上传失败，已存在同名歌词") from exc
+                        published = True
+                        _sync_media_directory(destination.parent)
+                        for directory in created_dirs:
+                            _sync_media_directory(directory.parent)
+                        if registration is not None:
+                            await registration(relative, journal)
+                            committed = True
+                            publication.finish(MEDIA_ROOT, journal)
+                        elif audit is not None:
+                            await audit(None, "success", 1, {"path": relative})
+                    except BaseException as exc:
+                        if committed or isinstance(exc, publication.PublicationCommitUnknown):
+                            _RECOVERY_REQUIRED_ROOTS.add(MEDIA_ROOT)
+                            raise
+                        try:
+                            if published:
+                                destination.unlink()
+                                _sync_media_directory(destination.parent)
+                                published = False
+                            if journal is not None:
+                                publication.finish(MEDIA_ROOT, journal)
+                        except BaseException:
+                            _RECOVERY_REQUIRED_ROOTS.add(MEDIA_ROOT)
+                            raise
+                        raise
+
+                # A disconnected request cannot release the writer fence while
+                # SQL commit/rollback or publication cleanup is still running.
+                await _finish_media_cleanup(asyncio.create_task(publish_and_register()))
             return destination.relative_to(MEDIA_ROOT).as_posix()
         finally:
+            os.close(fd)
             tmp.unlink(missing_ok=True)
             if not published:
                 for directory in created_dirs:
@@ -681,42 +770,19 @@ class MediaManager:
         event_scope = MediaManager._path_scope("stats.media_path", is_directory)
         stats_scope = MediaManager._path_scope("media_path", is_directory)
 
-        await conn.execute(text(f"""
-            DELETE events
-            FROM media_playback_events AS events
-            INNER JOIN media_objects AS object ON object.media_id=events.media_id
-            WHERE {object_scope}
-        """), params)
-        await conn.execute(text(f"""
-            DELETE stats
-            FROM media_playback_stats AS stats
-            INNER JOIN media_objects AS object ON object.media_id=stats.media_id
-            WHERE {object_scope}
-        """), params)
+        identifiers = f"SELECT object.media_id FROM media_objects AS object WHERE {object_scope}"
+        await conn.execute(text(f"UPDATE media_encryption SET descriptor_json=NULL WHERE object_kind='media' AND object_id IN ({identifiers})"), params)
+        await conn.execute(text(f"DELETE FROM media_playback_events WHERE media_id IN ({identifiers})"), params)
+        await conn.execute(text(f"DELETE FROM media_playback_stats WHERE media_id IN ({identifiers})"), params)
         for linked_id in ("media_id", "lyric_id"):
-            await conn.execute(text(f"""
-                DELETE link
-                FROM media_lyric_links AS link
-                INNER JOIN media_objects AS object ON object.media_id=link.{linked_id}
-                WHERE {object_scope}
-            """), params)
-        await conn.execute(text(f"""
-            DELETE events
-            FROM media_playback_events AS events
-            INNER JOIN media_playback_stats AS stats ON stats.media_id=events.media_id
-            WHERE {event_scope}
-        """), params)
-        await conn.execute(
-            text(f"DELETE FROM media_playback_stats WHERE {stats_scope}"),
-            params,
-        )
+            await conn.execute(text(f"DELETE FROM media_lyric_links WHERE {linked_id} IN ({identifiers})"), params)
+        await conn.execute(text(f"DELETE FROM media_playback_events WHERE media_id IN (SELECT stats.media_id FROM media_playback_stats AS stats WHERE {event_scope})"), params)
+        await conn.execute(text(f"DELETE FROM media_playback_stats WHERE {stats_scope}"), params)
         for column in ("media_path", "lyric_path"):
             await conn.execute(text("DELETE FROM media_lyric_links WHERE " + MediaManager._path_scope(column, is_directory)), params)
         if is_directory:
             await conn.execute(text("DELETE FROM media_visibility WHERE " + MediaManager._path_scope("relative_path", True)), params)
-        await conn.execute(text(f"""
-            DELETE object FROM media_objects AS object WHERE {object_scope}
-        """), params)
+        await conn.execute(text("DELETE FROM media_objects WHERE " + MediaManager._path_scope("media_path", is_directory)), params)
 
     @staticmethod
     def _restore_staged(quarantine: Path, manifest: list[dict]) -> None:
@@ -906,6 +972,8 @@ class MediaManager:
 async def recover_interrupted_media_deletions() -> None:
     """Finish or roll back journaled deletes left by a terminated worker."""
     async with media_mutation_lock:
+        from app.services import media_publication_recovery
+        await media_publication_recovery.recover(MEDIA_ROOT, engine)
         async with engine.connect() as conn:
             result = await conn.execute(text("""
                 SELECT operation_id, state, manifest

@@ -9,7 +9,7 @@ from app.services import karaoke_delete_integrity as deletion
 from app.services.federation.state import state
 
 
-router = APIRouter(prefix="/account")
+router = APIRouter(prefix="/account", route_class=legacy.RecordingRoute)
 
 
 @router.get("/status")

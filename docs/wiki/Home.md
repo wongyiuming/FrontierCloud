@@ -1,6 +1,6 @@
 # FrontierCloud Wiki
 
-FrontierCloud is a self-hosted media browsing, playback, karaoke, cluster-storage, backup, and administration system. FastAPI provides the business/control plane, native browser JavaScript provides the UI, and Docker Compose runs Web/API, Nginx, MySQL, Redis, Updater, and STUN.
+FrontierCloud is a self-hosted media browsing, playback, karaoke, cluster-storage, backup, and administration system. FastAPI provides the business/control plane, native browser JavaScript provides the UI, and Docker Compose runs Web/API, Nginx, SQLite (or optional MySQL), Redis, certificate-agent, and STUN.
 
 This Wiki documents the **current implementation**, not aspirational architecture. The project has changed quickly, so treat repository code, `ARCHITECTURE.md`, `CONTRIBUTING.md`, and exact-SHA CI as the final authority when a page and code disagree.
 
@@ -28,7 +28,7 @@ A FrontierCloud cluster has one business Master. The Master owns:
 - karaoke user/recording business state;
 - Admin audit facts;
 - node configuration authority;
-- release coordination.
+- encryption key grant and audit authority.
 
 Followers are resource nodes. They may provide Storage and/or Backup plus authenticated health/control/data-plane services. They are not secondary business sites.
 
@@ -102,7 +102,7 @@ main  reviewed release history
 
 No feature/fix/release/temporary branches are allowed. The only PR into `main` is same-repository `dev -> main`. After merge, `dev` must be fast-forwarded to the resulting `main` merge commit before further work.
 
-A `main` target is publishable only when the release verifier can prove merged `dev -> main` provenance, successful exact promoted `dev` push CI, and identical reviewed `dev` / `main` trees. Temporary GitHub verification failure keeps the running service available but disables new upgrade authorization.
+A `main` release requires merged `dev -> main` provenance, successful exact promoted `dev` push CI, identical reviewed/main trees and complete native acceptance. Online software upgrades are retired; operators use a backed-up maintenance window.
 
 ## Current Admin domains
 
@@ -116,9 +116,8 @@ The final Admin module order is intentional and regression-tested:
 6. WebRTC network relations
 7. Nodes
 8. Site access state
-9. System release management
-10. Admin Key
-11. Brand Logo
+9. Admin Key
+10. Brand Logo
 
 ## Important terms
 

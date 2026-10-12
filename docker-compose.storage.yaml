@@ -1,0 +1,161 @@
+# Separate Python/FastAPI storage appliance; never combine with business Compose.
+name: ${COMPOSE_PROJECT_NAME:-frontiercloud-storage}
+
+x-storage-image: &storage-image
+  image: frontiercloud-python-storage
+  build: .
+  env_file:
+    - path: .env
+      required: false
+
+x-storage-environment: &storage-environment
+  DEPLOYMENT_MODE: only_stroge
+  DB_TYPE: sqlite
+  SQLITE_PATH: /app/data/frontiercloud.db
+  TLS_ENABLED: ${TLS_ENABLED:-true}
+  SERVER_NAME: ${SERVER_NAME:?Set the storage DNS hostname}
+  STORAGE_TRANSPORT: ${STORAGE_TRANSPORT:-direct}
+  STORAGE_PORT: ${STORAGE_PORT:-443}
+  STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:?Set the certificate-verified storage root URL}
+  REDIS_URL: redis://redis:6379/0
+  PYTHONDONTWRITEBYTECODE: "1"
+
+services:
+  secrets-init:
+    <<: *storage-image
+    user: "0:0"
+    command: [python, -m, app.services.runtime_secrets]
+    environment: *storage-environment
+    restart: "no"
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    volumes: [storage_secrets:/run/frontiercloud-secrets]
+
+  media-init:
+    <<: *storage-image
+    user: "0:0"
+    command: [python, -m, app.services.media_storage_init]
+    environment: *storage-environment
+    restart: "no"
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    volumes: ["${DATA_DIRECTORY:-./storage-data}:/app/data:z"]
+
+  certificate-init:
+    <<: *storage-image
+    user: "0:10001"
+    command: [python, -m, app.services.certmanager.agent, initialize]
+    environment: *storage-environment
+    restart: "no"
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    volumes:
+      - certificate_state:/var/lib/frontiercloud-certificate
+      - certificate_runtime:/run/frontiercloud-certificate
+      - certificate_published:/run/frontiercloud-tls
+
+  certificate-agent:
+    <<: *storage-image
+    user: "0:10001"
+    command: [python, -m, app.services.certmanager.agent]
+    environment: *storage-environment
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    cpus: "0.10"
+    mem_limit: 128m
+    pids_limit: 32
+    depends_on:
+      certificate-init: {condition: service_completed_successfully}
+    volumes:
+      - certificate_state:/var/lib/frontiercloud-certificate
+      - certificate_runtime:/run/frontiercloud-certificate
+      - certificate_published:/run/frontiercloud-tls
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    healthcheck:
+      test: [CMD, python, -m, app.services.certmanager.probe]
+      interval: 30s
+      start_interval: 2s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 10s
+
+  web:
+    <<: *storage-image
+    environment: *storage-environment
+    user: "10001:10001"
+    restart: unless-stopped
+    cpus: "1.0"
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    sysctls: {net.ipv4.ip_unprivileged_port_start: "0"}
+    ports: ["${PUBLIC_BIND_ADDRESS:-0.0.0.0}:${STORAGE_PORT:-443}:${STORAGE_PORT:-443}"]
+    depends_on:
+      secrets-init: {condition: service_completed_successfully}
+      media-init: {condition: service_completed_successfully}
+      certificate-agent: {condition: service_started}
+      redis: {condition: service_healthy}
+    volumes:
+      - ${DATA_DIRECTORY:-./storage-data}:/app/data:z
+      - storage_secrets:/run/frontiercloud-secrets
+      - certificate_published:/run/frontiercloud-tls:ro
+      - certificate_runtime:/run/frontiercloud-certificate:ro
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    healthcheck:
+      test: [CMD, python, -m, app.services.health_probe]
+      interval: 30s
+      start_interval: 2s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+    stop_grace_period: 30s
+
+  redis:
+    image: redis:7.4.11-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes: [storage_redis:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  stun:
+    image: coturn/coturn:4.17.2-r0-alpine
+    restart: unless-stopped
+    command: [-n, --stun-only, --no-auth, --no-cli, --no-tls, --no-dtls, --fingerprint, --no-multicast-peers, --log-file=stdout, --simple-log, --listening-port=3478]
+    ports:
+      - target: 3478
+        published: "${WEBRTC_STUN_PORT:-3478}"
+        protocol: udp
+        host_ip: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}
+    read_only: true
+    tmpfs: ["/tmp:size=4m,mode=1777", "/var/lib/coturn:size=4m,mode=0700"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    mem_limit: 32m
+    cpus: "0.20"
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}
+
+volumes:
+  storage_secrets:
+  storage_redis:
+  certificate_state:
+  certificate_runtime:
+  certificate_published:

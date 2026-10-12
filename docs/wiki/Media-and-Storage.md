@@ -2,7 +2,7 @@
 
 ## 1. Authoritative catalog
 
-The Master MySQL global catalog is the authoritative mapping between logical media and physical storage placement.
+The Master SQL global catalog is the authoritative mapping between logical media and physical storage placement.
 
 Core tables include:
 
@@ -141,7 +141,7 @@ A candidate member must be:
 
 ### Empty media folder
 
-The immediate parent of a media file is the placement-affinity unit. When that folder has no active/pending media and no live upload reservation, the first reservation uses normal fair placement.
+The immediate parent of a media file is the placement-affinity unit. When that folder has no active/pending media and no unreconciled upload reservation, the first reservation uses normal fair placement.
 
 Selection prefers lower:
 
@@ -424,3 +424,24 @@ If catalog and bytes disagree, first investigate:
 - a database/filesystem restore from different recovery points.
 
 Do not immediately edit tables or move/delete managed files by hand. Restore a consistent business/data recovery point when necessary.
+
+## Browser encryption and upload recovery
+
+Each file/folder selection requires a fresh explicit `plain` or `encrypted`
+choice. Standard chunked AES-GCM protects bytes before they leave the browser;
+failure never silently retries as plaintext. The backend stores ciphertext and
+checks capability, hash, size, ownership and durable encryption identity.
+Deletion preserves a key/nonce reuse tombstone; rename preserves file identity.
+Local, Direct and Relay media use the same versioned browser contract.
+
+Timeouts select stale upload candidates, rather than granting permission to
+delete. Whole-writer kernel leases protect active streams and finalization.
+Authenticated Storage reconciliation may prove incomplete objects cleared or
+complete objects ready for recovery. A timeout, offline node or HTTP 404 alone
+never clears ownership.
+
+Priority is bounded to -7..500000 and existing values are inherited. Ties sort by
+canonical path/identity, without per-session randomness. Drag uses the entire
+immediate sibling-scope revision (including hidden/off-page siblings), updates
+only the minimal required collision window, and commits priority plus audit in
+one transaction. A stale scope is rejected and refreshed.

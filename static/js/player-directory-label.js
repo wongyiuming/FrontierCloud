@@ -20,7 +20,7 @@
             try {
                 const url = new URL(raw, window.location.href);
                 return url.origin === window.location.origin
-                    && url.pathname === '/api/v1/media/stream';
+                    && (url.pathname === '/api/v1/media/stream' || url.pathname.startsWith('/__fc_media/'));
             } catch (_error) {
                 return false;
             }
@@ -61,13 +61,17 @@
             if (!generationIsCurrent(generation) || signal?.aborted) throw stalePlaybackError();
             const delay = retryDelay(attempt);
             await new Promise((resolve, reject) => {
-                const timer = window.setTimeout(resolve, delay);
-                if (!signal) return;
+                const finish = () => {
+                    signal?.removeEventListener('abort', abort);
+                    resolve();
+                };
                 const abort = () => {
                     window.clearTimeout(timer);
+                    signal?.removeEventListener('abort', abort);
                     reject(signal.reason || stalePlaybackError());
                 };
-                signal.addEventListener('abort', abort, {once: true});
+                const timer = window.setTimeout(finish, delay);
+                signal?.addEventListener('abort', abort, {once: true});
             });
             if (!generationIsCurrent(generation) || signal?.aborted) throw stalePlaybackError();
         }
@@ -83,27 +87,55 @@
             };
         }
 
-        function requestedRangeOffset(init) {
-            const raw = String(new Headers(init?.headers || {}).get('Range') || '');
-            const match = /^bytes=(\d+)-$/i.exec(raw);
-            return match ? Number(match[1]) : 0;
+        function requestHeaders(input, init) {
+            return new Headers(init?.headers !== undefined ? init.headers : input?.headers || {});
         }
 
-        async function requestUntilReadable(input, init, offset, generation) {
+        function requestedRangeOffset(input, init) {
+            if (String(init?.method || input?.method || 'GET').toUpperCase() !== 'GET') return null;
+            const headers = requestHeaders(input, init);
+            if (!headers.has('Range')) return 0;
+            const raw = String(headers.get('Range'));
+            const match = /^bytes=(\d+)-$/i.exec(raw);
+            const offset = match ? Number(match[1]) : NaN;
+            return Number.isSafeInteger(offset) && offset >= 0 ? offset : null;
+        }
+
+        async function requestUntilReadable(input, init, offset, generation, identity = null) {
             let attempt = 0;
             while (generationIsCurrent(generation) && !init?.signal?.aborted) {
+                const cryptoFailure = window.FrontierMediaCrypto?.failureFor(input);
+                if (cryptoFailure) throw new Error(cryptoFailure);
                 let response = null;
                 try {
                     const headers = new Headers(init?.headers || {});
                     if (offset > 0) headers.set('Range', `bytes=${offset}-`);
+                    if (offset > 0 && identity?.etag) headers.set('If-Range', identity.etag);
                     response = await nativeFetch(input, {...init, headers});
                     if (response.ok && response.body) {
                         if (offset === 0) return response;
                         const range = contentRange(response.headers);
-                        if (response.status === 206 && range?.start === offset) return response;
+                        const sameTotal = !identity?.total || range?.total === identity.total;
+                        const etag = response.headers.get('ETag');
+                        const sameObject = !identity?.etag || etag === identity.etag;
+                        if (response.status === 206 && range?.start === offset && sameTotal && sameObject) return response;
                     }
                 } catch (_error) {
                     // Network failures are transient for continuous-audio prefetch.
+                }
+                if (response?.status === 416) {
+                    try { await response.body?.cancel(); } catch (_) {}
+                    throw new Error('媒体请求范围无效，请重新选择文件');
+                }
+                if (response?.status === 429) {
+                    try { await response.body?.cancel(); } catch (_) {}
+                    throw new Error('媒体授权请求已达到限额，请稍后重新选择文件');
+                }
+                // Permission, stale-object and authenticated-decryption failures
+                // must hold the current song for diagnosis, not loop forever.
+                if ([401, 403, 404, 409, 422].includes(response?.status)) {
+                    try { await response.body?.cancel(); } catch (_) {}
+                    throw new Error('媒体授权或完整性校验失败，请重新选择文件');
                 }
                 try {
                     await response?.body?.cancel?.();
@@ -119,13 +151,31 @@
 
         async function resilientMediaFetch(input, init = {}) {
             if (!mediaStreamRequest(input, init)) return nativeFetch(input, init);
+            // Only full and open-ended GET streams have a resumable byte offset.
+            // Other Range forms must retain their native response bounds and headers.
+            const initialOffset = requestedRangeOffset(input, init);
+            if (initialOffset === null) return nativeFetch(input, init);
 
             const generation = currentPlaybackGeneration();
-            const initialOffset = requestedRangeOffset(init);
-            const first = await requestUntilReadable(input, init, initialOffset, generation);
+            const controller = new AbortController();
+            const callerSignal = init.signal !== undefined ? init.signal : input?.signal;
+            const abort = () => controller.abort(callerSignal?.reason);
+            if (callerSignal?.aborted) abort();
+            else callerSignal?.addEventListener('abort', abort, {once: true});
+            init = {...init, headers: requestHeaders(input, init), signal: controller.signal};
+            const release = () => callerSignal?.removeEventListener('abort', abort);
+            let first;
+            try {
+                first = await requestUntilReadable(input, init, initialOffset, generation);
+            } catch (error) {
+                release();
+                throw error;
+            }
             const exposedHeaders = new Headers(first.headers);
             const initialRange = contentRange(first.headers);
             let totalBytes = initialRange?.total || Number(first.headers.get('Content-Length') || 0);
+            const etag = first.headers.get('ETag');
+            const identity = {total: totalBytes, etag: etag && !etag.startsWith('W/') ? etag : null};
             if (totalBytes > 0) exposedHeaders.set('Content-Length', String(Math.max(0, totalBytes - initialOffset)));
 
             let reader = first.body.getReader();
@@ -137,6 +187,7 @@
                     while (!closed) {
                         if (!generationIsCurrent(generation) || init?.signal?.aborted) {
                             closed = true;
+                            release();
                             controller.error(stalePlaybackError());
                             return;
                         }
@@ -150,18 +201,34 @@
                             }
                             if (!totalBytes || offset >= totalBytes) {
                                 closed = true;
+                                release();
                                 controller.close();
                                 return;
                             }
                         } catch (_error) {
+                            const cryptoFailure = window.FrontierMediaCrypto?.failureFor(input);
+                            if (cryptoFailure) {
+                                closed = true;
+                                release();
+                                controller.error(new Error(cryptoFailure));
+                                return;
+                            }
                             if (!generationIsCurrent(generation) || init?.signal?.aborted) {
                                 closed = true;
+                                release();
                                 controller.error(stalePlaybackError());
                                 return;
                             }
                         }
 
-                        const resumed = await requestUntilReadable(input, init, offset, generation);
+                        try { await reader.cancel(); } catch (_error) { /* response already failed */ }
+                        reader.releaseLock?.();
+                        await waitForRetry(0, generation, init.signal);
+                        const resumed = await requestUntilReadable(input, init, offset, generation, identity);
+                        if (closed || init.signal.aborted) {
+                            await resumed.body.cancel();
+                            return;
+                        }
                         const range = contentRange(resumed.headers);
                         if (range?.total > 0) totalBytes = range.total;
                         reader = resumed.body.getReader();
@@ -170,6 +237,8 @@
                 },
                 async cancel(reason) {
                     closed = true;
+                    controller.abort(stalePlaybackError());
+                    release();
                     try {
                         await reader.cancel(reason);
                     } catch (_error) {

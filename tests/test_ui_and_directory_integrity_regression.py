@@ -69,12 +69,10 @@ class LyricDirectoryCountRegressionTests(unittest.TestCase):
 
 
 class FrontendIntegrityContractTests(unittest.TestCase):
-    def test_release_ui_uses_semantic_version_state(self):
-        source = (ROOT / "static/js/release-version-ui.js").read_text(encoding="utf-8")
+    def test_software_update_controls_are_absent(self):
         page = (ROOT / "app/api/v1/admin_page_integrity.py").read_text(encoding="utf-8")
-        self.assertIn("已与 main HEAD 一致", source)
-        self.assertIn("→ 待发布", source)
-        self.assertIn('static_asset_url("js/release-version-ui.js")', page)
+        self.assertNotIn("release-version-ui.js", page)
+        self.assertFalse((ROOT / "static/js/release-version-ui.js").exists())
 
     def test_lyric_directory_counts_are_visible_on_both_sides(self):
         source = (ROOT / "static/js/lyrics-directory-counts.js").read_text(encoding="utf-8")

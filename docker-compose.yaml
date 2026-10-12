@@ -27,36 +27,75 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
     volumes:
-      - ./data:/app/data:z
+      - ${DATA_DIRECTORY:-./data}:/app/data:z
     logging: *service_logging
 
-  updater:
-    build: {context: ., dockerfile: updater/Dockerfile}
-    image: frontiercloud-updater
-    restart: always
-    user: "0:0"
-    command: ["python", "/workspace/updater/server.py"]
+  certificate-init:
+    <<: *app-image
+    user: "0:10001"
+    command: ["python", "-m", "app.services.certmanager.agent", "initialize"]
+    restart: "no"
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
     volumes:
-      - .:/workspace
-      - /var/run/docker.sock:/var/run/docker.sock
-      - updater_control:/run/frontiercloud-updater
-      - maintenance_state:/run/frontiercloud-maintenance
-    tmpfs:
-      - /tmp:size=64m,mode=1777
+      - certificate_state:/var/lib/frontiercloud-certificate
+      - certificate_runtime:/run/frontiercloud-certificate
+      - certificate_published:/run/frontiercloud-tls
+    logging: *service_logging
+
+  certificate-agent:
+    <<: *app-image
+    user: "0:10001"
+    command: ["python", "-m", "app.services.certmanager.agent"]
+    environment:
+      TLS_ENABLED: ${TLS_ENABLED:-false}
+      SERVER_NAME: ${SERVER_NAME:-localhost}
+      PYTHONDONTWRITEBYTECODE: "1"
+      HTTP_PORT: ${HTTP_PORT:-}
+      HTTPS_PORT: ${HTTPS_PORT:-}
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cpus: "0.10"
+    mem_limit: 128m
+    pids_limit: 32
+    depends_on:
+      certificate-init: {condition: service_completed_successfully}
+    expose: ["8001"]
+    volumes:
+      - certificate_state:/var/lib/frontiercloud-certificate
+      - certificate_runtime:/run/frontiercloud-certificate
+      - certificate_published:/run/frontiercloud-tls
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.services.certmanager.probe"]
+      interval: 30s
+      start_interval: 2s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 10s
     logging: *service_logging
 
   web:
     <<: *app-image
     container_name: office_automation_web
     restart: always
+    cpus: "1.0"
     env_file:
       - path: .env
         required: false
     environment:
       TLS_ENABLED: ${TLS_ENABLED:-false}
+      SERVER_NAME: ${SERVER_NAME:-localhost}
+      DB_TYPE: ${DB_TYPE:-sqlite}
+      SQLITE_PATH: ${SQLITE_PATH:-/app/data/frontiercloud.db}
       PYTHONDONTWRITEBYTECODE: "1"
     read_only: true
     security_opt: [no-new-privileges:true]
@@ -66,12 +105,11 @@ services:
       secrets-init: {condition: service_completed_successfully}
       media-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
-      mysql: {condition: service_healthy}
     volumes:
-      - ./data:/app/data:z
+      - ${DATA_DIRECTORY:-./data}:/app/data:z
       - web_tmp:/tmp
       - runtime_secrets:/run/frontiercloud-secrets
-      - updater_control:/run/frontiercloud-updater:ro
+      - certificate_runtime:/run/frontiercloud-certificate:ro
     healthcheck:
       test: ["CMD", "python", "-m", "app.services.health_probe"]
       interval: 30s
@@ -96,6 +134,7 @@ services:
     logging: *service_logging
 
   mysql:
+    profiles: [mysql]
     image: mysql:8.4.11
     container_name: office_automation_mysql
     restart: always
@@ -130,23 +169,30 @@ services:
       PUBLIC_BIND_ADDRESS: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}
       UPLOAD_INACTIVITY_TIMEOUT: ${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}
       NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
+      HTTP_PORT: ${HTTP_PORT:-}
+      HTTPS_PORT: ${HTTPS_PORT:-}
     ports:
       - target: 80
-        published: "${HTTP_PORT:-80}"
+        published: "80"
         protocol: tcp
         host_ip: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}
       - target: 443
-        published: "${HTTPS_PORT:-443}"
+        published: "443"
         protocol: tcp
         host_ip: ${PUBLIC_BIND_ADDRESS:-0.0.0.0}
     volumes:
-      - ./data:/app/data:ro,z
-      - ${SSL_CERT_PATH:-./certs/fullchain.pem}:/etc/nginx/certs/fullchain.pem:ro
-      - ${SSL_KEY_PATH:-./certs/privkey.pem}:/etc/nginx/certs/privkey.pem:ro
-      - ${ACME_WEBROOT:-./certs/acme}:/var/www/certbot:ro
-      - maintenance_state:/run/frontiercloud-maintenance:ro
+      - ${DATA_DIRECTORY:-./data}:/app/data:ro,z
+      - certificate_published:/run/frontiercloud-tls:ro
     depends_on:
       web: {condition: service_healthy}
+      certificate-agent: {condition: service_started}
+    healthcheck:
+      test: ["CMD", "python3", "/usr/local/lib/frontiercloud/tls_edge.py", "ready"]
+      interval: 30s
+      start_interval: 2s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
     stop_grace_period: 3s
     logging: *service_logging
 
@@ -184,5 +230,6 @@ volumes:
   redis_data:
   mysql_data:
   mysql_socket:
-  updater_control:
-  maintenance_state:
+  certificate_state:
+  certificate_runtime:
+  certificate_published:

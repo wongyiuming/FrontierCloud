@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 from urllib.parse import quote
 
 from pydantic import Field, field_validator, model_validator
@@ -9,6 +10,8 @@ MYSQL_PASSWORD_FILE = SECRET_DIR / "mysql_password"
 MYSQL_ROOT_PASSWORD_FILE = SECRET_DIR / "mysql_root_password"
 ADMIN_KEY_FILE = SECRET_DIR / "admin_key"
 METRICS_TOKEN_FILE = SECRET_DIR / "metrics_token"
+DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
+SQLITE_EXCLUDED_ROOTS = frozenset({"media", "recordings", "tmp", ".tmp"})
 
 
 def _read_secret(path: Path, fallback: str) -> str:
@@ -20,6 +23,12 @@ def _read_secret(path: Path, fallback: str) -> str:
 
 
 class Settings(BaseSettings):
+    DB_TYPE: str = Field("sqlite", validation_alias="DB_TYPE")
+    SQLITE_PATH: str = Field(str(DATA_ROOT / "frontiercloud.db"), validation_alias="SQLITE_PATH")
+    DEPLOYMENT_MODE: str = Field("", validation_alias="DEPLOYMENT_MODE")
+    STORAGE_TRANSPORT: str = Field("direct", validation_alias="STORAGE_TRANSPORT")
+    STORAGE_PORT: int = Field(443, ge=1, le=65535, validation_alias="STORAGE_PORT")
+    STORAGE_ENDPOINT: str = Field("", validation_alias="STORAGE_ENDPOINT")
     TLS_ENABLED: bool = Field(False, validation_alias="TLS_ENABLED")
     REDIS_URL: str = Field("redis://redis:6379/0", validation_alias="REDIS_URL")
     MYSQL_DATABASE: str = Field("office_automation", validation_alias="MYSQL_DATABASE")
@@ -42,7 +51,6 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field("INFO", validation_alias="LOG_LEVEL")
     LOG_FORMAT: str = Field("json", validation_alias="LOG_FORMAT")
     INSTANCE_NAME: str = Field("frontiercloud", validation_alias="INSTANCE_NAME")
-    GITHUB_API_TOKEN: str = Field("", validation_alias="GITHUB_API_TOKEN", repr=False)
     PUBLIC_BIND_ADDRESS: str = Field("0.0.0.0", validation_alias="PUBLIC_BIND_ADDRESS")
     TRUSTED_PROXY_NETWORKS: str = Field("172.16.0.0/12", validation_alias="TRUSTED_PROXY_NETWORKS")
     SECURITY_EXEMPT_NETWORKS: str = Field("127.0.0.0/8,::1/128", validation_alias="SECURITY_EXEMPT_NETWORKS")
@@ -51,8 +59,17 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore")
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_retired_settings(cls, values):
+        from app.services.certmanager.contract import validate_environment
+        validate_environment(dict(os.environ) | (values if isinstance(values, dict) else {}))
+        return values
+
     @model_validator(mode="after")
     def validate_settings(self):
+        from app.services.certmanager.contract import validate_settings
+        validate_settings(self, {})
         errors: list[str] = []
         if self.TLS_ENABLED and self.SERVER_NAME.strip().lower() in {"", "localhost"}:
             errors.append("SERVER_NAME must be set to the public hostname when TLS_ENABLED=true")
@@ -69,6 +86,42 @@ class Settings(BaseSettings):
         if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
         return normalized
+
+    @field_validator("DB_TYPE")
+    @classmethod
+    def validate_db_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"sqlite", "mysql"}:
+            raise ValueError("DB_TYPE must be sqlite or mysql")
+        return normalized
+
+    @field_validator("SERVER_NAME")
+    @classmethod
+    def normalize_server_name(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("SQLITE_PATH")
+    @classmethod
+    def validate_sqlite_path(cls, value: str) -> str:
+        value = value.strip()
+        path = Path(value)
+        if not value or value == ":memory:" or not path.is_absolute() or ".." in path.parts:
+            raise ValueError("SQLITE_PATH must be an absolute persistent file path")
+        try:
+            relative = path.relative_to(DATA_ROOT)
+        except ValueError:
+            raise ValueError("SQLITE_PATH must reside within the persistent data directory") from None
+        if not relative.parts or relative.parts[0] in SQLITE_EXCLUDED_ROOTS:
+            raise ValueError("SQLITE_PATH cannot use media, recordings or temporary directories")
+        current = DATA_ROOT
+        for component in (None, *relative.parts):
+            if component is not None:
+                current /= component
+            if current.is_symlink():
+                raise ValueError("SQLITE_PATH cannot traverse symbolic links")
+        if path.exists() and (not path.is_file() or path.stat().st_nlink != 1):
+            raise ValueError("SQLITE_PATH must be a regular persistent database file")
+        return str(path)
 
     @field_validator("LOG_FORMAT")
     @classmethod
@@ -96,6 +149,14 @@ class Settings(BaseSettings):
         password = quote(_read_secret(MYSQL_PASSWORD_FILE, "uninitialized"), safe="")
         database = quote(self.MYSQL_DATABASE, safe="")
         return f"mysql+asyncmy://{user}:{password}@mysql:3306/{database}"
+
+    @property
+    def DATABASE_URL(self):
+        if self.DB_TYPE == "mysql":
+            return self.MYSQL_URL
+        # SQLAlchemy URL handles escaping; do not concatenate user filenames into URLs.
+        from sqlalchemy.engine import URL
+        return URL.create("sqlite+aiosqlite", database=self.SQLITE_PATH)
 
     @property
     def ADMIN_COOKIE_NAME(self) -> str:

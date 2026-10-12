@@ -10,9 +10,13 @@ const elements = Object.fromEntries([
 ].map(id => [id, document.getElementById(id)]));
 
 const state = {
+  ready: false,
   phase: 'idle',
   context: null,
   lyrics: [],
+  sourceLyrics: [],
+  sourceLyricsEncrypted: false,
+  recordingSnapshot: null,
   activeLyric: -2,
   audioContext: null,
   graph: null,
@@ -160,6 +164,7 @@ function clearPreview() {
   if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
   state.previewUrl = null;
   state.recordedBlob = null;
+  state.recordingSnapshot = null;
   elements.previewCard.hidden = true;
 }
 
@@ -179,10 +184,22 @@ function resetFailedStart(message) {
   setStatus(`无法开始录音：${message}`, true);
 }
 
-async function addRecordingMetadata(blob) {
+function recordingTitle(value) {
+  // Match the server's Unicode TrimSpace before signing/storing one footer.
+  return String(value || '').replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '') || '卡拉OK录音';
+}
+
+async function addRecordingMetadata(blob, snapshot = state.recordingSnapshot, encryptedLyrics = null) {
+  // Guests retain encrypted-source lyrics only in page memory. Saving an
+  // opaque footer requires an authenticated preparation and browser encryption.
+  const encrypted = snapshot?.encrypted ?? state.sourceLyricsEncrypted;
+  if (encrypted && !encryptedLyrics) return blob;
   const encoded = new TextEncoder().encode(JSON.stringify({
-    version: 1, title: state.context?.title || '卡拉OK录音', lyrics: state.lyrics,
+    version: 1, title: recordingTitle(snapshot?.title || state.context?.title),
+    lyrics: encrypted ? [] : snapshot?.lyrics || state.lyrics,
+    ...(encryptedLyrics ? {encrypted_lyrics: encryptedLyrics} : {}),
   }));
+  if (encoded.byteLength > 2 * 1024 * 1024) throw new Error('录音元数据超过 2 MiB 限制');
   const length = new Uint8Array(8);
   new DataView(length.buffer).setBigUint64(0, BigInt(encoded.byteLength));
   return new Blob([blob, encoded, length, new TextEncoder().encode('FRONTIERCLOUD-KARAOKE-V1')], {type: blob.type});
@@ -206,17 +223,28 @@ async function finishRecording() {
   state.recorder = null;
   stopMicrophone();
   elements.upload.disabled = !state.account;
+  elements.previewHint.textContent = state.recordingSnapshot?.encrypted
+    ? '加密来源歌词当前仅在本页面内存中；登录上传后会以加密快照保存。' : '';
   setStatus(state.account ? '录音已停止，可试听或上传到个人空间。' : '录音已停止；登录后可上传，当前可试听。');
   void applyOutputDevice();
 }
 
 async function startRecording() {
+  if (!state.ready) return;
   if (state.phase === 'initializing' || state.phase === 'recording') return;
   state.phase = 'initializing';
   elements.record.disabled = true;
   elements.stop.disabled = true;
   elements.aec.disabled = true;
   clearPreview();
+  state.lyrics = state.sourceLyrics;
+  state.activeLyric = -2;
+  state.recordingSnapshot = {
+    encrypted: state.sourceLyricsEncrypted,
+    lyrics: state.sourceLyrics.map(entry => ({time: entry.time, text: entry.text})),
+    title: recordingTitle(state.context?.title),
+    media: new URLSearchParams(location.search).get('media'),
+  };
   setStatus('正在初始化麦克风和纯人声录音支路…');
   try {
     // Create and retain the media binding synchronously inside the trusted click.
@@ -380,13 +408,24 @@ async function initialize() {
   state.context = await response.json();
   elements.title.textContent = state.context.title;
   elements.kind.textContent = state.context.type === 'video' ? '视频' : '音乐';
+  if (state.context.encryption || state.context.encrypted) {
+    if (!window.FrontierMediaCrypto) throw new Error('浏览器解密组件未加载');
+    await window.FrontierMediaCrypto.ensureWorker();
+    state.context.stream_url = window.FrontierMediaCrypto.virtualUrl(state.context.file_path, false, state.context.encryption?.file_id);
+  }
   elements.media.src = state.context.stream_url;
   if (state.context.type === 'audio') elements.media.style.display = 'none';
   if (state.context.has_lyrics && state.context.lyrics_url) {
     const lyricResponse = await fetch(state.context.lyrics_url, {cache: 'no-store'});
     if (!lyricResponse.ok) throw new Error(`无法读取歌词（HTTP ${lyricResponse.status}）`);
     const payload = await lyricResponse.json();
+    if (payload.encrypted) {
+      state.sourceLyricsEncrypted = true;
+      const text = await window.FrontierMediaCrypto.textFor(payload.lyric_path || payload.file_path, payload.encryption?.file_id);
+      payload.entries = window.FrontierMediaCrypto.parseLyrics(text);
+    }
     state.lyrics = Array.isArray(payload.entries) ? payload.entries : [];
+    state.sourceLyrics = state.lyrics;
   } else {
     elements.fullLyrics.disabled = true;
   }
@@ -530,7 +569,10 @@ async function loadRecordings() {
     const actions = document.createElement('div'); actions.className = 'recording-actions';
     actions.append(
       recordingButton('试听', async () => {
-        state.lyrics = Array.isArray(item.lyrics) ? item.lyrics : [];
+        state.lyrics = item.encrypted_lyrics
+          ? await window.FrontierMediaCrypto.decryptRecordingLyrics(fields => accountApi(`/recordings/${item.recording_id}/lyrics-key`, {
+            method: 'POST', headers: karaokeHeaders(), body: JSON.stringify(fields),
+          })) : Array.isArray(item.lyrics) ? item.lyrics : [];
         state.activeLyric = -2;
         elements.preview.src = `/api/v1/karaoke/account/recordings/${item.recording_id}/stream`;
         elements.previewCard.hidden = false; elements.previewHint.textContent = item.filename;
@@ -553,9 +595,30 @@ async function loadRecordings() {
 
 async function uploadBlob(blob, title, media = null) {
   if (!state.account) throw new Error('请先登录 卡拉OK账号');
+  let lyricSnapshot;
+  let encryptedSnapshot;
+  if (media && state.sourceLyricsEncrypted) {
+    const snapshot = state.recordingSnapshot;
+    if (!snapshot?.encrypted || snapshot.media !== media)
+      throw new Error('加密来源录音歌词快照缺失，请重新录音');
+    encryptedSnapshot = await window.FrontierMediaCrypto.encryptRecordingLyrics(snapshot.lyrics,
+      fields => accountApi('/recordings/crypto/prepare', {method: 'POST', headers: karaokeHeaders(),
+        body: JSON.stringify({media, ...fields})}));
+    blob = await addRecordingMetadata(blob, snapshot, encryptedSnapshot.encrypted_lyrics);
+    title = recordingTitle(snapshot.title);
+  } else if (media) {
+    lyricSnapshot = state.recordingSnapshot?.lyrics || state.lyrics;
+    if (!Array.isArray(lyricSnapshot) || lyricSnapshot.length > 10000
+      || lyricSnapshot.some(entry => !Number.isFinite(entry?.time) || entry.time < 0
+        || typeof entry.text !== 'string' || new TextEncoder().encode(entry.text).byteLength > 4096)
+      || new TextEncoder().encode(JSON.stringify(lyricSnapshot)).byteLength > 2 * 1024 * 1024) {
+      throw new Error('录音歌词快照超过 10,000 行或 2 MiB 限制');
+    }
+  }
   setStatus('正在预留个人空间…');
   const ticket = await accountApi('/recordings/ticket', {method: 'POST', headers: karaokeHeaders(), body: JSON.stringify({
     size_bytes: blob.size, content_type: blob.type || 'application/octet-stream', media, title,
+    ...(encryptedSnapshot ? {...encryptedSnapshot, lyrics: []} : media ? {lyrics: lyricSnapshot} : {}),
   })});
   const headers = {'Content-Type': blob.type || 'application/octet-stream'};
   if (ticket.direct) headers['X-Recording-Capability'] = ticket.capability;
@@ -631,7 +694,10 @@ window.addEventListener('pagehide', () => {
 });
 
 requestAnimationFrame(lyricClock);
-Promise.all([initialize(), refreshAccount()]).catch(error => {
+Promise.all([initialize(), refreshAccount()]).then(() => {
+  state.ready = true;
+  elements.record.disabled = false;
+}).catch(error => {
   setStatus(`卡拉OK页面初始化失败：${errorText(error)}`, true);
   elements.record.disabled = true;
 });

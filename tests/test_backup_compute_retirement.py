@@ -49,7 +49,7 @@ class BackupProxyContractTests(unittest.TestCase):
 
     def test_interrupted_generations_have_authenticated_abort_cleanup(self):
         control = (ROOT / "app/api/internal_backup_control.py").read_text(encoding="utf-8")
-        registry = (ROOT / "app/api/internal_cluster_update.py").read_text(encoding="utf-8")
+        registry = (ROOT / "app/api/internal_control.py").read_text(encoding="utf-8")
         runtime = (ROOT / "app/services/federation/runtime.py").read_text(encoding="utf-8")
 
         self.assertIn('router = APIRouter(prefix="/internal/v1/backup"', control)
@@ -89,7 +89,7 @@ class ComputeRetirementContractTests(unittest.TestCase):
 
     def test_retirement_filter_is_installed_before_internal_router_registration(self):
         retirement = (ROOT / "app/api/internal_worker_retirement.py").read_text(encoding="utf-8")
-        registry = (ROOT / "app/api/internal_cluster_update.py").read_text(encoding="utf-8")
+        registry = (ROOT / "app/api/internal_control.py").read_text(encoding="utf-8")
 
         self.assertIn('RETIRED_WORKER_PREFIX = "/internal/v1/jobs/"', retirement)
         self.assertIn("internal_nodes.router.routes[:]", retirement)

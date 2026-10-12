@@ -11,6 +11,8 @@ import json
 import os
 import ssl
 import time
+import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,7 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from zipstream import ZIP_STORED, ZipStream
 
 from app.api.v1 import admin as legacy_admin
-from app.services import admin_service, resource_pool
+from app.services import admin_service, resource_pool, media_crypto
 from app.services.federation import protocol as p
 from app.services.federation import schema as s
 from app.services.federation.catalog import catalog as node_catalog
@@ -36,6 +38,7 @@ from app.services.media_manager import MEDIA_ROOT, MediaManager, SIGNATURES
 
 
 router = APIRouter()
+logger = logging.getLogger("frontiercloud.admin.upload")
 require_session = legacy_admin.require_session
 _mutation_audit = legacy_admin._mutation_audit
 
@@ -46,6 +49,10 @@ class ClusterUploadReservation(BaseModel):
     relative_path: str | None = Field(None, max_length=1024)
     filename: str = Field(min_length=1, max_length=255)
     size_bytes: int = Field(gt=0, le=10 * 1024 ** 3)
+    storage_mode: str = Field(pattern="^(encrypted|plain)$")
+    encryption: dict | None = None
+    preparation_token: str = Field("", max_length=4096)
+
 
 
 async def _category_layout_conflict(category: str, depth: int) -> bool:
@@ -101,7 +108,7 @@ async def _upload_logical_path(payload: ClusterUploadReservation) -> str:
     return logical
 
 
-async def _reserve_upload(path: str, size: int, preferred: str | None) -> dict:
+async def _reserve_upload(path: str, size: int, preferred: str | None, encryption=None) -> dict:
     """Reserve without discarding expired rows whose physical state is unknown."""
     path, kind = resource_pool.validate_media_path(path)
     member = await resource_pool.choose_member(size, preferred, node_state.database)
@@ -133,9 +140,12 @@ async def _reserve_upload(path: str, size: int, preferred: str | None) -> dict:
             await conn.execute(insert(s.upload_sessions).values(
                 upload_id=upload_id, storage_member_id=member["member_id"], media_id=media_id,
                 media_path=path, path_locator=locator, object_kind=kind, expected_bytes=size,
+                content_encrypted=int(encryption is not None),
                 state="reserved", expires_at=now + resource_pool.UPLOAD_TTL_SECONDS,
                 created_at=now, updated_at=now,
             ))
+            from app.services import media_crypto
+            await media_crypto.put_encryption(conn, media_id, encryption)
     except IntegrityError as exc:
         raise p.ProtocolError("全局媒体路径已存在或已有上传正在进行") from exc
     return {"upload_id": upload_id, "media_id": media_id, "path": path,
@@ -159,8 +169,11 @@ async def _member_relation(member_id: str):
     return member, relation
 
 
-async def _cleanup_upload_session(upload_id: str, *, allow_unindexed_local: bool = False) -> bool:
+async def _cleanup_upload_session_unlocked(upload_id: str, *, allow_unindexed_local: bool = False, expired_only: bool = False) -> bool:
     """Release a reservation only after its possible physical object is gone."""
+    from app.services import media_publication_recovery as publication
+    if publication.pending(MEDIA_ROOT):
+        return False
     try:
         row = await resource_pool.upload_session(upload_id, node_state.database)
     except p.ProtocolError:
@@ -169,17 +182,51 @@ async def _cleanup_upload_session(upload_id: str, *, allow_unindexed_local: bool
         return True
     if row["state"] != "reserved":
         return False
+    if expired_only and not resource_pool.upload_expired(row):
+        return False
 
     if row["member_kind"] == "MasterLocal":
-        target = (MEDIA_ROOT / row["media_path"]).resolve()
+        target = MEDIA_ROOT
+        for part in row["media_path"].split("/"):
+            target = target / part
+            if target.is_symlink():
+                return False
+        target = target.resolve()
         if MEDIA_ROOT not in target.parents:
             return False
         exists = target.is_file()
         indexed = await _local_object_exists(row) if exists else False
         if exists and not (indexed or allow_unindexed_local):
             return False
+        locator = resource_pool.path_locator(row["media_path"])
+        async with node_state.database.connect() as conn:
+            owned = await conn.scalar(select(s.global_media.c.media_id).where(s.global_media.c.path_locator == locator))
+            indexed_owner = await conn.scalar(text("SELECT media_id FROM media_objects WHERE path_locator=:locator"), {"locator": locator})
+        if owned or indexed_owner and indexed_owner != row["media_id"]:
+            return False
+        if expired_only and exists and target.stat().st_size == int(row["expected_bytes"]):
+            encrypted = await _encrypted_upload(row["media_id"])
+            if bool(row.get("content_encrypted", 0)) != encrypted:
+                return False
+            with target.open("rb") as source:
+                head = source.read(4096)
+            if encrypted or SIGNATURES.get(target.suffix.lower(), lambda _data: False)(head):
+                from app.services.upload_claims import digest_file
+                proof = await digest_file(target)
+                with target.open('rb') as source:
+                    os.fsync(source.fileno())
+                publication.sync_hierarchy(MEDIA_ROOT, target.parent)
+                await resource_pool.finalize_upload(upload_id, object_id=row["media_id"],
+                    actual_size=proof["size_bytes"], etag=proof["etag"], database=node_state.database,
+                    allow_expired=True, register_local=True)
+                await _invalidate_after_upload()
+                return True
+        temporary = MEDIA_ROOT / f".cluster-upload-{upload_id}.part"
+        if temporary.is_symlink():
+            return False
         if exists:
             target.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
         async with node_state.database.begin() as conn:
             await conn.execute(text("DELETE FROM media_objects WHERE media_id=:id"), {"id": row["media_id"]})
         await resource_pool.fail_upload(upload_id, node_state.database)
@@ -189,48 +236,62 @@ async def _cleanup_upload_session(upload_id: str, *, allow_unindexed_local: bool
     if not member or not relation or relation.get("state") != "active" or relation.get("status") == "offline":
         return False
     try:
-        await node_runtime.call(
+        result = await node_runtime.call(
             relation,
-            f"/internal/v1/storage/{row['media_id']}/stat",
-            {"path": row["media_path"]},
+            f"/internal/v1/storage/{row['media_id']}/reconcile",
+            {"path": row["media_path"], "expected_bytes": int(row["expected_bytes"]),
+             "expired_only": expired_only, "encrypted": await _encrypted_upload(row["media_id"])},
         )
-    except p.ProtocolError as exc:
-        if "HTTP 404" not in str(exc):
+    except (p.ProtocolError, httpx.HTTPError):
+        return False
+    if expired_only and result.get("state") == "complete" and result.get("object_id") == row["media_id"]:
+        if result.get("size_bytes") != int(row["expected_bytes"]) or not isinstance(result.get("etag"), str):
             return False
-        await resource_pool.fail_upload(upload_id, node_state.database)
+        await resource_pool.finalize_upload(upload_id, object_id=row["media_id"], actual_size=result["size_bytes"],
+            etag=result["etag"], database=node_state.database, allow_expired=True)
+        await _invalidate_after_upload()
         return True
-
-    token = p.storage_token(
-        node_state.unseal(relation["credential"]), relation["relationship_id"],
-        node_state.node["node_id"], row["storage_member_id"], row["media_id"], row["media_id"],
-        "delete", row["media_path"], int(row["expected_bytes"]), int(time.time()),
-    )
-    try:
-        async with httpx.AsyncClient(
-            verify=ssl.create_default_context(), trust_env=False, timeout=httpx.Timeout(20, connect=8),
-        ) as client:
-            response = await client.post(
-                relation["peer_endpoint"] + f"/internal/v1/storage/{row['media_id']}/delete",
-                headers={"X-Storage-Capability": token},
-            )
-        if response.status_code != 200:
-            return False
-    except httpx.HTTPError:
+    if result.get("object_id") != row["media_id"] or result.get("cleared") is not True or result.get("state") != "cleared":
         return False
     await resource_pool.fail_upload(upload_id, node_state.database)
     return True
 
 
-async def _cleanup_expired_uploads(limit: int = 50) -> int:
+async def _cleanup_upload_session(upload_id: str, *, allow_unindexed_local: bool = False, expired_only: bool = False) -> bool:
+    from app.services.upload_claims import claim, UploadBusy
+    try:
+        with claim(upload_id):
+            return await _cleanup_upload_session_unlocked(upload_id, allow_unindexed_local=allow_unindexed_local, expired_only=expired_only)
+    except UploadBusy:
+        return False
+
+
+async def _cleanup_expired_uploads(limit: int = 50, time_budget=2.0) -> int:
+    from app.core.config import settings
     now = int(time.time())
     async with node_state.database.connect() as conn:
         upload_ids = list((await conn.execute(select(s.upload_sessions.c.upload_id).where(
-            s.upload_sessions.c.state == "reserved", s.upload_sessions.c.expires_at <= now,
+            s.upload_sessions.c.state == "reserved",
+            ((s.upload_sessions.c.updated_at <= now - settings.ADMIN_UPLOAD_INACTIVITY_TIMEOUT) | (s.upload_sessions.c.expires_at <= now)),
         ).order_by(s.upload_sessions.c.created_at).limit(limit))).scalars())
     cleaned = 0
-    for upload_id in upload_ids:
-        cleaned += int(await _cleanup_upload_session(str(upload_id)))
+    try:
+        async with asyncio.timeout(time_budget):
+            for upload_id in upload_ids:
+                try:
+                    cleaned += int(await _cleanup_upload_session(str(upload_id), allow_unindexed_local=True, expired_only=True))
+                except Exception as exc:
+                    logger.warning("Upload recovery deferred upload_id=%s error=%s", upload_id, type(exc).__name__)
+    except TimeoutError:
+        pass
     return cleaned
+
+
+async def _invalidate_after_upload():
+    try:
+        await invalidate_media_catalog()
+    except Exception as exc:
+        logger.warning("Upload committed; catalog invalidation deferred error=%s", type(exc).__name__)
 
 
 async def _hidden_paths() -> set[str]:
@@ -331,12 +392,17 @@ async def create_upload_session(payload: ClusterUploadReservation, request: Requ
                                 session_hash: str = Depends(require_session)):
     if node_state.node["role"] != "Master":
         raise HTTPException(409, "Storage Pool uploads require a Master")
-    if payload.size_bytes > legacy_admin.settings.ADMIN_MAX_UPLOAD_FILE_SIZE:
-        raise HTTPException(413, "文件超过单文件上传限制")
-    await _cleanup_expired_uploads()
     path = await _upload_logical_path(payload)
     try:
-        reservation = await _reserve_upload(path, payload.size_bytes, _preferred_member(payload.storage_member_id))
+        from app.services import media_crypto
+        metadata = media_crypto.upload_encryption(payload.storage_mode, payload.encryption, payload.preparation_token, "admin:" + session_hash)
+        if metadata is not None and metadata.ciphertext_size != payload.size_bytes:
+            raise p.ProtocolError("Ciphertext reservation size mismatch")
+        plaintext_size = metadata.plaintext_size if metadata is not None else payload.size_bytes
+        if plaintext_size > legacy_admin.settings.ADMIN_MAX_UPLOAD_FILE_SIZE:
+            raise HTTPException(413, "文件超过单文件上传限制")
+        await _cleanup_expired_uploads()
+        reservation = await _reserve_upload(path, payload.size_bytes, _preferred_member(payload.storage_member_id), metadata)
         member = reservation["member"]
         result = {
             "upload_id": reservation["upload_id"], "media_id": reservation["media_id"],
@@ -348,28 +414,31 @@ async def create_upload_session(payload: ClusterUploadReservation, request: Requ
             token = p.storage_token(
                 node_state.unseal(relation["credential"]), relation["relationship_id"],
                 node_state.node["node_id"], member["member_id"], reservation["media_id"],
-                reservation["media_id"], "upload", path, payload.size_bytes, int(time.time()),
+                reservation["media_id"], "upload", path, payload.size_bytes, int(time.time()), encrypted=metadata is not None,
             )
             result["upload_url"] = relation["peer_endpoint"] + f"/internal/v1/storage/{reservation['media_id']}?token={token}"
         await admin_service.audit(session_hash, "upload-reserved", 1, path, "success",
                                   member["member_id"], request)
         return result
+    except media_crypto.MetadataError as exc:
+        raise HTTPException(400, str(exc)) from exc
     except p.ProtocolError as exc:
         raise HTTPException(409, str(exc)) from exc
 
 
-async def _receive_master_local(upload_id: str, request: Request, row: dict) -> dict:
-    destination = (MEDIA_ROOT / row["media_path"]).resolve()
+async def _receive_master_local(upload_id: str, request: Request, row: dict, *, audit=None) -> dict:
+    from app.services import media_manager, media_publication_recovery as publication
+    destination = media_manager.resolve_safe_path(MEDIA_ROOT, row['media_path'])
     if MEDIA_ROOT not in destination.parents or destination.exists():
         raise HTTPException(409, "目标位置已存在同名文件")
-    destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = (MEDIA_ROOT / f".cluster-upload-{upload_id}.part").resolve()
     written, digest, head, published = 0, hashlib.sha256(), b"", False
     try:
         with temporary.open("xb") as output:
-            async for chunk in request.stream():
-                if not head:
-                    head = chunk[:4096]
+            from app.services.upload_claims import chunks
+            async for chunk in chunks(request):
+                if len(head) < 4096:
+                    head += chunk[:4096 - len(head)]
                 written += len(chunk)
                 if written > int(row["expected_bytes"]):
                     raise HTTPException(413, "上传内容超过预留大小")
@@ -379,121 +448,162 @@ async def _receive_master_local(upload_id: str, request: Request, row: dict) -> 
             os.fsync(output.fileno())
         if written != int(row["expected_bytes"]):
             raise HTTPException(400, "上传内容大小与预留不一致")
-        if not SIGNATURES.get(destination.suffix.lower(), lambda _data: False)(head):
+        from app.services import media_crypto
+        async with node_state.database.connect() as conn:
+            encryption = await media_crypto.encryption_for_id(conn, row["media_id"])
+        if encryption is not None and encryption.ciphertext_size != written:
+            raise p.ProtocolError("Ciphertext size does not match reservation")
+        if encryption is None and not SIGNATURES.get(destination.suffix.lower(), lambda _data: False)(head):
             raise HTTPException(400, "媒体内容与扩展名不匹配")
-        os.replace(temporary, destination)
-        published = True
-        now_epoch = int(time.time())
-        now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
-        etag = f'"{digest.hexdigest()}"'
-        async with node_state.database.begin() as conn:
-            locked = (await conn.execute(select(s.upload_sessions).where(
-                s.upload_sessions.c.upload_id == upload_id).with_for_update()
-            )).mappings().first()
-            if not locked or locked["state"] != "reserved" or locked["expires_at"] <= now_epoch:
-                raise p.ProtocolError("Upload reservation is missing or expired")
-            await conn.execute(text("""
-                INSERT INTO media_objects
-                (media_id, object_kind, media_path, path_locator, created_at, updated_at)
-                VALUES (:media_id, :kind, :path, :locator, :now, :now)
-            """), {"media_id": row["media_id"], "kind": row["object_kind"], "path": row["media_path"],
-                     "locator": resource_pool.path_locator(row["media_path"]), "now": now_dt})
-            await conn.execute(insert(s.global_media).values(
-                media_id=row["media_id"], storage_member_id=row["storage_member_id"],
-                object_id=row["media_id"], media_path=row["media_path"],
-                path_locator=resource_pool.path_locator(row["media_path"]), object_kind=row["object_kind"],
-                size_bytes=written, etag=etag, state="active", created_at=now_epoch, updated_at=now_epoch,
-            ))
-            await conn.execute(update(s.storage_members).where(
-                s.storage_members.c.member_id == row["storage_member_id"]
-            ).values(reserved_bytes=func.greatest(0, s.storage_members.c.reserved_bytes - row["expected_bytes"]),
-                     used_bytes=s.storage_members.c.used_bytes + written, updated_at=now_epoch))
-            await conn.execute(update(s.upload_sessions).where(
-                s.upload_sessions.c.upload_id == upload_id
-            ).values(state="complete", path_locator=None, updated_at=now_epoch))
-        published = False
-        await invalidate_media_catalog()
-        return {"path": row["media_path"], "media_id": row["media_id"]}
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        if published:
-            destination.unlink(missing_ok=True)
-        raise
+        async def publish_and_finalize():
+            nonlocal published
+            async with media_manager.media_mutation_lock:
+                media_manager.ensure_media_mutations_ready()
+                if destination.exists():
+                    raise HTTPException(409, '目标位置已存在同名文件')
+                journal, committed = None, False
+                try:
+                    journal = publication.create(MEDIA_ROOT, row['media_path'], temporary, None,
+                        encryption, size=written, digest=digest.hexdigest(), reservation=row)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    temporary.chmod(0o644)
+                    # A reservation never authorizes overwriting an existing inode.
+                    os.link(temporary, destination)
+                    published = True
+                    publication.sync_hierarchy(MEDIA_ROOT, destination.parent)
+                    await resource_pool.finalize_upload(upload_id, object_id=row['media_id'], actual_size=written,
+                        etag='"' + digest.hexdigest() + '"', database=node_state.database,
+                        allow_expired=True, register_local=True, publication_record=journal, audit=audit)
+                    committed = True
+                    temporary.unlink()
+                    publication.sync_directory(MEDIA_ROOT)
+                    publication.finish(MEDIA_ROOT, journal)
+                except BaseException as exc:
+                    if committed or isinstance(exc, publication.PublicationCommitUnknown):
+                        media_manager._RECOVERY_REQUIRED_ROOTS.add(MEDIA_ROOT)
+                        raise
+                    try:
+                        if published:
+                            destination.unlink()
+                            publication.sync_hierarchy(MEDIA_ROOT, destination.parent)
+                            published = False
+                        if journal is not None:
+                            publication.finish(MEDIA_ROOT, journal)
+                    except BaseException:
+                        media_manager._RECOVERY_REQUIRED_ROOTS.add(MEDIA_ROOT)
+                        raise
+                    raise
+            await _invalidate_after_upload()
+            return {'path': row['media_path'], 'media_id': row['media_id']}
 
+        worker = asyncio.create_task(publish_and_finalize())
+        await media_manager._finish_media_cleanup(worker)
+        return worker.result()
+    finally:
+        temporary.unlink(missing_ok=True)
+        publication.sync_directory(MEDIA_ROOT)
+
+
+
+async def _encrypted_upload(identifier):
+    from app.services import media_crypto
+    async with node_state.database.connect() as conn:
+        return await media_crypto.encryption_for_id(conn, identifier) is not None
 
 @router.put("/upload/session/{upload_id}/bytes")
 async def upload_session_bytes(upload_id: str, request: Request,
                                session_hash: str = Depends(require_session)):
     allow_unindexed_local = False
+    from app.services.upload_claims import claim, UploadBusy
     try:
-        row = await resource_pool.upload_session(upload_id, node_state.database)
-        if row["state"] != "reserved" or row["expires_at"] <= int(time.time()):
-            raise p.ProtocolError("Upload reservation is unavailable")
-        if row["member_kind"] == "MasterLocal":
-            allow_unindexed_local = True
-            result = await _receive_master_local(upload_id, request, row)
-            await admin_service.audit(session_hash, "upload-finalized", 1, row["media_path"], "success",
-                                      row["storage_member_id"], request)
-            return result
-        relation = await node_state.relationship(row["relationship_id"])
-        token = p.storage_token(
-            node_state.unseal(relation["credential"]), relation["relationship_id"],
-            node_state.node["node_id"], row["storage_member_id"], row["media_id"], row["media_id"],
-            "upload", row["media_path"], int(row["expected_bytes"]), int(time.time()),
-        )
-        headers = {"X-Storage-Capability": token, "Content-Type": "application/octet-stream"}
-        async with httpx.AsyncClient(
-            verify=ssl.create_default_context(), trust_env=False, timeout=httpx.Timeout(None, connect=10),
-        ) as client:
-            async with client.stream(
-                "PUT", relation["peer_endpoint"] + f"/internal/v1/storage/{row['media_id']}",
-                headers=headers, content=request.stream(),
-            ) as upstream:
-                payload = await upstream.aread()
-                if upstream.status_code != 200 or len(payload) > p.MAX_CONTROL_BYTES:
-                    raise p.ProtocolError(f"Follower storage upload HTTP {upstream.status_code}")
-                result = json.loads(payload)
-        media = await resource_pool.finalize_upload(
-            upload_id, object_id=result["object_id"], actual_size=int(result["size_bytes"]),
-            etag=str(result["etag"]), database=node_state.database,
-        )
-        await invalidate_media_catalog()
-        await admin_service.audit(session_hash, "upload-finalized", 1, row["media_path"], "success",
-                                  row["storage_member_id"], request)
-        return {"path": media["media_path"], "media_id": media["media_id"]}
-    except Exception as exc:
-        cleaned = await _cleanup_upload_session(upload_id, allow_unindexed_local=allow_unindexed_local)
-        if not cleaned:
-            await admin_service.audit(session_hash, "upload-cleanup-deferred", 1, upload_id, "pending", "", request)
-        if isinstance(exc, HTTPException):
-            raise
-        raise HTTPException(409, str(exc) if isinstance(exc, p.ProtocolError) else "存储上传失败") from exc
+        with claim(upload_id):
+            try:
+                row = await resource_pool.upload_session(upload_id, node_state.database)
+                if row["state"] != "reserved" or row["expires_at"] <= int(time.time()):
+                    raise p.ProtocolError("Upload reservation is unavailable")
+                if row["member_kind"] == "MasterLocal":
+                    audit = _mutation_audit(session_hash, 'upload-finalized', [row['media_path']], request)
+                    result = await _receive_master_local(upload_id, request, row, audit=audit)
+                    return result
+                relation = await node_state.relationship(row["relationship_id"])
+                token = p.storage_token(
+                    node_state.unseal(relation["credential"]), relation["relationship_id"],
+                    node_state.node["node_id"], row["storage_member_id"], row["media_id"], row["media_id"],
+                    "upload", row["media_path"], int(row["expected_bytes"]), int(time.time()), encrypted=await _encrypted_upload(row["media_id"]),
+                )
+                headers = {"X-Storage-Capability": token, "Content-Type": "application/octet-stream"}
+                async with httpx.AsyncClient(
+                    verify=ssl.create_default_context(), trust_env=False, timeout=httpx.Timeout(None, connect=10),
+                ) as client:
+                    async with client.stream(
+                        "PUT", relation["peer_endpoint"] + f"/internal/v1/storage/{row['media_id']}",
+                        headers=headers, content=request.stream(),
+                    ) as upstream:
+                        payload = await upstream.aread()
+                        if upstream.status_code != 200 or len(payload) > p.MAX_CONTROL_BYTES:
+                            raise p.ProtocolError(f"Follower storage upload HTTP {upstream.status_code}")
+                        result = json.loads(payload)
+                media = await resource_pool.finalize_upload(
+                    upload_id, object_id=result["object_id"], actual_size=int(result["size_bytes"]),
+                    etag=str(result["etag"]), database=node_state.database, allow_expired=True,
+                )
+                await _invalidate_after_upload()
+                await admin_service.audit(session_hash, "upload-finalized", 1, row["media_path"], "success",
+                                          row["storage_member_id"], request)
+                return {"path": media["media_path"], "media_id": media["media_id"]}
+            except asyncio.CancelledError:
+                from app.services.media_manager import _finish_media_cleanup
+                cleanup = asyncio.create_task(_cleanup_upload_session_unlocked(
+                    upload_id, allow_unindexed_local=allow_unindexed_local))
+                try:
+                    await _finish_media_cleanup(cleanup)
+                except Exception as cleanup_error:
+                    logger.warning('Cancelled upload cleanup deferred upload_id=%s error=%s',
+                        upload_id, type(cleanup_error).__name__)
+                raise
+            except Exception as exc:
+                cleaned = await _cleanup_upload_session_unlocked(upload_id, allow_unindexed_local=allow_unindexed_local)
+                if not cleaned:
+                    await admin_service.audit(session_hash, "upload-cleanup-deferred", 1, upload_id, "pending", "", request)
+                if isinstance(exc, HTTPException):
+                    raise
+                raise HTTPException(409, str(exc) if isinstance(exc, p.ProtocolError) else "存储上传失败") from exc
+    except UploadBusy as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/upload/session/{upload_id}/finalize")
 async def finalize_direct_upload(upload_id: str, request: Request,
                                  session_hash: str = Depends(require_session)):
+    from app.services.upload_claims import claim, UploadBusy
     try:
-        row = await resource_pool.upload_session(upload_id, node_state.database)
-        if row["transport"] != "Direct" or not row["relationship_id"]:
-            raise p.ProtocolError("Upload session is not Direct")
-        relation = await node_state.relationship(row["relationship_id"])
-        result = await node_runtime.call(
-            relation, f"/internal/v1/storage/{row['media_id']}/stat", {"path": row["media_path"]},
-        )
-        media = await resource_pool.finalize_upload(
-            upload_id, object_id=result["object_id"], actual_size=int(result["size_bytes"]),
-            etag=str(result["etag"]), database=node_state.database,
-        )
-        await invalidate_media_catalog()
-        await admin_service.audit(session_hash, "upload-finalized", 1, row["media_path"], "success",
-                                  row["storage_member_id"], request)
-        return {"path": media["media_path"], "media_id": media["media_id"]}
-    except Exception as exc:
-        cleaned = await _cleanup_upload_session(upload_id)
-        if not cleaned:
-            await admin_service.audit(session_hash, "upload-cleanup-deferred", 1, upload_id, "pending", "", request)
-        raise HTTPException(409, str(exc) if isinstance(exc, p.ProtocolError) else "Direct 上传校验失败") from exc
+        with claim(upload_id):
+            try:
+                row = await resource_pool.upload_session(upload_id, node_state.database)
+                if row["transport"] != "Direct" or not row["relationship_id"]:
+                    raise p.ProtocolError("Upload session is not Direct")
+                relation = await node_state.relationship(row["relationship_id"])
+                result = await node_runtime.call(
+                    relation, f"/internal/v1/storage/{row['media_id']}/stat", {
+                        "path": row["media_path"], "expected_bytes": int(row["expected_bytes"]),
+                        "encrypted": await _encrypted_upload(row["media_id"]),
+                    },
+                )
+                media = await resource_pool.finalize_upload(
+                    upload_id, object_id=result["object_id"], actual_size=int(result["size_bytes"]),
+                    etag=str(result["etag"]), database=node_state.database, allow_expired=True,
+                )
+                await _invalidate_after_upload()
+                await admin_service.audit(session_hash, "upload-finalized", 1, row["media_path"], "success",
+                                          row["storage_member_id"], request)
+                return {"path": media["media_path"], "media_id": media["media_id"]}
+            except Exception as exc:
+                cleaned = await _cleanup_upload_session_unlocked(upload_id)
+                if not cleaned:
+                    await admin_service.audit(session_hash, "upload-cleanup-deferred", 1, upload_id, "pending", "", request)
+                raise HTTPException(409, str(exc) if isinstance(exc, p.ProtocolError) else "Direct 上传校验失败") from exc
+    except UploadBusy as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/upload/item")

@@ -122,6 +122,34 @@ class KaraokeStorageIntegrityTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(target.with_suffix(".part").exists())
             self.assertEqual(database.updates, [1, 2, 3])
 
+    async def test_active_recording_lease_blocks_cleanup_even_when_part_is_old(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(karaoke_storage, "ROOT", Path(directory).resolve()):
+            target = karaoke_storage._path(self.relationship, self.user, self.recording)
+            target.parent.mkdir(parents=True)
+            temporary = target.with_suffix(".part")
+            temporary.write_bytes(b"active writer")
+            with karaoke_storage.recording_lease(self.relationship, self.user, self.recording):
+                with self.assertRaises(HTTPException) as raised:
+                    karaoke_storage.remove(self.relationship, self.user, self.recording)
+                self.assertEqual(raised.exception.status_code, 409)
+                self.assertTrue(temporary.exists())
+            self.assertEqual(karaoke_storage.remove(self.relationship, self.user, self.recording), 0)
+            self.assertFalse(temporary.exists())
+
+    async def test_user_cleanup_acquires_all_leases_before_removing_any_file(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(karaoke_storage, "ROOT", Path(directory).resolve()):
+            first = karaoke_storage._path(self.relationship, self.user, "a" * 32)
+            active = karaoke_storage._path(self.relationship, self.user, "e" * 32)
+            first.parent.mkdir(parents=True)
+            first.write_bytes(b"retained")
+            active.with_suffix(".part").write_bytes(b"active")
+            with karaoke_storage.recording_lease(self.relationship, self.user, "e" * 32):
+                with self.assertRaises(HTTPException):
+                    karaoke_storage.remove_user(self.relationship, self.user)
+                self.assertEqual(first.read_bytes(), b"retained")
+                self.assertTrue(active.with_suffix(".part").exists())
+            self.assertEqual(karaoke_storage.remove_user(self.relationship, self.user), len(b"retained"))
+
 
 if __name__ == "__main__":
     unittest.main()

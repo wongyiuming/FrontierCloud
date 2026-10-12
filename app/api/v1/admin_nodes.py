@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
-from sqlalchemy import text
+from pydantic import BaseModel, Field, ConfigDict
 
 from app.api.internal_nodes import require_https
 from app.api.v1.admin import require_session
-from app.services import control_audit, lyrics, release_control, site_control
+from app.services import control_audit
+from app.services.business_lifecycle import initialize_business_services
 from app.services.federation import protocol as p
 from app.services.federation.runtime import runtime
 from app.services.federation.state import state
@@ -47,68 +47,101 @@ def checked(exc):
 
 
 async def ensure_follower_business_empty() -> None:
-    """Ignore only the immutable system fallback lyric when checking business emptiness."""
+    """Apply the same business admission contract as native Storage startup."""
     from app.api.v1.media import MEDIA_ROOT
-
-    for root_name in ("music", "vido", "lyrics"):
-        root = MEDIA_ROOT / root_name
-        if not root.exists():
-            continue
-        for item in root.rglob("*"):
-            if not item.is_file():
-                continue
-            relative = item.relative_to(MEDIA_ROOT).as_posix()
-            if relative == lyrics.DEFAULT_LYRIC_PATH and not item.is_symlink():
-                continue
-            raise p.ProtocolError("Standalone 仍有媒体或歌词；请先执行显式纳管迁移，不能直接固定为 Follower")
-
-    async with state.database.connect() as conn:
-        for table in ("karaoke_users", "karaoke_recordings"):
-            if int(await conn.scalar(text(f"SELECT COUNT(*) FROM {table}")) or 0):
-                raise p.ProtocolError("Standalone 仍有 卡拉OK业务数据；请先迁移，不能直接固定为 Follower")
+    from app.services.business_lifecycle import ensure_follower_business_empty as admission
+    await admission(state.database, media_root=MEDIA_ROOT)
 
 
 @router.get("")
 async def status(actor: str = Depends(require_session)):
     relations = await state.list_relationships()
+    certificate = await _certificate_view()
+    for relation in relations:
+        # Queries are deliberately serial and use the existing authenticated
+        # control path. This never asks the Master to read a Storage private key.
+        if (state.node.get('role') == 'Master'
+                and relation.get('direction') == 'downstream'
+                and relation['state'] == 'active'):
+            if relation.get('status') == 'offline':
+                view = _certificate_unavailable('storage_offline')
+            else:
+                try:
+                    view = await runtime.call(relation, '/internal/v1/certificate', {'action': 'status'})
+                except Exception:
+                    view = _certificate_unavailable('authenticated_observation_unavailable')
+            relation['summary'] = {**(relation.get('summary') or {}), 'certificate': view}
     from app.services import storage_capacity
     return {"node_id": state.node["node_id"], "role": state.node["role"], "endpoint": state.node["endpoint"],
             "app_version": p.APP_VERSION, "protocol": p.PROTOCOL_VERSION,
+            "certificate": certificate,
             "relationships": [{key: value for key, value in row.items() if key not in ("credential", "peer_key")} for row in relations],
             "storage_pool": await storage_capacity.observed_pool(state) if state.node["role"] == "Master" else None}
 
 
-@router.get("/release")
-async def release_status(refresh_ci: bool = False, actor: str = Depends(require_session)):
-    return await release_control.release_status(refresh_ci=refresh_ci)
+def _certificate_unavailable(error: str) -> dict:
+    # Unreachable peers have unknown certificate/controller health, not a
+    # fabricated CA failure or a cached success from an earlier heartbeat.
+    return {'state': 'UNAVAILABLE', 'enabled': None, 'controller_running': None,
+            'https_ready': None, 'serving_matches': None, 'last_error': error}
 
 
-@router.post("/release/upgrade")
-async def release_upgrade(request: Request, actor: str = Depends(require_session)):
+async def _certificate_view():
+    from app.core.config import settings
+    from app.services.certmanager import certificate_control
+    if not settings.TLS_ENABLED:
+        return {'enabled': False, 'state': 'DISABLED', 'controller_running': False,
+                'https_ready': False, 'serving_matches': False, 'managed': False, 'auto_renew': False}
+    try:
+        return await certificate_control()
+    except Exception:
+        return {'enabled': True, 'hostname': settings.SERVER_NAME, 'state': 'FAILED',
+                'controller_running': False, 'https_ready': False, 'serving_matches': False,
+                'managed': True, 'auto_renew': True, 'last_error': 'controller_unavailable'}
+
+
+class CertificateDownload(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    action: str = Field(pattern='^download$')
+    browser_public_key: str = Field(min_length=1, max_length=256)
+    browser_nonce: str = Field(min_length=1, max_length=256)
+
+
+async def _node_certificate(identifier, value):
+    from app.services.certmanager import certificate_control
+    if identifier == state.node['node_id']:
+        return await certificate_control(**value)
+    if state.node['role'] != 'Master':
+        raise HTTPException(403, 'Only the Master can observe a paired Storage certificate')
+    relation = await state.relationship(identifier)
+    if relation['state'] != 'active' or relation['direction'] != 'downstream':
+        raise HTTPException(404, 'Active Storage relationship not found')
+    if value.get('action') == 'status' and relation.get('status') == 'offline':
+        return _certificate_unavailable('storage_offline')
+    return await runtime.call(relation, '/internal/v1/certificate', value)
+
+
+@router.get('/{identifier}/certificate')
+async def certificate_status(identifier: str, actor: str = Depends(require_session)):
+    try:
+        return await _node_certificate(identifier, {'action': 'status'})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise checked(exc) from exc
+
+
+@router.post('/{identifier}/certificate')
+async def certificate_download(identifier: str, payload: CertificateDownload, request: Request,
+                               actor: str = Depends(require_session)):
     require_https(request)
     try:
-        async with control_audit.action(
-            actor, "release_upgrade", request,
-            source_summary="release_branch=main",
-        ):
-            site_control.prepare_release()
-            return await release_control.start_upgrade()
+        async with control_audit.action(actor, 'certificate_download', request, source_summary=identifier):
+            return await _node_certificate(identifier, payload.model_dump())
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@router.post("/release/rollback")
-async def release_rollback(request: Request, actor: str = Depends(require_session)):
-    require_https(request)
-    try:
-        async with control_audit.action(
-            actor, "release_rollback", request,
-            source_summary="release_branch=main",
-        ):
-            site_control.prepare_release()
-            return await release_control.start_rollback()
-    except Exception as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise checked(exc) from exc
 
 
 @router.post("/promote")
@@ -138,6 +171,7 @@ async def reinitialize(request: Request, payload: Reinitialization, actor: str =
             except Exception:
                 pass
         await runtime.stop()
+        await initialize_business_services()
         runtime.start(revocations=bool(relations))
         from app.services.media_catalog_cache import invalidate_media_catalog
         await invalidate_media_catalog()

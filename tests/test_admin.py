@@ -7,6 +7,7 @@ import zipfile
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException, UploadFile
@@ -19,7 +20,9 @@ from app.services import media_manager
 
 class _AuditContext:
     async def __aenter__(self):
-        return object()
+        # Upload contract tests now register a fresh object inside the same
+        # transaction. Real commit/rollback proofs live in publication tests.
+        return SimpleNamespace(execute=AsyncMock())
 
     async def __aexit__(self, *_args):
         return False

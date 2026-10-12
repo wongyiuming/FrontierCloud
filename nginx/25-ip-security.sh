@@ -22,12 +22,9 @@ watch_rules() {
     while kill -0 "$master_pid" 2>/dev/null; do
         if render_rules; then
             if ! cmp -s "$candidate" "$rules"; then
-                cp "$rules" "$previous"
-                mv "$candidate" "$rules"
-                if nginx -t && nginx -s reload; then
+                if python3 /usr/local/lib/frontiercloud/tls_edge.py security; then
                     echo 'nginx: applied IP security rules'
                 else
-                    mv "$previous" "$rules"
                     echo 'nginx: rejected IP security update; retaining previous rules' >&2
                 fi
             fi

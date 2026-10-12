@@ -129,7 +129,7 @@ async def immediate_preferences(scope: str, database=engine) -> list[dict]:
         path = str(row["media_path"])
         if path.startswith(prefix) and len(path.split("/")) == depth:
             result.append({"path": path, "preference": int(row["preference"])})
-    result.sort(key=lambda item: (-item["preference"], item["path"].casefold()))
+    result.sort(key=lambda item: (-item["preference"], item["path"].casefold(), item["path"]))
     return result
 
 
@@ -179,6 +179,7 @@ async def sort_directory_entries(entries: list[dict], path_for: Callable[[dict],
             -preferences.get(path_for(entry), 0),
             str(entry.get("name") or "").casefold(),
             path_for(entry).casefold(),
+            path_for(entry),
         ),
     )
 
@@ -222,6 +223,20 @@ async def _target_metadata_conflict(conn, new_path: str) -> bool:
 async def _rewrite_local_metadata(conn, old_path: str, new_path: str) -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     params = MediaManager._path_params(old_path)
+    # Completed upload proofs still identify the physical object after rename.
+    # Keep this history in the same transaction as path/ownership metadata.
+    completed = (await conn.execute(select(
+        s.upload_sessions.c.upload_id, s.upload_sessions.c.media_path,
+    ).where(
+        s.upload_sessions.c.state == "complete",
+        s.upload_sessions.c.media_path.startswith(old_path.rstrip("/") + "/", autoescape=True),
+    ))).mappings().all()
+    for row in completed:
+        await conn.execute(s.upload_sessions.update().where(
+            s.upload_sessions.c.upload_id == row["upload_id"],
+            s.upload_sessions.c.state == "complete",
+        ).values(media_path=_replace_prefix(str(row["media_path"]), old_path, new_path),
+                 path_locator=None, updated_at=int(time.time())))
     object_rows = (await conn.execute(text(
         "SELECT media_id, media_path FROM media_objects WHERE "
         + MediaManager._path_scope("media_path", True)

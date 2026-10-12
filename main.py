@@ -10,6 +10,7 @@ import uuid
 from contextlib import asynccontextmanager
 from contextlib import suppress
 from functools import lru_cache
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
@@ -19,6 +20,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.v1.endpoints import router as api_v1_router
+from app.api.v1.media_crypto import router as media_crypto_router
 from app.core.admin_log import sanitize_log_value
 from app.core.config import settings
 from app.core.client_ip import client_ip, resolve_client_identity
@@ -30,14 +32,22 @@ from app.core.upload_lifecycle import install_upload_lifecycle_guard
 from app.middleware.ip_security import IPSecurityMiddleware
 from app.middleware.admin_upload import AdminUploadMiddleware
 from app.middleware.node_role import NodeRoleMiddleware
-from app.services import admin_service, lyrics
+from app.middleware.html_security import HtmlSecurityMiddleware
+from app.middleware.native_storage import NativeStorageDeliveryMiddleware
+from app.middleware.operator_fence import OperatorFenceMiddleware
+from app.services import admin_service
+from app.services.business_lifecycle import (
+    ensure_follower_business_empty, ensure_follower_business_files_empty,
+    initialize_business_services,
+)
 from app.services.health import live_status, readiness_response
 from app.services.ip_security import initialize_ip_security_cache, retry_edge_projection
 from app.services.media_manager import recover_interrupted_media_deletions
 from app.services.runtime_secrets import announce_initial_secrets_once
 from app.services.upload_cleanup import cleanup_stale_upload_parts, run_stale_upload_cleanup
 from app.api.internal_nodes import router as internal_nodes_router
-from app.api.internal_cluster_update import router as internal_cluster_update_router
+from app.api.internal_certificate import router as internal_certificate_router
+from app.api.internal_control import router as internal_control_router
 from app.services.federation.state import state as node_state
 from app.services.federation.runtime import runtime as node_runtime
 
@@ -47,18 +57,85 @@ configure_logging()
 logger = logging.getLogger("frontiercloud.http")
 
 
+async def _storage_role_admission() -> str | None:
+    """Inspect initialized storage input before migrations, recovery or writes."""
+    if settings.DEPLOYMENT_MODE != "only_stroge":
+        return None
+    from sqlalchemy import text
+    from sqlalchemy.engine import URL
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from app.api.v1.media import MEDIA_ROOT
+    from app.core import db
+    from app.services.federation.protocol import endpoint
+
+    if not settings.TLS_ENABLED:
+        raise RuntimeError("Storage deployment requires TLS before fixing a node role")
+    expected = endpoint(settings.STORAGE_ENDPOINT)
+    database = db.engine
+    reader = None
+    if database.dialect.name == "sqlite":
+        destination = Path(database.url.database)
+        if not destination.exists() or destination.stat().st_size == 0:
+            if (db.SECRET_DIR / "node-vault.key").exists():
+                raise RuntimeError("Existing node identity has no SQLite database; storage admission refused")
+            ensure_follower_business_files_empty(MEDIA_ROOT)
+            return expected
+        # Do not switch journal mode or create an empty file while diagnosing an
+        # existing directory. Normal mode=ro sees committed WAL data as well.
+        reader = create_async_engine(URL.create("sqlite+aiosqlite",
+            database=destination.absolute().as_uri(), query={"mode": "ro", "uri": "true"}))
+        database = reader
+    try:
+        async with database.connect() as conn:
+            tables = await db._table_names(conn)
+            if not tables:
+                if (db.SECRET_DIR / "node-vault.key").exists():
+                    raise RuntimeError("Existing node identity has no database tables; storage admission refused")
+                ensure_follower_business_files_empty(MEDIA_ROOT)
+                return expected
+            # Unknown/partial databases are not eligible for implicit conversion.
+            if "node_identity" not in tables:
+                raise RuntimeError("Storage admission requires a valid initialized node identity")
+            row = (await conn.execute(text(
+                "SELECT node_id,role,endpoint FROM node_identity WHERE singleton=1"
+            ))).mappings().first()
+            if row is None:
+                raise RuntimeError("Storage admission requires a valid initialized node identity")
+            if row["role"] == "Follower":
+                if row["endpoint"] != expected:
+                    raise RuntimeError("Storage deployment cannot change a paired endpoint")
+                return expected
+            if row["role"] != "Standalone":
+                raise RuntimeError("Storage deployment cannot change an existing node role")
+            await ensure_follower_business_empty(conn=conn, media_root=MEDIA_ROOT)
+            return expected
+    finally:
+        if reader is not None:
+            await reader.dispose()
+
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def _lifespan(app: FastAPI):
     upload_cleanup_task = None
     edge_projection_task = None
     try:
+        storage_endpoint = await _storage_role_admission()
         await init_db()
+        if storage_endpoint is not None:
+            await node_state.initialize()
+            if node_state.node["role"] == "Standalone":
+                from app.api.v1.media import MEDIA_ROOT
+                await ensure_follower_business_empty(node_state.database, media_root=MEDIA_ROOT)
+                await node_state.promote("Follower", storage_endpoint, "storage-deployment")
+            if node_state.node["role"] != "Follower" or node_state.node["endpoint"] != storage_endpoint:
+                raise RuntimeError("Storage deployment cannot change an existing node role or paired endpoint")
         await recover_interrupted_media_deletions()
         await initialize_ip_security_cache()
-        await node_state.initialize()
-        await lyrics.initialize_default_lyrics()
+        if storage_endpoint is None:
+            await node_state.initialize()
         if node_state.node["role"] != "Standalone" and not settings.TLS_ENABLED:
             raise RuntimeError("Master/Follower 节点必须启用 TLS；请恢复 TLS 配置或显式重新初始化节点")
+        await initialize_business_services()
         pending_revocations = any(row["state"] == "revoked" and not row["summary"].get("revocation_acknowledged")
                                   for row in await node_state.list_relationships(include_revoked=True))
         node_runtime.start(revocations=pending_revocations)
@@ -83,6 +160,14 @@ async def lifespan(app: FastAPI):
         await close_db()
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from app.services import runtime_gate
+    with runtime_gate.acquire():
+        async with _lifespan(app):
+            yield
+
+
 app = FastAPI(
     title="FrontierCloud Media Service",
     lifespan=lifespan,
@@ -92,7 +177,9 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(internal_nodes_router)
-app.include_router(internal_cluster_update_router)
+app.include_router(internal_certificate_router)
+app.include_router(internal_control_router)
+app.include_router(media_crypto_router)
 
 QUIET_REQUEST_PATHS = frozenset({
     "/health",
@@ -236,6 +323,9 @@ app.add_middleware(MetricsMiddleware)
 app.add_middleware(RealIPLogMiddleware)
 app.add_middleware(NodeRoleMiddleware)
 app.add_middleware(CatalogFreshnessMiddleware)
+app.add_middleware(NativeStorageDeliveryMiddleware)
+app.add_middleware(HtmlSecurityMiddleware)
+app.add_middleware(OperatorFenceMiddleware)
 app.include_router(api_v1_router, prefix="/api/v1")
 
 
@@ -304,13 +394,15 @@ async def root():
 
 @app.get("/karaoke/", response_class=HTMLResponse, include_in_schema=False)
 async def karaoke_page():
+    from app.api.v1.media import inject_page_runtime, node_stun_urls, safe_json_dumps
+    stun_urls = await node_stun_urls()
     content = karaoke_template()
     content = content.replace("{{KARAOKE_CSS_URL}}", static_asset_url("css/karaoke.css"))
     content = content.replace("{{KARAOKE_JS_URL}}", static_asset_url("js/karaoke.js"))
     content = content.replace("{{NETWORK_OBSERVATION_JS_URL}}", static_asset_url("js/network-observation.js"))
-    content = content.replace("{{STUN_URLS}}", json.dumps(settings.webrtc_stun_urls()))
+    content = content.replace("{{STUN_URLS}}", safe_json_dumps(stun_urls))
     content = content.replace("{{WEBRTC_INTERVAL_MS}}", str(settings.WEBRTC_REPORT_COOLDOWN * 1000))
-    return HTMLResponse(content, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(inject_page_runtime(content, stun_urls), headers={"Cache-Control": "no-cache"})
 
 
 if __name__ == "__main__":

@@ -8,6 +8,22 @@ from app.services.upload_cleanup import cleanup_stale_upload_parts
 
 
 class StaleUploadCleanupTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Linux upload cleanup uses kernel flock")
+    def test_old_mtime_does_not_release_a_live_writer(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / ".upload-live.part"
+            with target.open("wb") as writer:
+                writer.write(b"active")
+                writer.flush()
+                fcntl.flock(writer.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                old = time.time() - 600
+                os.utime(target, (old, old))
+                self.assertEqual(cleanup_stale_upload_parts(root, 300), (0, 0))
+                self.assertTrue(target.exists())
+            self.assertEqual(cleanup_stale_upload_parts(root, 300), (1, 6))
+
     def test_only_expired_upload_parts_are_removed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -59,7 +59,22 @@ class NetworkObservation(BaseModel):
     failure: str | None = Field(None, max_length=32)
 
 
-def inject_page_runtime(html: str) -> str:
+async def node_stun_urls() -> list[str]:
+    from urllib.parse import urlsplit
+    urls = settings.webrtc_stun_urls()
+    if node_state.node.get("role") == "Master":
+        for row in sorted(await node_state.list_relationships(), key=lambda r: r["peer_id"]):
+            if row.get("state") == "active":
+                hostname = urlsplit(row["peer_endpoint"]).hostname
+                if hostname:
+                    hostname = f"[{hostname}]" if ":" in hostname else hostname
+                    value = f"stun:{hostname}:{settings.WEBRTC_STUN_PORT}"
+                    if value not in urls:
+                        urls.append(value)
+    return urls
+
+
+def inject_page_runtime(html: str, stun_urls: list[str] | None = None) -> str:
     player_assets = [
         static_asset_url("js/player.js"),
         static_asset_url("css/player.css"),
@@ -67,7 +82,7 @@ def inject_page_runtime(html: str) -> str:
         static_asset_url("css/lyrics.css"),
     ]
     replacements = {
-        "{{STUN_URLS_JSON}}": safe_json_dumps(settings.webrtc_stun_urls()),
+        "{{STUN_URLS_JSON}}": safe_json_dumps(settings.webrtc_stun_urls() if stun_urls is None else stun_urls),
         "{{WEBRTC_INTERVAL_MS}}": str(settings.WEBRTC_REPORT_COOLDOWN * 1000),
         "{{NETWORK_OBSERVATION_JS_URL}}": html_escape.escape(static_asset_url("js/network-observation.js"), quote=True),
         "{{PLAYER_JS_URL}}": html_escape.escape(static_asset_url("js/player.js"), quote=True),
@@ -79,6 +94,10 @@ def inject_page_runtime(html: str) -> str:
     }
     for marker, value in replacements.items():
         html = html.replace(marker, value)
+    crypto_scripts = "".join(f'<script src="{html_escape.escape(static_asset_url(name), quote=True)}"></script>\n'
+        for name in ("js/compiled/media-crypto-common.js", "js/compiled/media-crypto.js"))
+    # Crypto must be available before player/lyrics/Karaoke business listeners.
+    html = html.replace("</head>", crypto_scripts + "</head>", 1)
     return html
 
 
@@ -318,6 +337,14 @@ async def scan_media_files_by_category(category_subpath, valid_exts, media_type,
                 hidden,
             )
             media_list = await media_objects.bind_items(media_list, media_type)
+    from app.services import media_crypto
+    identifiers = [item.get("resource_id") or item.get("media_id") for item in media_list]
+    async with engine.connect() as conn:
+        encryption = await media_crypto.encryption_for_ids(conn, [value for value in identifiers if value])
+    for item, identifier in zip(media_list, identifiers):
+        if identifier in encryption:
+            item["encryption"] = encryption[identifier].to_dict()
+            item["encrypted"] = True
     await store_media_catalog(generation, "tracks-v2", identity, media_list)
     return media_list
 
@@ -464,7 +491,7 @@ async def _local_stream_response(file_path: str, request: Request | None) -> Res
 @router.get("", response_class=HTMLResponse)
 async def get_media_index_page():
     return HTMLResponse(
-        inject_page_runtime(load_html_template("index.html")),
+        inject_page_runtime(load_html_template("index.html"), await node_stun_urls()),
         headers=NO_STORE_HEADERS,
     )
 
@@ -481,7 +508,7 @@ async def refresh_media_interface():
 @router.get("/music", response_class=HTMLResponse)
 async def get_music_categories_page(include_hidden: bool = False):
     suffix = "&include_hidden=true" if include_hidden else ""
-    return _render_category_page(
+    return await _render_category_page(
         "前沿音乐",
         "/api/v1/media",
         {
@@ -495,7 +522,7 @@ async def get_music_categories_page(include_hidden: bool = False):
 @router.get("/video", response_class=HTMLResponse)
 async def get_video_categories_page(include_hidden: bool = False):
     suffix = "&include_hidden=true" if include_hidden else ""
-    return _render_category_page(
+    return await _render_category_page(
         "前沿视讯",
         "/api/v1/media",
         {
@@ -506,12 +533,12 @@ async def get_video_categories_page(include_hidden: bool = False):
     )
 
 
-def _render_category_page(page_title: str, back_url: str, config: dict) -> HTMLResponse:
+async def _render_category_page(page_title: str, back_url: str, config: dict) -> HTMLResponse:
     html = load_html_template("category.html")
     html = html.replace("{{PAGE_TITLE}}", html_escape.escape(page_title))
     html = html.replace("{{BACK_URL}}", html_escape.escape(back_url, quote=True))
     html = html.replace("{{CATALOG_CONFIG_JSON}}", safe_json_dumps(config))
-    html = inject_page_runtime(html)
+    html = inject_page_runtime(html, await node_stun_urls())
     return HTMLResponse(html, headers=NO_STORE_HEADERS)
 
 
@@ -532,8 +559,8 @@ def _validated_public_directory(path: str, media_type: str) -> tuple[Path, tuple
     return directory, parts
 
 
-def _render_subcategory_page(page_title: str, back_url: str, categories) -> HTMLResponse:
-    return _render_category_page(
+async def _render_subcategory_page(page_title: str, back_url: str, categories) -> HTMLResponse:
+    return await _render_category_page(
         page_title,
         back_url,
         {"bootstrap": categories, "cacheKey": "", "url": "", "emptyText": "暂无分类目录"},
@@ -558,7 +585,7 @@ async def _get_player_or_subcategories(
         if subcategories and not direct:
             if node_state.node["role"] == "Master" and await scan_media_files_by_category(path, valid_exts, playback_type, include_hidden=include_hidden):
                 subcategories = [{"name": "当前目录曲目", "url": _category_url(media_type, path, include_hidden=include_hidden) + "&direct=true"}] + subcategories
-            return _render_subcategory_page(
+            return await _render_subcategory_page(
                 f"{title_prefix} - {display_path}",
                 type_list_url,
                 subcategories,
@@ -587,7 +614,7 @@ async def _get_player_or_subcategories(
     html = html.replace("{{MEDIA_JSON}}", "[]")
     html = html.replace("{{PLAYBACK_SESSION_ID}}", safe_json_dumps(session_id))
     html = html.replace("{{PLAYER_CATALOG_CONFIG_JSON}}", safe_json_dumps(catalog_config))
-    html = inject_page_runtime(html)
+    html = inject_page_runtime(html, await node_stun_urls())
     return HTMLResponse(html, headers=NO_STORE_HEADERS)
 
 
@@ -629,6 +656,18 @@ async def get_video_player_page(
 
 @router.get("/lyrics", response_class=HTMLResponse)
 async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024), resource_id: str | None = None, request: Request = None):
+    if resource_id:
+        require_https(request)
+    from app.services import media_crypto
+    try:
+        encrypted = await media_crypto.encrypted_lyric(track, resource_id or "")
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Lyrics not found") from exc
+    if encrypted:
+        view = {"encrypted": True, "file_path": encrypted["path"], "lyric_path": encrypted["path"], "encryption": encrypted["encryption"].to_dict(), "source_url": "/api/v1/media/crypto/bytes?file_path=" + urllib.parse.quote(encrypted["path"], safe="")}
+        html = load_html_template("lyrics.html").replace("{{LYRICS_JSON}}", "[]").replace("{{LINE_COUNT}}", "0")
+        html = html.replace("{{ENCRYPTED_LYRICS_JSON}}", safe_json_dumps(view))
+        return HTMLResponse(inject_page_runtime(html, await node_stun_urls()), headers=NO_STORE_HEADERS)
     try:
         if resource_id:
             require_https(request)
@@ -641,12 +680,23 @@ async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024)
     html = load_html_template("lyrics.html")
     lines = [entry["text"] for entry in entries]
     html = html.replace("{{LYRICS_JSON}}", safe_json_dumps(lines))
+    html = html.replace("{{ENCRYPTED_LYRICS_JSON}}", "null")
     html = html.replace("{{LINE_COUNT}}", str(len(lines)))
-    return HTMLResponse(inject_page_runtime(html), headers=NO_STORE_HEADERS)
+    return HTMLResponse(inject_page_runtime(html, await node_stun_urls()), headers=NO_STORE_HEADERS)
 
 
 @router.get("/lyrics/content")
 async def get_lyrics_content(track: str = Query(..., min_length=1, max_length=1024), resource_id: str | None = None, request: Request = None):
+    if resource_id:
+        require_https(request)
+    from app.services import media_crypto
+    try:
+        encrypted = await media_crypto.encrypted_lyric(track, resource_id or "")
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Lyrics not found") from exc
+    if encrypted:
+        view = {"encrypted": True, "file_path": encrypted["path"], "lyric_path": encrypted["path"], "encryption": encrypted["encryption"].to_dict(), "source_url": "/api/v1/media/crypto/bytes?file_path=" + urllib.parse.quote(encrypted["path"], safe="")}
+        return JSONResponse(view, headers=NO_STORE_HEADERS)
     try:
         if resource_id:
             require_https(request)

@@ -1,24 +1,32 @@
 import time
+import os
+from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
-from app.core.config import settings
+from app.core.config import SECRET_DIR, settings
 from app.core.schema_migrations import (
     CURRENT_SCHEMA_GENERATION,
     MIGRATION_HISTORY_DDL,
     MIGRATION_HISTORY_TABLE,
     migrate_schema,
+    validate_migration_history,
+    column_exists,
 )
 
 
-engine: AsyncEngine = create_async_engine(
-    settings.MYSQL_URL,
-    pool_pre_ping=True,
-    pool_recycle=1800,
-    pool_size=5,
-    max_overflow=10,
-)
+def create_database_engine(configuration=settings) -> AsyncEngine:
+    if configuration.DB_TYPE == "sqlite":
+        from app.core.sqlite_compat import create_sqlite_engine
+        return create_sqlite_engine(configuration.DATABASE_URL)
+    return create_async_engine(
+        configuration.MYSQL_URL, pool_pre_ping=True, pool_recycle=1800,
+        pool_size=5, max_overflow=10,
+    )
+
+
+engine: AsyncEngine = create_database_engine()
 
 SCHEMA_GENERATION = CURRENT_SCHEMA_GENERATION
 SCHEMA_MARKER_TABLE = "frontiercloud_schema"
@@ -49,6 +57,9 @@ async def _commit_ddl(conn: AsyncConnection, statement: str) -> None:
 
 
 async def _table_names(conn: AsyncConnection) -> set[str]:
+    if getattr(getattr(conn, "dialect", None), "name", "mysql") == "sqlite":
+        rows = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"))
+        return {str(row[0]) for row in rows}
     rows = await conn.execute(text("""
         SELECT TABLE_NAME
         FROM information_schema.tables
@@ -61,11 +72,13 @@ async def _table_names(conn: AsyncConnection) -> set[str]:
 def _required_tables() -> set[str]:
     from app.services.federation import schema as federation_schema
     from app.services import karaoke_schema
+    from app.services import media_crypto_schema
 
     return (
         LOCAL_TABLES
         | {table.name for table in federation_schema.metadata.sorted_tables}
         | {table.name for table in karaoke_schema.metadata.sorted_tables}
+        | {table.name for table in media_crypto_schema.metadata.sorted_tables}
         | {SCHEMA_MARKER_TABLE}
     )
 
@@ -99,6 +112,9 @@ async def _validate_initialized_schema(conn: AsyncConnection, tables: set[str]) 
         raise RuntimeError(
             "当前代际数据库结构不完整，禁止带病启动；缺少表：" + ", ".join(missing)
         )
+    await validate_migration_history(conn)
+    if not await column_exists(conn, "cluster_upload_sessions", "content_encrypted"):
+        raise RuntimeError("当前代际数据库结构不完整；缺少 cluster_upload_sessions.content_encrypted")
 
 
 async def init_db() -> None:
@@ -109,8 +125,30 @@ async def init_db() -> None:
     advisory lock. An unmarked non-empty database is deliberately rejected because its
     historical schema cannot be inferred safely.
     """
+    sqlite = getattr(getattr(engine, "dialect", None), "name", "mysql") == "sqlite"
+    if sqlite:
+        destination = Path(engine.url.database)
+        if (not destination.exists() or destination.stat().st_size == 0) and (SECRET_DIR / "node-vault.key").exists():
+            raise RuntimeError(
+                "检测到历史节点身份但 SQLite 数据库缺失；禁止用空库替代历史 MySQL。"
+                "旧部署请显式设置 DB_TYPE=mysql，或先恢复经过验收的完整 SQLite 备份。"
+            )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            os.chmod(destination, 0o600)
+        else:
+            os.close(descriptor)
     async with engine.connect() as conn:
+        if sqlite:
+            await conn.execution_options(fc_write_transaction=True)
         existing_tables = await _table_names(conn)
+        if sqlite and not existing_tables and (SECRET_DIR / "node-vault.key").exists():
+            raise RuntimeError(
+                "检测到历史节点身份但 SQLite 数据库没有业务表；禁止用空库替代历史 MySQL。"
+                "旧部署请显式设置 DB_TYPE=mysql，或先恢复经过验收的完整 SQLite 备份。"
+            )
         if existing_tables:
             if SCHEMA_MARKER_TABLE not in existing_tables:
                 await _validate_initialized_schema(conn, existing_tables)
@@ -127,6 +165,22 @@ async def init_db() -> None:
                 existing_tables = await _table_names(conn)
 
             await _validate_initialized_schema(conn, existing_tables)
+            return
+
+        if sqlite:
+            from app.core.sqlite_schema import LOCAL_DDL
+            from app.services.federation.schema import metadata as federation_metadata
+            from app.services.karaoke_schema import metadata as karaoke_metadata
+            from app.services.media_crypto_schema import metadata as crypto_metadata
+            for statement in LOCAL_DDL:
+                await conn.execute(text(statement))
+            await conn.run_sync(federation_metadata.create_all)
+            await conn.run_sync(karaoke_metadata.create_all)
+            await conn.run_sync(crypto_metadata.create_all)
+            await conn.execute(text("INSERT INTO ip_security_projection(singleton) VALUES (1)"))
+            await conn.execute(text("INSERT INTO frontiercloud_schema(singleton,generation,created_at) VALUES (1,:generation,:created_at)"), {"generation": SCHEMA_GENERATION, "created_at": int(time.time())})
+            await conn.commit()
+            await _validate_initialized_schema(conn, await _table_names(conn))
             return
 
         await _commit_ddl(conn, """
@@ -284,12 +338,12 @@ async def init_db() -> None:
                 media_id CHAR(64) NOT NULL PRIMARY KEY,
                 media_path VARCHAR(1024) NOT NULL,
                 play_score BIGINT UNSIGNED NOT NULL DEFAULT 0,
-                preference SMALLINT NOT NULL DEFAULT 0,
+                preference INT NOT NULL DEFAULT 0,
                 created_at DATETIME(6) NOT NULL,
                 updated_at DATETIME(6) NOT NULL,
                 INDEX idx_playback_sort (preference, play_score),
                 INDEX idx_playback_path (media_path(191)),
-                CONSTRAINT chk_media_preference CHECK (preference BETWEEN -7 AND 500)
+                CONSTRAINT chk_media_preference CHECK (preference BETWEEN -7 AND 500000)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """)
         await _commit_ddl(conn, """
@@ -324,6 +378,13 @@ async def init_db() -> None:
         from app.services.karaoke_schema import migration_statements as karaoke_schema_statements
         for statement in karaoke_schema_statements():
             await _commit_ddl(conn, statement)
+
+        from app.services.media_crypto_schema import metadata as crypto_metadata
+        from sqlalchemy.dialects import mysql
+        from sqlalchemy.schema import CreateTable
+        for table in crypto_metadata.sorted_tables:
+            table.dialect_options["mysql"].update(engine="InnoDB", charset="utf8mb4", collate="utf8mb4_bin")
+            await _commit_ddl(conn, str(CreateTable(table, if_not_exists=True).compile(dialect=mysql.dialect())))
 
         await _commit_ddl(conn, MIGRATION_HISTORY_DDL)
         await _commit_ddl(conn, """

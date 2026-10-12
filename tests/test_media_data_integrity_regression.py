@@ -34,6 +34,10 @@ class _Connection:
         self.executed.append((str(statement), params or {}))
         return _Result(self.row)
 
+    async def scalar(self, statement, params=None):
+        self.executed.append((str(statement), params or {}))
+        return None
+
 
 class _Context:
     def __init__(self, connection):
@@ -86,7 +90,7 @@ class GlobalMediaOwnershipTests(unittest.TestCase):
 class UploadRecoveryTests(unittest.IsolatedAsyncioTestCase):
     def _reserved_local(self):
         return {
-            "upload_id": "u" * 32,
+            "upload_id": "c" * 32,
             "state": "reserved",
             "member_kind": "MasterLocal",
             "storage_member_id": "m" * 32,
@@ -141,9 +145,9 @@ class UploadRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any("DELETE FROM media_objects" in sql for sql, _ in connection.executed))
             fail_upload.assert_awaited_once_with(row["upload_id"], database)
 
-    async def test_remote_404_releases_reservation_because_bytes_are_already_absent(self):
+    async def test_remote_404_does_not_prove_that_a_writer_is_absent(self):
         row = {
-            "upload_id": "u" * 32,
+            "upload_id": "c" * 32,
             "state": "reserved",
             "member_kind": "Follower",
             "storage_member_id": "f" * 32,
@@ -163,12 +167,13 @@ class UploadRecoveryTests(unittest.IsolatedAsyncioTestCase):
             patch.object(cluster.resource_pool, "upload_session", new=AsyncMock(return_value=row)),
             patch.object(cluster, "_member_relation", new=AsyncMock(return_value=({"member_id": row["storage_member_id"]}, relation))),
             patch.object(cluster.node_runtime, "call", new=AsyncMock(side_effect=cluster.p.ProtocolError("HTTP 404"))),
+            patch.object(cluster, "_encrypted_upload", new=AsyncMock(return_value=False)),
             patch.object(cluster.resource_pool, "fail_upload", new=fail_upload),
         ):
             cleaned = await cluster._cleanup_upload_session(row["upload_id"])
 
-        self.assertTrue(cleaned)
-        fail_upload.assert_awaited_once_with(row["upload_id"], cluster.node_state.database)
+        self.assertFalse(cleaned)
+        fail_upload.assert_not_awaited()
 
     async def test_new_upload_reconciles_stale_path_before_reserving_again(self):
         events = []
@@ -189,7 +194,7 @@ class UploadRecoveryTests(unittest.IsolatedAsyncioTestCase):
             return {"upload_id": "u" * 32}
 
         payload = cluster.ClusterUploadReservation(
-            target_dir="music/artist", filename="song.mp3", size_bytes=3,
+            target_dir="music/artist", filename="song.mp3", size_bytes=3, storage_mode="plain",
         )
         with (
             patch.object(upload_entry, "recover_expired_masterlocal", new=recover),
@@ -205,7 +210,7 @@ class UploadRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_reconciliation_failure_blocks_new_reservation(self):
         create = AsyncMock()
         payload = cluster.ClusterUploadReservation(
-            target_dir="music/artist", filename="song.mp3", size_bytes=3,
+            target_dir="music/artist", filename="song.mp3", size_bytes=3, storage_mode="plain",
         )
         with (
             patch.object(upload_entry, "recover_expired_masterlocal", new=AsyncMock(return_value=0)),

@@ -21,6 +21,7 @@ router = APIRouter()
 async def recover_expired_masterlocal(limit: int = 50) -> int:
     """Remove bytes owned by expired local reservations before releasing quota."""
     now = int(time.time())
+    from app.core.config import settings
     async with node_state.database.connect() as conn:
         upload_ids = list((await conn.execute(
             select(s.upload_sessions.c.upload_id)
@@ -28,7 +29,7 @@ async def recover_expired_masterlocal(limit: int = 50) -> int:
                   s.upload_sessions.c.storage_member_id == s.storage_members.c.member_id)
             .where(
                 s.upload_sessions.c.state == "reserved",
-                s.upload_sessions.c.expires_at <= now,
+                ((s.upload_sessions.c.updated_at <= now - settings.ADMIN_UPLOAD_INACTIVITY_TIMEOUT) | (s.upload_sessions.c.expires_at <= now)),
                 s.storage_members.c.member_kind == "MasterLocal",
             )
             .order_by(s.upload_sessions.c.created_at)
@@ -37,29 +38,9 @@ async def recover_expired_masterlocal(limit: int = 50) -> int:
 
     recovered = 0
     for upload_id in upload_ids:
-        try:
-            row = await resource_pool.upload_session(str(upload_id), node_state.database)
-        except p.ProtocolError:
-            continue
-        if (row["state"] != "reserved" or int(row["expires_at"]) > now
-                or row["member_kind"] != "MasterLocal"):
-            continue
-        async with node_state.database.connect() as conn:
-            committed = bool(await conn.scalar(select(s.global_media.c.media_id).where(
-                s.global_media.c.media_id == row["media_id"]
-            )))
-        if committed:
-            continue
-        target = (MEDIA_ROOT / row["media_path"]).resolve()
-        if MEDIA_ROOT not in target.parents:
-            continue
-        target.unlink(missing_ok=True)
-        async with node_state.database.begin() as conn:
-            await conn.execute(text("DELETE FROM media_objects WHERE media_id=:id"),
-                               {"id": row["media_id"]})
-        await resource_pool.fail_upload(str(upload_id), node_state.database)
-        recovered += 1
+        recovered += int(await cluster._cleanup_upload_session(str(upload_id), allow_unindexed_local=True, expired_only=True))
     return recovered
+
 
 
 @router.get("/storage-pool")

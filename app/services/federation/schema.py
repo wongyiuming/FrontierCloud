@@ -1,5 +1,5 @@
 """Additive tables, isolated from local media/deletion transactions."""
-from sqlalchemy import (BigInteger, Column, Integer, JSON, LargeBinary, MetaData,
+from sqlalchemy import (BigInteger, Column, Integer, JSON, LargeBinary, MetaData, CheckConstraint,
                         String, Table, Text, UniqueConstraint, Index)
 from sqlalchemy.dialects import mysql
 from sqlalchemy.schema import CreateTable, CreateIndex
@@ -100,6 +100,8 @@ upload_sessions = Table("cluster_upload_sessions", metadata,
     Column("path_locator", String(64)),
     Column("object_kind", String(16), nullable=False),
     Column("expected_bytes", BigInteger, nullable=False),
+    Column("content_encrypted", Integer, nullable=False, server_default="0"),
+    CheckConstraint("content_encrypted IN (0,1)", name="chk_upload_encryption_mode"),
     Column("state", String(24), nullable=False),
     Column("expires_at", BigInteger, nullable=False),
     Column("created_at", BigInteger, nullable=False),

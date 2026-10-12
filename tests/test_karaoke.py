@@ -18,6 +18,8 @@ class KaraokeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(karaoke.media_api, "require_https"),
             patch.object(karaoke.node_routing, "resolve", AsyncMock(return_value=(row, {}))),
             patch.object(karaoke.node_routing, "lyric_entries", AsyncMock(return_value=[{"time": 1, "text": "master"}])) as master_lyrics,
+            patch.object(karaoke.recording_crypto, "source_object", AsyncMock(return_value={"encryption": None})),
+            patch.object(karaoke.media_crypto, "encrypted_lyric", AsyncMock(return_value=None)),
         ):
             resolved = await karaoke._resolve("opaque", request=object())
         self.assertTrue(resolved["has_lyrics"])
@@ -54,7 +56,8 @@ class KaraokeTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(karaoke, "_resolve", AsyncMock(return_value={
             "kind": "global", "identifier": "f" * 64, "path": "music/shared/song.mp3",
             "type": "audio", "has_lyrics": True,
-        })), patch.object(karaoke.node_routing, "lyric_entries", AsyncMock(return_value=entries)) as master_lyrics:
+        })), patch.object(karaoke.node_routing, "lyric_entries", AsyncMock(return_value=entries)) as master_lyrics, \
+             patch.object(karaoke.media_crypto, "encrypted_lyric", AsyncMock(return_value=None)):
             response = await karaoke.lyric_entries(opaque, request=object())
         self.assertEqual(json.loads(response.body), {"entries": entries})
         master_lyrics.assert_awaited_once_with("f" * 64)

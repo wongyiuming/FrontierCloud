@@ -91,7 +91,9 @@ class RepositoryPolicyRegressionTests(unittest.TestCase):
         architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
         combined = dockerfile + "\n" + compose
 
-        self.assertIn('CMD ["uvicorn", "main:app"', dockerfile)
+        self.assertIn('app.services.certmanager.server', dockerfile)
+        server = (ROOT / 'app/services/certmanager/server.py').read_text(encoding='utf-8')
+        self.assertIn('workers=1', server)
         self.assertNotRegex(combined, re.compile(r"--workers(?:=|\s)", re.I))
         self.assertNotRegex(combined, re.compile(r"\bWEB_CONCURRENCY\b", re.I))
         self.assertNotRegex(combined, re.compile(r"\bgunicorn\b", re.I))

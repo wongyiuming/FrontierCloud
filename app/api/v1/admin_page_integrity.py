@@ -32,8 +32,8 @@ async def admin_page(request: Request,
     content = content.replace("</head>", f'<link rel="stylesheet" href="{system_css}">\n<link rel="stylesheet" href="{directory_css}">\n<link rel="stylesheet" href="{upload_site_css}">\n</head>')
 
     scripts = [
-        static_asset_url("js/release-admin.js"),
-        static_asset_url("js/release-version-ui.js"),
+        static_asset_url("js/compiled/media-crypto-common.js"),
+        static_asset_url("js/compiled/media-crypto.js"),
         static_asset_url("js/maintenance-admin.js"),
         static_asset_url("js/brand-admin.js"),
         static_asset_url("js/admin-focus.js"),
@@ -41,6 +41,7 @@ async def admin_page(request: Request,
         static_asset_url("js/lyrics-directory-counts.js"),
         static_asset_url("js/admin-upload-integrity.js"),
         static_asset_url("js/admin-visibility-integrity.js"),
+        static_asset_url("js/priority-drag.js"),
     ]
     tags = "\n".join(f'<script src="{source}"></script>' for source in scripts)
     content = content.replace("</body>", f"{tags}\n</body>")

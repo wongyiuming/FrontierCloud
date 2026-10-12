@@ -40,7 +40,7 @@ Index("idx_karaoke_recording_member", recordings.c.storage_member_id, recordings
 
 audit = Table(
     "karaoke_audit_log", metadata,
-    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
     Column("user_id", String(32)),
     Column("action", String(48), nullable=False),
     Column("result", String(24), nullable=False),

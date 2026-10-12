@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAINTENANCE_FLAG = ROOT / "data" / ".frontiercloud-maintenance"
 EXPECTED_ADMIN_MODULE_ORDER = [
     "media", "priority", "lyrics", "users", "security", "network",
-    "nodes", "site", "release", "key", "brand",
+    "nodes", "site", "key", "brand",
 ]
 
 
@@ -185,7 +185,7 @@ def admin_focus_check(browser) -> None:
     page = context.new_page()
     page.goto(BASE_URL + "/api/v1/media/admin/", wait_until="domcontentloaded")
     page.locator("#siteAccessPanel .module-heading").wait_for(state="visible", timeout=15000)
-    page.locator("#systemVersionPanel").wait_for(state="attached", timeout=15000)
+    require(page.locator("#systemVersionPanel").count() == 0, "Retired release module reappeared")
     page.locator('.admin-module[data-admin-module="brand"]').wait_for(state="attached", timeout=15000)
     page.locator("#renameDirectory").wait_for(state="attached", timeout=15000)
     page.wait_for_function(
