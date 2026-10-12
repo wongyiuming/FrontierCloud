@@ -475,6 +475,8 @@ async def _receive_master_local(upload_id: str, request: Request, row: dict, *, 
                         etag='"' + digest.hexdigest() + '"', database=node_state.database,
                         allow_expired=True, register_local=True, publication_record=journal, audit=audit)
                     committed = True
+                    temporary.unlink()
+                    publication.sync_directory(MEDIA_ROOT)
                     publication.finish(MEDIA_ROOT, journal)
                 except BaseException as exc:
                     if committed or isinstance(exc, publication.PublicationCommitUnknown):

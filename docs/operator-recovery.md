@@ -194,6 +194,8 @@ encryption descriptor and staged device/inode. It contains no encryption keys.
 The file and every publication directory up to the media root are synchronized
 before the local object, global catalog, quota, completed upload session and
 publication-specific success audit commit in one database transaction.
+After that commit, the staged link is removed and its directory synchronized
+before the journal is cleared, so a crash cannot orphan an untracked upload link.
 
 Cancellation waits for that publication worker to finish or retain an explicit
 unknown outcome. A lost commit acknowledgement keeps the bytes and journal;

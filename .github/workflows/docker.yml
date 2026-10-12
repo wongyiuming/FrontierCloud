@@ -76,8 +76,6 @@ jobs:
     timeout-minutes: 15
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-      FC_EVIDENCE_DIR: ${{ runner.temp }}/frontiercloud-native-evidence
-      FC_BROWSER_PYTHON: ${{ runner.temp }}/frontiercloud-native-driver/bin/python
       PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
     steps:
       - uses: actions/checkout@v4
@@ -92,6 +90,9 @@ jobs:
           node-version: '22'
       - name: Prepare isolated native test tools
         run: |
+          export FC_EVIDENCE_DIR="$RUNNER_TEMP/frontiercloud-native-evidence"
+          export FC_BROWSER_PYTHON="$RUNNER_TEMP/frontiercloud-native-driver/bin/python"
+          printf '%s\n' "FC_EVIDENCE_DIR=$FC_EVIDENCE_DIR" "FC_BROWSER_PYTHON=$FC_BROWSER_PYTHON" >> "$GITHUB_ENV"
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libnss3-tools
           command -v node

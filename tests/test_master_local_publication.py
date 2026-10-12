@@ -199,7 +199,13 @@ class MasterLocalPublicationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_committed_crash_before_journal_clear_restores_without_double_quota(self):
         await self.reserve(encrypted=False)
-        with patch.object(publication, 'finish', side_effect=OSError('Injected crash before journal clear')):
+        def crash_before_finish(root, record):
+            staged = root / ('.cluster-upload-' + record['upload_id'] + '.part')
+            self.assertFalse(staged.exists())
+            self.assertEqual((root / self.path).read_bytes(), self.data)
+            self.assertTrue(publication.journal_path(root, record).exists())
+            raise OSError('Injected crash before journal clear')
+        with patch.object(publication, 'finish', side_effect=crash_before_finish):
             with self.assertRaises(HTTPException): await self.upload()
         before = await self.facts(); self.assert_committed(before)
         self.assertTrue(publication.pending(self.media))
