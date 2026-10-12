@@ -54,13 +54,15 @@ identity-preserving endpoint wrapper for both databases.
 Fixtures use a private local ACME CA, actual HTTP-01/JWS/CSR/account operations
 and test-only trust roots. They do not contact a public CA, publish host HTTP/HTTPS
 ports, disable certificate checking, or affect existing deployments. Test-only
-CA images must never become frozen runnable artifacts.
+CA images must never become product deployment images.
 
 CI uploads only explicitly selected sanitized JSON receipts, the source commit
 receipt and test logs. Private CA directories, NSS profiles, database/control
 snapshots, certificate pairs and runtime keys are excluded. The artifact collector
 rejects private-key PEM material; it never uploads the fixture or deployment
-directories. Independent exact-source native evidence remains required for the
+directories. These workflow artifacts expire after 14 days and are not a permanent
+evidence archive. A durable summary belongs in the existing acceptance ledger.
+Independent exact-source native evidence remains required for the
 final archival deliverable.
 
 Every Web fixture has one ASGI worker and one CPU. A timeout is a failure; stop
@@ -69,9 +71,10 @@ five consecutive one-second samples within 30 seconds. STUN probes are serialize
 
 ## Evidence and archival
 
-Keep sanitized results, exact source identity, image IDs/digests, dependency
-resolution, Git bundles and restoration proof with the final release. All
+Keep sanitized results and exact source identity with the CI run. All
 required gates in [the acceptance ledger](../python-final-parity.md) must pass
 before deleting the two historical Gin refs and archiving. A passing narrow unit
-test is never sufficient archival evidence. [Recovery](../operator-recovery.md)
-explains frozen images and later unarchival.
+test is never sufficient archival evidence. Retain only Python `main` and `dev`;
+do not preserve Gin branch recovery references or bundles. GitHub's native archive
+operation makes the repository read-only and can be reversed in Settings.
+[Recovery](../operator-recovery.md) explains private deployment backup and restore.

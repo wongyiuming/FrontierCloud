@@ -4,10 +4,11 @@ FrontierCloud is a self-hosted media browsing, continuous-audio playback, karaok
 
 The core product model is deliberately small: one business Master owns business truth, Followers provide Storage and/or Backup resources, and every managed media object has one complete physical owner.
 
-This is the recoverable Python/FastAPI edition. The final release preserves
-runnable `main` and `dev`, source history and frozen offline images; see
-[recovery and unarchival](docs/operator-recovery.md). The active Gin implementation
-is [FrontierCloud-Gin](https://github.com/wongyiuming/FrontierCloud-Gin).
+This repository retains the runnable Python/FastAPI implementation on `main`
+and `dev`. GitHub archival makes the repository read-only; the owner can
+unarchive it in Settings and continue using the normal source and Compose commands.
+The Go implementation lives exclusively in the separate
+[FrontierCloud-Gin](https://github.com/wongyiuming/FrontierCloud-Gin) repository.
 
 ## Current capabilities
 
@@ -87,7 +88,7 @@ FrontierCloud has exactly two canonical branches: `dev` for implementation and
 complete CI, and `main` for reviewed release history. Do not create additional
 branches. The only valid promotion PR is same-repository `dev -> main`; after
 merge, fast-forward `dev` to the resulting `main` commit before the next change.
-The final release preserves the Python/FastAPI runtime and frozen recovery
-artifacts; [unarchive instructions](docs/operator-recovery.md) keep it usable.
+Only Python/FastAPI `main` and `dev` are retained. No Gin archive references,
+branch recovery bundles or separate archival recovery release are provided.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing cross-cutting behavior.

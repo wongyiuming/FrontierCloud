@@ -1,11 +1,11 @@
 # Operator recovery and unarchival
 
-The final runtime remains Python/FastAPI. Archival changes GitHub write access;
-local clones, running containers, release bundles and frozen images remain
-usable. Preserve the final source/tree identity, historical Git bundle, clean
-image export, dependency resolution, checksums and sanitized acceptance results
-independently of GitHub. Test CA images and fixture secrets are not release
-artifacts. Private deployment backups must never become public release assets.
+The runtime remains Python/FastAPI on `main` and `dev`. GitHub archival changes
+write access; ordinary clones, Compose builds and running containers remain
+usable. Cancel archival in repository Settings to resume development. No Gin
+archive references, branch recovery bundles or archival image release are retained.
+This guide covers private deployment data recovery, not repository branch recovery.
+Private deployment backups must never become public release assets.
 
 ## Full database and control backup
 
@@ -29,7 +29,7 @@ python3 scripts/operator_backup.py verify \
 ```
 
 Paths are placeholders. Repeat `--compose-file` for every active overlay,
-including MySQL or frozen image selection. Storage uses its storage Compose
+including MySQL or deployment-specific image selection. Storage uses its storage Compose
 file. Keep the actual original project name and persistent volume identities;
 do not accidentally initialize a second empty deployment.
 
@@ -61,6 +61,29 @@ business Backup excludes the Master premaster and is not this full recovery set.
 
 Copy the private snapshot to another machine and verify it there. Retain old
 source, Compose and images. Never remove persistent volumes as cache cleanup.
+
+The snapshot does not contain container images. Its `manifest.json` records
+the exact Redis image and, for MySQL deployments, the exact MySQL image needed
+to restore their cold data. Save those existing image IDs privately before
+the original cache or registry version is lost; a new source build or moved
+version tag cannot satisfy the restore identity check.
+
+```bash
+docker save --output /absolute/private-backups/restore-images.tar RECORDED_REDIS_IMAGE_ID
+# For a MySQL deployment, include both recorded IDs in the same save command:
+docker save --output /absolute/private-backups/restore-images.tar RECORDED_REDIS_IMAGE_ID RECORDED_MYSQL_IMAGE_ID
+```
+
+Choose the applicable command and replace the placeholders with the exact IDs
+in the snapshot manifest. Keep the image file outside the snapshot directory:
+the verifier rejects extra files there. Protect and transfer it privately with
+the snapshot, then run `docker load --input /absolute/private-backups/restore-images.tar`
+on a host with the recorded platform. Configure the stopped restore project's
+Redis/MySQL services to use the loaded IDs or their verified original aliases;
+pass that image-selection overlay to the restore tool along with every existing
+Compose file. Confirm the IDs and platform match the manifest before restoring.
+This is operator-managed private deployment backup, not a public repository
+recovery release or a Gin branch archive.
 
 ## Restore or migrate
 
@@ -174,21 +197,15 @@ fences, then verify online relationships and representative HEAD/Range bytes;
 restore the fences on failure. Keep both recovery sets until acceptance succeeds. A
 failure leaves maintenance active and does not silently reset or downgrade TLS.
 
-## Frozen images and future use
+## Unarchive and continue using Python
 
-Verify release checksums before `git bundle verify` and `docker load`. A source
-installation uses `docker compose up -d --build`. Offline recovery uses the
-recorded clean image override with `--no-build --pull never`; include matching
-Python Web, Nginx, Redis and STUN, plus MySQL for an original MySQL deployment.
-Keep independent copies of image exports rather than relying on registry tags.
-Equal Python/Gin schema generations do not authorize interchanging databases,
-vaults or images; an audited converter is required for that separate operation.
-
-The owner can unarchive in GitHub Settings, restore the verified Git bundle if
-needed, and fetch retained `main`/`dev`. Historical Gin refs stay preserved in
-the bundle without becoming active implementation branches. Before new changes,
-review dependency/security advisories and rerun complete exact-source unit/native
-acceptance, then use the same reviewed `dev -> main` promotion.
+The owner can select Unarchive this repository in GitHub Settings. Clone the
+repository normally, use `main` for deployment and run `docker compose up -d --build`.
+An archived repository can also be cloned and built without cancelling archival.
+Existing deployments keep their private databases, media, secrets and certificate
+state; use the preceding backup procedure when migrating those deployments.
+Before new changes, review dependency/security advisories and rerun complete
+exact-source unit/native acceptance, then use the same `dev -> main` promotion.
 
 Temporary playback diagnostics stop accepting reports after 2026-10-15. Fixed
 clock-boundary tests cover that retirement; it does not prevent future installs.

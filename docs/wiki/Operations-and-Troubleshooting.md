@@ -58,4 +58,4 @@ Before upgrading, stop writes and back up all database tables, secrets, media pr
 
 Before cleanup, inspect disk usage and actual container references. Preserve running images, explicit rollback images, valid recovery sets, data, and ACME volumes. Do not run broad `docker system prune -a --volumes` on a shared host or treat `down -v` as routine reclamation.
 
-The product has no online Updater or upgrade GUI. Missing retired update APIs are intentional and must not be resurrected from historical scripts. Restore the archived release with frozen images/source and a complete recovery set.
+The product has no online Updater or upgrade GUI. Missing retired update APIs are intentional and must not be resurrected from historical scripts. Install from the retained Python source with the normal Compose commands; restore existing private deployment data with the operator backup tool.
