@@ -6,8 +6,8 @@ The core product model is deliberately small: one business Master owns business 
 
 This is the recoverable Python/FastAPI edition. The final release preserves
 runnable `main` and `dev`, source history and frozen offline images; see
-[recovery and unarchival](docs/operator-recovery.md). Active Gin development
-continues in [FrontierCloud-Gin](https://github.com/wongyiuming/FrontierCloud-Gin).
+[recovery and unarchival](docs/operator-recovery.md). The active Gin implementation
+is [FrontierCloud-Gin](https://github.com/wongyiuming/FrontierCloud-Gin).
 
 ## Current capabilities
 
