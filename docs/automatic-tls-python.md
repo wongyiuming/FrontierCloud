@@ -36,6 +36,16 @@ Nginx configuration, reloads, and verifies the real local TLS handshake. Failure
 restores the old configuration and serving generation. Storage selects complete
 SSL contexts for new handshakes; existing streams retain their connection.
 
+Before opening an ACME account or order, the Business controller checks an exact
+random challenge through the fixed Compose-local `nginx:80` route with the
+configured domain as Host. An unavailable route, redirect or unexpected body
+keeps bootstrap PENDING and retries after five seconds without consuming a CA
+authorization or increasing the CA failure backoff. The real challenge route
+is checked again before answering the CA. Local readiness is only a startup
+guard: issuance still requires the CA's actual public HTTP-01 validation.
+An unready renewal route retains the valid serving generation and reports
+DEGRADED until the route recovers.
+
 Three named volumes are part of the recovery boundary:
 
 - `certificate_state`: private ACME account key/registration, pending order,

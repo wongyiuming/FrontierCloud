@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import http.client
 import json
 import logging
 import os
@@ -32,6 +33,14 @@ logger = logging.getLogger("frontiercloud.certificate")
 
 class ChallengeBindError(OSError):
     """Public validation ingress could not be reserved; no serving fallback."""
+
+
+class BusinessIngressPending(RuntimeError):
+    """The local HTTP-01 proxy is not ready; no CA authorization was attempted."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
 
 
 def classify(exc):
@@ -81,7 +90,7 @@ class IPv6ChallengeServer(ChallengeServer):
 class Manager:
     def __init__(self, host, enabled, profile, relay_port=8443, *, private=assets.PRIVATE,
                  published=assets.PUBLISHED, runtime=assets.RUNTIME, roots=None, issuer_factory=None,
-                 lookup=None, probe=None, challenge_address=None, now=None):
+                 lookup=None, probe=None, challenge_address=None, now=None, ingress_address=None):
         self.host, self.enabled, self.profile, self.port = host, enabled, profile, relay_port if profile == "relay" else 443
         self.private, self.published, self.runtime = Path(private), Path(published), Path(runtime)
         self.roots = roots or assets.trust_store()
@@ -89,6 +98,8 @@ class Manager:
         self.lookup = lookup or socket.getaddrinfo
         self.probe = probe or self._probe
         self.challenge_address = challenge_address or (("0.0.0.0", 8001) if profile == "business" else ("", 80))
+        # A fixed Compose-local route. Only in-process tests inject another address.
+        self.ingress_address = ingress_address or ('nginx', 80)
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.active_challenge = False
@@ -197,6 +208,22 @@ class Manager:
             self.refresh()
             return json.loads(json.dumps(self.view))
 
+    def verify_business_ingress(self, resources):
+        """Require an exact challenge response through Nginx, never follow redirects."""
+        for path, value in resources.items():
+            connection = http.client.HTTPConnection(*self.ingress_address, timeout=2)
+            try:
+                connection.request('GET', path, headers={'Host': self.host, 'Connection': 'close'})
+                response = connection.getresponse()
+                if 300 <= response.status < 400:
+                    raise BusinessIngressPending('http_ingress_redirect')
+                if response.status != 200 or response.read(8193) != value.encode('ascii'):
+                    raise BusinessIngressPending('http_ingress_mismatch')
+            except (OSError, http.client.HTTPException):
+                raise BusinessIngressPending('http_ingress_unavailable') from None
+            finally:
+                connection.close()
+
     @contextmanager
     def responder(self, resources):
         manager = self
@@ -234,6 +261,9 @@ class Manager:
         for thread in threads:
             thread.start()
         try:
+            if self.profile == 'business':
+                # This also guards the actual CA token immediately before answer_challenge.
+                self.verify_business_ingress(resources)
             yield
         finally:
             for server in servers:
@@ -294,8 +324,9 @@ class Manager:
                 self.refresh()
                 self.save()
                 return
-            self.journal.update(state="RENEWING" if leaf else "VALIDATING", started_at=int(now), completed_at=0)
-            self.save()
+            if self.profile != 'business':
+                self.journal.update(state="RENEWING" if leaf else "VALIDATING", started_at=int(now), completed_at=0)
+                self.save()
         try:
             # A clock rollback must not create a storm of new accounts or orders.
             if now < 1_700_000_000 or now + 300 < self.journal.get("last_clock", 0):
@@ -304,6 +335,14 @@ class Manager:
             if not addresses:
                 raise socket.gaierror("No A/AAAA addresses")
             self.ipv6_required = any(isinstance(address, tuple) and address[0] == socket.AF_INET6 for address in addresses)
+            if self.profile == 'business':
+                # Verify routing before opening an ACME account or creating any order.
+                nonce = secrets.token_urlsafe(24)
+                with self.responder({'/.well-known/acme-challenge/' + nonce: secrets.token_urlsafe(48)}):
+                    pass
+                with self.lock:
+                    self.journal.update(state='RENEWING' if leaf else 'VALIDATING', started_at=int(now), completed_at=0)
+                    self.save()
             certificate, key = self.issuer.issue(self.phase)
             issued = assets.publish(self.host, certificate, key, directory=self.published, roots=self.roots,
                                     now=datetime.fromtimestamp(now, timezone.utc))
@@ -322,6 +361,14 @@ class Manager:
             logger.info("automatic_certificate_published", extra={"context": {
                 "hostname": self.host, "fingerprint": assets.fingerprint(issued), "state": "DEGRADED"}})
             # Nginx reload/Storage SNI hot load happen independently; next tick verifies actual service.
+        except BusinessIngressPending as exc:
+            with self.lock:
+                self.journal.update(state='DEGRADED' if leaf else 'PENDING', error=exc.code,
+                    retry_at=int(now + 5), completed_at=int(self.clock()), last_clock=now)
+                self.save()
+                self.refresh()
+            logger.info('automatic_certificate_ingress_pending', extra={'context': {
+                'hostname': self.host, 'code': exc.code}})
         except Exception as exc:
             code = "clock_unreliable" if str(exc) == "clock_unreliable" else classify(exc)
             with self.lock:
@@ -340,7 +387,8 @@ class Manager:
         try:
             while not self.stop_event.is_set():
                 self.step()
-                self.stop_event.wait(30)
+                delay = 5 if self.journal.get('error', '').startswith('http_ingress_') else 30
+                self.stop_event.wait(delay)
         finally:
             self.stop_event.set()
             with self.lock:

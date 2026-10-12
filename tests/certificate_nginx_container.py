@@ -89,11 +89,19 @@ manager = Manager(HOST, True, "business", private=BASE/"private", published=BASE
                   lookup=lambda *_args, **_kwargs: ["test-address"],
                   issuer_factory=lambda private, host, responder: ACMEIssuer(private, host, responder, directory_url=ca.url+"/directory"))
 try:
+    # The driver starts before Nginx; no CA work is permitted during bootstrap.
+    manager.step()
+    assert manager.status()['state'] == 'PENDING', manager.status()
+    assert manager.status()['last_error'] == 'http_ingress_unavailable', manager.status()
+    assert ca.account_creations == 0 and len(ca.orders) == 0 and ca.validated_challenges == 0 and ca.failures == []
+    assert not manager.active_challenge
+    (BASE/'control'/'ingress-waiting').write_text('ok')
     eventually(bootstrap_closed)
     try:
         probe()
         raise AssertionError("fresh bootstrap exposed HTTPS before trusted issuance")
     except (OSError, ValueError): pass
+    manager.journal['retry_at'] = 0
     manager.step()
     assert ca.failures == [], ca.failures
     first = manager.status()["fingerprint"]
@@ -125,7 +133,8 @@ try:
     manager.step()
     assert manager.status()["https_ready"]
     assert ca.account_creations == 1 and ca.validated_challenges == 2 and len(ca.orders) == 2
-    report = {"bootstrap_business_closed": True, "actual_acme_http01": True, "nginx_trusted_tls": True,
+    report = {"bootstrap_business_closed": True, "late_nginx_no_ca_attempt": True,
+              "actual_acme_http01": True, "nginx_trusted_tls": True,
               "renewal": True, "retained_stream": True, "nginx_recreated_restores_certificate": True,
               "account_creations": ca.account_creations, "validated_challenges": ca.validated_challenges,
               "first_fingerprint": first, "second_fingerprint": second}

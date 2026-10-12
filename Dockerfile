@@ -7,10 +7,13 @@ WORKDIR /app
 # Install locked dependencies before copying application sources. Code and test
 # changes must not invalidate the dependency layer on every deployment.
 # Keep builds usable with both the classic builder and BuildKit.
+# Remove the ACME wheel's bundled test keys in this same installation layer;
+# deleting them in a later layer would leave them in exported image history.
 COPY pyproject.toml .
 RUN chmod 0644 pyproject.toml && \
     python -c "import pathlib,tomllib; data=tomllib.loads(pathlib.Path('pyproject.toml').read_text()); pathlib.Path('/tmp/requirements.txt').write_text('\\n'.join(data['project']['dependencies'])+'\\n')" && \
-    python -m pip install --no-cache-dir -r /tmp/requirements.txt
+    python -m pip install --no-cache-dir -r /tmp/requirements.txt && \
+    python -c "import pathlib,shutil,sysconfig; site=pathlib.Path(sysconfig.get_path('purelib')).resolve(); target=site/'acme'/'_internal'/'tests'; target.resolve().relative_to(site); assert target.resolve() == target, 'ACME test directory escaped installed package'; assert not target.exists() or target.is_dir(), 'Unexpected ACME test fixture path'; shutil.rmtree(target) if target.is_dir() else None"
 
 # Git worktree permissions can be restrictive on the host. Copy mutable sources
 # after dependencies, then normalize them for the fixed unprivileged UID.

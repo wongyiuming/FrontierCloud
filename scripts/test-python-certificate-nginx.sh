@@ -28,10 +28,11 @@ docker run -d --name "$driver" --cpus 1 --network "$network" \
   --workdir /app --user 0 frontiercloud-python-certificate-tools \
   python -m tests.certificate_nginx_container >/dev/null
 for _ in $(seq 1 100); do
-  [ -f "$runtime/control/root.crt" ] && break
+  [ -f "$runtime/control/ingress-waiting" ] && break
   sleep .2
 done
 test -f "$runtime/control/root.crt"
+test -f "$runtime/control/ingress-waiting"
 start_edge() {
   docker run -d --name "$edge" --cpus 1 --network "$network" --network-alias nginx \
     -e TLS_ENABLED=true -e SERVER_NAME=node.4399.com -e PUBLIC_BIND_ADDRESS=0.0.0.0 \

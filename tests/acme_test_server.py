@@ -6,6 +6,7 @@ ACME protocol requests under test are made by the pinned python-acme library.
 import base64
 import http.client
 import json
+import logging
 import secrets
 import threading
 from datetime import datetime, timedelta, timezone
@@ -124,6 +125,9 @@ class ACMETestServer:
                         raise ValueError("unsupported ACME endpoint")
                 except Exception as exc:
                     owner.failures.append(type(exc).__name__+": "+str(exc))
+                    logging.getLogger('frontiercloud.test_acme').warning('test_acme_request_rejected',
+                        extra={'context': {'error_class': type(exc).__name__,
+                            'operation': self.path.split('/')[1], 'stage': 'challenge' if self.path.startswith('/challenge/') else 'protocol'}})
                     self.respond({"type": "urn:ietf:params:acme:error:malformed", "detail": "test CA rejected request"}, code=400)
         self.server = HTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_port}"
