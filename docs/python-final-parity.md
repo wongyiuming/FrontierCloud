@@ -9,8 +9,8 @@ Only existing `dev` and `main` are implementation/release branches.
 ## Required acceptance ledger
 
 This ledger defines required evidence, not a passing declaration. The final
-release must include an acceptance.json result and source-commit receipt for the
-exact tested source, with the corresponding logs below. All gates must pass
+release must have sanitized results and a source-commit receipt for the
+exact tested source, with the corresponding CI logs below. All gates must pass
 before archival; historical component results alone do not authorize it.
 
 | Area | Required behavior | Final evidence |
@@ -30,18 +30,16 @@ before archival; historical component results alone do not authorize it.
 | Configuration | Automatic TLS two-value fresh baseline; retired path/port settings rejected with migration diagnosis | unit.log + source policy checks |
 | Upgrades | Online upgrade/rollback APIs, UI and privileged updater removed; safe operator migrations retained | unit.log + operator-endpoint.log |
 | Security | Nonce CSP, HTTPS trust, authenticated node control, exact media ownership and bounded compute | unit.log + federation.json |
-| Recovery | Frozen dependency/image artifacts, restart/recreate/offline restoration and clear unarchive instructions | operator-backup.log + frozen image restore receipt |
+| Recovery | Container restart/recreate, private database/control restoration and normal GitHub unarchive | operator-backup.log + source deployment instructions |
 
 ## Archival order
 
-1. Preserve all four existing branch tips in an independently verified Git bundle.
-2. Implement and test on `dev`, using isolated disposable development deployments.
-3. Pass exact-source CI and real Python Business/Direct/Relay acceptance.
-4. Promote through one same-repository `dev -> main` PR, then fast-forward `dev`.
-5. Freeze tested release artifacts and document database backup/restore procedures.
-6. Verify GitHub `main` is the tested runnable Python tree.
-7. Delete only `gin_dev` and `gin_main`, verifying their recorded tips first.
-8. Archive the repository and verify read-only status, remaining branches and artifacts.
+1. Implement and test on `dev`, using isolated disposable development deployments.
+2. Pass exact-source CI and real Python Business/Direct/Relay acceptance.
+3. Promote through one same-repository `dev -> main` PR, then fast-forward `dev`.
+4. Verify GitHub `main` is the tested runnable Python implementation.
+5. Delete `gin_dev` and `gin_main`; retain no Gin archive refs or recovery bundles.
+6. Archive using GitHub's native operation and verify read-only status and Python branches.
 
 Production deployments are outside this task. Existing media and production nodes
 must not be used as test fixtures. Test CA trust is confined to disposable test
@@ -52,26 +50,25 @@ databases, node vaults or private keys.
 
 ## Deliberate retirement and replacement coverage
 
-The reference release removed online software replacement. The frozen Python
+The reference release removed online software replacement. The Python
 release follows that contract: no Web upgrade/rollback endpoints, no cluster
 software-distribution endpoints, no Admin release module, and no privileged
 Docker-socket updater. Existing authenticated backup, media-control and node
 identity routes remain registered through `app/api/internal_control.py`.
 
 37 cases in the four former online-updater suites are retired with those removed
-product components, rather than skipped to hide a failure. Their history remains
-in the independently verified pre-archive Git bundle. Replacement protection is
+product components, rather than skipped to hide a failure. Replacement protection is
 `tests/test_retired_release_boundary.py` (actual HTTP 404 and operator-fence
 precedence), deployment/source policy assertions against Compose socket/mounts,
 and the remaining Admin/backup/worker-retirement regression suites. Manual
-migration/recovery and frozen-image installation receive independent acceptance.
+migration and private deployment recovery receive independent acceptance.
 
 The old mixed federation/security/site-control suites replace assertions for the
 removed updater with actual authenticated control routing and hard maintenance
 fences. The historical ten-node updater/CD harness is retired; current native
 acceptance exercises actual Business, Direct and Relay deployments with the
-current TLS controller and browser contracts. Historical source and audit results
-remain available in the pre-archive Git bundle.
+current TLS controller and browser contracts. Existing Python source history and
+sanitized CI evidence remain in the repository and its CI runs.
 
 ## Development evidence collected before exact final acceptance
 
@@ -104,7 +101,7 @@ replace an exact-source final Compose acceptance:
   independently released in PRs #12 and #13; the Python archival release remains
   unpromoted until all final gates pass.
 
-The release acceptance manifest records any unsupported features explicitly.
+The acceptance record states unsupported features explicitly.
 DNS-01 and direct Gin/Python database interchange are not implemented. Public
 DNS/HTTP-01 reachability remains a deployment prerequisite; the Python native
 fixture uses a real local ACME test CA, with test-only trust roots.

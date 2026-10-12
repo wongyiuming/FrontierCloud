@@ -50,7 +50,7 @@ its own audited converter and is outside normal restore.
 ## Operator procedure
 
 Follow [the recovery and unarchive guide](../operator-recovery.md) for the actual
-backup/restore commands, frozen image selection, maintenance fence, readiness
+backup/restore commands, deployment image selection, maintenance fence, readiness
 checks and rollback boundary. Existing external certificates require the fixed
 offline import described in [automatic TLS](../automatic-tls-python.md), before
 removing retired certificate path variables. New installations request their own
