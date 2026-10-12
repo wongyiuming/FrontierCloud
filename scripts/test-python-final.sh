@@ -25,6 +25,10 @@ USER 0
 RUN apt-get update && apt-get install -y --no-install-recommends git nodejs && rm -rf /var/lib/apt/lists/*
 EOF
 docker build -t frontiercloud-python-unit-tools "$tools_context"
+# A clean Git clone has no ignored data directory; runc needs its mountpoint
+# before placing disposable tmpfs over the read-only source bind.
+test ! -L data
+mkdir -p data
 docker run --rm --cpus 1 --network none --user 0 \
   --mount "type=bind,source=$PWD,target=/workspace,readonly" \
   --tmpfs /workspace/data:size=2g,mode=1777 --tmpfs /tmp:size=2g,mode=1777 \
