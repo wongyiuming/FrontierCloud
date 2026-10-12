@@ -67,8 +67,34 @@ The old mixed federation/security/site-control suites replace assertions for the
 removed updater with actual authenticated control routing and hard maintenance
 fences. The historical ten-node updater/CD harness is retired; current native
 acceptance exercises actual Business, Direct and Relay deployments with the
-current TLS controller and browser contracts. Existing Python source history and
-sanitized CI evidence remain in the repository and its CI runs.
+current TLS controller and browser contracts. Python source history remains in
+the repository. GitHub workflow artifacts contain sanitized receipts and logs
+for 14 days, then expire; they are not a permanent archival evidence store.
+The durable functional acceptance summary is recorded below in this document.
+
+## Completed functional acceptance
+
+The Python implementation was accepted at source
+`ce6c539523a1cad4dfdd6e7c56c215704ff210cf`, tree
+`fc26b2e0d653df04b8d9877b09f87fddf76eddc3`. This records completed functional
+tests, not a claim that expiring raw CI artifacts remain available indefinitely.
+Later documentation-only corrections do not change that tested implementation.
+
+- Complete Linux unit discovery: 750 cases, 5 explicit environment skips;
+  actual MySQL tests ran separately.
+- Real Nginx and Direct/Relay ACME/TLS issuance, renewal and restart checks passed.
+- Three-node Chromium acceptance: 19 checks passed, including Local/Direct/Relay
+  encrypted media and recording lifecycle, strictly serial STUN, and serial
+  single-core CPU recovery checks.
+- Actual MySQL migrations: 4 cases passed. Cold SQLite/MySQL database and control
+  restoration: 2 cases passed, checking all 39 SQLite / 38 MySQL fixture tables.
+- Actual identity-preserving endpoint handovers: 2 cases passed.
+- Dev [CI #885](https://github.com/wongyiuming/FrontierCloud/actions/runs/38263696018)
+  and PR [CI #886](https://github.com/wongyiuming/FrontierCloud/actions/runs/38263703959)
+  passed source and required complete native acceptance. Their workflow records
+  identify the tested commit; attached detailed artifacts expire after 14 days.
+- Automatic review completed for that source without new findings; all previous
+  review findings were corrected and verified before promotion in PR #73.
 
 ## Development evidence collected before exact final acceptance
 

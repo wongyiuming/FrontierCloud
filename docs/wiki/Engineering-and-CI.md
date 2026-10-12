@@ -60,7 +60,9 @@ CI uploads only explicitly selected sanitized JSON receipts, the source commit
 receipt and test logs. Private CA directories, NSS profiles, database/control
 snapshots, certificate pairs and runtime keys are excluded. The artifact collector
 rejects private-key PEM material; it never uploads the fixture or deployment
-directories. Independent exact-source native evidence remains required for the
+directories. These workflow artifacts expire after 14 days and are not a permanent
+evidence archive. A durable summary belongs in the existing acceptance ledger.
+Independent exact-source native evidence remains required for the
 final archival deliverable.
 
 Every Web fixture has one ASGI worker and one CPU. A timeout is a failure; stop
