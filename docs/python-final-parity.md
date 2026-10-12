@@ -96,37 +96,6 @@ Later documentation-only corrections do not change that tested implementation.
 - Automatic review completed for that source without new findings; all previous
   review findings were corrected and verified before promotion in PR #73.
 
-## Development evidence collected before exact final acceptance
-
-These are component results while integration is still in progress; they do not
-replace an exact-source final Compose acceptance:
-
-- Original Python baseline `60f2260`: 547 discovered unit cases, 546 passed and one
-  external MySQL case skipped; disposable temporary storage exposed sufficient
-  filesystem space for the original 1 GiB reserve invariant.
-- SQLite/Python database changes: 38 passing source/runtime cases plus one legacy
-  external-MySQL skip; a separate real MySQL 8.4.11 fixture executed four migration
-  and preservation cases successfully.
-- Browser encryption/recording components: 50 Linux single-CPU cases; an actual
-  Uvicorn socket with Chromium WebCrypto proved key unwrapping, two-chunk Range
-  decryption, tag rejection and revocation. The production process never decrypts
-  ordinary media content.
-- Python certificate components: 33 cases, including a real local ACME protocol
-  server and real TLS hot-loading. Actual Nginx issuance/renewal/recreation and
-  Direct/Relay Compose issuance, HTTPS, pairing, STUN and restart checks passed.
-- Integrated full source/unit snapshot: 629 discovered cases passed, with five
-  explicit external-MySQL skips; the separate real MySQL fixture covers four of
-  them. Final exact-commit acceptance remains pending while integration changes
-  are still being applied.
-- Operator cold recovery: actual SQLite and MySQL projects restored into new
-  Compose projects. SQLite included 39 tables (including sqlite_sequence/BLOBs),
-  MySQL 38 application tables, with typed hashes/rows matching; Redis AOF and
-  secrets/ACME/premaster recovery matched and media/sockets stayed excluded.
-- Admin navigation and fullscreen progress regressions were reproduced before
-  the change and corrected in real Chromium in both repositories. Gin fixes are
-  independently released in PRs #12 and #13; the Python archival release remains
-  unpromoted until all final gates pass.
-
 The acceptance record states unsupported features explicitly.
 DNS-01 and direct Gin/Python database interchange are not implemented. Public
 DNS/HTTP-01 reachability remains a deployment prerequisite; the Python native

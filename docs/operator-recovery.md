@@ -62,6 +62,29 @@ business Backup excludes the Master premaster and is not this full recovery set.
 Copy the private snapshot to another machine and verify it there. Retain old
 source, Compose and images. Never remove persistent volumes as cache cleanup.
 
+The snapshot does not contain container images. Its `manifest.json` records
+the exact Redis image and, for MySQL deployments, the exact MySQL image needed
+to restore their cold data. Save those existing image IDs privately before
+the original cache or registry version is lost; a new source build or moved
+version tag cannot satisfy the restore identity check.
+
+```bash
+docker save --output /absolute/private-backups/restore-images.tar RECORDED_REDIS_IMAGE_ID
+# For a MySQL deployment, include both recorded IDs in the same save command:
+docker save --output /absolute/private-backups/restore-images.tar RECORDED_REDIS_IMAGE_ID RECORDED_MYSQL_IMAGE_ID
+```
+
+Choose the applicable command and replace the placeholders with the exact IDs
+in the snapshot manifest. Keep the image file outside the snapshot directory:
+the verifier rejects extra files there. Protect and transfer it privately with
+the snapshot, then run `docker load --input /absolute/private-backups/restore-images.tar`
+on a host with the recorded platform. Configure the stopped restore project's
+Redis/MySQL services to use the loaded IDs or their verified original aliases;
+pass that image-selection overlay to the restore tool along with every existing
+Compose file. Confirm the IDs and platform match the manifest before restoring.
+This is operator-managed private deployment backup, not a public repository
+recovery release or a Gin branch archive.
+
 ## Restore or migrate
 
 Restore into an empty, stopped compatible Compose project:
