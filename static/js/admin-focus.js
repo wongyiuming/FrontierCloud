@@ -32,10 +32,29 @@
         if (indicator) indicator.textContent = expanded ? '−' : '＋';
     }
 
+    let focusRevision = 0;
+    const cancelPendingFocus = () => { focusRevision++; };
+    consoleRoot?.addEventListener('wheel', cancelPendingFocus, {passive: true});
+    consoleRoot?.addEventListener('touchmove', cancelPendingFocus, {passive: true});
+    document.addEventListener('pointerdown', cancelPendingFocus, {capture: true, passive: true});
+    document.addEventListener('keydown', event => {
+        if (['Escape', 'PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' '].includes(event.key)) cancelPendingFocus();
+    });
+
     function focusExpanded(module) {
         if (!module?.classList.contains('expanded')) return;
-        requestAnimationFrame(() => {
-            module.scrollIntoView({behavior: 'smooth', block: 'start', inline: 'nearest'});
+        const revision = ++focusRevision;
+        requestAnimationFrame(async () => {
+            if (revision !== focusRevision) return;
+            // A collapsing sibling above the target keeps moving its start
+            // position during the flex transition. Align only to settled layout.
+            const transitions = moduleChildren().flatMap(node => node.getAnimations?.() || [])
+                .filter(animation => ['flex-basis', 'flex-grow'].includes(animation.transitionProperty));
+            await Promise.allSettled(transitions.map(animation => animation.finished));
+            requestAnimationFrame(() => {
+                if (revision !== focusRevision || !module.isConnected || !module.classList.contains('expanded')) return;
+                module.scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start', inline: 'nearest'});
+            });
         });
     }
 
