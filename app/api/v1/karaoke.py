@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, Response
 
 from app.api.v1 import media as media_api
 from app.api.v1.karaoke_contract import KaraokeContext
-from app.services import karaoke_identity, lyrics, media_objects
+from app.services import karaoke_identity, lyrics, media_objects, media_crypto, recording_crypto
 from app.services.federation import routing as node_routing
 
 
@@ -24,6 +24,7 @@ async def _resolve(token: str, request: Request | None) -> dict:
 
     if kind == "global":
         media_api.require_https(request)
+        authorized = await recording_crypto.source_object(token)
         row, _relationship = await node_routing.resolve(identifier)
         payload = row["payload"]
         media_type = payload.get("type")
@@ -32,19 +33,22 @@ async def _resolve(token: str, request: Request | None) -> dict:
         has_lyrics = False
         if media_type == "audio":
             # Master lyric relations are authoritative and independent of placement.
-            has_lyrics = bool(await node_routing.lyric_entries(identifier))
+            encrypted = await media_crypto.encrypted_lyric(row["path"], identifier)
+            has_lyrics = bool(encrypted or await node_routing.lyric_entries(identifier))
         return {
             "kind": kind,
             "identifier": identifier,
             "path": row["path"],
             "type": media_type,
             "has_lyrics": has_lyrics,
+            "encryption": authorized["encryption"],
         }
 
     row = await media_objects.object_by_id(identifier)
     if not row or row["object_kind"] not in {"audio", "video"}:
         raise HTTPException(404, "Karaoke media not found")
     media_path, media_type = str(row["media_path"]), str(row["object_kind"])
+    authorized = await recording_crypto.source_object(token)
     async with media_api.media_mutation_lock.shared():
         media_api.ensure_media_mutations_ready()
         try:
@@ -63,7 +67,7 @@ async def _resolve(token: str, request: Request | None) -> dict:
         else:
             has_lyrics = False
     return {"kind": kind, "identifier": identifier, "path": media_path,
-            "type": media_type, "has_lyrics": has_lyrics}
+            "type": media_type, "has_lyrics": has_lyrics, "encryption": authorized["encryption"]}
 
 
 @router.get("/context", response_model=KaraokeContext)
@@ -81,6 +85,8 @@ async def context(
         has_lyrics=resolved["has_lyrics"],
         lyrics_url=f"/api/v1/karaoke/lyrics?{query}" if resolved["has_lyrics"] else None,
         cover_url="/favicon.ico",
+        file_path=resolved["path"] if resolved.get("encryption") else None,
+        encryption=resolved["encryption"].to_dict() if resolved.get("encryption") else None,
     )
 
 
@@ -102,6 +108,12 @@ async def lyric_entries(media: str = Query(..., min_length=80, max_length=512), 
     if not resolved["has_lyrics"]:
         raise HTTPException(404, "Lyrics not found")
     try:
+        encrypted = await media_crypto.encrypted_lyric(resolved["path"], resolved["identifier"] if resolved["kind"] == "global" else "")
+        if encrypted:
+            return JSONResponse({"encrypted": True, "lyric_path": encrypted["path"],
+                                 "encryption": encrypted["encryption"].to_dict(),
+                                 "source_url": "/api/v1/media/crypto/bytes?" + urlencode({"file_path": encrypted["path"]})},
+                                headers=media_api.NO_STORE_HEADERS)
         if resolved["kind"] == "global":
             entries = await node_routing.lyric_entries(resolved["identifier"])
         else:

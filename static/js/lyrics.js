@@ -2,6 +2,7 @@ const lyricPalette = ['#aebfca', '#b9c4a6', '#c5b49f', '#b8adc4', '#9fbeb9', '#c
 
 function renderLyrics() {
     const board = document.getElementById('lyricsBoard');
+    board.dataset.lineCount = String(lyricLines.length);
     const columns = [0, 1, 2].map(index => document.getElementById(`lyricsColumn${index}`));
     columns.forEach(column => { column.innerHTML = ''; });
     const rowsPerColumn = Math.max(1, Math.ceil(lyricLines.length / columns.length));
@@ -22,5 +23,13 @@ function renderLyrics() {
     document.documentElement.style.setProperty('--lyric-font-size', `${fontSize}px`);
 }
 
-window.addEventListener('DOMContentLoaded', renderLyrics);
+window.addEventListener('DOMContentLoaded', async () => {
+    const encrypted = window.frontierCloudEncryptedLyrics;
+    if (!encrypted?.file_path) { renderLyrics(); return; }
+    try {
+        const text = await window.FrontierMediaCrypto.textFor(encrypted.file_path, encrypted.encryption?.file_id);
+        lyricLines.splice(0, lyricLines.length, ...window.FrontierMediaCrypto.parseLyrics(text).map(entry => entry.text));
+        renderLyrics();
+    } catch (error) { document.getElementById('lyricsBoard').textContent = error.message; }
+});
 window.addEventListener('resize', renderLyrics);

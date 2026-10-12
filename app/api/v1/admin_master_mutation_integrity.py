@@ -33,6 +33,10 @@ class SiteTypeUploadReservation(BaseModel):
     relative_path: str | None = Field(None, max_length=1024)
     filename: str = Field(min_length=1, max_length=255)
     size_bytes: int = Field(gt=0, le=10 * 1024 ** 3)
+    storage_mode: str = Field(pattern="^(encrypted|plain)$")
+    encryption: dict | None = None
+    preparation_token: str = Field("", max_length=4096)
+
 
 
 def _is_master_media_paths(payload: dict) -> bool:
@@ -66,6 +70,9 @@ async def create_upload_session(
                 relative_path=payload.relative_path,
                 filename=payload.filename,
                 size_bytes=payload.size_bytes,
+                storage_mode=payload.storage_mode,
+                encryption=payload.encryption,
+                preparation_token=payload.preparation_token,
             )
             logical_path = await cluster._upload_logical_path(base_payload)
             folder_path = upload_site_routing.media_folder_path(logical_path)

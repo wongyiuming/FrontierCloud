@@ -11,12 +11,14 @@ import copy
 import hashlib
 import json
 import os
+import re
 import socket
 import ssl
 import struct
 import subprocess
 import tempfile
 import time
+import traceback
 import uuid
 import wave
 from concurrent.futures import ThreadPoolExecutor
@@ -28,6 +30,14 @@ from playwright.sync_api import expect, sync_playwright
 ROOT = Path(__file__).resolve().parents[1]
 ACCEPTANCE_SUBNET = "172.30.251.0/24"
 ACCEPTANCE_GATEWAY = "172.30.251.1"
+DOMAIN_ADDRESSES = {}
+_original_getaddrinfo = socket.getaddrinfo
+
+
+def fixture_getaddrinfo(host, port, *arguments, **kwargs):
+    # Resolver injection stays inside this disposable test process. Product
+    # containers resolve the same names through isolated Docker network aliases.
+    return _original_getaddrinfo(DOMAIN_ADDRESSES.get(host, host), port, *arguments, **kwargs)
 
 
 class Checks(list):
@@ -58,15 +68,19 @@ def wait_for(work, seconds=150, description="condition"):
 
 
 class Node:
-    def __init__(self, name, directory, base, ca, bundle, index):
+    def __init__(self, name, directory, base, ca, bundle, index, *, network):
         self.name, self.directory = name, directory / name
         self.directory.mkdir()
-        self.host = ACCEPTANCE_GATEWAY
-        self.port = 14443 + index
-        self.project = "fc-acceptance-" + name
+        self.host = f"172.30.251.{11+index}"
+        self.hostname = name+".4399.com"
+        self.storage = index != 0
+        self.profile = "relay" if index == 2 else "direct"
+        self.port = 8443 if self.storage and self.profile == "relay" else 443
+        DOMAIN_ADDRESSES[self.hostname] = self.host
+        self.project = "fc-acceptance-" + directory.name[-12:] + "-" + name
         self.configuration = self.directory / "compose.json"
         self.ca, self.client = ca, None
-        self.endpoint = f"https://{self.host}:{self.port}"
+        self.endpoint = f"https://{self.hostname}"+(f":{self.port}" if self.port!=443 else "")
         self.csrf = ""
         self.relation = ""
         self.resource = None
@@ -74,62 +88,49 @@ class Node:
         (self.data / "media/music/shared").mkdir(parents=True)
         (self.data / "media/vido").mkdir(parents=True)
         (self.data / "media/lyrics").mkdir(parents=True)
-        certs = self.directory / "certs"
-        certs.mkdir()
-        request = certs / "request.pem"
-        key, cert = certs / "privkey.pem", certs / "fullchain.pem"
-        command("openssl", "req", "-new", "-nodes", "-newkey", "rsa:2048", "-keyout", str(key),
-                "-out", str(request), "-subj", f"/CN={self.host}")
-        extensions = certs / "extensions.conf"
-        extensions.write_text(
-            f"subjectAltName=IP:{self.host}\n"
-            "basicConstraints=critical,CA:FALSE\n"
-            "keyUsage=critical,digitalSignature,keyEncipherment\n"
-            "extendedKeyUsage=serverAuth\n"
-            "subjectKeyIdentifier=hash\n"
-            "authorityKeyIdentifier=keyid,issuer\n"
-        )
-        command("openssl", "x509", "-req", "-in", str(request), "-CA", str(ca), "-CAkey", str(ca.with_suffix(".key")),
-                "-CAcreateserial", "-out", str(cert), "-days", "1", "-extfile", str(extensions))
-        public_key = command("openssl", "x509", "-in", str(cert), "-pubkey", "-noout")
-        public_key_der = subprocess.check_output(
-            ["openssl", "pkey", "-pubin", "-outform", "DER"],
-            input=public_key.encode(),
-        )
-        self.spki = base64.b64encode(hashlib.sha256(public_key_der).digest()).decode()
+        self.spki = ""
+        if self.storage:
+            environment={**os.environ,"TLS_ENABLED":"true","SERVER_NAME":self.hostname,"STORAGE_TRANSPORT":self.profile,
+                         "STORAGE_PORT":str(self.port),"STORAGE_ENDPOINT":self.endpoint,"DATA_DIRECTORY":str(self.data)}
+            base=json.loads(command("docker","compose","-f",str(ROOT/"docker-compose.storage.yaml"),"config","--format","json",env=environment))
         configuration = copy.deepcopy(base)
         configuration.pop("name", None)
         for volume in configuration.get("volumes", {}).values():
             volume.pop("name", None)
-        configuration["networks"] = {"default": {"name": self.project}}
+        configuration["networks"] = {"default": {"name": self.project+"-private"},"fleet":{"external":True,"name":network}}
         for name, service in configuration["services"].items():
             service.pop("container_name", None)
             service.pop("env_file", None)
             service.pop("build", None)
             service.pop("ports", None)
-            if name in ("web", "secrets-init", "media-init"):
-                service["image"] = "frontiercloud-acceptance-web"
+            service.pop("network_mode", None)
+            if name in ("web", "secrets-init", "media-init", "certificate-init", "certificate-agent"):
+                service["image"] = "frontiercloud-python-fleet:trusted-web"
             elif name == "nginx":
-                service["image"] = "frontiercloud-acceptance-nginx"
-                service["ports"] = [{"target": 443, "published": str(self.port), "host_ip": ACCEPTANCE_GATEWAY, "protocol": "tcp"}]
-            if name in ("web", "nginx"):
-                service.setdefault("environment", {}).update(TLS_ENABLED="true", SERVER_NAME=self.host, INSTANCE_NAME="acceptance")
-                service.setdefault("volumes", []).append({
-                    "type": "bind", "source": str(bundle),
-                    "target": "/etc/ssl/certs/ca-certificates.crt", "read_only": True,
-                })
+                service["image"] = "frontiercloud-python-fleet:trusted-nginx"
+            if name in ("web", "nginx", "certificate-agent"):
+                service.setdefault("environment", {}).update(TLS_ENABLED="true", SERVER_NAME=self.hostname, INSTANCE_NAME="acceptance")
+                if self.storage:
+                    service["environment"].update(STORAGE_TRANSPORT=self.profile,STORAGE_PORT=str(self.port),STORAGE_ENDPOINT=self.endpoint)
             if name == "web":
-                service["environment"]["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt"
                 service["cpus"] = 1.0
+            if name == "certificate-agent":
+                service["command"]=["python","-m","tests.storage_certificate_agent_fixture"]
+                service.setdefault("volumes",[]).append({"type":"bind","source":str(ca.parent),"target":"/test-ca","read_only":True})
+            if self.storage and name=="web":
+                service["environment"]["TRUSTED_PROXY_NETWORKS"]=""
+            service["networks"]={"default":{}}
+            if name == "web" and not self.storage:
+                # Business makes verified outbound requests to both appliances;
+                # its Nginx remains the only public entry on this test network.
+                service["networks"]["fleet"] = {}
+            public_service = name == ("web" if self.storage else "nginx")
+            if public_service:
+                service["networks"]["default"]["aliases"]=[self.hostname]
+                service["networks"]["fleet"]={"ipv4_address":self.host,"aliases":[self.hostname]}
             for volume in service.get("volumes", []):
                 if volume.get("target") == "/app/data":
                     volume["source"] = str(self.data)
-                elif volume.get("target") == "/etc/nginx/certs/fullchain.pem":
-                    volume["source"] = str(cert)
-                elif volume.get("target") == "/etc/nginx/certs/privkey.pem":
-                    volume["source"] = str(key)
-                elif volume.get("target") == "/var/www/certbot":
-                    volume["source"] = str(certs / "acme")
         self.configuration.write_text(json.dumps(configuration))
         # The private temporary parent remains 0700. Fixture directories need both
         # the runner and the actual UID 10001 container to create/delete fixtures.
@@ -147,18 +148,26 @@ class Node:
 
     def start(self):
         self.compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "180")
-        self.compose("exec", "-T", "nginx", "nginx", "-t")
+        if not self.storage:self.compose("exec", "-T", "nginx", "nginx", "-t")
         trusted = ssl.create_default_context(cafile=str(self.ca))
-        with socket.create_connection((self.host, self.port), timeout=10) as connection:
-            with trusted.wrap_socket(connection, server_hostname=self.host):
-                pass
+        def served():
+            with socket.create_connection((self.host,self.port),timeout=3) as connection:
+                with trusted.wrap_socket(connection,server_hostname=self.hostname) as stream:
+                    return stream.getpeercert(binary_form=True)
+        certificate=wait_for(served,description=f"{self.name} automatically issued TLS certificate")
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        public_key=x509.load_der_x509_certificate(certificate).public_key().public_bytes(serialization.Encoding.DER,serialization.PublicFormat.SubjectPublicKeyInfo)
+        self.spki=base64.b64encode(hashlib.sha256(public_key).digest()).decode()
         unknown_ca = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        for context, hostname in ((unknown_ca, self.host), (trusted, "wrong.frontiercloud.local")):
+        for context, hostname in ((unknown_ca, self.hostname), (trusted, "wrong.frontiercloud.local")):
             try:
                 with socket.create_connection((self.host, self.port), timeout=10) as connection:
                     with context.wrap_socket(connection, server_hostname=hostname):
                         pass
-            except ssl.SSLCertVerificationError:
+            except ssl.SSLError:
+                # Native TLS may reject an unknown SNI before presenting any
+                # certificate; that handshake refusal is also fail-closed.
                 continue
             raise AssertionError("Untrusted CA or mismatched TLS hostname was accepted")
         self.client = httpx.Client(verify=ssl.create_default_context(cafile=str(self.ca)),
@@ -173,7 +182,7 @@ class Node:
         identity = self.nodes()
         verified_id = self.web(
             "import asyncio; from app.services.federation.transport import transport; "
-            f"print(asyncio.run(transport.identity({self.endpoint!r}, expected_id={identity['node_id']!r}, role='Standalone'))['node_id'])"
+            f"print(asyncio.run(transport.identity({self.endpoint!r}, expected_id={identity['node_id']!r}, role={('Follower' if self.storage else 'Standalone')!r}))['node_id'])"
         )
         assert verified_id == identity["node_id"]
 
@@ -229,23 +238,22 @@ print(json.dumps(asyncio.run(read())))
     def mode(self, value, relation=None):
         self.api(f"/api/v1/media/admin/nodes/{relation or self.relation}/mode", {"mode": value})
 
-    def configure_resources(self, *, storage=True, capacity_gib=2, compute=False, backup=True, relation=None):
+    def configure_resources(self, *, storage=True, capacity_gib=2, backup=True, relation=None):
         return self.api(f"/api/v1/media/admin/nodes/{relation or self.relation}/resources", {
             "storage_enabled": storage,
             "storage_capacity_gib": capacity_gib if storage else 0,
-            "compute_enabled": compute,
-            "worker_slots": 1 if compute else 0,
             "backup_enabled": backup,
         })
 
-    def upload_media(self, blob, filename, *, site_type):
-        target_dir = "music/relay-shared" if site_type == "relay" else "music/shared"
+    def upload_media(self, blob, filename, *, site_type, target_dir=None):
+        target_dir = target_dir or ("music/relay-shared" if site_type == "relay" else "music/shared")
         reservation = self.api("/api/v1/media/admin/upload/session", {
             "site_type": site_type,
             "target_dir": target_dir,
             "relative_path": None,
             "filename": filename,
             "size_bytes": len(blob),
+            "storage_mode": "plain",
         })
         expected_transport = {"primary": "Local", "direct": "Direct", "relay": "Relay"}[site_type]
         assert reservation["site_type"] == site_type
@@ -356,12 +364,12 @@ print(json.dumps({key:sum(row[key] for row in rows) for key in ['rss','fd','sock
     def stop(self):
         if self.client:
             self.client.close()
-        self.compose("down", "--volumes", "--remove-orphans")
+        self.compose("down", "--timeout", "5", "--volumes", "--remove-orphans")
 
     def failure_diagnostics(self):
         from urllib.parse import urlsplit
         details = {"node": self.name, "endpoint": self.endpoint}
-        if self.endpoint:
+        if self.endpoint and self.client is not None:
             try:
                 details["dns"] = sorted({row[4][0] for row in socket.getaddrinfo(urlsplit(self.endpoint).hostname, 443)})
             except OSError as exc:
@@ -387,13 +395,22 @@ def browser_args(nodes):
     return ["--autoplay-policy=no-user-gesture-required",
             "--use-fake-device-for-media-stream",
             "--use-fake-ui-for-media-stream",
-            "--ignore-certificate-errors-spki-list=" + ",".join(node.spki for node in nodes),
+            "--host-resolver-rules="+",".join(f"MAP {node.hostname} {node.host}" for node in nodes),
             "--log-net-log=" + str(nodes[0].directory.parent / "browser-network.json")]
 
 
 def launch_browser(playwright, nodes):
     executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
-    options = {"args": browser_args(nodes)}
+    # Chromium's NSS trust belongs to this disposable process profile, never the
+    # development user's global certificate store. No TLS-error bypass flags.
+    browser_home = nodes[0].directory.parent / "browser-home"
+    nss = browser_home / ".pki/nssdb"
+    if not nss.exists():
+        nss.mkdir(parents=True, mode=0o700)
+        command("certutil", "-N", "--empty-password", "-d", "sql:" + str(nss))
+        command("certutil", "-A", "-n", "FrontierCloud disposable ACME root", "-t", "C,,",
+                "-i", str(nodes[0].ca), "-d", "sql:" + str(nss))
+    options = {"args": browser_args(nodes), "env": {**os.environ, "HOME": str(browser_home)}}
     if executable:
         options["executable_path"] = executable
     return playwright.chromium.launch(**options)
@@ -417,6 +434,14 @@ def browser_network_failure(directory):
         print(json.dumps({"browser_network": "incomplete network log"}), flush=True)
 
 
+def wait_page(page, expression, **options):
+    # Playwright string predicates use eval and fail under the product nonce CSP.
+    # Explicit function predicates exercise the same DOM without unsafe-eval.
+    if not re.match(r"^(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>", expression.strip()):
+        expression = "() => (" + expression + ")"
+    return page.wait_for_function(expression, **options)
+
+
 def admin_page(browser, node):
     context = browser.new_context()  # TLS errors are never ignored.
     context.add_cookies([{ "name": item.name, "value": item.value, "domain": item.domain,
@@ -424,7 +449,7 @@ def admin_page(browser, node):
     page = context.new_page()
     page.goto(node.endpoint + "/api/v1/media/admin/", wait_until="domcontentloaded")
     page.locator('#nodesPanel .module-heading').click()
-    page.wait_for_function("document.querySelector('#nodeIdentity').textContent.includes(' / v')")
+    wait_page(page, "document.querySelector('#nodeIdentity').textContent.includes(' / v')")
     return context, page
 
 
@@ -433,24 +458,23 @@ def browser_promote(browser, node, role):
     page.select_option('#nodeRole', role)
     page.fill('#nodeEndpoint', node.endpoint)
     page.locator('#nodePromotion button[type="submit"]').click()
-    page.wait_for_function("document.querySelector('#nodeOperationStatus').textContent && document.querySelector('#nodeOperationStatus').textContent !== '处理中'")
+    wait_page(page, "document.querySelector('#nodeOperationStatus').textContent && document.querySelector('#nodeOperationStatus').textContent !== '处理中'")
     operation = page.locator('#nodeOperationStatus').text_content()
     assert operation == '已完成', f"{node.name} promotion failed: {operation}"
-    page.wait_for_function("role => document.querySelector('#nodeIdentity').textContent.startsWith(role)", arg=role)
+    wait_page(page, "role => document.querySelector('#nodeIdentity').textContent.startsWith(role)", arg=role)
     assert not page.locator('#nodePromotion').is_visible()
     context.close()
 
 
 def browser_pair(browser, master, follower):
-    follower_context, follower_page = admin_page(browser, follower)
-    follower_page.locator('#nodeIssuePair').click()
-    follower_page.wait_for_function("document.querySelector('#nodePairPackage').value.includes('signature')")
-    package = json.loads(follower_page.input_value('#nodePairPackage'))
+    # The native appliance issues its five-minute package only after HTTPS is
+    # ready. It has no business AdminGUI; import is exercised on the Master UI.
+    package = follower.api("/api/v1/media/admin/nodes/pair-package", {})
     master_context, master_page = admin_page(browser, master)
     master_page.fill('#nodePairPackage', json.dumps(package))
     master_page.locator('#nodeImportPair').click()
-    master_page.wait_for_function("document.querySelector('#nodeOperationStatus').textContent === '已完成'", timeout=60000)
-    master_page.wait_for_function(
+    wait_page(master_page, "document.querySelector('#nodeOperationStatus').textContent === '已完成'", timeout=60000)
+    wait_page(master_page,
         "peer => Array.from(document.querySelector('#nodeRelationships').rows)"
         ".some(row => row.textContent.includes(peer))",
         arg=follower.nodes()["node_id"], timeout=60000,
@@ -459,17 +483,14 @@ def browser_pair(browser, master, follower):
         row["relationship_id"] for row in master.nodes()["relationships"]
         if row["peer_id"] == follower.nodes()["node_id"]
     )
-    follower_page.locator('#nodesRefresh').click()
-    follower_page.wait_for_function("count => document.querySelector('#nodeRelationships').rows.length === count", arg=len(follower.nodes()["relationships"]))
     master_context.close()
-    follower_context.close()
     return package
 
 
 def browser_revoke(browser, master):
     context, page = admin_page(browser, master)
     page.locator('#nodeRelationships button').filter(has_text='撤销关系').click()
-    page.wait_for_function("document.querySelector('#nodeRelationships').rows.length === 0", timeout=60000)
+    wait_page(page, "document.querySelector('#nodeRelationships').rows.length === 0", timeout=60000)
     context.close()
 
 
@@ -487,24 +508,24 @@ def browser_checks(browser, master, resource):
     """)
     # Joining is accepted only with working media routes; exercise the actual public player.
     page.goto(master.endpoint + "/api/v1/media/music/category?path=music/shared", wait_until="domcontentloaded")
-    page.wait_for_function("typeof art !== 'undefined' && art && art.video", timeout=60000)
-    page.wait_for_function("currentMediaList.length > 0", timeout=30000)
+    wait_page(page, "typeof art !== 'undefined' && art && art.video", timeout=60000)
+    wait_page(page, "currentMediaList.length > 0", timeout=30000)
     assert page.locator('.media-search-input, input[type="search"]').count() == 0
     assert page.locator(f'[data-media-id="{resource["resource_id"]}"]').count() == 1
     page.evaluate("id => selectMedia(currentMediaList.findIndex(item => item.resource_id === id))", resource["resource_id"])
-    page.wait_for_function("art.video.currentTime > 0.1 && !art.video.paused", timeout=30000)
-    page.wait_for_function("activeLyricEntries.length > 0", timeout=10000)
+    wait_page(page, "art.video.currentTime > 0.1 && !art.video.paused", timeout=30000)
+    wait_page(page, "activeLyricEntries.length > 0", timeout=10000)
     player_url = page.url
     playback_position = page.evaluate("art.video.currentTime")
     page.locator('#lyricsLink').click()
-    page.wait_for_function("!document.querySelector('#fullscreenLyrics').classList.contains('hidden')")
+    wait_page(page, "!document.querySelector('#fullscreenLyrics').classList.contains('hidden')")
     assert page.url == player_url and page.locator('.fullscreen-lyrics-column').count() == 3
     page.locator('#fullscreenLyrics').click(position={"x": 12, "y": 12})
-    page.wait_for_function("document.querySelector('#fullscreenLyrics').classList.contains('hidden')")
-    page.wait_for_function("position => art.video.currentTime >= position && !art.video.paused", arg=playback_position)
+    wait_page(page, "document.querySelector('#fullscreenLyrics').classList.contains('hidden')")
+    wait_page(page, "position => art.video.currentTime >= position && !art.video.paused", arg=playback_position)
     assert page.url == player_url
     page.evaluate("async () => { await art.video.play(); art.video.pause(); art.video.currentTime=1; await art.video.play(); }")
-    page.wait_for_function("art.video.currentTime > 1", timeout=10000)
+    wait_page(page, "art.video.currentTime > 1", timeout=10000)
     karaoke_id = page.evaluate(
         "id => currentMediaList.find(item => item.resource_id === id).karaoke_id",
         resource["resource_id"],
@@ -551,24 +572,37 @@ def main():
     arguments = parser.parse_args()
     report, nodes = {"checks": Checks(), "samples": []}, []
     network = "fc-acceptance-" + uuid.uuid4().hex[:12]
-    command("docker", "network", "create", "--subnet", ACCEPTANCE_SUBNET,
-            "--gateway", ACCEPTANCE_GATEWAY, network)
     with tempfile.TemporaryDirectory(prefix="frontiercloud-acceptance-") as temporary:
         directory = Path(temporary)
-        ca = directory / "ca.pem"
-        command("openssl", "req", "-x509", "-nodes", "-days", "1", "-newkey", "rsa:2048",
-                "-keyout", str(ca.with_suffix(".key")), "-out", str(ca),
-                "-subj", "/CN=FrontierCloud disposable test CA",
-                "-addext", "basicConstraints=critical,CA:TRUE",
-                "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-                "-addext", "subjectKeyIdentifier=hash")
+        from tests.certificate_fixtures import TestCA
+        from cryptography.hazmat.primitives import serialization
+        test_ca=TestCA()
+        private=directory/"test-ca";private.mkdir(mode=0o700)
+        ca = private / "root.crt"
+        ca.write_bytes(test_ca.root.public_bytes(serialization.Encoding.PEM))
+        (private/"private.pem").write_bytes(test_ca.key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()))
+        (private/"private.pem").chmod(0o600)
         bundle = directory / "ca-certificates.crt"
         bundle.write_bytes(Path("/etc/ssl/certs/ca-certificates.crt").read_bytes() + b"\n" + ca.read_bytes())
+        command("docker","build","-t","frontiercloud-python-fleet:web","-f",str(ROOT/"Dockerfile"),str(ROOT))
+        command("docker","build","-t","frontiercloud-python-fleet:nginx","-f",str(ROOT/"nginx/Dockerfile"),str(ROOT))
+        report["clean_images"] = {}
+        for kind in ("web", "nginx"):
+            clean_tag = "frontiercloud-acceptance-" + kind
+            command("docker", "tag", "frontiercloud-python-fleet:" + kind, clean_tag)
+            report["clean_images"][kind] = command("docker", "image", "inspect", "--format", "{{.Id}}", clean_tag)
+        for kind in ("web","nginx"):
+            trust_file=private/("Dockerfile.trust-"+kind)
+            trust_file.write_text(f"FROM frontiercloud-python-fleet:{kind}\nUSER 0\nCOPY root.crt /usr/local/share/ca-certificates/frontiercloud-test-only-root.crt\nRUN update-ca-certificates\n"+("USER 10001:10001\n" if kind=="web" else ""))
+            command("docker","build","-t",f"frontiercloud-python-fleet:trusted-{kind}","-f",str(trust_file),str(private))
+        socket.getaddrinfo=fixture_getaddrinfo
         base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.yaml"),
                                   "config", "--format", "json"))
         try:
+            command("docker", "network", "create", "--subnet", ACCEPTANCE_SUBNET,
+                    "--gateway", ACCEPTANCE_GATEWAY, network)
             for index, name in enumerate(("master-a", "direct-b", "relay-c")):
-                node = Node(name, directory, base, ca, bundle, index)
+                node = Node(name, directory, base, ca, bundle, index,network=network)
                 nodes.append(node)
             a, b, c = nodes
             # Master Local content is imported once during promotion. A Follower
@@ -577,15 +611,12 @@ def main():
             upload_source = directory / "upload-source.wav"
             wav(upload_source, seconds=20, tone=700)
             source = upload_source.read_bytes()
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                list(executor.map(Node.start, nodes))
+            for node in nodes:node.start()
             report["checks"].append("trusted TLS succeeds; unknown CA and wrong hostname rejected on every node")
 
             with sync_playwright() as playwright:
                 browser = launch_browser(playwright, nodes)
                 browser_promote(browser, a, "Master")
-                browser_promote(browser, b, "Follower")
-                browser_promote(browser, c, "Follower")
                 browser_pair(browser, a, b)
                 browser_pair(browser, a, c)
                 browser.close()
@@ -609,7 +640,9 @@ def main():
             follower_id = b.nodes()["node_id"]
             relay_id = c.nodes()["node_id"]
             a.configure_resources(storage=True, capacity_gib=2, backup=True, relation=b.relation)
-            a.configure_resources(storage=True, capacity_gib=2, backup=True, relation=c.relation)
+            # Direct has twice the allocation with the same media byte count;
+            # recording placement therefore selects it deterministically.
+            a.configure_resources(storage=True, capacity_gib=1, backup=True, relation=c.relation)
             def follower_enabled(member_id):
                 return f"""
 import asyncio
@@ -636,12 +669,14 @@ print(asyncio.run(read_enabled()))
             a.api("/api/v1/media/admin/upload/session", {
                 "site_type": "direct", "target_dir": "music/shared",
                 "relative_path": None, "filename": "direct.wav", "size_bytes": len(source),
+                "storage_mode": "plain",
             }, expected=409)
             report["checks"].append("site-type reservations place Relay/Direct uploads and enforce global path uniqueness")
 
             lyric = b"[00:01.00]MASTER OWNED LYRIC\n[00:05.00]next line\n"
             response = a.client.post(a.endpoint + "/api/v1/media/admin/upload/lyric",
                                      headers={"X-CSRF-Token": a.csrf},
+                                     data={"storage_mode":"plain"},
                                      files={"file": ("owner.lrc", lyric, "text/plain")})
             assert response.status_code == 200, response.text[:300]
             a.api("/api/v1/media/admin/lyrics/relations", {
@@ -698,6 +733,7 @@ print(asyncio.run(read_enabled()))
                 a.mode(mode)
                 ticket = a.upload_recording(b"WEBM-VOICE-ONLY" + lyrics_metadata + trailer,
                                             f"{mode} recording")
+                assert ticket["direct"] == (mode == "Direct"), ticket["direct"]
                 listing = a.client.get(a.endpoint + "/api/v1/karaoke/account/recordings").json()["items"]
                 item = next(row for row in listing if row["recording_id"] == ticket["recording_id"])
                 assert item["title"] == "round-trip" and item["lyrics"][0]["text"] == "stored lyric"
@@ -755,7 +791,35 @@ print(asyncio.run(read_enabled()))
             assert (b.data / "media/music/shared/direct.wav").read_bytes() == source
             assert a.range(direct_resource["url"]).status_code == 206
             report["checks"].append("Follower with placed files cannot reset; identities and media remain intact")
+            from tests.federation_crypto_acceptance import check as crypto_check, priority as priority_check, certificates as certificate_check
+            encrypted_source = directory / "encrypted-browser-source.wav"
+            wav(encrypted_source, seconds=80, tone=840)
+            with sync_playwright() as playwright:
+                browser = launch_browser(playwright, nodes)
+                crypto_check(browser, nodes, encrypted_source.read_bytes(), report)
+                priority_check(browser, a, source, report)
+                certificate_check(browser, nodes, report)
+                browser.close()
+            for node in nodes:
+                node.web("import os,socket,struct; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(3); transaction=os.urandom(12); s.sendto(struct.pack('!HHI',1,0,0x2112a442)+transaction,('stun',3478)); reply,_=s.recvfrom(2048); assert reply[:2]==b'\\x01\\x01' and reply[8:20]==transaction; s.close(); print('one serial STUN Binding accepted')")
+            report["checks"].append("one STUN Binding per node, executed strictly serially")
+            # Business tests and STUN probes are complete before recovery checks.
+            # Each real single-core Web is sampled independently, in sequence.
+            for node in nodes:
+                container = node.container("web")
+                assert command("docker", "inspect", "--format", "{{.HostConfig.NanoCpus}}", container) == "1000000000"
+                output = command("python3", str(ROOT / "scripts/check_cpu_quiescence.py"), container,
+                                 "--threshold", "20", "--consecutive", "5", "--timeout", "30")
+                values = json.loads(output.rsplit(":", 1)[1].strip())
+                assert len(values) >= 5 and all(value < 20 for value in values[-5:]), values
+                report["samples"].append({"node": node.name, "single_core": True, "cpu_percent": values,
+                                          "threshold": 20, "consecutive": 5, "timeout_seconds": 30})
+            report["checks"].append("three single-core Web processes each recover below 20 percent for five consecutive samples, checked serially")
             report["result"] = "passed"
+        except BaseException as exc:
+            report["failure"] = {"type": type(exc).__name__, "message": str(exc)}
+            traceback.print_exc()
+            raise
         finally:
             arguments.output.write_text(json.dumps(report, indent=2))
             if report.get("result") != "passed":
@@ -763,15 +827,15 @@ print(asyncio.run(read_enabled()))
                 for node in nodes:
                     try:
                         node.failure_diagnostics()
-                        logs = node.compose("logs", "--no-color", "--tail", "60", "web", "nginx")
+                        logs = node.compose("logs", "--no-color", "--tail", "60", "web", "certificate-agent",*([] if node.storage else ["nginx"]))
                         print("\n".join(line for line in logs.splitlines()
                                          if "initial_runtime_secrets" not in line), flush=True)
                     except Exception:
                         pass
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                list(executor.map(lambda node: node.stop(), reversed(nodes)))
+            for node in reversed(nodes):node.stop()
             command("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(directory))
             subprocess.run(["docker", "network", "rm", network], capture_output=True)
+            socket.getaddrinfo=_original_getaddrinfo
     print(json.dumps({"result": report.get("result", "failed"), "checks": report["checks"],
                       "samples": len(report["samples"])}))
 

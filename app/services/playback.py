@@ -18,7 +18,7 @@ from app.services.media_manager import ensure_media_mutations_ready, media_mutat
 
 PLAYBACK_EVENT_TTL_DAYS = 7
 MIN_PREFERENCE = -7
-MAX_PREFERENCE = 500
+MAX_PREFERENCE = 500_000
 _next_cleanup_at = 0.0
 
 
@@ -41,16 +41,13 @@ def valid_playback_threshold(duration: float) -> float:
     return max(5.0, min(30.0, duration * 0.5))
 
 
-def stable_random_key(session_id: str, media_id: str) -> str:
-    return hashlib.sha256(f"{session_id}:{media_id}".encode("utf-8")).hexdigest()
-
-
 def sort_media(items: list[dict[str, Any]], session_id: str) -> list[dict[str, Any]]:
     return sorted(
         items,
         key=lambda item: (
             -int(item.get("preference", 0)),
-            stable_random_key(session_id, str(item["media_id"])),
+            str(item.get("media_path", item.get("path", ""))),
+            str(item["media_id"]),
         ),
     )
 

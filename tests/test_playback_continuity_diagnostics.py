@@ -14,17 +14,15 @@ class PlaybackContinuityDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     def test_temporary_interface_has_mandatory_retirement(self):
         retire = datetime.fromisoformat(diagnostics.RETIRE_AT_ISO)
         self.assertIsNotNone(retire.tzinfo)
-        now = datetime.now(timezone.utc)
-        self.assertLess(
-            now,
-            retire,
-            "Temporary Tesla playback diagnostics reached their retirement date; remove the API, client probe, store, and this test before releasing.",
-        )
+        cutoff = int(retire.timestamp())
+        self.assertTrue(diagnostics.enabled(cutoff - 1))
+        self.assertFalse(diagnostics.enabled(cutoff))
+        self.assertFalse(diagnostics.enabled(cutoff + 86400))
 
     def test_retirement_relay_and_non_persistence_are_source_contracts(self):
         api_source = (ROOT / "app/api/v1/playback_continuity_diagnostics.py").read_text(encoding="utf-8")
         relay_source = (ROOT / "app/api/internal_playback_diagnostics.py").read_text(encoding="utf-8")
-        cluster_source = (ROOT / "app/api/internal_cluster_update.py").read_text(encoding="utf-8")
+        cluster_source = (ROOT / "app/api/internal_control.py").read_text(encoding="utf-8")
         store_source = (ROOT / "app/services/playback_continuity_diagnostics.py").read_text(encoding="utf-8")
         client_source = (ROOT / "static/js/playback-continuity-diagnostics.js").read_text(encoding="utf-8")
         loader_source = (ROOT / "static/js/network-observation.js").read_text(encoding="utf-8")

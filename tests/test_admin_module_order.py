@@ -16,7 +16,6 @@ EXPECTED_ORDER = [
     ("network", 60),
     ("nodes", 70),
     ("site", 80),
-    ("release", 90),
     ("key", 100),
     ("brand", 110),
 ]
@@ -36,19 +35,17 @@ class AdminModuleOrderTests(unittest.TestCase):
         names = [name for name, _order in EXPECTED_ORDER]
         self.assertEqual(names[0:3], ["media", "priority", "lyrics"])
         self.assertEqual(names[4:6], ["security", "network"])
-        self.assertEqual(names[6:9], ["nodes", "site", "release"])
+        self.assertEqual(names[6:8], ["nodes", "site"])
         self.assertEqual(names[-1], "brand")
 
     def test_static_and_runtime_modules_use_the_order_contract_names(self):
         html = (ROOT / "static/media/admin.html").read_text(encoding="utf-8")
-        release = (ROOT / "static/js/release-admin.js").read_text(encoding="utf-8")
         maintenance = (ROOT / "static/js/maintenance-admin.js").read_text(encoding="utf-8")
         brand = (ROOT / "static/js/brand-admin.js").read_text(encoding="utf-8")
 
         for module in ("media", "priority", "lyrics", "users", "security", "network", "nodes", "key"):
             self.assertIn(f'data-admin-module="{module}"', html)
         self.assertIn("panel.dataset.adminModule = 'site'", maintenance)
-        self.assertIn("panel.dataset.adminModule = 'release'", release)
         self.assertIn("panel.dataset.adminModule = 'brand'", brand)
         self.assertIn("consoleRoot?.append(panel)", brand)
 
@@ -92,11 +89,9 @@ class AdminModuleOrderTests(unittest.TestCase):
         page = (ROOT / "app/api/v1/admin_page_integrity.py").read_text(encoding="utf-8")
         self.assertIn('static_asset_url("css/admin-system-modules.css")', page)
         self.assertIn('content.replace("</head>"', page)
-        release_pos = page.index('static_asset_url("js/release-admin.js")')
         maintenance_pos = page.index('static_asset_url("js/maintenance-admin.js")')
         brand_pos = page.index('static_asset_url("js/brand-admin.js")')
         focus_pos = page.index('static_asset_url("js/admin-focus.js")')
-        self.assertLess(release_pos, focus_pos)
         self.assertLess(maintenance_pos, focus_pos)
         self.assertLess(brand_pos, focus_pos)
 

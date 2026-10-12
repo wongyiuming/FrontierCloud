@@ -1,0 +1,74 @@
+{
+  "format": "frontiercloud-browser-crypto-build",
+  "version": 1,
+  "tool": {
+    "name": "javascript-obfuscator",
+    "version": "5.9.0"
+  },
+  "builder_sha256": "166e148d3b0e2f9c33c7e788d3bddadcaabad8a55ac1c5d418264274d4bcc6cb",
+  "lock_sha256": "06fc6c93a76185c859598acc16f1b73534b4fe3700eafd4e227af7881f049fca",
+  "build_sha256": "f038e935a5ec0d504de3f5769e208978de58341f2668d5f1d754275cfbacb674",
+  "options": {
+    "compact": true,
+    "controlFlowFlattening": false,
+    "deadCodeInjection": false,
+    "debugProtection": false,
+    "debugProtectionInterval": 0,
+    "disableConsoleOutput": false,
+    "identifierNamesGenerator": "hexadecimal",
+    "log": false,
+    "numbersToExpressions": false,
+    "renameGlobals": false,
+    "renameProperties": false,
+    "reservedNames": [
+      "^FrontierCryptoCommon$",
+      "^FrontierMediaCrypto$"
+    ],
+    "reservedStrings": [
+      "^/static/js/compiled/"
+    ],
+    "selfDefending": false,
+    "simplify": true,
+    "sourceMap": false,
+    "splitStrings": false,
+    "stringArray": true,
+    "stringArrayCallsTransform": false,
+    "stringArrayEncoding": [],
+    "stringArrayIndexesType": [
+      "hexadecimal-number"
+    ],
+    "stringArrayIndexShift": true,
+    "stringArrayRotate": false,
+    "stringArrayShuffle": true,
+    "stringArrayWrappersCount": 1,
+    "stringArrayWrappersChainedCalls": false,
+    "stringArrayWrappersType": "variable",
+    "stringArrayThreshold": 0.75,
+    "target": "browser-no-eval",
+    "transformObjectKeys": false,
+    "unicodeEscapeSequence": false
+  },
+  "files": [
+    {
+      "file": "media-crypto-common.js",
+      "source_sha256": "cc4a0dde2e88ed6b57bcf9e2db3284b93b3dbd704ca0edd7f1d9e75246c09627",
+      "compiled_sha256": "4277b1e6e53eb9ac23b2723d9015ea935ea4a4ac3efd7fde8da6f21c9e6c8e18",
+      "source_bytes": 6596,
+      "compiled_bytes": 7433
+    },
+    {
+      "file": "media-crypto.js",
+      "source_sha256": "de834ddd507696d9c42a2927249f82561cd24e5dded31d53fa87286c60f55f2d",
+      "compiled_sha256": "0d4ef7057c4c65404d7c412100ea8ce415780a2099f56ee542dcfc8c2afea88a",
+      "source_bytes": 23516,
+      "compiled_bytes": 25511
+    },
+    {
+      "file": "media-crypto-sw.js",
+      "source_sha256": "081033a2aa04822b96dea08ae26704771f24d9b021b57d3af858f252b455c074",
+      "compiled_sha256": "07b2d5cf82a126a99ef35249b2ce06c95795a698bc324351edb403ca55bb2d8c",
+      "source_bytes": 18042,
+      "compiled_bytes": 22807
+    }
+  ]
+}

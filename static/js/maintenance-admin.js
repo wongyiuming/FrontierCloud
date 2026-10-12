@@ -43,8 +43,6 @@
         pill.className = `site-state-pill ${maintenance ? 'maintenance' : 'open'}`;
         element('siteAccessDetail').textContent = value.detail || (maintenance ? '站点维护中' : '站点正常开放');
         element('siteAccessSource').textContent = value.source || '-';
-        const release = value.release || {};
-        element('siteAccessRelease').textContent = `${release.state || 'unknown'} / ${release.phase || '-'}${release.target_sha ? ` · ${String(release.target_sha).slice(0, 12)}` : ''}`;
         element('siteAccessManual').textContent = value.manual ? '已启用' : '未启用';
         element('siteEnterMaintenance').disabled = maintenance && value.manual;
         element('siteEndMaintenance').disabled = !maintenance;
@@ -92,7 +90,6 @@
                 </div>
                 <div class="site-access-overview">
                     <div class="site-access-stat"><small>状态来源</small><strong id="siteAccessSource">-</strong></div>
-                    <div class="site-access-stat"><small>发布任务</small><strong id="siteAccessRelease">-</strong></div>
                     <div class="site-access-stat"><small>手动维护</small><strong id="siteAccessManual">-</strong></div>
                 </div>
                 <div id="siteAccessDetail" class="site-access-note">尚未加载</div>

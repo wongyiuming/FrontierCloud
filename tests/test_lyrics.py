@@ -213,7 +213,10 @@ class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
             await lyrics.replace_relations("track", "missing", ["one", "two"])
 
     async def test_public_content_endpoint_returns_only_lines_without_cache(self):
+        from app.services import media_crypto
         with (
+            patch.object(media_crypto, "encrypted_lyric", new=unittest.mock.AsyncMock(return_value=None)),
+            patch.object(media, "node_stun_urls", new=unittest.mock.AsyncMock(return_value=[])),
             patch.object(media.lyrics, "validate_track", return_value=("music/album/song.mp3", Path("song.mp3"))),
             patch.object(media, "_hidden_set", new=unittest.mock.AsyncMock(return_value=set())),
             patch.object(
@@ -238,7 +241,10 @@ class LyricRelationTests(unittest.IsolatedAsyncioTestCase):
             "lyrics/shared.lrc",
             [{"time": 1.0, "text": "one"}],
         ))
+        from app.services import media_crypto
         with (
+            patch.object(media_crypto, "encrypted_lyric", new=unittest.mock.AsyncMock(return_value=None)),
+            patch.object(media, "node_stun_urls", new=unittest.mock.AsyncMock(return_value=[])),
             patch.object(media.lyrics, "validate_track", return_value=("music/album/song.mp3", Path("song.mp3"))),
             patch.object(media, "_hidden_set", new=hidden_set),
             patch.object(media.lyrics, "load_for_track", new=loader),

@@ -2,7 +2,7 @@
     'use strict';
 
     const DIRECTORY_MIN = -7;
-    const DIRECTORY_MAX = 500;
+    const DIRECTORY_MAX = 500000;
 
     function directoryCanMutate(path) {
         const parts = String(path || '').split('/').filter(Boolean);
@@ -80,6 +80,8 @@
 
         const row = document.createElement('div');
         row.className = 'priority-directory priority-directory-row';
+        row.dataset.priorityPath = path;
+        row.dataset.priorityKind = 'directory';
         const enter = document.createElement('button');
         enter.type = 'button';
         enter.className = 'priority-directory-enter';
@@ -127,13 +129,16 @@
             }
         };
         row.append(enter, control);
+        attachPriorityNumber(control);
         return row;
     }
 
     priorityDirectoryButton = directoryPriorityRow;
 
+    let loadVersion = 0;
     loadMediaPriority = async function loadMediaPriorityWithDirectories(force = false) {
         if (priorityLoading && !force) return;
+        const version = ++loadVersion;
         priorityLoading = true;
         try {
             const params = new URLSearchParams({page: String(priorityPage), page_size: '100'});
@@ -143,24 +148,26 @@
             if (mediaType) params.set('media_type', mediaType);
             if (priorityScope) params.set('path', priorityScope);
             const data = await api(`/api/v1/media/admin/media-priority?${params}`);
-            if (!data.searching && Array.isArray(data.directories) && data.directories.length) {
-                const result = await api(`/api/v1/media/admin/directory-priorities?scope=${encodeURIComponent(data.scope || '')}`);
-                const preferences = new Map((result.items || []).map(item => [item.path, Number(item.preference || 0)]));
-                for (const directory of data.directories) {
-                    directory.preference = preferences.get(directory.path) || 0;
+            const orders = {};
+            if (!data.searching && data.scope) {
+                for (const [kind, field] of [['directory', 'directories'], ['media', 'items']]) {
+                    if (!data[field]?.length) continue;
+                    orders[kind] = await api(`/api/v1/media/admin/priority-order?scope=${encodeURIComponent(data.scope)}&kind=${kind}`);
+                    const facts = new Map(orders[kind].items.map((item, index) => [item.path, {...item, index}]));
+                    data[field] = data[field].filter(item => facts.has(item.path || item.media_path));
+                    for (const item of data[field]) item.preference = facts.get(item.path || item.media_path).preference;
+                    data[field].sort((a, b) => facts.get(a.path || a.media_path).index - facts.get(b.path || b.media_path).index);
                 }
-                data.directories.sort((left, right) => {
-                    const preference = Number(right.preference || 0) - Number(left.preference || 0);
-                    if (preference) return preference;
-                    return String(left.name || '').localeCompare(String(right.name || ''), 'zh-Hans-CN');
-                });
             }
+            if (version !== loadVersion) return;
+            window.FrontierPriorityDrag?.cancel();
             renderMediaPriority(data);
+            window.FrontierPriorityDrag?.activate(data, orders);
             if (!data.searching) {
                 $('prioritySummary').textContent = `${$('priorityPath').title || '/data/media'} 目录和媒体均可独立设置排序优先级`;
             }
         } finally {
-            priorityLoading = false;
+            if (version === loadVersion) priorityLoading = false;
         }
     };
 

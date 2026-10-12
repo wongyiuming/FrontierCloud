@@ -11,3 +11,5 @@ class KaraokeContext(BaseModel):
     has_lyrics: bool
     lyrics_url: str | None
     cover_url: str | None
+    file_path: str | None = None
+    encryption: dict | None = None

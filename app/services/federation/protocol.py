@@ -164,15 +164,16 @@ def verify_media_token(credential: str, token: str, now: int) -> dict:
 
 def storage_token(credential: str, relationship: str, master: str, storage_node: str,
                   media_id: str, object_id: str, operation: str, path: str, size: int,
-                  now: int) -> str:
+                  now: int, *, encrypted: bool = False) -> str:
     if (not all(IDENTIFIER.fullmatch(value) for value in (relationship, master, storage_node))
             or not OBJECT_ID.fullmatch(media_id) or not OBJECT_ID.fullmatch(object_id)
             or operation not in {"upload", "delete"} or not 0 <= size <= 10 * 1024 ** 3
-            or not isinstance(path, str) or not 1 <= len(path) <= 1024):
+            or not isinstance(path, str) or not 1 <= len(path) <= 1024
+            or not isinstance(encrypted, bool)):
         raise ProtocolError("Invalid storage capability")
     value = {"r": relationship, "m": master, "n": storage_node, "g": media_id,
              "i": object_id, "op": operation, "path": path, "size": size,
-             "e": now + TOKEN_SECONDS, "v": PROTOCOL_VERSION}
+             "e": now + TOKEN_SECONDS, "v": PROTOCOL_VERSION, "encrypted": encrypted}
     payload = encode(canonical(value))
     return payload + "." + encode(hmac.new(decode(credential), payload.encode(), hashlib.sha256).digest())
 
@@ -187,6 +188,7 @@ def verify_storage_token(credential: str, token: str, now: int) -> dict:
         if (value["v"] != PROTOCOL_VERSION or value["e"] <= now
                 or value["e"] > now + TOKEN_SECONDS + 60
                 or value["op"] not in {"upload", "delete"}
+                or not isinstance(value.get("encrypted", False), bool)
                 or not isinstance(value["size"], int) or not 0 <= value["size"] <= 10 * 1024 ** 3
                 or not isinstance(value["path"], str) or not 1 <= len(value["path"]) <= 1024):
             raise ValueError()
@@ -203,7 +205,8 @@ def verify_storage_token(credential: str, token: str, now: int) -> dict:
 
 def recording_token(credential: str, relationship: str, master: str, owner: str,
                     recording: str, operation: str, now: int, *, size: int = 0,
-                    content_type: str = "application/octet-stream", filename: str = "recording.bin") -> str:
+                    content_type: str = "application/octet-stream", filename: str = "recording.bin",
+                    encrypted_lyrics_encryption: dict | None = None, encrypted_lyrics_sha256: str = "") -> str:
     if (not IDENTIFIER.fullmatch(relationship) or not IDENTIFIER.fullmatch(master)
             or not IDENTIFIER.fullmatch(owner) or not IDENTIFIER.fullmatch(recording)
             or operation not in {"upload", "stream", "download"} or not 0 <= size <= 1024 ** 3
@@ -213,12 +216,22 @@ def recording_token(credential: str, relationship: str, master: str, owner: str,
     value = {"r": relationship, "m": master, "u": owner, "i": recording,
              "op": operation, "size": size, "ct": content_type, "name": filename,
              "e": now + TOKEN_SECONDS, "v": PROTOCOL_VERSION}
+    if encrypted_lyrics_encryption is not None or encrypted_lyrics_sha256:
+        from app.services.recording_crypto import token_snapshot
+        value["encrypted_lyrics_encryption"] = encrypted_lyrics_encryption
+        value["encrypted_lyrics_sha256"] = encrypted_lyrics_sha256
+        try:
+            token_snapshot(value)
+        except ValueError as exc:
+            raise ProtocolError("Invalid recording snapshot capability") from exc
     payload = encode(canonical(value))
     return payload + "." + encode(hmac.new(decode(credential), payload.encode(), hashlib.sha256).digest())
 
 
 def verify_recording_token(credential: str, token: str, now: int) -> dict:
     try:
+        if len(token) > 8192:
+            raise ValueError()
         payload, signature = token.split(".")
         expected = hmac.new(decode(credential), payload.encode(), hashlib.sha256).digest()
         if not hmac.compare_digest(expected, decode(signature)):
@@ -235,6 +248,8 @@ def verify_recording_token(credential: str, token: str, now: int) -> dict:
         for field in ("r", "m", "u", "i"):
             if not IDENTIFIER.fullmatch(value[field]):
                 raise ValueError()
+        from app.services.recording_crypto import token_snapshot
+        token_snapshot(value)
         return value
     except Exception as exc:
         raise ProtocolError("Invalid or expired recording capability") from exc

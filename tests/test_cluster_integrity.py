@@ -26,6 +26,7 @@ class ClusterUploadPathTests(unittest.IsolatedAsyncioTestCase):
             relative_path="黄耀明/大型演出/达明一派_1996年万岁.mp3",
             filename="ignored.mp3",
             size_bytes=1024,
+            storage_mode="plain",
         )
         with patch.object(cluster, "_category_layout_conflict", new=AsyncMock(return_value=False)):
             self.assertEqual(
@@ -39,6 +40,7 @@ class ClusterUploadPathTests(unittest.IsolatedAsyncioTestCase):
             relative_path="大型演出/song.mp3",
             filename="ignored.mp3",
             size_bytes=1024,
+            storage_mode="plain",
         )
         with patch.object(cluster, "_category_layout_conflict", new=AsyncMock(return_value=False)):
             self.assertEqual(
@@ -48,7 +50,7 @@ class ClusterUploadPathTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_single_file_upload_requires_a_category(self):
         payload = cluster.ClusterUploadReservation(
-            target_dir="music", filename="song.mp3", size_bytes=1024,
+            target_dir="music", filename="song.mp3", size_bytes=1024, storage_mode="plain",
         )
         with patch.object(cluster, "_category_layout_conflict", new=AsyncMock(return_value=False)):
             with self.assertRaises(HTTPException):
@@ -60,6 +62,7 @@ class ClusterUploadPathTests(unittest.IsolatedAsyncioTestCase):
             relative_path="artist/album/disc/song.mp3",
             filename="ignored.mp3",
             size_bytes=1024,
+            storage_mode="plain",
         )
         with patch.object(cluster, "_category_layout_conflict", new=AsyncMock(return_value=False)):
             with self.assertRaises(HTTPException):
@@ -67,7 +70,7 @@ class ClusterUploadPathTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_incompatible_existing_category_layout_is_rejected_by_bounded_query(self):
         payload = cluster.ClusterUploadReservation(
-            target_dir="music/artist", filename="song.mp3", size_bytes=1024,
+            target_dir="music/artist", filename="song.mp3", size_bytes=1024, storage_mode="plain",
         )
         conflict = AsyncMock(return_value=True)
         with patch.object(cluster, "_category_layout_conflict", new=conflict):
@@ -161,6 +164,7 @@ class ClusterRouteIntegrityTests(unittest.IsolatedAsyncioTestCase):
                     relative_path=None,
                     session_hash="actor",
                     site_type="primary",
+                    storage_mode="plain",
                 )
         self.assertEqual(raised.exception.status_code, 409)
 

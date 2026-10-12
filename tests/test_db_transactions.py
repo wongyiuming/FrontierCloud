@@ -26,11 +26,14 @@ class _BootstrapConnection:
         self.scalar_queries = []
         self.commits = 0
         self.rollbacks = 0
+        self.preference_check = True
 
     async def execute(self, statement, params=None):
         sql = str(statement)
         if "FROM information_schema.tables" in sql:
             return _Rows((name,) for name in sorted(self.tables))
+        if sql.startswith("SELECT generation,migration_name,checksum FROM"):
+            return _Rows()
 
         parameters = params or {}
         self.executed.append((sql, parameters))
@@ -46,6 +49,10 @@ class _BootstrapConnection:
         if "UPDATE `frontiercloud_schema`" in sql:
             if self.generation == parameters["current"]:
                 self.generation = parameters["target"]
+        if "DROP CHECK chk_media_preference" in sql:
+            self.preference_check = False
+        if "ADD CONSTRAINT chk_media_preference" in sql:
+            self.preference_check = True
         return _Rows()
 
     async def scalar(self, statement, _params=None):
@@ -59,6 +66,14 @@ class _BootstrapConnection:
             return self.lock_acquired
         if "RELEASE_LOCK(" in sql:
             return 1
+        if "FROM information_schema.tables" in sql:
+            return int((_params or {}).get("table_name") in self.tables)
+        if "FROM information_schema.columns" in sql:
+            return int((_params or {}).get("table_name") in self.tables)
+        if "FROM information_schema.table_constraints" in sql:
+            return int(self.preference_check)
+        if "FROM media_playback_stats WHERE preference < -7" in sql:
+            return 0
         raise AssertionError(f"Unexpected scalar query: {sql}")
 
     async def commit(self):
@@ -99,7 +114,7 @@ class SchemaBootstrapTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CREATE TABLE frontiercloud_schema", schema)
         self.assertIn("CREATE TABLE IF NOT EXISTS frontiercloud_schema_migrations", schema)
         self.assertIn("storage_member_id", schema)
-        self.assertIn("CHECK (preference BETWEEN -7 AND 500)", schema)
+        self.assertIn("CHECK (preference BETWEEN -7 AND 500000)", schema)
         self.assertIn("UNIQUE INDEX uq_ip_ban_active_ip", schema)
         self.assertIn("idx_webrtc_client_time", schema)
         self.assertNotIn("ALTER TABLE", schema)
@@ -186,6 +201,7 @@ class SchemaBootstrapTransactionTests(unittest.IsolatedAsyncioTestCase):
         connection = _BootstrapConnection(tables=generation_one_tables, generation=1)
         with (
             patch.object(schema_migrations, "MIGRATIONS", {2: migration}),
+            patch.object(schema_migrations, "CURRENT_SCHEMA_GENERATION", 2),
             patch.object(db, "engine", _BootstrapEngine(connection)),
         ):
             with self.assertRaisesRegex(RuntimeError, "generation marker 未推进"):

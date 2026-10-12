@@ -23,7 +23,7 @@ class _Connection:
     async def execute(self, statement, params=None):
         sql = str(statement)
         self.executed.append((sql, params or {}))
-        if self.failure is not None and "DELETE events" in sql:
+        if self.failure is not None and "DELETE FROM media_playback_events" in sql:
             raise self.failure
         return _Result()
 
@@ -104,7 +104,7 @@ class MediaDeleteTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(track.exists())
         self.assertEqual(list(root.glob(media_manager.DELETE_QUARANTINE_PREFIX + "*")), [])
         sql = "\n".join(statement for statement, _params in connection.executed)
-        self.assertIn("DELETE events", sql)
+        self.assertIn("DELETE FROM media_playback_events", sql)
         self.assertIn("DELETE FROM media_playback_stats", sql)
         self.assertIn("DELETE FROM media_lyric_links", sql)
         self.assertIn("DELETE FROM media_visibility", sql)

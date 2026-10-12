@@ -21,7 +21,8 @@ The repository can fail an invalid PR topology, but repository-local code cannot
 2. Start from the current `dev` HEAD. If `main` was just promoted, synchronize `dev` to `main` first as described above.
 3. Change the smallest coherent surface. Do not revive retired compatibility/product features to make a test pass.
 4. Add or strengthen regression coverage for every bug fix and every new invariant.
-5. Run the complete `dev` CI. A passing narrow unit test is not release evidence.
+5. Run the complete `dev` CI and complete native acceptance for the exact source
+   being promoted. A passing narrow unit test is not release evidence.
 6. Open exactly one release PR from `dev` to `main`. The repository owner performs the merge.
 
 ## Documentation ownership
@@ -54,7 +55,11 @@ Never weaken an existing regression merely to make a new implementation pass. If
 - One managed media object is complete and belongs to exactly one storage member. Do not split one logical object across storage members.
 - Compute Worker is retired. Do not add worker slots, compute scheduling, worker UI, or worker product configuration back without an explicit architecture decision.
 - Product runtime changes that add burst or sustained high-load computation are rejected. Do not add transcoding, compression, inference, bulk transformation, process execution, executor offload, or compute-heavy runtime dependencies. This is a one-core service boundary, not a tunable CPU budget.
-- CI runs the Web container with one CPU. A compute-caused test timeout fails the build; failure handling stops the Web fixture before cleanup. After business tests, CPU must fall below 20% of one core for five consecutive one-second samples within 30 seconds. The threshold detects failure to recover and does not authorize compute-heavy work below it.
+- Native acceptance runs each Web container with one CPU. A compute-caused test
+  timeout fails acceptance; failure handling stops the Web fixture before cleanup.
+  After business tests, CPU must fall below 20% of one core for five consecutive
+  one-second samples within 30 seconds. The threshold detects failure to recover
+  and does not authorize compute-heavy work below it.
 - Heartbeat health is independent from Backup work. Backup failure must never mark a healthy node offline.
 - Backup is a recovery artifact, not online replication, HA, or automatic failover.
 - Managed paths are changed only through FrontierCloud transactions. Do not rename/move/delete managed files directly on disk as a substitute for metadata updates.
@@ -67,5 +72,13 @@ Never weaken an existing regression merely to make a new implementation pass. If
 ## Release evidence
 
 A release is valid only when the exact `dev` commit being promoted has successful CI and the resulting `main` tree is identical to the reviewed `dev` tree. Post-merge release provenance checks are an additional guard, not a replacement for the `dev -> main` workflow.
+
+The final Python source CI runs complete unit discovery, JavaScript checks and
+source/deployment policy checks with read-only permissions. The complete native
+acceptance gate runs `scripts/test-python-final.sh` on an isolated Docker host,
+with actual ACME, Nginx, Storage TLS and Chromium. Its test CA and trust roots
+remain confined to disposable fixtures. Keep the exact-source receipt and
+sanitized results with the release; no branch deletion or archival precedes
+those checks. GitHub CI never installs a deployment or owns its CD.
 
 The complete local baseline and CI composition are maintained in [`docs/wiki/Engineering-and-CI.md`](docs/wiki/Engineering-and-CI.md). Deployment, rollback, and migration procedures are maintained in [`docs/wiki/Release-and-Database-Migrations.md`](docs/wiki/Release-and-Database-Migrations.md).

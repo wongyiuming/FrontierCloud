@@ -306,9 +306,9 @@ async def _collect_with_nested_lyrics(paths: Iterable[str], original_collect) ->
     return result
 
 
-async def _upload_lyric_with_boundary(upload: UploadFile, relative_path: str | None, original_upload, *, audit=None) -> str:
+async def _upload_lyric_with_boundary(upload: UploadFile, relative_path: str | None, original_upload, *, audit=None, encryption=None, registration=None) -> str:
     normalized = validate_upload_relative_path(relative_path, upload.filename or "")
-    return await original_upload(upload, normalized, audit=audit)
+    return await original_upload(upload, normalized, audit=audit, encryption=encryption, registration=registration)
 
 
 def install() -> None:
@@ -349,9 +349,9 @@ def install() -> None:
     async def collect(paths: Iterable[str]) -> list[tuple[str, Path]]:
         return await _collect_with_nested_lyrics(paths, original_collect)
 
-    async def upload_lyric(upload: UploadFile, relative_path: str | None = None, *, audit=None) -> str:
+    async def upload_lyric(upload: UploadFile, relative_path: str | None = None, *, audit=None, encryption=None, registration=None) -> str:
         return await _upload_lyric_with_boundary(
-            upload, relative_path, original_upload_lyric, audit=audit,
+            upload, relative_path, original_upload_lyric, audit=audit, encryption=encryption, registration=registration,
         )
 
     lyrics._safe_file = _safe_file

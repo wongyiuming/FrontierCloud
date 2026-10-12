@@ -63,6 +63,7 @@ class MasterMutationFenceTests(unittest.IsolatedAsyncioTestCase):
             return {"upload_id": "u1", "transport": "Local"}
 
         payload = integrity.SiteTypeUploadReservation(
+            storage_mode="plain",
             site_type="primary",
             target_dir="music/artist",
             filename="song.mp3",

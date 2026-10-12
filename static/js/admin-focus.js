@@ -2,10 +2,54 @@
     const MODULE_ORDER = [
         'media', 'priority', 'lyrics', 'users',
         'security', 'network',
-        'nodes', 'site', 'release', 'key', 'brand',
+        'nodes', 'site', 'key', 'brand',
     ];
     const MODULE_RANK = new Map(MODULE_ORDER.map((name, index) => [name, index]));
     const consoleRoot = document.querySelector('.admin-console');
+    const navigation = document.getElementById('adminModuleLinks');
+    const navigationPanel = document.getElementById('adminNavigation');
+    const navigationToggle = document.getElementById('adminNavigationToggle');
+    const navigationButtons = new Map();
+
+    function updateNavigation(modules) {
+        if (!navigation) return;
+        for (const module of modules) {
+            const name = module.dataset.adminModule;
+            if (!navigationButtons.has(name)) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.dataset.moduleTarget = name;
+                button.textContent = module.querySelector('.module-heading strong')?.textContent || name;
+                button.onclick = () => {
+                    if (!module.classList.contains('expanded')) module.querySelector('.module-heading')?.click();
+                    focusExpanded(module);
+                    navigationPanel?.classList.remove('open');
+                    navigationToggle?.setAttribute('aria-expanded', 'false');
+                    module.querySelector('.module-heading')?.focus({preventScroll: true});
+                };
+                navigationButtons.set(name, button);
+            }
+        }
+        const buttons = modules.map(module => navigationButtons.get(module.dataset.adminModule));
+        if (!buttons.every((button, index) => navigation.children[index] === button)) navigation.append(...buttons);
+    }
+
+    navigationToggle?.addEventListener('click', () => {
+        const open = !navigationPanel.classList.contains('open');
+        navigationPanel.classList.toggle('open', open);
+        navigationToggle.setAttribute('aria-expanded', String(open));
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key !== 'Escape' || !navigationPanel?.classList.contains('open')) return;
+        navigationPanel.classList.remove('open');
+        navigationToggle.setAttribute('aria-expanded', 'false');
+        navigationToggle.focus();
+    });
+    document.addEventListener('pointerdown', event => {
+        if (!navigationPanel?.classList.contains('open') || navigationPanel.contains(event.target) || navigationToggle.contains(event.target)) return;
+        navigationPanel.classList.remove('open');
+        navigationToggle.setAttribute('aria-expanded', 'false');
+    });
 
     function moduleChildren() {
         if (!consoleRoot) return [];
@@ -20,6 +64,7 @@
             const rightRank = MODULE_RANK.get(right.dataset.adminModule) ?? Number.MAX_SAFE_INTEGER;
             return leftRank - rightRank;
         });
+        updateNavigation(sortedModules);
         if (modules.every((module, index) => module === sortedModules[index])) return;
         for (const module of sortedModules) consoleRoot.append(module);
     }
@@ -30,6 +75,9 @@
         heading.setAttribute('aria-expanded', String(expanded));
         const indicator = heading.querySelector('b');
         if (indicator) indicator.textContent = expanded ? '−' : '＋';
+        const button = navigationButtons.get(module.dataset.adminModule);
+        if (expanded) button?.setAttribute('aria-current', 'true');
+        else button?.removeAttribute('aria-current');
     }
 
     let focusRevision = 0;
@@ -62,6 +110,7 @@
         for (const record of records) {
             if (record.type !== 'attributes' || record.attributeName !== 'class') continue;
             const module = record.target;
+            syncHeading(module, module.classList.contains('expanded'));
             if (module.classList?.contains('admin-module') && module.classList.contains('expanded')) {
                 focusExpanded(module);
             }
@@ -87,7 +136,7 @@
         setTimeout(() => focusExpanded(module), 0);
     });
 
-    // Site/release/brand panels may finish asynchronous initialization after
+    // Site/brand panels may finish asynchronous initialization after
     // admin-focus.js starts. Observe only direct Admin module insertion. DOM
     // moves caused by reorderModules() are harmless because the reorder is
     // idempotent and performs no append when the order is already correct.

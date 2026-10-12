@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import text
 
 from app.api.internal_nodes import require_https
 from app.api.v1.admin import require_session
-from app.services import control_audit, lyrics, release_control, site_control
+from app.services import control_audit, lyrics
 from app.services.federation import protocol as p
 from app.services.federation.runtime import runtime
 from app.services.federation.state import state
@@ -71,44 +71,81 @@ async def ensure_follower_business_empty() -> None:
 @router.get("")
 async def status(actor: str = Depends(require_session)):
     relations = await state.list_relationships()
+    certificate = await _certificate_view()
+    for relation in relations:
+        # Queries are deliberately serial and use the existing authenticated
+        # control path. This never asks the Master to read a Storage private key.
+        if (state.node.get('role') == 'Master'
+                and relation.get('direction') == 'downstream'
+                and relation['state'] == 'active'):
+            try:
+                view = await runtime.call(relation, '/internal/v1/certificate', {'action': 'status'})
+            except Exception:
+                view = {'state': 'FAILED', 'enabled': True, 'controller_running': False,
+                        'https_ready': False, 'serving_matches': False, 'last_error': 'Authenticated certificate observation unavailable'}
+            relation['summary'] = {**(relation.get('summary') or {}), 'certificate': view}
     from app.services import storage_capacity
     return {"node_id": state.node["node_id"], "role": state.node["role"], "endpoint": state.node["endpoint"],
             "app_version": p.APP_VERSION, "protocol": p.PROTOCOL_VERSION,
+            "certificate": certificate,
             "relationships": [{key: value for key, value in row.items() if key not in ("credential", "peer_key")} for row in relations],
             "storage_pool": await storage_capacity.observed_pool(state) if state.node["role"] == "Master" else None}
 
 
-@router.get("/release")
-async def release_status(refresh_ci: bool = False, actor: str = Depends(require_session)):
-    return await release_control.release_status(refresh_ci=refresh_ci)
+async def _certificate_view():
+    from app.core.config import settings
+    from app.services.certmanager import certificate_control
+    if not settings.TLS_ENABLED:
+        return {'enabled': False, 'state': 'DISABLED', 'controller_running': False,
+                'https_ready': False, 'serving_matches': False, 'managed': False, 'auto_renew': False}
+    try:
+        return await certificate_control()
+    except Exception:
+        return {'enabled': True, 'hostname': settings.SERVER_NAME, 'state': 'FAILED',
+                'controller_running': False, 'https_ready': False, 'serving_matches': False,
+                'managed': True, 'auto_renew': True, 'last_error': 'Automatic certificate controller unavailable'}
 
 
-@router.post("/release/upgrade")
-async def release_upgrade(request: Request, actor: str = Depends(require_session)):
+class CertificateDownload(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    action: str = Field(pattern='^download$')
+    browser_public_key: str = Field(min_length=1, max_length=256)
+    browser_nonce: str = Field(min_length=1, max_length=256)
+
+
+async def _node_certificate(identifier, value):
+    from app.services.certmanager import certificate_control
+    if identifier == state.node['node_id']:
+        return await certificate_control(**value)
+    if state.node['role'] != 'Master':
+        raise HTTPException(403, 'Only the Master can observe a paired Storage certificate')
+    relation = await state.relationship(identifier)
+    if relation['state'] != 'active' or relation['direction'] != 'downstream':
+        raise HTTPException(404, 'Active Storage relationship not found')
+    return await runtime.call(relation, '/internal/v1/certificate', value)
+
+
+@router.get('/{identifier}/certificate')
+async def certificate_status(identifier: str, actor: str = Depends(require_session)):
+    try:
+        return await _node_certificate(identifier, {'action': 'status'})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise checked(exc) from exc
+
+
+@router.post('/{identifier}/certificate')
+async def certificate_download(identifier: str, payload: CertificateDownload, request: Request,
+                               actor: str = Depends(require_session)):
     require_https(request)
     try:
-        async with control_audit.action(
-            actor, "release_upgrade", request,
-            source_summary="release_branch=main",
-        ):
-            site_control.prepare_release()
-            return await release_control.start_upgrade()
+        async with control_audit.action(actor, 'certificate_download', request, source_summary=identifier):
+            return await _node_certificate(identifier, payload.model_dump())
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@router.post("/release/rollback")
-async def release_rollback(request: Request, actor: str = Depends(require_session)):
-    require_https(request)
-    try:
-        async with control_audit.action(
-            actor, "release_rollback", request,
-            source_summary="release_branch=main",
-        ):
-            site_control.prepare_release()
-            return await release_control.start_rollback()
-    except Exception as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise checked(exc) from exc
 
 
 @router.post("/promote")

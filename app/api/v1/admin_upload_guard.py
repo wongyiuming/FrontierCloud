@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 
 from app.api.v1 import admin as legacy_admin
 from app.core.db import engine
-from app.services import admin_service, media_objects
+from app.services import admin_service, media_objects, media_crypto
+from app.services import media_publication_recovery as publication
 from app.services.federation.state import state as node_state
 from app.services.media_catalog_cache import invalidate_media_catalog
 from app.services.media_manager import LYRICS_ROOT, MEDIA_ROOT, MediaManager
@@ -22,12 +23,23 @@ logger = logging.getLogger("frontiercloud.admin.upload")
 async def upload_item(
     request: Request,
     file: Annotated[UploadFile, File(...)],
+    storage_mode: Annotated[str, Form(pattern="^(encrypted|plain)$")],
+    encryption: Annotated[str | None, Form()] = None,
+    preparation_token: Annotated[str, Form()] = "",
     target_dir: Annotated[str, Form()] = "",
     relative_path: Annotated[str | None, Form()] = None,
     session_hash: str = Depends(legacy_admin.require_session),
     site_type: Annotated[str | None, Form()] = None,
 ):
     source = relative_path or file.filename or ""
+    if node_state.node.get("role") == "Follower":
+        await file.close()
+        raise HTTPException(409, "Storage nodes cannot accept business uploads")
+    try:
+        metadata = media_crypto.upload_encryption(storage_mode, encryption, preparation_token, "admin:" + session_hash)
+    except media_crypto.MetadataError as exc:
+        await file.close()
+        raise HTTPException(400, str(exc)) from exc
     if node_state.node["role"] == "Master":
         try:
             await admin_service.audit(
@@ -54,25 +66,17 @@ async def upload_item(
         target_dir,
         relative_path,
         session_hash,
+        encryption=metadata,
     )
     if isinstance(result, dict):
         return {**result, "site_type": "primary", "site_label": "主站"}
     return result
 
 
-def _rollback_unregistered_lyric(saved_path: str) -> None:
-    target = (MEDIA_ROOT / saved_path).resolve()
-    lyric_root = LYRICS_ROOT.resolve()
-    if not target.is_relative_to(lyric_root):
-        return
-    target.unlink(missing_ok=True)
-    parent = target.parent
-    while parent != lyric_root:
-        try:
-            parent.rmdir()
-        except (FileNotFoundError, OSError):
-            break
-        parent = parent.parent
+async def _register_lyric_publication(saved_path, journal, metadata, audit):
+    if saved_path != journal['path'] or (metadata.to_dict() if metadata else None) != journal['encryption']:
+        raise RuntimeError('Lyric publication identity changed')
+    await publication.register(engine, journal, audit)
 
 
 async def _failed_upload_audit(audit, detail: dict) -> None:
@@ -87,37 +91,44 @@ async def _failed_upload_audit(audit, detail: dict) -> None:
 async def upload_lyric(
     request: Request,
     file: Annotated[UploadFile, File(...)],
+    storage_mode: Annotated[str, Form(pattern="^(encrypted|plain)$")],
+    encryption: Annotated[str | None, Form()] = None,
+    preparation_token: Annotated[str, Form()] = "",
     relative_path: Annotated[str | None, Form()] = None,
     session_hash: str = Depends(legacy_admin.require_session),
 ):
     """Publish an LRC only when its managed-object record commits atomically.
 
-    The physical file is staged/published first. Object registration and the
-    success audit then share one MySQL transaction. A failure before that
+    The staged file, object registration, encryption descriptor, and the
+    success audit share one database transaction under the publication fence. A failure before that
     transaction commits removes the file; failures in cache invalidation after
     commit never remove a durable, registered lyric.
     """
     source = relative_path or file.filename or ""
+    if node_state.node.get("role") == "Follower":
+        await file.close()
+        raise HTTPException(409, "Storage nodes cannot accept business uploads")
+    try:
+        metadata = media_crypto.upload_encryption(storage_mode, encryption, preparation_token, "admin:" + session_hash)
+    except media_crypto.MetadataError as exc:
+        await file.close()
+        raise HTTPException(400, str(exc)) from exc
     saved_path: str | None = None
-    committed = False
     audit = legacy_admin._mutation_audit(session_hash, "upload_lyric", [source], request)
+    async def register(path, journal):
+        await _register_lyric_publication(path, journal, metadata, audit)
     try:
         try:
-            saved_path = await MediaManager.upload_lyric(file, relative_path)
-            async with engine.begin() as conn:
-                await media_objects.ensure_object(conn, saved_path, "lyric")
-                await audit(conn, "success", 1, {"path": saved_path})
-            committed = True
+            saved_path = await MediaManager.upload_lyric(file, relative_path, audit=audit,
+                                                        encryption=metadata, registration=register)
         except HTTPException as exc:
             await _failed_upload_audit(audit, {"error": str(exc.detail)})
             raise
         except Exception as exc:
-            if saved_path and not committed:
-                _rollback_unregistered_lyric(saved_path)
             await _failed_upload_audit(audit, {"error": str(exc)})
             raise HTTPException(
                 status_code=500,
-                detail="歌词上传未能写入系统记录，已回滚文件",
+                detail="歌词发表未完成；已安全回滚或保留事务日志等待恢复",
             ) from exc
 
         try:

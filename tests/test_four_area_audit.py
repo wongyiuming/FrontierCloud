@@ -164,36 +164,49 @@ class AuditRegressionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_follower_storage_hash_yields_and_preserves_digest(self):
         from app.api import internal_storage_integrity as storage
-        from app.core.file_digest import file_digest
-        entered, release = threading.Event(), threading.Event()
-        loop_thread = threading.get_ident()
-        workers = []
+        from app.services.upload_claims import digest_file
+        from tests.test_upload_recovery_runtime import UploadRecoveryRuntime
+        import os
+        if os.name == "nt":
+            self.skipTest("authenticated byte-writer leases require Linux flock")
+        fixture = UploadRecoveryRuntime()
+        await fixture.asyncSetUp()
+        try:
+            fixture.data = b"ID3" + b"x" * (1024 * 1024 + 1)
+            original = "a" * 64
+            response = await fixture.client.put(f"/internal/v1/storage/{original}", params={"token": fixture.token(original)}, content=fixture.data)
+            self.assertEqual(response.status_code, 200)
+            yielding, finished = asyncio.Event(), asyncio.Event()
+            ticks = []
 
-        def slow_digest(path):
-            workers.append(threading.get_ident())
-            entered.set()
-            release.wait(2)
-            return file_digest(path)
+            async def tick():
+                await yielding.wait()
+                while not finished.is_set():
+                    ticks.append(True)
+                    await asyncio.sleep(0)
 
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            path = root / "music/album/song.wav"
-            path.parent.mkdir(parents=True)
-            payload = b"RIFF" + b"x" * (1024 * 1024 + 1)
-            path.write_bytes(payload)
-            req = request()
-            req.state.node_control_body = json.dumps({"path": "music/album/song.wav"}).encode()
-            with (patch.object(storage, "MEDIA_ROOT", root),
-                  patch.dict(storage.state.node, role="Follower"),
-                  patch.object(storage.legacy_internal, "authenticated", new=AsyncMock(return_value={"direction": "upstream"})),
-                  patch.object(storage, "file_digest", new=slow_digest)):
-                task = asyncio.create_task(storage.storage_stat(req, "a" * 64))
+            async def observed_digest(path):
+                yielding.set()
                 try:
-                    self.assertTrue(await asyncio.to_thread(entered.wait, 1))
-                    self.assertFalse(task.done())
+                    return await digest_file(path)
                 finally:
-                    release.set()
-                result = await task
-            self.assertNotEqual(workers, [loop_thread])
+                    finished.set()
+
+            observer = asyncio.create_task(tick())
+            try:
+                with patch.object(storage, "digest_file", new=observed_digest):
+                    response = await fixture.control(original, "stat")
+                self.assertEqual(response.status_code, 200)
+                result = response.json()
+                self.assertTrue(ticks, "integrity hashing must yield between chunks")
+            finally:
+                observer.cancel()
+                await asyncio.gather(observer, return_exceptions=True)
+            payload = fixture.data
             self.assertEqual(result["size_bytes"], len(payload))
             self.assertEqual(result["sha256"], hashlib.sha256(payload).hexdigest())
+            # The same signed request cannot inspect an object owned by another ID.
+            response = await fixture.control("b" * 64, "stat")
+            self.assertEqual(response.status_code, 409)
+        finally:
+            await fixture.asyncTearDown()

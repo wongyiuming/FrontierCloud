@@ -75,6 +75,7 @@ class MediaCatalogCacheTests(unittest.IsolatedAsyncioTestCase):
         to_thread.assert_not_awaited()
 
     async def test_track_cache_miss_scans_and_populates_redis(self):
+        from app.services import media_crypto
         expected = [{"title": "from-filesystem"}]
         store = AsyncMock()
         bound = [{"title": "from-filesystem", "media_id": "stable-id"}]
@@ -84,6 +85,7 @@ class MediaCatalogCacheTests(unittest.IsolatedAsyncioTestCase):
             patch.object(media.asyncio, "to_thread", new=AsyncMock(return_value=expected)) as to_thread,
             patch.object(media.media_objects, "bind_items", new=AsyncMock(return_value=bound)),
             patch.object(media, "store_media_catalog", new=store),
+            patch.object(media_crypto, "encryption_for_ids", new=AsyncMock(return_value={})),
         ):
             result = await media.scan_media_files_by_category("test", media.AUDIO_EXTS, "audio")
 

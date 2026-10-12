@@ -177,54 +177,7 @@ class ControlPlaneAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[1], ("side-effect", "maintenance", "failed"))
         self.assertEqual(events[2][0:3], ("audit", "maintenance_change", "failed"))
 
-    async def test_release_upgrade_and_rollback_are_audited_around_updater_side_effect(self):
-        for mode, action, method_name in (
-            ("upgrade", "release_upgrade", "start_upgrade"),
-            ("rollback", "release_rollback", "start_rollback"),
-        ):
-            with self.subTest(mode=mode):
-                events = []
 
-                async def start():
-                    events.append(("side-effect", mode))
-                    return {"ok": True, "mode": mode}
-
-                request = _request(scheme="https", path=f"/api/v1/media/admin/nodes/release/{mode}")
-                with (
-                    patch.object(admin_service, "audit", new=self._audit(events)),
-                    patch.object(admin_nodes.release_control, method_name, new=start),
-                    patch.object(admin_nodes.site_control, "prepare_release", new=lambda: None),
-                    patch.object(admin_nodes, "require_https", new=lambda _request: None),
-                ):
-                    endpoint = admin_nodes.release_upgrade if mode == "upgrade" else admin_nodes.release_rollback
-                    result = await endpoint(request, "session-hash")
-
-                self.assertEqual(result, {"ok": True, "mode": mode})
-                self.assertEqual(events[0][0:3], ("audit", action, "pending"))
-                self.assertEqual(events[1], ("side-effect", mode))
-                self.assertEqual(events[2][0:3], ("audit", action, "success"))
-
-    async def test_release_failure_is_audited_after_pending_intent(self):
-        events = []
-
-        async def fail_upgrade():
-            events.append(("side-effect", "upgrade", "failed"))
-            raise RuntimeError("updater rejected release")
-
-        request = _request(scheme="https", path="/api/v1/media/admin/nodes/release/upgrade")
-        with (
-            patch.object(admin_service, "audit", new=self._audit(events)),
-            patch.object(admin_nodes.release_control, "start_upgrade", new=fail_upgrade),
-            patch.object(admin_nodes.site_control, "prepare_release", new=lambda: None),
-            patch.object(admin_nodes, "require_https", new=lambda _request: None),
-        ):
-            with self.assertRaises(HTTPException) as raised:
-                await admin_nodes.release_upgrade(request, "session-hash")
-
-        self.assertEqual(raised.exception.status_code, 409)
-        self.assertEqual(events[0][0:3], ("audit", "release_upgrade", "pending"))
-        self.assertEqual(events[1], ("side-effect", "upgrade", "failed"))
-        self.assertEqual(events[2][0:3], ("audit", "release_upgrade", "failed"))
 
 
 if __name__ == "__main__":

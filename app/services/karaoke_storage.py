@@ -4,15 +4,16 @@ from __future__ import annotations
 import hashlib
 import asyncio
 import json
-import math
 import os
 import time
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 
 from fastapi import HTTPException, Request
 
 from app.services.federation import protocol as p
 from app.services.federation.state import state
+from app.services import media_crypto, recording_crypto
 
 ROOT = Path("data/recordings").resolve()
 TRAILER_MAGIC = b"FRONTIERCLOUD-KARAOKE-V1"
@@ -20,6 +21,40 @@ MAX_METADATA_BYTES = 2 * 1024 * 1024
 CHUNK_LIMIT = 1024 * 1024
 _write_lock = asyncio.Lock()
 _usage_cache: dict[str, int] = {}
+
+
+@contextmanager
+def recording_lease(relationship: str, user_id: str, recording_id: str):
+    """A live writer and physical cleanup cannot own the same recording inode."""
+    _path(relationship, user_id, recording_id)
+    identifier = hashlib.sha256((relationship + ":" + user_id + ":" + recording_id).encode("ascii")).hexdigest()
+    root = ROOT.parent / "recording-leases"
+    if os.name != "nt":
+        from app.services.upload_claims import claim, UploadBusy
+        try:
+            with claim(identifier, root=root):
+                yield
+        except UploadBusy as exc:
+            raise HTTPException(409, "Recording still has a live storage operation") from exc
+        return
+    # Developer Windows tests use the corresponding kernel byte-range lock.
+    # Product Compose runtime uses flock above; both release on process death.
+    import msvcrt
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if root.is_symlink() or not root.is_dir():
+        raise RuntimeError("Recording lease directory is invalid")
+    with (root / identifier).open("a+b") as stream:
+        if stream.tell() == 0:
+            stream.write(b"\x00");stream.flush()
+        stream.seek(0)
+        try:
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            raise HTTPException(409, "Recording still has a live storage operation") from exc
+        try:
+            yield
+        finally:
+            stream.seek(0);msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def _path(relationship: str, user_id: str, recording_id: str) -> Path:
@@ -60,24 +95,10 @@ def parse_trailer(path: Path) -> dict:
             value = json.loads(source.read(length))
         except (ValueError, UnicodeError, RecursionError):
             return {}
-    if not isinstance(value, dict) or value.get("version") != 1:
+    try:
+        return recording_crypto.metadata(value, with_version=True)
+    except media_crypto.MetadataError:
         return {}
-    lyrics = value.get("lyrics")
-    if not isinstance(lyrics, list) or len(lyrics) > 10000:
-        return {}
-    cleaned = []
-    for entry in lyrics:
-        if (not isinstance(entry, dict) or not isinstance(entry.get("text"), str)
-                or len(entry["text"]) > 4000 or not isinstance(entry.get("time"), (int, float))):
-            return {}
-        try:
-            timestamp = float(entry["time"])
-        except (ValueError, OverflowError):
-            return {}
-        if isinstance(entry["time"], bool) or not math.isfinite(timestamp):
-            return {}
-        cleaned.append({"time": max(0, timestamp), "text": entry["text"]})
-    return {"title": str(value.get("title") or "")[:255], "lyrics": cleaned}
 
 
 async def capability(token: str, operation: str, recording_id: str) -> tuple[dict, dict]:
@@ -105,6 +126,11 @@ async def capability(token: str, operation: str, recording_id: str) -> tuple[dic
 
 
 async def receive(request: Request, relation: dict, value: dict) -> dict:
+    with recording_lease(relation["relationship_id"], value["u"], value["i"]):
+        return await _receive(request, relation, value)
+
+
+async def _receive(request: Request, relation: dict, value: dict) -> dict:
     expected = int(value["size"])
     capacity = int(relation.get("allocated_capacity_bytes") or 0)
     if expected <= 0 or expected > capacity:
@@ -145,7 +171,8 @@ async def receive(request: Request, relation: dict, value: dict) -> dict:
                 raise HTTPException(409, "Recording already uploaded")
             target.parent.mkdir(parents=True, exist_ok=True)
             with temporary.open("xb") as output:
-                async for chunk in request.stream():
+                from app.services.upload_claims import chunks
+                async for chunk in chunks(request):
                     if len(chunk) > CHUNK_LIMIT:
                         for offset in range(0, len(chunk), CHUNK_LIMIT):
                             piece = chunk[offset:offset + CHUNK_LIMIT]
@@ -162,6 +189,17 @@ async def receive(request: Request, relation: dict, value: dict) -> dict:
                 os.fsync(output.fileno())
             if written != expected:
                 raise HTTPException(400, "Recording body size does not match reservation")
+            parsed_metadata = parse_trailer(temporary)
+            try:
+                descriptor, expected_hash = recording_crypto.token_snapshot(value)
+                if descriptor is not None:
+                    if (not parsed_metadata or parsed_metadata.get("encrypted_lyrics", {}).get("encryption") != descriptor.to_dict()
+                            or recording_crypto.metadata_sha256(parsed_metadata) != expected_hash):
+                        raise media_crypto.MetadataError("Recording footer does not match signed snapshot reservation")
+                elif parsed_metadata.get("encrypted_lyrics") is not None:
+                    raise media_crypto.MetadataError("Encrypted recording footer requires a signed snapshot reservation")
+            except media_crypto.MetadataError as exc:
+                raise HTTPException(400, str(exc)) from exc
             os.replace(temporary, target)
             published = True
             _usage_cache.pop(relation["relationship_id"], None)
@@ -208,9 +246,18 @@ def stat(relationship: str, user_id: str, recording_id: str) -> dict:
 
 
 def remove(relationship: str, user_id: str, recording_id: str) -> int:
+    with recording_lease(relationship, user_id, recording_id):
+        return _remove(relationship, user_id, recording_id)
+
+
+def _remove(relationship: str, user_id: str, recording_id: str) -> int:
     target = _path(relationship, user_id, recording_id)
+    temporary = target.with_suffix(".part")
+    if temporary.is_symlink():
+        raise HTTPException(409, "Recording cleanup encountered an unmanaged part")
     size = target.stat().st_size if target.is_file() else 0
     target.unlink(missing_ok=True)
+    temporary.unlink(missing_ok=True)
     _usage_cache.pop(relationship, None)
     return size
 
@@ -222,12 +269,19 @@ def remove_user(relationship: str, user_id: str) -> int:
         raise HTTPException(400, "Invalid recording owner")
     removed = 0
     if root.exists():
+        identifiers = set()
         for item in root.iterdir():
-            if not item.is_file():
-                continue
-            removed += item.stat().st_size
-            item.unlink()
-        root.rmdir()
+            if item.is_symlink() or not item.is_file() or item.suffix not in {".bin", ".part"} or not p.IDENTIFIER.fullmatch(item.stem):
+                raise HTTPException(409, "Recording owner directory contains an unmanaged object")
+            identifiers.add(item.stem)
+        # Acquire every affected lease before deleting any bytes. An active
+        # upload therefore rejects the whole operation without partial cleanup.
+        with ExitStack() as stack:
+            for identifier in sorted(identifiers):
+                stack.enter_context(recording_lease(relationship, user_id, identifier))
+            for identifier in sorted(identifiers):
+                removed += _remove(relationship, user_id, identifier)
+            root.rmdir()
     _usage_cache.pop(relationship, None)
     return removed
 

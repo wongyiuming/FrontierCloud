@@ -59,9 +59,9 @@ class _Engine:
 
 
 class PlaybackPolicyTests(unittest.TestCase):
-    def test_preference_range_extends_from_negative_seven_through_five_hundred(self):
+    def test_preference_range_extends_from_negative_seven_through_five_hundred_thousand(self):
         self.assertEqual(playback.MIN_PREFERENCE, -7)
-        self.assertEqual(playback.MAX_PREFERENCE, 500)
+        self.assertEqual(playback.MAX_PREFERENCE, 500_000)
 
     def test_threshold_uses_half_duration_with_five_and_thirty_second_bounds(self):
         self.assertEqual(playback.valid_playback_threshold(6), 5)
@@ -120,8 +120,8 @@ class PlaybackPolicyTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("CHECK (preference BETWEEN -7 AND 500)", source)
-        self.assertIn("preference SMALLINT", source)
+        self.assertIn("CHECK (preference BETWEEN -7 AND 500000)", source)
+        self.assertIn("preference INT", source)
         self.assertNotIn("ALTER TABLE media_playback_stats", source)
         self.assertNotIn("UPDATE media_playback_stats", source)
 

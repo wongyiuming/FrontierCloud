@@ -43,7 +43,7 @@ router = APIRouter()
 class MediaPriorityChange(BaseModel):
     media_path: str = Field(min_length=1, max_length=1024)
     resource_id: str | None = Field(None, pattern=r"^[a-f0-9]{64}$")
-    value: int = Field(ge=-7, le=500)
+    value: int = Field(ge=-7, le=500_000)
 
 
 class UploadReservation(BaseModel):
@@ -290,7 +290,7 @@ async def media_priority(
     )
     items.sort(key=lambda item: (
         -int(item.get("preference", 0)),
-        str(item["media_path"]).casefold(),
+        str(item["media_path"]),
         str(item["media_id"]),
     ))
     total = len(items)
@@ -583,6 +583,7 @@ async def upload_item(
         Form(),
     ] = None,
     session_hash: str = Depends(require_session),
+    encryption=None,
 ):
     source = relative_path or file.filename or ""
     try:
@@ -592,7 +593,7 @@ async def upload_item(
                 file.filename = upload_name
             else:
                 target = MediaManager.validate_destination_dir(target_dir)
-            saved_path = await MediaManager.upload_one(file, target, audit=_mutation_audit(session_hash, "upload_item", [source], request))
+            saved_path = await MediaManager.upload_one(file, target, audit=_mutation_audit(session_hash, "upload_item", [source], request), encryption=encryption)
         except HTTPException as exc:
             await admin_service.audit(session_hash, "upload_item", 1, source, "failed", str(exc.detail), request)
             raise

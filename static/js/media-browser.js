@@ -201,10 +201,22 @@
         });
     }
 
-    window.addEventListener('DOMContentLoaded', () => {
+    let pageStarted = false;
+    function startBrowserPage() {
+        if (pageStarted) return;
+        pageStarted = true;
         if (!syncHiddenRevealState()) return;
         startCatalogPage();
         bindHiddenRevealGesture();
         bindPrefetch();
-    });
+    }
+
+    // Category templates load this script after their complete catalog DOM.
+    // Render immediately: an unrelated later script must not hold the directory
+    // behind DOMContentLoaded while its download is stalled on a weak network.
+    if (document.readyState !== 'loading' || document.getElementById('categoryGrid')) {
+        startBrowserPage();
+    } else {
+        window.addEventListener('DOMContentLoaded', startBrowserPage, {once: true});
+    }
 })();

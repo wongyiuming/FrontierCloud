@@ -75,6 +75,8 @@ class Database:
     def __init__(self):
         self.engine = create_engine("sqlite://")
         s.metadata.create_all(self.engine)
+        from app.services.media_crypto_schema import metadata as crypto_metadata
+        crypto_metadata.create_all(self.engine)
         with self.engine.begin() as conn:
             conn.execute(text("""CREATE TABLE media_objects (
                 media_id TEXT PRIMARY KEY, object_kind TEXT NOT NULL, media_path TEXT NOT NULL,

@@ -146,7 +146,16 @@ async def ensure_master_local(node: dict, allocation_bytes: int | None = None, *
             SELECT COALESCE(SUM(size_bytes), 0) FROM karaoke_recordings
             WHERE storage_member_id=:member_id AND state='ready'
         """), {"member_id": node["node_id"]}) or 0)
-        used = max(int(used or 0), local_filesystem_bytes(MEDIA_ROOT)) + recording_used
+        pending_paths = list((await conn.execute(select(s.upload_sessions.c.media_path).where(
+            s.upload_sessions.c.storage_member_id == node["node_id"], s.upload_sessions.c.state == "reserved",
+        ))).scalars())
+        uncommitted_bytes = 0
+        for pending_path in pending_paths:
+            target = (MEDIA_ROOT / str(pending_path)).resolve()
+            if target.is_relative_to(MEDIA_ROOT) and target.is_file() and not target.is_symlink():
+                uncommitted_bytes += target.stat().st_size
+        physical_committed = max(0, local_filesystem_bytes(MEDIA_ROOT) - uncommitted_bytes)
+        used = max(int(used or 0), physical_committed) + recording_used
         allocation = int(allocation_bytes if allocation_bytes is not None
                          else (current["allocated_bytes"] if current else max(used, GIB)))
         if allocation < used:
@@ -392,7 +401,17 @@ BACKUP_TABLES = (
     "admin_audit_log", "webrtc_observation_events", "webrtc_observation_summary",
     "ip_security_audit_log", "ip_security_summary", "ip_security_projection",
     "ip_auto_ban_events", "ip_permanent_whitelist", "node_audit",
+    "media_encryption", "media_crypto_keys",
 )
+
+
+def upload_expired(row, now=None) -> bool:
+    from app.core.config import settings
+    now = int(time.time()) if now is None else now
+    return row["state"] == "reserved" and (
+        int(row["expires_at"]) <= now
+        or int(row["updated_at"]) <= now - settings.ADMIN_UPLOAD_INACTIVITY_TIMEOUT
+    )
 
 
 def _json_value(value):
@@ -637,20 +656,18 @@ async def choose_member(size: int, preferred: str | None = None, database=engine
 
 
 async def release_expired_uploads(database=engine) -> int:
-    now = int(time.time())
-    async with database.begin() as conn:
-        rows = [dict(row) for row in (await conn.execute(select(s.upload_sessions).where(
-            s.upload_sessions.c.state == "reserved", s.upload_sessions.c.expires_at <= now
-        ).limit(500).with_for_update())).mappings()]
-        for row in rows:
-            await conn.execute(update(s.storage_members).where(
-                s.storage_members.c.member_id == row["storage_member_id"]
-            ).values(reserved_bytes=func.greatest(
-                0, s.storage_members.c.reserved_bytes - int(row["expected_bytes"])), updated_at=now))
-        if rows:
-            await conn.execute(delete(s.upload_sessions).where(
-                s.upload_sessions.c.upload_id.in_([row["upload_id"] for row in rows])))
-    return len(rows)
+    """Age selects candidates; kernel leases and physical proofs permit release."""
+    from app.services.federation.state import state
+    if state.database is not database:
+        # A detached database has no authenticated physical ownership context.
+        return 0
+    if state.node.get("role") == "Master":
+        from app.api.v1.admin_cluster_integrity import _cleanup_expired_uploads
+        return await _cleanup_expired_uploads(time_budget=None)
+    if state.node.get("role") == "Follower":
+        from app.api.internal_storage_integrity import cleanup_expired_storage
+        return await cleanup_expired_storage()
+    return 0
 
 
 async def reserve_upload(path: str, size: int, preferred: str | None, database=engine) -> dict:
@@ -702,7 +719,10 @@ async def upload_session(upload_id: str, database=engine) -> dict:
 
 
 async def finalize_upload(upload_id: str, *, object_id: str, actual_size: int, etag: str,
-                          database=engine) -> dict:
+                          database=engine, allow_expired: bool = False, register_local: bool = False) -> dict:
+    from app.services.upload_claims import is_held
+    if (allow_expired or register_local) and not is_held(upload_id):
+        raise p.ProtocolError("Expired upload completion requires the admitted writer lease")
     now = int(time.time())
     async with database.begin() as conn:
         row = (await conn.execute(select(s.upload_sessions).where(
@@ -712,10 +732,32 @@ async def finalize_upload(upload_id: str, *, object_id: str, actual_size: int, e
                 s.global_media.c.media_id == row["media_id"]))).mappings().first()
             if existing:
                 return dict(existing)
-        if not row or row["state"] != "reserved" or row["expires_at"] <= now:
+        if not row or row["state"] != "reserved" or row["expires_at"] <= now and not allow_expired:
             raise p.ProtocolError("Upload reservation is missing or expired")
+        if object_id != row["media_id"]:
+            raise p.ProtocolError("Storage proof has a different object identity")
         if actual_size != int(row["expected_bytes"]):
             raise p.ProtocolError("Uploaded file size does not match reservation")
+        if bool(row.get("content_encrypted", 0)):
+            from app.services.media_crypto import encryption_for_id
+            descriptor = await encryption_for_id(conn, row["media_id"])
+            if descriptor is None or descriptor.ciphertext_size != actual_size:
+                raise p.ProtocolError("Encrypted upload lost its authoritative descriptor; plaintext fallback is prohibited")
+        if register_local:
+            kind = await conn.scalar(select(s.storage_members.c.member_kind).where(s.storage_members.c.member_id == row["storage_member_id"]))
+            if kind != "MasterLocal":
+                raise p.ProtocolError("Only MasterLocal publication can register local objects")
+            from datetime import datetime, timezone
+            from sqlalchemy import text
+            existing = await conn.scalar(text("SELECT media_id FROM media_objects WHERE path_locator=:locator"), {"locator": row["path_locator"]})
+            if existing and existing != row["media_id"]:
+                raise p.ProtocolError("Local path has a different object identity")
+            if not existing:
+                await conn.execute(text("""INSERT INTO media_objects(media_id,object_kind,media_path,path_locator,created_at,updated_at)
+                    VALUES (:id,:kind,:path,:locator,:now,:now)"""), {
+                        "id": row["media_id"], "kind": row["object_kind"], "path": row["media_path"],
+                        "locator": row["path_locator"], "now": datetime.now(timezone.utc).replace(tzinfo=None),
+                    })
         values = dict(media_id=row["media_id"], storage_member_id=row["storage_member_id"], object_id=object_id,
             media_path=row["media_path"], path_locator=path_locator(row["media_path"]), object_kind=row["object_kind"],
             size_bytes=actual_size, etag=etag[:128], state="active", created_at=now, updated_at=now)
@@ -729,6 +771,9 @@ async def finalize_upload(upload_id: str, *, object_id: str, actual_size: int, e
 
 
 async def fail_upload(upload_id: str, database=engine) -> None:
+    from app.services.upload_claims import is_held
+    if not is_held(upload_id):
+        raise p.ProtocolError("Upload release requires an exclusive physical reconciliation lease")
     now = int(time.time())
     async with database.begin() as conn:
         row = (await conn.execute(select(s.upload_sessions).where(
@@ -738,6 +783,8 @@ async def fail_upload(upload_id: str, database=engine) -> None:
         await conn.execute(update(s.storage_members).where(s.storage_members.c.member_id == row["storage_member_id"]).values(
             reserved_bytes=func.greatest(0, s.storage_members.c.reserved_bytes - row["expected_bytes"]), updated_at=now))
         await conn.execute(delete(s.upload_sessions).where(s.upload_sessions.c.upload_id == upload_id))
+        from app.services.media_crypto import forget_encryption
+        await forget_encryption(conn, row["media_id"])
 
 
 async def media(identifier: str, database=engine) -> dict:
@@ -846,6 +893,9 @@ async def adopt_master_local_media(node: dict, database=engine) -> None:
         configured = await conn.scalar(select(s.storage_members.c.allocated_bytes).where(
             s.storage_members.c.member_id == node["node_id"]))
         await ensure_master_local(node, max(int(configured or 0), GIB, existing_bytes), conn=conn)
+        reserved_paths = set((await conn.execute(select(s.upload_sessions.c.media_path).where(
+            s.upload_sessions.c.state == "reserved",
+        ))).scalars())
     discovered = []
     for root_name, object_kind, extensions in (
         ("music", "audio", {".mp3", ".m4a", ".flac", ".wav"}),
@@ -857,7 +907,8 @@ async def adopt_master_local_media(node: dict, database=engine) -> None:
             relative = target.relative_to(MEDIA_ROOT)
             if len(relative.parts) not in (3, 4) or any(part.startswith(".") for part in relative.parts):
                 continue
-            discovered.append((relative.as_posix(), object_kind))
+            if relative.as_posix() not in reserved_paths:
+                discovered.append((relative.as_posix(), object_kind))
     await media_objects.ensure_objects(discovered, database)
     async with database.begin() as conn:
         from sqlalchemy import text
@@ -865,6 +916,15 @@ async def adopt_master_local_media(node: dict, database=engine) -> None:
             "SELECT media_id, object_kind, media_path FROM media_objects "
             "WHERE object_kind IN ('audio','video')"))).mappings()]
         for item in local_rows:
+            if item["media_path"] in reserved_paths:
+                continue
+            existing = await conn.scalar(select(s.global_media.c.media_id).where(
+                s.global_media.c.path_locator == path_locator(item["media_path"])))
+            if existing:
+                # Active identities, placement, ciphertext hashes and pending
+                # deletions already have an authoritative lifecycle. Startup
+                # adoption must not rewrite or resurrect managed objects.
+                continue
             target = (MEDIA_ROOT / item["media_path"]).resolve()
             if not target.is_file() or MEDIA_ROOT not in target.parents:
                 continue
@@ -874,17 +934,17 @@ async def adopt_master_local_media(node: dict, database=engine) -> None:
                 object_kind=item["object_kind"], size_bytes=info.st_size,
                 etag=f'"{int(info.st_mtime):x}-{info.st_size:x}"', state="active",
                 created_at=int(info.st_ctime), updated_at=int(info.st_mtime))
-            statement = mysql_insert(s.global_media).values(**values)
-            await conn.execute(statement.on_duplicate_key_update(
-                storage_member_id=statement.inserted.storage_member_id, object_id=statement.inserted.object_id,
-                size_bytes=statement.inserted.size_bytes, etag=statement.inserted.etag,
-                object_kind=statement.inserted.object_kind, state="active", updated_at=statement.inserted.updated_at))
+            await _upsert(conn, s.global_media, values, ("path_locator",))
     # Recompute used counters after adoption.
     async with database.begin() as conn:
         rows = (await conn.execute(select(s.global_media.c.storage_member_id,
             func.coalesce(func.sum(s.global_media.c.size_bytes), 0).label("used")).where(
             s.global_media.c.state.in_(("active", "pending_delete"))).group_by(s.global_media.c.storage_member_id))).mappings()
         totals = {row["storage_member_id"]: int(row["used"]) for row in rows}
+        recordings = (await conn.execute(text("SELECT storage_member_id,COALESCE(SUM(size_bytes),0) AS used FROM karaoke_recordings WHERE state='ready' GROUP BY storage_member_id"))).mappings()
+        for recording in recordings:
+            member_id = recording["storage_member_id"]
+            totals[member_id] = totals.get(member_id, 0) + int(recording["used"])
         members = (await conn.execute(select(s.storage_members.c.member_id))).scalars()
         for member_id in members:
             await conn.execute(update(s.storage_members).where(s.storage_members.c.member_id == member_id).values(

@@ -6,8 +6,7 @@ WORKDIR /app
 
 # Install locked dependencies before copying application sources. Code and test
 # changes must not invalidate the dependency layer on every deployment.
-# Keep this Dockerfile compatible with the legacy Docker builder used by the
-# in-cluster updater: do not depend on BuildKit-only COPY/RUN flags here.
+# Keep builds usable with both the classic builder and BuildKit.
 COPY pyproject.toml .
 RUN chmod 0644 pyproject.toml && \
     python -c "import pathlib,tomllib; data=tomllib.loads(pathlib.Path('pyproject.toml').read_text()); pathlib.Path('/tmp/requirements.txt').write_text('\\n'.join(data['project']['dependencies'])+'\\n')" && \
@@ -33,10 +32,10 @@ ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
 # Document the application port.
-EXPOSE 8000
+EXPOSE 8000 443 8443
 
 # Keep the runtime process unprivileged.
 USER 10001:10001
 
 # Start the ASGI server without trusting client-supplied proxy headers.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers", "--no-access-log"]
+CMD ["python", "-m", "app.services.certmanager.server"]

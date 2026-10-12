@@ -22,7 +22,7 @@ The single business authority in a cluster. It owns:
 - playback and sorting business facts;
 - karaoke user/recording business state;
 - node desired configuration;
-- release coordination;
+- encryption grant authority;
 - Admin audit state.
 
 ### Follower

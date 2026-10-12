@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+import stat
 from pathlib import Path
 
 from app.core.admin_log import append_admin_log
@@ -18,6 +19,9 @@ def cleanup_stale_upload_parts(
     max_age_seconds: int | float | None = None,
 ) -> tuple[int, int]:
     """Remove abandoned named upload parts that have received no recent writes."""
+    from app.services.site_control import hard_fence_active
+    if hard_fence_active():
+        return 0, 0
 
     max_age = (
         settings.ADMIN_UPLOAD_INACTIVITY_TIMEOUT
@@ -46,13 +50,27 @@ def cleanup_stale_upload_parts(
             ):
                 continue
             candidate = current_path / filename
+            descriptor = None
             try:
                 stat_result = candidate.lstat()
-                if candidate.is_symlink() or stat_result.st_mtime > cutoff:
+                if not stat.S_ISREG(stat_result.st_mode) or stat_result.st_mtime > cutoff:
+                    continue
+                import fcntl
+                descriptor = os.open(candidate, os.O_RDONLY | os.O_NOFOLLOW)
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    continue
+                locked = os.fstat(descriptor)
+                current = candidate.lstat()
+                if (locked.st_dev, locked.st_ino) != (current.st_dev, current.st_ino) or locked.st_mtime > cutoff:
                     continue
                 candidate.unlink()
             except FileNotFoundError:
                 continue
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
             removed_count += 1
             removed_bytes += stat_result.st_size
 
@@ -69,6 +87,12 @@ async def run_stale_upload_cleanup() -> None:
     while True:
         await asyncio.sleep(interval)
         try:
+            from app.services.site_control import hard_fence_active
+            if hard_fence_active():
+                continue
+            from app.services import resource_pool
+            from app.services.federation.state import state
+            recovered = await resource_pool.release_expired_uploads(state.database)
             removed_count, removed_bytes = await asyncio.to_thread(
                 cleanup_stale_upload_parts,
             )
@@ -77,6 +101,8 @@ async def run_stale_upload_cleanup() -> None:
                     "[UPLOAD_CLEANUP] removed "
                     f"{removed_count} stale parts totaling {removed_bytes} bytes"
                 )
+            if recovered:
+                append_admin_log(f"[UPLOAD_CLEANUP] safely reconciled {recovered} expired upload reservations")
         except asyncio.CancelledError:
             raise
         except Exception as exc:

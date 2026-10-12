@@ -40,7 +40,7 @@ The only supported site types are:
 - `direct` — Follower placements whose current transport is `Direct`;
 - `relay` — Follower placements whose current transport is `Relay`.
 
-For Direct and Relay uploads, the user must not name a specific member. FrontierCloud selects among all members of the requested type that are storage-enabled, online, writable, and have enough writable capacity for the object. Placement prefers the lowest current `(used + reserved) / allocated` pressure and then more available bytes, so sequential/concurrent reservations spread naturally across ready members instead of sticking to one node. Member selection plus durable upload reservation is serialized by the storage write lock so concurrent Admin sessions see current `reserved_bytes`.
+For Direct and Relay uploads, the user must not name a specific member. FrontierCloud selects among all members of the requested type that are storage-enabled, online, writable, and have enough writable capacity for the object. Placement prefers the lowest current `(used + reserved) / allocated` pressure and then more available bytes, for an empty immediate-parent media folder. Existing active objects and every unreconciled reservation pin that folder to its current owner. An offline, full or conflicting owner rejects the request; FrontierCloud never scatters siblings to work around that condition. Member selection plus durable upload reservation is serialized by the storage write lock so concurrent Admin sessions see current `reserved_bytes`.
 
 Historical media requires **no migration** for this feature. Existing `storage_member_id`, `member_kind`, and `transport` remain the source of truth; Admin derives the visible site type from those fields. A missing transport in a local/Standalone media tree is treated as primary/local. Changing this presentation must not rewrite historical ownership.
 
@@ -151,9 +151,8 @@ The Admin console order is an intentional product contract and is tested in both
 6. WebRTC network relations
 7. Nodes
 8. Site access state
-9. System release management
-10. Admin Key
-11. Brand Logo
+9. Admin Key
+10. Brand Logo
 
 Dynamic modules must join this same final DOM/visual order. Reordering code must be idempotent; DOM mutation observers must not create self-triggering reorder loops.
 
@@ -179,3 +178,47 @@ GitHub-side ref creation cannot be fully prevented by a unit test. The repositor
 When an invariant can be encoded as a test, encode it. When it cannot be reliably observed from repository code (for example, who is allowed to create a Git ref), document it explicitly and enforce it with GitHub repository settings where available.
 
 A regression may not be weakened merely to accommodate a new feature. Architectural changes require an explicit architecture update and corresponding test changes in the same development cycle.
+
+## Frozen Python release contracts
+
+This repository's final runtime remains Python/FastAPI, with one ASGI business
+worker. Business HTTPS uses Nginx; Storage uses Python's native TLS server.
+Published Business and Direct HTTP/HTTPS are fixed to 80/443. Relay Storage exposes
+only its authenticated private node transport. Product components run through
+Compose, without host systemd, Docker sockets or privileged mode.
+
+TLS_ENABLED is the sole TLS switch. Automatic Python ACME owns durable accounts,
+private cache, certificate validation, retries, atomic publication and reload.
+User certificate paths and public port overrides are removed; the environment
+validator diagnoses retired settings instead of accidentally reading old keys.
+Failure never opens plaintext business traffic or disables peer TLS validation.
+Certificate status is read-only; an authenticated Admin may download only a leaf
+certificate/key pair through a browser-bound encryption envelope.
+
+Each upload selection explicitly chooses `plain` or `encrypted`. Encrypted bytes
+leave the browser as AES-256-GCM chunks, using the fixed versioned Gin browser
+protocol; the Python backend wraps file keys and checks metadata, ownership,
+ciphertext size/hash and lifecycle consistency. It does not routinely decrypt
+media. Fixed 15-minute authorization is consumed for one browser session's grant
+scope covering multiple current file requests. Expiry/revocation blocks new key
+grants; it cannot erase browser-retained keys or plaintext.
+
+Media file IDs and nonce prefixes cannot be reused. Deletion preserves an
+immutable encryption tombstone; rename preserves identity. Premaster secrets
+remain only on the business node and in separately protected operator recovery
+artifacts; they must never be included in ordinary Follower business backups.
+
+Priorities use bounded integers from -7 through 500000 and inherit every stored
+historical value. Ties have canonical path/identity order independent of browser
+sessions. Drag requests carry the complete sibling-scope revision; hidden and
+off-page siblings remain part of that revision. The minimal collision window and
+its bounded audit records commit atomically, or the entire request rolls back.
+
+A timeout only selects upload recovery candidates. Kernel writer leases and an
+authenticated physical reconciliation result decide whether bytes and quota can
+be released. Refresh, process death and expired credentials cannot strand a
+unique path forever, and live writers cannot be reclaimed based on age alone.
+
+Software replacement is an operator action. The online updater, upgrade/rollback
+APIs and Admin module are retired. Explicit backup/migration remains available;
+an operator maintenance fence always wins over manual Admin availability.

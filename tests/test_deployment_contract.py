@@ -107,6 +107,10 @@ class DeploymentContractTests(unittest.TestCase):
                 self.assertNotRegex(lines[index - 1], r"^# [A-Z][A-Z0-9_]*=")
         app_names = set(re.findall(r'validation_alias="([A-Z][A-Z0-9_]*)"', config))
         compose_names = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", compose))
+        # Compose forwards retired port inputs only so runtime validation can
+        # diagnose them. They are not configuration choices in the public contract.
+        compose_names -= {"HTTP_PORT", "HTTPS_PORT"}
+        compose_names |= {"COMPOSE_PROJECT_NAME", "COMPOSE_FILE"}
         self.assertEqual(set(listed), app_names | compose_names)
 
     def test_private_deployment_variables_are_absent_from_contract(self):
@@ -210,7 +214,8 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertIn(f'"{directory}"', initializer)
         self.assertIn("APP_UID = 10001", initializer)
         self.assertIn("followlinks=False", initializer)
-        self.assertIn('(\"web\", \"secrets-init\", \"media-init\")', federation_harness)
+        for service in ("web", "secrets-init", "media-init"):
+            self.assertIn(service, federation_harness)
 
     def test_chinese_product_name_is_consistent(self):
         paths = [ROOT / "app", ROOT / "static"]
@@ -256,7 +261,9 @@ class DeploymentContractTests(unittest.TestCase):
     def test_duplicate_uvicorn_access_log_is_disabled(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         logging_config = (ROOT / "app/core/logging_config.py").read_text(encoding="utf-8")
-        self.assertIn("--no-access-log", dockerfile)
+        server = (ROOT / "app/services/certmanager/server.py").read_text(encoding="utf-8")
+        self.assertIn("app.services.certmanager.server", dockerfile)
+        self.assertIn("access_log=False", server)
         self.assertIn('logging.getLogger("uvicorn.access")', logging_config)
         self.assertIn("access_logger.disabled = True", logging_config)
 
@@ -327,31 +334,16 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("persistent `runtime_secrets` volume", guide)
         self.assertIn("Rapidly click the second half of the home logo five times", guide)
 
-    def test_web_release_control_is_isolated_and_never_uses_compose(self):
-        workflow = (ROOT / ".github/workflows/docker.yml").read_text(encoding="utf-8")
+    def test_product_runtime_has_no_privileged_software_updater(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
-        updater = (ROOT / "updater/server.py").read_text(encoding="utf-8")
-        release = (ROOT / "app/services/release_control.py").read_text(encoding="utf-8")
-        release_ui = (ROOT / "static/js/release-admin.js").read_text(encoding="utf-8")
-        gate = (ROOT / "nginx/maintenance-gate.conf").read_text(encoding="utf-8")
-        for marker in (
-            "  prepare-rn:", "  deploy-rn:", "  prepare-evoxt:", "  deploy-evoxt:",
-            "self-hosted", "RN_DEPLOY_PATH", "EVOXT_DEPLOY_PATH", "deployments: write",
-        ):
-            self.assertNotIn(marker, workflow)
-        self.assertFalse((ROOT / "scripts/deploy_rn.sh").exists())
-        self.assertIn("  updater:", compose)
-        self.assertEqual(compose.count("- /var/run/docker.sock:/var/run/docker.sock"), 1)
-        self.assertIn("updater_control:/run/frontiercloud-updater", compose)
-        self.assertIn("maintenance_state:/run/frontiercloud-maintenance:ro", compose)
-        self.assertIn("docker.DockerClient", updater)
-        self.assertNotIn("docker compose", updater.lower())
-        self.assertNotIn("systemctl", updater.lower())
-        self.assertIn("actions/workflows/docker.yml/runs", release)
-        self.assertIn("升级并分发", release_ui)
-        self.assertIn("一键回滚", release_ui)
-        self.assertIn("/internal/v1/cluster-update", gate)
-        self.assertIn("workflow_dispatch:", workflow)
+        admin = (ROOT / "app/api/v1/admin_nodes.py").read_text(encoding="utf-8")
+        self.assertNotIn("  updater:", compose)
+        self.assertNotIn("/var/run/docker.sock", compose)
+        self.assertNotIn("/run/frontiercloud-updater", compose)
+        self.assertNotIn('@router.get("/release")', admin)
+        self.assertFalse((ROOT / "updater/server.py").exists())
+        self.assertFalse((ROOT / "app/services/release_control.py").exists())
+
 
 
 if __name__ == "__main__":
