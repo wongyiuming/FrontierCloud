@@ -911,8 +911,13 @@ function isGestureControl(target) {
     ));
 }
 
+function playerGestureRect(playerSection) {
+    // Fullscreen changes the player bounds, not its layout ancestor.
+    return (art?.container || playerSection).getBoundingClientRect();
+}
+
 function verticalPlayerRatio(event, playerSection) {
-    const rect = playerSection.getBoundingClientRect();
+    const rect = playerGestureRect(playerSection);
     return Math.min(1, Math.max(0, (event.clientY - rect.top) / Math.max(1, rect.height)));
 }
 
@@ -920,7 +925,7 @@ function seekToHorizontalPosition(clientX, playerSection) {
     if (!art) return;
     const duration = Number(art.duration || 0);
     if (!duration) return;
-    const rect = playerSection.getBoundingClientRect();
+    const rect = playerGestureRect(playerSection);
     const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
     art.currentTime = duration * ratio;
 }
@@ -1015,10 +1020,11 @@ function initAudioGestureControl() {
     }, true);
 
     playerSection.addEventListener('click', event => {
+        // Controls own their clicks, including the progress bar's pointer seek.
+        if (isGestureControl(event.target)) return;
         if (Date.now() < suppressClickUntil) return;
 
         const isDirectSeekZone = verticalPlayerRatio(event, playerSection) >= DIRECT_SEEK_ZONE_START;
-        if (!isDirectSeekZone && isGestureControl(event.target)) return;
 
         event.stopPropagation();
         event.preventDefault();
@@ -1102,6 +1108,8 @@ function initVideoGestureControl() {
     });
 
     playerSection.addEventListener('click', event => {
+        // Controls own their clicks, including the progress bar's pointer seek.
+        if (isGestureControl(event.target)) return;
         if (Date.now() < suppressClickUntil) {
             event.stopPropagation();
             event.preventDefault();
