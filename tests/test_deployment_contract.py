@@ -177,7 +177,9 @@ class DeploymentContractTests(unittest.TestCase):
 
     def test_runtime_and_readme_do_not_define_deployment_tiers(self):
         paths = [ROOT / "README.md", ROOT / "app/core/config.py", ROOT / "app/api/v1/admin.py"]
-        paths.extend(path for path in (ROOT / "nginx").rglob("*") if path.is_file())
+        paths.extend(path for path in (ROOT / "nginx").rglob("*")
+                     if path.is_file() and "__pycache__" not in path.parts
+                     and path.suffix not in {".pyc", ".pyo"})
         for path in paths:
             with self.subTest(path=path.relative_to(ROOT)):
                 self.assertNotRegex(
