@@ -152,9 +152,35 @@ class EncryptedMediaLifecycleTests(unittest.IsolatedAsyncioTestCase):
         response=await self.client.get("/api/v1/media/lyrics/content",params={"track":"music/artist/source.mp3"})
         self.assertEqual(response.status_code,200,response.text)
         self.assertTrue(response.json()["encrypted"])
+        page = await self.client.get("/api/v1/media/lyrics", params={"track":"music/artist/source.mp3"})
+        self.assertEqual(page.status_code,200,page.text)
+        self.assertIn('"encrypted": true',page.text)
         await media_manager.MediaManager.set_hidden(["music/artist"],True)
         response=await self.client.get("/api/v1/media/crypto/bytes?file_path=lyrics/song.lrc")
         self.assertEqual(response.status_code,404,response.text)
+
+    async def test_invalid_lyric_paths_and_resource_ids_are_http_404(self):
+        for endpoint in ("/api/v1/media/lyrics", "/api/v1/media/lyrics/content"):
+            for track in ("foo", "../music/a.mp3", "music/artist/bad.txt"):
+                response = await self.client.get(endpoint, params={"track":track})
+                self.assertEqual(response.status_code,404,response.text)
+            with patch.object(db.settings,"TLS_ENABLED",True):
+                response = await self.client.get("https://localhost" + endpoint,
+                    params={"track":"music/artist/source.mp3","resource_id":"not-an-id"})
+            self.assertEqual(response.status_code,404,response.text)
+
+    async def test_plaintext_lyric_page_and_content_remain_available(self):
+        await media_manager.MediaManager.upload_one(
+            UploadFile(filename="source.mp3",file=io.BytesIO(b"ID3 source")),self.media/"music/artist")
+        await media_manager.MediaManager.upload_lyric(
+            UploadFile(filename="plain.lrc",file=io.BytesIO(b"[00:01.00]plain lyric\n")))
+        await lyrics.replace_relations("track","music/artist/source.mp3",["lyrics/plain.lrc"])
+        content = await self.client.get("/api/v1/media/lyrics/content",params={"track":"music/artist/source.mp3"})
+        self.assertEqual(content.status_code,200,content.text)
+        self.assertEqual(content.json()["entries"][0]["text"],"plain lyric")
+        page = await self.client.get("/api/v1/media/lyrics",params={"track":"music/artist/source.mp3"})
+        self.assertEqual(page.status_code,200,page.text)
+        self.assertIn("plain lyric",page.text)
 
     async def test_encrypted_upload_limit_counts_plaintext_and_accepts_tag_overhead(self):
         oversized,cipher_large,_=await self.encrypted_payload(b"ID3"+b"x"*22)

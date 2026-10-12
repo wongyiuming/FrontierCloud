@@ -30,10 +30,17 @@ class RecordingRoute(APIRoute):
         original = super().get_route_handler()
         async def bounded(request: Request):
             if request.method == "POST" and self.path.endswith("/recordings/ticket"):
+                maximum = recording_crypto.MAX_METADATA_BYTES + 8192
+                declared = request.headers.get("content-length", "")
+                # Reject oversized declarations before requesting any body, but
+                # always count actual chunks: headers cannot establish the bound.
+                digits = declared.lstrip("0") or "0"
+                if declared.isascii() and declared.isdecimal() and (len(digits) > 10 or int(digits) > maximum):
+                    raise HTTPException(413, "录音歌词快照消息超过限制", headers={"Cache-Control":"private, no-store"})
                 chunks, length = [], 0
                 async for chunk in request.stream():
                     length += len(chunk)
-                    if length > recording_crypto.MAX_METADATA_BYTES + 8192:
+                    if length > maximum:
                         raise HTTPException(413, "录音歌词快照消息超过限制", headers={"Cache-Control":"private, no-store"})
                     chunks.append(chunk)
                 request._body=b"".join(chunks)

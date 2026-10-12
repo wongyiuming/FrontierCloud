@@ -49,6 +49,9 @@ class FederationContractTests(unittest.TestCase):
 
     def test_exact_dev_promotion_and_reviewed_tree_are_required(self):
         workflow = (ROOT / '.github/workflows/docker.yml').read_text()
+        promotion = workflow.split('  promote-main:', 1)[1]
+        self.assertIn('      pull-requests: read', promotion)
+        self.assertNotIn('pull-requests:', workflow.split('  promote-main:', 1)[0])
         for marker in ('listPullRequestsAssociatedWithCommit', "pr?.base?.ref === 'main'",
                        "pr?.head?.ref === 'dev'", 'sourceShas.length !== 1',
                        'sourceTree !== mainTree', 'head_sha: sourceSha',

@@ -659,7 +659,10 @@ async def get_lyrics_page(track: str = Query(..., min_length=1, max_length=1024)
     if resource_id:
         require_https(request)
     from app.services import media_crypto
-    encrypted = await media_crypto.encrypted_lyric(track, resource_id or "")
+    try:
+        encrypted = await media_crypto.encrypted_lyric(track, resource_id or "")
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Lyrics not found") from exc
     if encrypted:
         view = {"encrypted": True, "file_path": encrypted["path"], "lyric_path": encrypted["path"], "encryption": encrypted["encryption"].to_dict(), "source_url": "/api/v1/media/crypto/bytes?file_path=" + urllib.parse.quote(encrypted["path"], safe="")}
         html = load_html_template("lyrics.html").replace("{{LYRICS_JSON}}", "[]").replace("{{LINE_COUNT}}", "0")
@@ -687,7 +690,10 @@ async def get_lyrics_content(track: str = Query(..., min_length=1, max_length=10
     if resource_id:
         require_https(request)
     from app.services import media_crypto
-    encrypted = await media_crypto.encrypted_lyric(track, resource_id or "")
+    try:
+        encrypted = await media_crypto.encrypted_lyric(track, resource_id or "")
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Lyrics not found") from exc
     if encrypted:
         view = {"encrypted": True, "file_path": encrypted["path"], "lyric_path": encrypted["path"], "encryption": encrypted["encryption"].to_dict(), "source_url": "/api/v1/media/crypto/bytes?file_path=" + urllib.parse.quote(encrypted["path"], safe="")}
         return JSONResponse(view, headers=NO_STORE_HEADERS)

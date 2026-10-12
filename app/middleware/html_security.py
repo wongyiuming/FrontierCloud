@@ -17,6 +17,11 @@ class HtmlSecurityMiddleware:
         if scope['type'] != 'http':
             await self.app(scope, receive, send)
             return
+        # FileResponse must send readable body chunks through this renderer.
+        # A pathsend skips them entirely and would precede our buffered start.
+        extensions = dict(scope.get('extensions', {}))
+        extensions.pop('http.response.pathsend', None)
+        scope = {**scope, 'extensions': extensions}
         nonce = secrets.token_urlsafe(24)
         start = None
         chunks = []
