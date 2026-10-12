@@ -311,8 +311,9 @@
         heading.append(make('strong', '', relation.local ? '本机证书' : '存储节点证书'));
         const observed = relation.summary?.certificate || {};
         const queried = certificateViews.get(relation.relationship_id);
-        const facts = queried && Date.now() - queried.at < 30000 ? queried.value : observed;
-        const labels = {DISABLED: '未启用 TLS', PENDING: '等待证书', VALIDATING: '验证域名', ISSUING: '签发中', ACTIVE: '已生效', RENEWING: '续期中', DEGRADED: '降级，需检查', FAILED: '失败'};
+        const facts = relation.status === 'offline' && observed.state === 'UNAVAILABLE'
+            ? observed : queried && Date.now() - queried.at < 30000 ? queried.value : observed;
+        const labels = {DISABLED: '未启用 TLS', PENDING: '等待证书', VALIDATING: '验证域名', ISSUING: '签发中', ACTIVE: '已生效', RENEWING: '续期中', DEGRADED: '降级，需检查', FAILED: '失败', UNAVAILABLE: '无法观测'};
         const codes = {dns: 'DNS 未就绪或解析失败', port80_busy: '80 端口被占用', http01_unreachable: '公网 HTTP-01 不可达', http01_ingress: '等待内部 Challenge 入口就绪', authorization: '域名授权失败', caa: 'CAA 限制', rate_limited: 'CA 限流，自动退避', ca_unavailable: 'CA 暂不可用', ca_timeout: 'CA 请求超时', ca_error: 'CA 请求失败', domain_rejected: 'CA 拒绝域名', system_clock: '系统时间异常', interrupted: '上次操作中断', journal_unwritable: '状态无法持久化', journal_recovered: '已保护损坏记录，等待安全重试', certificate_cache_unreadable: '证书缓存无法读取，保留有效旧证书', certificate_not_yet_valid: '证书尚未生效，请检查系统时间', certificate_cache_unwritable: '签发结果无法保存，保留旧证书', legacy_certificate_invalid: '历史证书无法安全迁移', challenge_listener: 'ACME 验证监听器异常', certificate_validation: '证书完整校验失败', certificate_invalid: '证书已失效或损坏', certificate_expired: '证书已过期', serving_certificate_mismatch: '线上证书尚未与托管证书一致', controller_unavailable: '证书控制器不可用'};
         section.append(heading, kv([
             ['TLS', facts.enabled ? '已启用' : facts.state === 'DISABLED' ? '未启用' : '待查询'],
@@ -326,7 +327,7 @@
             ['剩余有效期', facts.not_after ? duration(facts.remaining_seconds) : '待查询'],
             ['最近续期', facts.last_renewal === 'success' ? '成功' : facts.last_renewal === 'failed' ? '失败' : '尚无续期记录'],
             ['下次计划续期', facts.next_renewal ? localTime(facts.next_renewal) : '待签发或等待 CA 计划'],
-            ['最近错误', facts.last_error ? codes[facts.last_error] || '未知错误' : '无'],
+            ['最近错误', facts.last_error === 'storage_offline' ? '存储节点离线，证书状态尚未确认' : facts.last_error === 'authenticated_observation_unavailable' ? '已认证的证书查询暂不可用' : facts.last_error ? codes[facts.last_error] || '未知错误' : '无'],
             ['HTTPS 服务', facts.https_ready ? '握手已验证' : '尚未验证可用'],
             ['线上证书一致', facts.serving_matches ? '已验证一致' : '尚未验证一致'],
             ['控制器', facts.controller_running ? '运行中' : '尚未确认'],

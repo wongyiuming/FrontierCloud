@@ -19,10 +19,22 @@ The read-only `docker.yml` workflow installs pinned Python dependencies, checks
 Python/JavaScript syntax, runtime CPU boundaries, deployment/env contracts and
 English source comments, discovers the complete unit suite, and runs the browser
 JavaScript smoke tests. Source jobs have a three-minute limit. CI owns no SSH
-credentials, host deployment, Docker socket, or product CD.
+credentials, deployment authority, or product CD. Product containers never
+receive a Docker socket or host service control.
+
+The required `test-compose` check depends on successful source CI and runs the
+actual `scripts/test-python-final.sh` suite on a fresh GitHub-hosted Linux Docker
+runner, with a fifteen-minute limit. It runs for `dev` pushes, release PRs and
+manual workflow dispatches. Both test jobs check out the exact PR head SHA or
+event SHA with persisted Git credentials disabled. Test-only pinned browser
+dependencies, NSS tools and the runner's verified Chrome support the fixtures;
+no deployment credentials or production machine is involved.
 
 The `promote-main` guard proves a unique merged same-repository `dev -> main` PR,
-successful exact-source `dev` push CI, and identical reviewed/main trees. A newer
+successful exact-source `dev` push CI including both `source` and `test-compose`,
+and identical reviewed/main trees. A `main` push reuses that proven tree rather
+than repeating source or native builds. Missing, skipped or failed required jobs
+cannot satisfy promotion. A newer
 commit invalidates earlier CI and native acceptance evidence.
 
 ## Complete native acceptance
@@ -43,6 +55,13 @@ Fixtures use a private local ACME CA, actual HTTP-01/JWS/CSR/account operations
 and test-only trust roots. They do not contact a public CA, publish host HTTP/HTTPS
 ports, disable certificate checking, or affect existing deployments. Test-only
 CA images must never become frozen runnable artifacts.
+
+CI uploads only explicitly selected sanitized JSON receipts, the source commit
+receipt and test logs. Private CA directories, NSS profiles, database/control
+snapshots, certificate pairs and runtime keys are excluded. The artifact collector
+rejects private-key PEM material; it never uploads the fixture or deployment
+directories. Independent exact-source native evidence remains required for the
+final archival deliverable.
 
 Every Web fixture has one ASGI worker and one CPU. A timeout is a failure; stop
 fixtures before cleaning them. After business work, require CPU below 20% for

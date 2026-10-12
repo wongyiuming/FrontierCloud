@@ -33,11 +33,25 @@ including MySQL or frozen image selection. Storage uses its storage Compose
 file. Keep the actual original project name and persistent volume identities;
 do not accidentally initialize a second empty deployment.
 
+`SQLITE_PATH` must name a regular file under the actual persistent `data` root:
+`/app/data` inside the product container, or the checkout's `data` directory when
+running source tools. An arbitrary absolute path is insufficient. Paths under
+`media`, `recordings`, `tmp` or `.tmp`, parent traversal, symbolic links and hard
+links are rejected. Keep the container's `/app/data` bind mounted to the intended
+`DATA_DIRECTORY`; the default database is `frontiercloud.db` in that root.
+
 Snapshots use 0700 directories and 0600 files. SQLite includes a consistent
 binary backup, full SQL dump, integrity/foreign-key checks and actual SQL
 restoration with every table's schema, row count and typed content hash checked.
 MySQL uses a complete cold-volume snapshot restored with the exact recorded
 image and platform; this is not a portable cross-version SQL import.
+
+Snapshot completion is published only after artifact files, the snapshot
+directory and its parent's new directory entry have been synchronized to disk.
+The final private `manifest.json` is the completion marker. An interrupted or
+failed snapshot without that marker is explicitly incomplete and cannot restore
+or modify destination volumes. Keep incomplete output for diagnosis; do not
+construct a manifest manually or treat existing archive files as success.
 
 The recovery set also preserves node identity/vault, runtime secrets, media
 premaster, Redis and complete ACME private state/published generations. Media,
@@ -170,3 +184,29 @@ acceptance, then use the same reviewed `dev -> main` promotion.
 
 Temporary playback diagnostics stop accepting reports after 2026-10-15. Fixed
 clock-boundary tests cover that retirement; it does not prevent future installs.
+
+## MasterLocal upload publication recovery
+
+MasterLocal uploads persist a version 2 private publication journal before
+linking bytes without overwriting an existing file. The journal binds the
+existing upload, media and member IDs to the path, byte count, SHA-256, public
+encryption descriptor and staged device/inode. It contains no encryption keys.
+The file and every publication directory up to the media root are synchronized
+before the local object, global catalog, quota, completed upload session and
+publication-specific success audit commit in one database transaction.
+
+Cancellation waits for that publication worker to finish or retain an explicit
+unknown outcome. A lost commit acknowledgement keeps the bytes and journal;
+expired-upload reclamation refuses outstanding publication journals. On normal
+startup, the exclusive runtime/media fences and per-upload kernel claim protect
+reconciliation. Matching completed session, local/global object, descriptor,
+audit, quota and actual byte hash prove a commit: preserve the file and remove
+only its journal and any matching staged link. A proven uncommitted reservation
+with no registered object or success audit permits deleting only its original
+fresh inode and transactionally releasing its quota and descriptor. Recovery is
+idempotent and never charges a completed upload again.
+
+Unavailable database evidence, partial registration, missing success audit,
+changed bytes or an unrelated replacement inode retain the journal and recovery
+fence. Restore consistent database/control/media evidence and restart for
+verification; never delete a journal or media file manually to force progress.

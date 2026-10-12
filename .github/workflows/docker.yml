@@ -13,16 +13,18 @@ permissions:
 
 jobs:
   source:
+    if: github.event_name != 'push' || github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
       DB_TYPE: sqlite
-      SQLITE_PATH: /tmp/frontiercloud-source.db
+      SQLITE_PATH: ${{ github.workspace }}/data/frontiercloud-source.db
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14.7'
@@ -66,6 +68,82 @@ jobs:
             if (p.base.ref !== 'main' || p.head.ref !== 'dev' || p.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
               core.setFailed('Only same-repository dev -> main promotion is allowed');
             }
+
+  test-compose:
+    needs: source
+    if: github.event_name != 'push' || github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      FC_EVIDENCE_DIR: ${{ runner.temp }}/frontiercloud-native-evidence
+      FC_BROWSER_PYTHON: ${{ runner.temp }}/frontiercloud-native-driver/bin/python
+      PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare isolated native test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libnss3-tools
+          command -v node
+          command -v certutil
+          test -x "$PLAYWRIGHT_CHROMIUM_EXECUTABLE"
+          "$PLAYWRIGHT_CHROMIUM_EXECUTABLE" --version
+          docker version
+          docker compose version
+          python -m venv "$RUNNER_TEMP/frontiercloud-native-driver"
+          "$FC_BROWSER_PYTHON" -m pip install --disable-pip-version-check \
+            playwright==1.62.0 httpx==0.28.1 cryptography==50.0.1
+          sudo install -d -m 0700 /root/frontiercloud-dev "$FC_EVIDENCE_DIR"
+          sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Complete Compose TLS browser and database acceptance
+        run: |
+          sudo --preserve-env=PYTHONDONTWRITEBYTECODE,FC_EVIDENCE_DIR,FC_BROWSER_PYTHON,PLAYWRIGHT_CHROMIUM_EXECUTABLE \
+            bash -c 'set -euo pipefail; cd "$1"; bash scripts/test-python-final.sh > "$FC_EVIDENCE_DIR/native.log" 2>&1' \
+            bash "$GITHUB_WORKSPACE"
+      - name: Collect only sanitized receipts and test logs
+        id: collect-evidence
+        if: always()
+        run: |
+          upload="$RUNNER_TEMP/frontiercloud-native-artifact"
+          mkdir -p "$upload"
+          chmod 0700 "$upload"
+          for name in source-commit.txt nginx-real.json storage-direct-real.json storage-relay-real.json \
+            federation.json operator-sqlite-proof.json operator-mysql-proof.json \
+            operator-endpoint-sqlite-proof.json operator-endpoint-mysql-proof.json \
+            native.log unit.log certificate-nginx.log certificate-storage.log federation.log \
+            mysql.log operator.log operator-backup.log operator-endpoint.log; do
+            if sudo test -f "$FC_EVIDENCE_DIR/$name"; then
+              sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" "$FC_EVIDENCE_DIR/$name" "$upload/$name"
+            fi
+          done
+          python - <<'PY'
+          import json, os, pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'frontiercloud-native-artifact'
+          for path in root.iterdir():
+              content = path.read_text()
+              if 'PRIVATE KEY-----' in content:
+                  path.unlink()
+                  raise SystemExit('Refusing evidence containing private key material')
+              if path.suffix == '.json':
+                  json.loads(content)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.collect-evidence.outcome == 'success'
+        with:
+          name: native-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/frontiercloud-native-artifact/*
+          if-no-files-found: warn
+          retention-days: 14
 
   promote-main:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -131,6 +209,17 @@ jobs:
             if (run.status !== 'completed' || run.conclusion !== 'success') {
               core.setFailed(`dev CI #${run.run_number} for ${sourceSha} is ${run.status}/${run.conclusion || 'unknown'}`);
               return;
+            }
+            const jobResponse = await github.rest.actions.listJobsForWorkflowRun({
+              owner, repo, run_id: run.id, filter: 'latest', per_page: 100,
+            });
+            const jobs = Array.isArray(jobResponse.data?.jobs) ? jobResponse.data.jobs : [];
+            for (const required of ['source', 'test-compose']) {
+              const job = jobs.find(item => item.name === required);
+              if (!job || job.status !== 'completed' || job.conclusion !== 'success') {
+                core.setFailed(`dev CI #${run.run_number} has no successful ${required} job for ${sourceSha}`);
+                return;
+              }
             }
             core.notice(`main ${context.sha} promotes dev ${sourceSha} from CI #${run.run_number}; tree ${mainTree}`);
             core.setOutput('source_sha', sourceSha);

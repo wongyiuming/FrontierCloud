@@ -1,4 +1,4 @@
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import os
 from urllib.parse import quote
 
@@ -10,6 +10,8 @@ MYSQL_PASSWORD_FILE = SECRET_DIR / "mysql_password"
 MYSQL_ROOT_PASSWORD_FILE = SECRET_DIR / "mysql_root_password"
 ADMIN_KEY_FILE = SECRET_DIR / "admin_key"
 METRICS_TOKEN_FILE = SECRET_DIR / "metrics_token"
+DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
+SQLITE_EXCLUDED_ROOTS = frozenset({"media", "recordings", "tmp", ".tmp"})
 
 
 def _read_secret(path: Path, fallback: str) -> str:
@@ -22,7 +24,7 @@ def _read_secret(path: Path, fallback: str) -> str:
 
 class Settings(BaseSettings):
     DB_TYPE: str = Field("sqlite", validation_alias="DB_TYPE")
-    SQLITE_PATH: str = Field("/app/data/frontiercloud.db", validation_alias="SQLITE_PATH")
+    SQLITE_PATH: str = Field(str(DATA_ROOT / "frontiercloud.db"), validation_alias="SQLITE_PATH")
     DEPLOYMENT_MODE: str = Field("", validation_alias="DEPLOYMENT_MODE")
     STORAGE_TRANSPORT: str = Field("direct", validation_alias="STORAGE_TRANSPORT")
     STORAGE_PORT: int = Field(443, ge=1, le=65535, validation_alias="STORAGE_PORT")
@@ -102,9 +104,24 @@ class Settings(BaseSettings):
     @classmethod
     def validate_sqlite_path(cls, value: str) -> str:
         value = value.strip()
-        if not value or value == ":memory:" or not (Path(value).is_absolute() or PurePosixPath(value).is_absolute()):
+        path = Path(value)
+        if not value or value == ":memory:" or not path.is_absolute() or ".." in path.parts:
             raise ValueError("SQLITE_PATH must be an absolute persistent file path")
-        return value
+        try:
+            relative = path.relative_to(DATA_ROOT)
+        except ValueError:
+            raise ValueError("SQLITE_PATH must reside within the persistent data directory") from None
+        if not relative.parts or relative.parts[0] in SQLITE_EXCLUDED_ROOTS:
+            raise ValueError("SQLITE_PATH cannot use media, recordings or temporary directories")
+        current = DATA_ROOT
+        for component in (None, *relative.parts):
+            if component is not None:
+                current /= component
+            if current.is_symlink():
+                raise ValueError("SQLITE_PATH cannot traverse symbolic links")
+        if path.exists() and (not path.is_file() or path.stat().st_nlink != 1):
+            raise ValueError("SQLITE_PATH must be a regular persistent database file")
+        return str(path)
 
     @field_validator("LOG_FORMAT")
     @classmethod

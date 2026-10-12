@@ -34,7 +34,8 @@ from app.middleware.node_role import NodeRoleMiddleware
 from app.middleware.html_security import HtmlSecurityMiddleware
 from app.middleware.native_storage import NativeStorageDeliveryMiddleware
 from app.middleware.operator_fence import OperatorFenceMiddleware
-from app.services import admin_service, lyrics, media_crypto
+from app.services import admin_service
+from app.services.business_lifecycle import initialize_business_services
 from app.services.health import live_status, readiness_response
 from app.services.ip_security import initialize_ip_security_cache, retry_edge_projection
 from app.services.media_manager import recover_interrupted_media_deletions
@@ -70,9 +71,7 @@ async def _lifespan(app: FastAPI):
                 raise RuntimeError("Storage deployment cannot change an existing node role or paired endpoint")
         if node_state.node["role"] != "Standalone" and not settings.TLS_ENABLED:
             raise RuntimeError("Master/Follower 节点必须启用 TLS；请恢复 TLS 配置或显式重新初始化节点")
-        if node_state.node["role"] != "Follower":
-            await media_crypto.initialize()
-            await lyrics.initialize_default_lyrics()
+        await initialize_business_services()
         pending_revocations = any(row["state"] == "revoked" and not row["summary"].get("revocation_acknowledged")
                                   for row in await node_state.list_relationships(include_revoked=True))
         node_runtime.start(revocations=pending_revocations)

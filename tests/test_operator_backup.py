@@ -211,6 +211,51 @@ class OperatorBackupTests(unittest.TestCase):
         with self.assertRaisesRegex(backup.BackupError, "symbolic"):
             backup.absolute(alias / "new", exists=False)
 
+    def test_incomplete_snapshot_has_a_clear_error_and_cannot_mutate_restore(self):
+        path = self.base / "incomplete"
+        path.mkdir(mode=0o700)
+        backup.private_write(path / "compose-resolved.json", b"{}")
+        with self.assertRaisesRegex(backup.BackupError, "incomplete snapshot.*manifest"):
+            backup.verify(path)
+        docker, target = self.target()
+        with self.assertRaisesRegex(backup.BackupError, "incomplete snapshot"):
+            backup.restore(target, path)
+        self.assertEqual(docker.volumes, {})
+        self.assertEqual(list(target.resources["control"].root.iterdir()), [])
+
+    def test_snapshot_parent_is_synced_before_completion_is_published(self):
+        calls = []
+        original = backup.fsync_directory
+        def synced(path):
+            calls.append((path, (self.base / "snapshot/manifest.json").exists()))
+            original(path)
+        with patch.object(backup, "fsync_directory", side_effect=synced):
+            path, manifest = self.snapshot()
+        self.assertGreaterEqual(sum(directory == self.base for directory, _ in calls), 2)
+        self.assertTrue(all(not complete for directory, complete in calls if directory == self.base))
+        self.assertEqual(calls[-1], (path, True))
+        self.assertEqual(backup.verify(path), manifest)
+
+    def test_failed_parent_fsync_never_publishes_a_completion_manifest(self):
+        original = backup.fsync_directory
+        def fail_parent(path):
+            if path == self.base:
+                raise OSError("injected parent durability failure")
+            original(path)
+        with patch.object(backup, "fsync_directory", side_effect=fail_parent):
+            with self.assertRaises(OSError):
+                self.snapshot()
+        self.assertFalse((self.base / "snapshot/manifest.json").exists())
+        with self.assertRaisesRegex(backup.BackupError, "incomplete snapshot"):
+            backup.verify(self.base / "snapshot")
+
+    def test_sqlite_path_outside_control_or_inside_excluded_roots_is_rejected(self):
+        for value in ("/tmp/database.db", "/app/data/media/db.sqlite", "/app/data/recordings/db.sqlite", "/app/data/tmp/db.sqlite", "/app/data/.tmp/db.sqlite", "/app/data/../outside.sqlite"):
+            with self.subTest(path=value):
+                self.docker.config_value["services"]["web"]["environment"]["SQLITE_PATH"] = value
+                with self.assertRaises(backup.BackupError):
+                    backup.Plan.load(self.docker)
+
     def test_archive_path_escape_link_duplicate_and_mode_are_rejected(self):
         for name, kind, mode in (("../outside", tarfile.REGTYPE, 0o600), ("link", tarfile.SYMTYPE, 0o600), ("badmode", tarfile.REGTYPE, 0o4600)):
             with self.subTest(name=name):

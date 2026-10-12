@@ -29,6 +29,7 @@ import time
 
 VERSION = 1
 EXCLUDED_DATA = frozenset({"media", "recordings"})
+SQLITE_EXCLUDED_ROOTS = EXCLUDED_DATA | {"tmp", ".tmp"}
 PERSISTENT_TARGETS = {
     "/app/data": "control", "/run/frontiercloud-secrets": "secrets",
     "/var/lib/frontiercloud-certificate": "certificate_state",
@@ -105,6 +106,14 @@ def private_write(path: Path, data: bytes) -> None:
         stream.write(data)
         stream.flush()
         os.fsync(stream.fileno())
+
+
+def fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def bounded_json(path: Path, limit=64 * 1024 * 1024):
@@ -323,8 +332,8 @@ class Plan:
             if not isinstance(value, str) or not value.startswith("/app/data/"):
                 raise BackupError("SQLite must reside within the persistent DATA_DIRECTORY")
             sqlite_path = relative(value[len("/app/data/"):])
-            if sqlite_path.parts[0] in EXCLUDED_DATA:
-                raise BackupError("SQLite cannot reside in excluded media directories")
+            if sqlite_path.parts[0] in SQLITE_EXCLUDED_ROOTS:
+                raise BackupError("SQLite cannot reside in excluded media or temporary directories")
         docker_root = docker.local_root()
         plan = cls(docker, config, name, engine, resources, sqlite_path, {}, docker_root)
         for key in list(resources):
@@ -567,6 +576,9 @@ def backup(plan: Plan, output: Path) -> dict:
     plan.assert_cold()
     output.mkdir(mode=0o700)
     os.chmod(output, 0o700)
+    # Persist the new snapshot directory entry before publishing completion.
+    # Syncing the child alone does not make its parent's directory entry durable.
+    fsync_directory(output.parent)
     manifest = {"version": VERSION, "complete": True, "created_at": int(time.time()), "project": plan.name,
                 "database_engine": plan.engine, "images": plan.images, "excluded_data": sorted(EXCLUDED_DATA),
                 "resources": {}, "files": {}}
@@ -599,12 +611,15 @@ def backup(plan: Plan, output: Path) -> dict:
     for artifact in sorted(output.iterdir()):
         size, checksum = digest(artifact)
         manifest["files"][artifact.name] = {"bytes": size, "sha256": checksum}
-    private_write(output / "manifest.json", json_bytes(manifest))
-    directory = os.open(output, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    fsync_directory(output)
+    fsync_directory(output.parent)
     try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+        private_write(output / "manifest.json", json_bytes(manifest))
+        fsync_directory(output)
+    except BaseException:
+        (output / "manifest.json").unlink(missing_ok=True)
+        fsync_directory(output)
+        raise
     return manifest
 
 
@@ -612,7 +627,11 @@ def verify(snapshot: Path) -> dict:
     snapshot = absolute(snapshot)
     if not snapshot.is_dir() or snapshot.stat().st_mode & 0o077:
         raise BackupError("snapshot directory must be private (0700)")
-    if (snapshot / "manifest.json").lstat().st_mode & 0o077:
+    try:
+        manifest_info = (snapshot / "manifest.json").lstat()
+    except FileNotFoundError:
+        raise BackupError("incomplete snapshot: completion manifest is missing") from None
+    if manifest_info.st_mode & 0o077:
         raise BackupError("snapshot manifest must be private (0600)")
     manifest = bounded_json(snapshot / "manifest.json")
     if not isinstance(manifest, dict) or manifest.get("version") != VERSION or manifest.get("complete") is not True or not NAME.fullmatch(manifest.get("project", "")):
@@ -630,7 +649,7 @@ def verify(snapshot: Path) -> dict:
     if engine == "sqlite":
         value = manifest["sqlite"]
         sql_path = relative(value["path"])
-        if sql_path.parts[0] in EXCLUDED_DATA or not isinstance(value["mode"], int) or value["mode"] & ~0o777 or any(not isinstance(value[key], int) or not 0 <= value[key] < 2 ** 31 for key in ("uid", "gid")):
+        if sql_path.parts[0] in SQLITE_EXCLUDED_ROOTS or not isinstance(value["mode"], int) or value["mode"] & ~0o777 or any(not isinstance(value[key], int) or not 0 <= value[key] < 2 ** 31 for key in ("uid", "gid")):
             raise BackupError("invalid SQLite destination metadata")
         expected_files |= {"sqlite.db", "all-tables.sql", "sqlite-proof.json"}
     if not isinstance(files, dict) or set(files) != expected_files or {entry.name for entry in snapshot.iterdir()} != expected_files | {"manifest.json"}:

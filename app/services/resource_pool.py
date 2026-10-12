@@ -719,54 +719,75 @@ async def upload_session(upload_id: str, database=engine) -> dict:
 
 
 async def finalize_upload(upload_id: str, *, object_id: str, actual_size: int, etag: str,
-                          database=engine, allow_expired: bool = False, register_local: bool = False) -> dict:
+                          database=engine, allow_expired: bool = False, register_local: bool = False,
+                          publication_record=None, audit=None) -> dict:
+    from app.services import media_publication_recovery as publication
     from app.services.upload_claims import is_held
     if (allow_expired or register_local) and not is_held(upload_id):
         raise p.ProtocolError("Expired upload completion requires the admitted writer lease")
+    if publication_record is not None and not register_local:
+        raise p.ProtocolError("Publication proofs require MasterLocal registration")
     now = int(time.time())
-    async with database.begin() as conn:
-        row = (await conn.execute(select(s.upload_sessions).where(
-            s.upload_sessions.c.upload_id == upload_id).with_for_update())).mappings().first()
-        if row and row["state"] == "complete":
-            existing = (await conn.execute(select(s.global_media).where(
-                s.global_media.c.media_id == row["media_id"]))).mappings().first()
-            if existing:
-                return dict(existing)
-        if not row or row["state"] != "reserved" or row["expires_at"] <= now and not allow_expired:
-            raise p.ProtocolError("Upload reservation is missing or expired")
-        if object_id != row["media_id"]:
-            raise p.ProtocolError("Storage proof has a different object identity")
-        if actual_size != int(row["expected_bytes"]):
-            raise p.ProtocolError("Uploaded file size does not match reservation")
-        if bool(row.get("content_encrypted", 0)):
-            from app.services.media_crypto import encryption_for_id
-            descriptor = await encryption_for_id(conn, row["media_id"])
-            if descriptor is None or descriptor.ciphertext_size != actual_size:
-                raise p.ProtocolError("Encrypted upload lost its authoritative descriptor; plaintext fallback is prohibited")
-        if register_local:
-            kind = await conn.scalar(select(s.storage_members.c.member_kind).where(s.storage_members.c.member_id == row["storage_member_id"]))
-            if kind != "MasterLocal":
-                raise p.ProtocolError("Only MasterLocal publication can register local objects")
-            from datetime import datetime, timezone
-            from sqlalchemy import text
-            existing = await conn.scalar(text("SELECT media_id FROM media_objects WHERE path_locator=:locator"), {"locator": row["path_locator"]})
-            if existing and existing != row["media_id"]:
-                raise p.ProtocolError("Local path has a different object identity")
-            if not existing:
-                await conn.execute(text("""INSERT INTO media_objects(media_id,object_kind,media_path,path_locator,created_at,updated_at)
-                    VALUES (:id,:kind,:path,:locator,:now,:now)"""), {
-                        "id": row["media_id"], "kind": row["object_kind"], "path": row["media_path"],
-                        "locator": row["path_locator"], "now": datetime.now(timezone.utc).replace(tzinfo=None),
-                    })
-        values = dict(media_id=row["media_id"], storage_member_id=row["storage_member_id"], object_id=object_id,
-            media_path=row["media_path"], path_locator=path_locator(row["media_path"]), object_kind=row["object_kind"],
-            size_bytes=actual_size, etag=etag[:128], state="active", created_at=now, updated_at=now)
-        await conn.execute(insert(s.global_media).values(**values))
-        await conn.execute(update(s.storage_members).where(s.storage_members.c.member_id == row["storage_member_id"]).values(
-            reserved_bytes=s.storage_members.c.reserved_bytes - row["expected_bytes"],
-            used_bytes=s.storage_members.c.used_bytes + actual_size, updated_at=now))
-        await conn.execute(update(s.upload_sessions).where(s.upload_sessions.c.upload_id == upload_id).values(
-            state="complete", path_locator=None, updated_at=now))
+    body_complete = False
+    try:
+        async with database.begin() as conn:
+            row = (await conn.execute(select(s.upload_sessions).where(
+                s.upload_sessions.c.upload_id == upload_id).with_for_update())).mappings().first()
+            if publication_record is not None and row:
+                publication.validate_reservation(publication_record, row)
+                if etag != '"' + publication_record['sha256'] + '"':
+                    raise p.ProtocolError("Publication checksum changed")
+            if row and row["state"] == "complete":
+                existing = (await conn.execute(select(s.global_media).where(
+                    s.global_media.c.media_id == row["media_id"]))).mappings().first()
+                if existing:
+                    body_complete = True
+                    return dict(existing)
+            if not row or row["state"] != "reserved" or row["expires_at"] <= now and not allow_expired:
+                raise p.ProtocolError("Upload reservation is missing or expired")
+            if object_id != row["media_id"]:
+                raise p.ProtocolError("Storage proof has a different object identity")
+            if actual_size != int(row["expected_bytes"]):
+                raise p.ProtocolError("Uploaded file size does not match reservation")
+            descriptor = None
+            if bool(row.get("content_encrypted", 0)):
+                from app.services.media_crypto import encryption_for_id
+                descriptor = await encryption_for_id(conn, row["media_id"])
+                if descriptor is None or descriptor.ciphertext_size != actual_size:
+                    raise p.ProtocolError("Encrypted upload lost its authoritative descriptor; plaintext fallback is prohibited")
+            if publication_record is not None and (descriptor.to_dict() if descriptor else None) != publication_record['encryption']:
+                raise p.ProtocolError("Publication encryption descriptor changed")
+            if register_local:
+                kind = await conn.scalar(select(s.storage_members.c.member_kind).where(s.storage_members.c.member_id == row["storage_member_id"]))
+                if kind != "MasterLocal":
+                    raise p.ProtocolError("Only MasterLocal publication can register local objects")
+                from datetime import datetime, timezone
+                from sqlalchemy import text
+                existing = await conn.scalar(text("SELECT media_id FROM media_objects WHERE path_locator=:locator"), {"locator": row["path_locator"]})
+                if existing and existing != row["media_id"]:
+                    raise p.ProtocolError("Local path has a different object identity")
+                if not existing:
+                    await conn.execute(text("""INSERT INTO media_objects(media_id,object_kind,media_path,path_locator,created_at,updated_at)
+                        VALUES (:id,:kind,:path,:locator,:now,:now)"""), {
+                            "id": row["media_id"], "kind": row["object_kind"], "path": row["media_path"],
+                            "locator": row["path_locator"], "now": datetime.now(timezone.utc).replace(tzinfo=None),
+                        })
+            values = dict(media_id=row["media_id"], storage_member_id=row["storage_member_id"], object_id=object_id,
+                media_path=row["media_path"], path_locator=path_locator(row["media_path"]), object_kind=row["object_kind"],
+                size_bytes=actual_size, etag=etag[:128], state="active", created_at=now, updated_at=now)
+            await conn.execute(insert(s.global_media).values(**values))
+            await conn.execute(update(s.storage_members).where(s.storage_members.c.member_id == row["storage_member_id"]).values(
+                reserved_bytes=s.storage_members.c.reserved_bytes - row["expected_bytes"],
+                used_bytes=s.storage_members.c.used_bytes + actual_size, updated_at=now))
+            await conn.execute(update(s.upload_sessions).where(s.upload_sessions.c.upload_id == upload_id).values(
+                state="complete", path_locator=None, updated_at=now))
+            if publication_record is not None:
+                await publication.write_audit(conn, publication_record, audit)
+            body_complete = True
+    except BaseException as exc:
+        if publication_record is not None and body_complete:
+            raise publication.PublicationCommitUnknown("MasterLocal SQL commit acknowledgement unavailable") from exc
+        raise
     return values
 
 

@@ -10,6 +10,7 @@ from sqlalchemy import text
 from app.api.internal_nodes import require_https
 from app.api.v1.admin import require_session
 from app.services import control_audit, lyrics
+from app.services.business_lifecycle import initialize_business_services
 from app.services.federation import protocol as p
 from app.services.federation.runtime import runtime
 from app.services.federation.state import state
@@ -78,11 +79,13 @@ async def status(actor: str = Depends(require_session)):
         if (state.node.get('role') == 'Master'
                 and relation.get('direction') == 'downstream'
                 and relation['state'] == 'active'):
-            try:
-                view = await runtime.call(relation, '/internal/v1/certificate', {'action': 'status'})
-            except Exception:
-                view = {'state': 'FAILED', 'enabled': True, 'controller_running': False,
-                        'https_ready': False, 'serving_matches': False, 'last_error': 'Authenticated certificate observation unavailable'}
+            if relation.get('status') == 'offline':
+                view = _certificate_unavailable('storage_offline')
+            else:
+                try:
+                    view = await runtime.call(relation, '/internal/v1/certificate', {'action': 'status'})
+                except Exception:
+                    view = _certificate_unavailable('authenticated_observation_unavailable')
             relation['summary'] = {**(relation.get('summary') or {}), 'certificate': view}
     from app.services import storage_capacity
     return {"node_id": state.node["node_id"], "role": state.node["role"], "endpoint": state.node["endpoint"],
@@ -90,6 +93,13 @@ async def status(actor: str = Depends(require_session)):
             "certificate": certificate,
             "relationships": [{key: value for key, value in row.items() if key not in ("credential", "peer_key")} for row in relations],
             "storage_pool": await storage_capacity.observed_pool(state) if state.node["role"] == "Master" else None}
+
+
+def _certificate_unavailable(error: str) -> dict:
+    # Unreachable peers have unknown certificate/controller health, not a
+    # fabricated CA failure or a cached success from an earlier heartbeat.
+    return {'state': 'UNAVAILABLE', 'enabled': None, 'controller_running': None,
+            'https_ready': None, 'serving_matches': None, 'last_error': error}
 
 
 async def _certificate_view():
@@ -122,6 +132,8 @@ async def _node_certificate(identifier, value):
     relation = await state.relationship(identifier)
     if relation['state'] != 'active' or relation['direction'] != 'downstream':
         raise HTTPException(404, 'Active Storage relationship not found')
+    if value.get('action') == 'status' and relation.get('status') == 'offline':
+        return _certificate_unavailable('storage_offline')
     return await runtime.call(relation, '/internal/v1/certificate', value)
 
 
@@ -175,6 +187,7 @@ async def reinitialize(request: Request, payload: Reinitialization, actor: str =
             except Exception:
                 pass
         await runtime.stop()
+        await initialize_business_services()
         runtime.start(revocations=bool(relations))
         from app.services.media_catalog_cache import invalidate_media_catalog
         await invalidate_media_catalog()

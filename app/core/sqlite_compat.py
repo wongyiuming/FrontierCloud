@@ -18,6 +18,39 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 
 _PROTECTED = re.compile(r"'(?:''|\\.|[^'\\])*'|\"(?:\"\"|\\.|[^\"\\])*\"|`(?:``|[^`])*`|--[^\n]*|/\*.*?\*/", re.S)
+_PATH_COLUMN = r"(?<![a-z_0-9])(?:[a-z_][a-z_0-9]*\.)?(?:media_path|relative_path|lyric_path)"
+_LIKE_ATOM = r"(?:\?(?:[0-9]+)?|:[a-z_][a-z_0-9]*|__fc_literal_[0-9]+__)"
+_LIKE_VALUE = rf"(?:{_LIKE_ATOM}(?:\s*\|\|\s*{_LIKE_ATOM})*|\(\s*{_LIKE_ATOM}(?:\s*\|\|\s*{_LIKE_ATOM})*\s*\))"
+_PATH_LIKE = re.compile(rf"(?P<column>{_PATH_COLUMN})\s+(?P<negation>NOT\s+)?LIKE\s+(?P<value>{_LIKE_VALUE})(?:\s+ESCAPE\s+(?P<escape>{_LIKE_ATOM}))?", re.I)
+
+
+def _path_glob(pattern, escape=None):
+    """Translate LIKE wildcards; SQLite itself performs case-sensitive matching."""
+    if pattern is None:
+        return None
+    pattern = str(pattern)
+    if escape is not None and len(str(escape)) != 1:
+        raise ValueError("ESCAPE expression must be a single character")
+    escape = str(escape) if escape is not None else None
+    literal = {"*": "[*]", "?": "[?]", "[": "[[]", "]": "[]]"}
+    translated, index = [], 0
+    while index < len(pattern):
+        character = pattern[index]
+        if escape is not None and character == escape:
+            index += 1
+            if index == len(pattern):
+                # SQLite LIKE with a trailing escape never matches.
+                return "[]"
+            character = pattern[index]
+            translated.append(literal.get(character, character))
+        elif character == "%":
+            translated.append("*")
+        elif character == "_":
+            translated.append("?")
+        else:
+            translated.append(literal.get(character, character))
+        index += 1
+    return "".join(translated)
 
 
 def normalize_statement(statement: str) -> str:
@@ -28,6 +61,15 @@ def normalize_statement(statement: str) -> str:
         return f"__fc_literal_{len(protected) - 1}__"
 
     sql = _PROTECTED.sub(protect, statement)
+    # Core startswith emits LIKE (... || '%') ESCAPE '/'. Raw managed path
+    # predicates use bound LIKE + ESCAPE '!'. Preserve exact filesystem identity
+    # without changing LIKE on usernames/search or using a deprecated PRAGMA.
+    sql = _PATH_LIKE.sub(lambda match: (
+        f"{match['column']} {'NOT ' if match['negation'] else ''}GLOB "
+        f"fc_path_glob({match['value']}, {match['escape'] or 'NULL'})"
+    ), sql)
+    if re.search(rf"{_PATH_COLUMN}\s+(?:NOT\s+)?LIKE\b", sql, re.I):
+        raise ValueError("Unsupported managed-path LIKE expression")
     ignored_insert = bool(re.match(r"\s*INSERT\s+IGNORE\s+INTO\b", sql, re.I))
     sql = re.sub(r"\bINSERT\s+IGNORE\s+INTO\b", "INSERT INTO", sql, flags=re.I)
     if re.search(r"\bON\s+DUPLICATE\s+KEY\s+UPDATE\b", sql, re.I):
@@ -109,6 +151,7 @@ def create_sqlite_engine(url) -> AsyncEngine:
         connection.create_function("fc_left", 2, lambda value, count: None if value is None or count is None else str(value)[:max(0, int(count))])
         connection.create_function("fc_if", 3, lambda condition, yes, no: yes if condition else no)
         connection.create_function("INET6_ATON", 1, _inet6_aton, deterministic=True)
+        connection.create_function("fc_path_glob", 2, _path_glob, deterministic=True)
 
     @event.listens_for(database.sync_engine, "begin")
     def begin_transaction(connection):

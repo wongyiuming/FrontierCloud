@@ -75,8 +75,8 @@ class ColdRecoveryRuntime(unittest.TestCase):
             program += 'from sqlalchemy.ext.asyncio import create_async_engine; db.engine=create_async_engine("mysql+asyncmy://root@mysql:3306/office_automation"); '
         program += "asyncio.run(db.init_db())"
         self.command(["docker", "run", "--rm", "--cpus=1", "--memory=512m", "--network", config["networks"]["default"]["name"],
-                      "--tmpfs", "/tmp:size=2g", "-v", str(source) + ":/workspace:ro", "-v", str(directory / "data") + ":/app/data",
-                      "-w", "/workspace", "-e", "DB_TYPE=" + engine, "-e", "SQLITE_PATH=/app/data/frontiercloud.db",
+                      "--tmpfs", "/tmp:size=2g", "-v", str(source) + ":/app:ro", "-v", str(directory / "data") + ":/app/data",
+                      "-w", "/app", "-e", "DB_TYPE=" + engine, "-e", "SQLITE_PATH=/app/data/frontiercloud.db",
                       "-e", "PYTHONDONTWRITEBYTECODE=1", "frontiercloud-python-archive:db-test-tools", "python", "-c", program])
 
     def mysql_facts(self, directory):

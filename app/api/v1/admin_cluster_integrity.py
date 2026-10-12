@@ -171,6 +171,9 @@ async def _member_relation(member_id: str):
 
 async def _cleanup_upload_session_unlocked(upload_id: str, *, allow_unindexed_local: bool = False, expired_only: bool = False) -> bool:
     """Release a reservation only after its possible physical object is gone."""
+    from app.services import media_publication_recovery as publication
+    if publication.pending(MEDIA_ROOT):
+        return False
     try:
         row = await resource_pool.upload_session(upload_id, node_state.database)
     except p.ProtocolError:
@@ -210,6 +213,9 @@ async def _cleanup_upload_session_unlocked(upload_id: str, *, allow_unindexed_lo
             if encrypted or SIGNATURES.get(target.suffix.lower(), lambda _data: False)(head):
                 from app.services.upload_claims import digest_file
                 proof = await digest_file(target)
+                with target.open('rb') as source:
+                    os.fsync(source.fileno())
+                publication.sync_hierarchy(MEDIA_ROOT, target.parent)
                 await resource_pool.finalize_upload(upload_id, object_id=row["media_id"],
                     actual_size=proof["size_bytes"], etag=proof["etag"], database=node_state.database,
                     allow_expired=True, register_local=True)
@@ -420,11 +426,11 @@ async def create_upload_session(payload: ClusterUploadReservation, request: Requ
         raise HTTPException(409, str(exc)) from exc
 
 
-async def _receive_master_local(upload_id: str, request: Request, row: dict) -> dict:
-    destination = (MEDIA_ROOT / row["media_path"]).resolve()
+async def _receive_master_local(upload_id: str, request: Request, row: dict, *, audit=None) -> dict:
+    from app.services import media_manager, media_publication_recovery as publication
+    destination = media_manager.resolve_safe_path(MEDIA_ROOT, row['media_path'])
     if MEDIA_ROOT not in destination.parents or destination.exists():
         raise HTTPException(409, "目标位置已存在同名文件")
-    destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = (MEDIA_ROOT / f".cluster-upload-{upload_id}.part").resolve()
     written, digest, head, published = 0, hashlib.sha256(), b"", False
     try:
@@ -449,19 +455,51 @@ async def _receive_master_local(upload_id: str, request: Request, row: dict) -> 
             raise p.ProtocolError("Ciphertext size does not match reservation")
         if encryption is None and not SIGNATURES.get(destination.suffix.lower(), lambda _data: False)(head):
             raise HTTPException(400, "媒体内容与扩展名不匹配")
-        os.replace(temporary, destination)
-        published = True
-        etag = f'"{digest.hexdigest()}"'
-        await resource_pool.finalize_upload(upload_id, object_id=row["media_id"], actual_size=written,
-            etag=etag, database=node_state.database, allow_expired=True, register_local=True)
-        published = False
-        await _invalidate_after_upload()
-        return {"path": row["media_path"], "media_id": row["media_id"]}
-    except BaseException:
+        async def publish_and_finalize():
+            nonlocal published
+            async with media_manager.media_mutation_lock:
+                media_manager.ensure_media_mutations_ready()
+                if destination.exists():
+                    raise HTTPException(409, '目标位置已存在同名文件')
+                journal, committed = None, False
+                try:
+                    journal = publication.create(MEDIA_ROOT, row['media_path'], temporary, None,
+                        encryption, size=written, digest=digest.hexdigest(), reservation=row)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    temporary.chmod(0o644)
+                    # A reservation never authorizes overwriting an existing inode.
+                    os.link(temporary, destination)
+                    published = True
+                    publication.sync_hierarchy(MEDIA_ROOT, destination.parent)
+                    await resource_pool.finalize_upload(upload_id, object_id=row['media_id'], actual_size=written,
+                        etag='"' + digest.hexdigest() + '"', database=node_state.database,
+                        allow_expired=True, register_local=True, publication_record=journal, audit=audit)
+                    committed = True
+                    publication.finish(MEDIA_ROOT, journal)
+                except BaseException as exc:
+                    if committed or isinstance(exc, publication.PublicationCommitUnknown):
+                        media_manager._RECOVERY_REQUIRED_ROOTS.add(MEDIA_ROOT)
+                        raise
+                    try:
+                        if published:
+                            destination.unlink()
+                            publication.sync_hierarchy(MEDIA_ROOT, destination.parent)
+                            published = False
+                        if journal is not None:
+                            publication.finish(MEDIA_ROOT, journal)
+                    except BaseException:
+                        media_manager._RECOVERY_REQUIRED_ROOTS.add(MEDIA_ROOT)
+                        raise
+                    raise
+            await _invalidate_after_upload()
+            return {'path': row['media_path'], 'media_id': row['media_id']}
+
+        worker = asyncio.create_task(publish_and_finalize())
+        await media_manager._finish_media_cleanup(worker)
+        return worker.result()
+    finally:
         temporary.unlink(missing_ok=True)
-        if published:
-            destination.unlink(missing_ok=True)
-        raise
+        publication.sync_directory(MEDIA_ROOT)
 
 
 
@@ -482,10 +520,8 @@ async def upload_session_bytes(upload_id: str, request: Request,
                 if row["state"] != "reserved" or row["expires_at"] <= int(time.time()):
                     raise p.ProtocolError("Upload reservation is unavailable")
                 if row["member_kind"] == "MasterLocal":
-                    allow_unindexed_local = True
-                    result = await _receive_master_local(upload_id, request, row)
-                    await admin_service.audit(session_hash, "upload-finalized", 1, row["media_path"], "success",
-                                              row["storage_member_id"], request)
+                    audit = _mutation_audit(session_hash, 'upload-finalized', [row['media_path']], request)
+                    result = await _receive_master_local(upload_id, request, row, audit=audit)
                     return result
                 relation = await node_state.relationship(row["relationship_id"])
                 token = p.storage_token(
@@ -513,6 +549,16 @@ async def upload_session_bytes(upload_id: str, request: Request,
                 await admin_service.audit(session_hash, "upload-finalized", 1, row["media_path"], "success",
                                           row["storage_member_id"], request)
                 return {"path": media["media_path"], "media_id": media["media_id"]}
+            except asyncio.CancelledError:
+                from app.services.media_manager import _finish_media_cleanup
+                cleanup = asyncio.create_task(_cleanup_upload_session_unlocked(
+                    upload_id, allow_unindexed_local=allow_unindexed_local))
+                try:
+                    await _finish_media_cleanup(cleanup)
+                except Exception as cleanup_error:
+                    logger.warning('Cancelled upload cleanup deferred upload_id=%s error=%s',
+                        upload_id, type(cleanup_error).__name__)
+                raise
             except Exception as exc:
                 cleaned = await _cleanup_upload_session_unlocked(upload_id, allow_unindexed_local=allow_unindexed_local)
                 if not cleaned:
