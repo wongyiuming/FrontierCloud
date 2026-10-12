@@ -22,7 +22,8 @@ trap cleanup EXIT
 cat > "$tools_context/Dockerfile" <<'EOF'
 FROM frontiercloud-acceptance-web
 USER 0
-RUN apt-get update && apt-get install -y --no-install-recommends git nodejs && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git nodejs && rm -rf /var/lib/apt/lists/* && \
+    git config --system --add safe.directory /workspace
 EOF
 docker build -t frontiercloud-python-unit-tools "$tools_context"
 # A clean Git clone has no ignored data directory; runc needs its mountpoint
