@@ -175,13 +175,20 @@ def _sensitive(text, values=None):
 
 
 def _parse(text, suffix):
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate_json_key')
+            result[key] = value
+        return result
     if suffix == '.json':
-        return [json.loads(text)]
+        return [json.loads(text, object_pairs_hook=unique_object)]
     if suffix == '.jsonl':
         lines = text.splitlines()
         if not lines:
             raise ValueError('empty_jsonl')
-        return [json.loads(line) for line in lines]
+        return [json.loads(line, object_pairs_hook=unique_object) for line in lines]
     return None
 
 

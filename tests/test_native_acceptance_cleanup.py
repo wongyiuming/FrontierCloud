@@ -243,7 +243,9 @@ class NativeAcceptanceCleanupTests(unittest.TestCase):
         contents={'migration-hour-source-commit.txt':'a'*40+'\n',
             'migration-hour.json':'{"passed": false, "error": "InterruptedError"}\n',
             'migration-hour.log':'native job interrupted\n',
-            'native-publication.json':'{"passed": false,', 'unit-coverage.json':''}
+            'native-publication.json':'{"passed": false,', 'unit-coverage.json':'',
+            'native-admission.json':'{"passed":false,"passed":null}',
+            'native-master-cancel-mysql.jsonl':'{"state":"failed","state":"aborted"}\n'}
         for name,value in contents.items():(evidence/name).write_text(value,encoding='utf-8')
         manifest=collect(evidence,upload)
         self.assertFalse(manifest['complete'])
@@ -252,7 +254,7 @@ class NativeAcceptanceCleanupTests(unittest.TestCase):
             self.assertEqual((upload/name).read_text(),contents[name])
             self.assertEqual(records[name]['status'],'copied')
         self.assertFalse(json.loads((upload/'migration-hour.json').read_text())['passed'])
-        for name in ('native-publication.json','unit-coverage.json'):
+        for name in ('native-publication.json','unit-coverage.json','native-admission.json','native-master-cancel-mysql.jsonl'):
             self.assertFalse((upload/name).exists())
             self.assertEqual((upload/(name+'.raw.txt')).read_text(),contents[name])
             self.assertEqual(records[name]['status'],'invalid_json')
@@ -337,7 +339,9 @@ class NativeAcceptanceCleanupTests(unittest.TestCase):
             '{"error":"Authorization: Bearer private-fixture-secret"}',
             '{"accessKey":"private-fixture-secret"}', '{"token":"private-fixture-secret"}',
             '{"admin_key":"private-fixture-secret",', 'token=private-fixture-secret',
-            'https://example.test/a?grant=private-fixture-secret')
+            'https://example.test/a?grant=private-fixture-secret',
+            '{"secret_key":"private-fixture-secret","secret_key":null}',
+            '{"outer":{"secret_key":"private-fixture-secret","secret_key":null}}')
         for index,sample in enumerate(samples):
             with self.subTest(sample=index):
                 (evidence/'s3/transactions.json').write_text(sample)
@@ -348,6 +352,17 @@ class NativeAcceptanceCleanupTests(unittest.TestCase):
                 self.assertFalse(any(path.name.startswith('s3-transactions') for path in upload.iterdir()))
                 self.assertFalse((upload/'s3-credential-revocation-provider.log').exists())
                 self.assertNotIn('private-fixture-secret',''.join(path.read_text() for path in upload.iterdir()))
+        (evidence/'s3/transactions.json').write_text('{"passed": false}')
+        for index,sample in enumerate(('{"secret_key":"private-fixture-secret","secret_key":null}\n',
+                '{}\n{"outer":{"secret_key":"private-fixture-secret","secret_key":null}}\n')):
+            with self.subTest(jsonl_duplicate=index):
+                (evidence/'native-unit-cancel-mysql.jsonl').write_text(sample)
+                upload=root/f'jsonl-export-{index}'
+                manifest=collect(evidence,upload)
+                self.assertFalse(manifest['complete'])
+                self.assertFalse(any(path.name.startswith('native-unit-cancel-mysql') for path in upload.iterdir()))
+                self.assertNotIn('private-fixture-secret',''.join(path.read_text() for path in upload.iterdir()))
+        (evidence/'native-unit-cancel-mysql.jsonl').unlink()
         # Redacted digests are useful diagnostics, not usable credentials.
         (evidence/'s3/transactions.json').write_text(json.dumps({'secret_key':{'redacted':True,'sha256':'a'*64}}))
         redacted=collect(evidence,root/'redacted-export')
