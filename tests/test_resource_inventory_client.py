@@ -71,6 +71,18 @@ class InventoryClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls[-1], 'close')
         self.assertIsNone(self.server.session)
 
+    async def test_header_lifetime_stays_exact_across_a_wall_clock_second(self):
+        clock = iter((self.now + .999, self.now + 1.001))
+        self.server.wall = lambda: next(clock)
+        self.client.wall = lambda: self.now + 1.001
+        async def consume(_):
+            self.fail('empty inventory must not produce entries')
+        proof = await self.client.read('data', consume)
+        self.assertEqual(proof['header']['expires_at'] - proof['header']['created_at'], 300)
+        self.assertEqual((proof['count'], proof['bytes']), (0, 0))
+        self.assertEqual(self.calls[-1], 'close')
+        self.assertIsNone(self.server.session)
+
     async def test_wrong_identity_scope_incarnation_and_expiry_are_rejected(self):
         for name, wrong in [('master_id', 'd'*32), ('node_id', 'd'*32), ('scope', 'media'),
                             ('request_id', 'd'*32), ('expires_at', 999999), ('version', True),

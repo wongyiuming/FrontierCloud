@@ -199,9 +199,10 @@ class Inventory:
                     return dict(header)
                 raise InventoryError('inventory_busy')
             walker = await joined_io(Walker, self.root_provider()[scope], on_cancel=lambda value: value.close())
+            created_at = int(self.wall())
             header = dict(format='frontiercloud-python-inventory', version=1, **owner,
                 incarnation=self.incarnation, session_id=uuid.uuid4().hex, request_id=request_id,
-                scope=scope, created_at=int(self.wall()), expires_at=int(self.wall()) + SESSION_SECONDS,
+                scope=scope, created_at=created_at, expires_at=created_at + SESSION_SECONDS,
                 root_exists=walker.exists, physical_free_bytes=walker.free_bytes,
                 physical_total_bytes=walker.total_bytes, writable_verified=False)
             self.session = Session(header, self.clock()+SESSION_SECONDS, walker,
