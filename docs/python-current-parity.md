@@ -8,7 +8,10 @@ address-only Admin presentation change still requires owner experience before
 its push. Archival remains a separate repository action after all release gates.
 Only the existing `dev` and `main` branches may be used. Production is not a fixture.
 
-## Review checkpoint, 2026-10-22
+## Pre-promotion evidence checkpoint, 2026-10-22
+
+The states below record this checkpoint, rather than live release status.
+The published branch, exact-head CI and promotion record determine the release.
 
 PR 75 promotes the public Python `dev` branch to `main`; it does not modify Gin.
 The first public candidate, `854dcade`, receives three actionable review findings:
@@ -22,16 +25,20 @@ native acceptance are separate requirements, not implied by those components.
 Review of `a1a80ddf` finds three further issues: missing remote ID3v1 fallback,
 music-specific labels in shared video catalogs, and metadata starvation without
 `requestIdleCallback`. An independent check also reproduces overlapping bucket
-ownership through an AWS bucket PrivateLink alias. These findings require fixes
-and new exact-source checks before promotion. The retained full V6 native run
+ownership through an AWS bucket PrivateLink alias. Follow-up `a524a291` corrects
+all four. Its ten changed runtime/test paths pass 81 focused Python cases and
+three Node scripts; the complete submitted tree passes all four source policies.
+Automatic review of that commit completes without findings, with the bot's
+positive reaction recorded at `2026-10-22T04:19:32Z`. Complete exact-final-source
+CI and native acceptance remain separate gates. The retained full V6 native run
 fails on a test driver's low-traffic handling; V7 passes its focused repair only.
 Neither is represented as a successful complete final-source run. Actual public
 SQLite/MySQL many-small and catalog-budget supplements retain their own source
 identities and results; unfinished runs are not passing evidence.
 
 The owner's address-only UI is deployed privately for experience and remains
-outside both public commits. It places the address between file size and
-encryption, without NodeID or node-name duplication. Development access uses
+outside the public commits recorded here. It places the address between file
+size and encryption, without NodeID or node-name duplication. Development access uses
 normal certificate trust. Production and the Gin repository remain untouched.
 
 ## Earlier pre-publication checkpoint, 2026-10-21
@@ -529,7 +536,7 @@ source size.
 
 ## Complete scope and required evidence
 
-| ID | Required behavior | Evidence required | Current state |
+| ID | Required behavior | Evidence required | Recorded pre-promotion evidence |
 | --- | --- | --- | --- |
 | PY01 | Python business/control/TLS runtime, native browser UI, single ASGI worker | Docker/Compose inspection, runtime process inspection, source/dependency guards | Existing baseline; revalidation pending |
 | PY02 | Compose-centered source installation and updating with safe state transitions | Approved delivery contract, old-deployment upgrade, new-service admission and failed preparation recovery | Install/upgrade/resume/recover use verified selected source. Entry V4 passes 299 focused cases/four policies and five real Docker-host cases: four trusted-TLS source-exec install/resume profiles, real host exits after up/publication, same-release no-op and pre-build directory-conflict refusal. Earlier cases prove new init-service admission, installed-origin SQLite/MySQL recovery and a following MySQL upgrade. Fixed-Master SQLite/MySQL and paired Direct/Relay forward/cold recovery components now pass; genuine public-release proof and exact-final-source full gates remain pending |
@@ -547,7 +554,7 @@ source size.
 | PY14 | Nodes compact summaries, local certificate placement, removed Auto UI, independent migration and safe retirement | Actual Admin browser layout, authorization and operation lifecycle | Compact lazy cards, remembered expansion, Nodes naming and certificate placement remain. Retirement Browser V8 passes 21 trusted-Chromium checks. Independent migration has real SQL/API cases and V13 trusted GUI execution with 22 checks/21 inputs, including ordinary encrypted upload and two-parent cutover. Complete final-source browser/fleet matrices remain required |
 | PY15 | CSP, authenticated admin/CSRF, hidden node-location headers, browser-only ordinary decryption, deterministic priorities and no retired compute/updater | Real HTTP/browser tests, tampered ciphertext, key revocation, source/deployment guards and negative cases | Dormant compute job endpoints/helpers, heartbeat sampling and configuration writes removed; historical tables/rows and fixed disabled peer envelope retained; focused SQLite and actual MySQL preservation/refusal cases passed; complete current-source gates still running |
 | PY16 | Existing media, lyrics, playback facts, karaoke, quotas, IP policy, logo and STUN retained | Complete regressions plus actual browser/federation workflows | Historical baseline was 750 cases/five skips. Private final V1 completes 1,880 unit entries, including 18 dedicated-environment skips, with zero failures/errors; actual MySQL components retain their recorded source scopes. Its fleet stage passes 19 HTTPS/browser/business checks and CPU recovery on three one-core Web fixtures, but the full run then fails at Nodes network setup. Later test changes and all remaining native/database gates require a new final-source run |
-| PY17 | Complete exact-source CI and native acceptance, review, same-tree dev-to-main release, independent release/version verification, then read-only archival | Successful required checks, reviewed commit/tree, release asset hashes, fast-forwarded dev, API `archived=true` and retained branches | Public dev-to-main PR 75 is open. Follow-up a1a80ddf has source policies passing and unit CI in progress; its automatic review requires three further fixes. Complete final-source gates, same-tree promotion, normal public-source delivery proof and rearchival remain outstanding |
+| PY17 | Complete exact-source CI and native acceptance, review, same-tree dev-to-main release, independent release/version verification, then read-only archival | Successful required checks, reviewed commit/tree, release asset hashes, fast-forwarded dev, API `archived=true` and retained branches | Public dev-to-main PR 75 is submitted. Follow-up a524a291 passes source policies and receives a positive automatic review with no findings. Complete final-source CI/native gates, same-tree promotion, normal public-source delivery proof and rearchival remain outstanding at this checkpoint |
 | PY18 | Optional private S3 music/video storage configured in Nodes, direct browser bytes, original encryption boundary and durable interrupted-upload recovery | Verified TLS, SigV4, plaintext/ciphertext upload, Range playback/download, expiry/revocation, multipart failure/restart, ownership and deletion; owner-authorized release criterion | Actual MySQL/browser/provider V11 passes 66 checks, including real expired-URL refusal, renewed uncached decryption, continued long MSE/automatic next, separate plain titles/original pictures, restart and delete settlement. Separate V4 retains actual thirty-minute idle cleanup. Complete cache/fault and final-source gates remain required. The owner authorizes publication after positive automatic review; a separate owner S3 session is waived. AWS real-bucket proof remains unavailable |
 
 No missing row is replaced by a passing narrower test. In particular, frontend

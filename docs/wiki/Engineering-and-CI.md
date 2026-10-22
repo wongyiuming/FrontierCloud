@@ -260,7 +260,8 @@ profile proves whole-task cancellation or replaces its remaining integration.
 
 Keep sanitized results and exact source identity with the CI run. All
 required gates in [the current renewal ledger](../python-current-parity.md) must
-pass before archival, including owner acceptance of the optional S3 feature.
+pass before archival, including the owner-authorized S3 release criterion
+recorded in the ledger.
 The [prior acceptance ledger](../python-final-parity.md) is historical evidence;
 it must not be relabelled as proof for the current source. A passing narrow unit
 test is never sufficient archival evidence. Retain Python `main` and `dev`;
