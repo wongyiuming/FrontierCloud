@@ -4,9 +4,22 @@ This ledger records implementation and acceptance; it is not release proof.
 The owner requested another Python parity release on 2026-10-19, followed by
 native GitHub archival. The owner subsequently authorized publication on a
 positive automatic review, without a separate S3 experience gate. The later
-address-only Admin presentation change still requires owner experience before
-its push. Archival remains a separate repository action after all release gates.
+address-only Admin presentation change received owner experience approval before
+its push in `580e894`. Archival remains a separate repository action after all release gates.
 Only the existing `dev` and `main` branches may be used. Production is not a fixture.
+
+## Hosted CI boundary correction, 2026-10-23
+
+The owner requires the Gin CI boundary: bounded source/policy/frontend checks
+and Compose configuration rendering on GitHub; complete unit, database,
+browser, certificate, migration-hour and recovery acceptance on the development
+host before release. Hosted test jobs are parallel, limited to three minutes,
+and run bounded 150-second commands. They do not prove native acceptance.
+The old hosted native failures and earlier CI topology below remain historical
+evidence; moving tests does not turn those failed runs into successful runs.
+Current CI, exact-source development acceptance, review and same-tree promotion
+must all pass independently before archival. Owner experience approved the
+address layout before its push in `580e894`.
 
 ## Pre-promotion evidence checkpoint, 2026-10-22
 

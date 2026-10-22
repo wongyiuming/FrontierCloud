@@ -301,7 +301,7 @@ Dynamic modules must join this same final DOM/visual order. Reordering code must
 
 The repository has two canonical branches:
 
-- `dev` — implementation and complete CI authority;
+- `dev` — implementation and bounded source CI authority;
 - `main` — reviewed release history.
 
 Absolute repository policy:
@@ -313,6 +313,13 @@ Absolute repository policy:
 - never force-rewrite `dev` or `main`.
 
 GitHub-side ref creation cannot be fully prevented by a unit test. The repository-policy workflow detects non-canonical branch creation after the event, while true pre-creation prevention requires GitHub repository ruleset/administrative enforcement. The no-new-branch invariant must remain documented here, in `CONTRIBUTING.md`, and in the Wiki/ruleset configuration.
+
+Hosted test jobs have a three-minute maximum and bounded 150-second commands.
+Source and Compose-configuration checks run in parallel, without complete unit
+discovery, image builds, live services, real databases, Chromium or recovery and
+hour-long lifecycle fixtures. Complete exact-source acceptance remains required
+on the development host before release. Public CI/source provenance does not
+claim that this separate native gate has passed.
 
 ## 12. Regression rule
 

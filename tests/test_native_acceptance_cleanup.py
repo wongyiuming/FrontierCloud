@@ -1,8 +1,9 @@
 """Pure checks for native acceptance result and cold-operator ordering."""
 import ast
 import json
+import os
 import re
-import shlex
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -236,20 +237,41 @@ class NativeAcceptanceCleanupTests(unittest.TestCase):
         self.assertIn('docker rm -f "${unit_names[@]}"',cleanup)
         self.assertIn('wait "$fixture_pid"',cleanup)
 
-    def test_successful_hour_sanitized_receipts_are_in_ci_artifact_allowlist(self):
-        workflow=(ROOT/'.github/workflows/docker.yml').read_text()
+    def test_manual_collector_preserves_failed_hour_and_invalid_json_diagnostics(self):
+        from scripts.collect_native_evidence import collect
+        root=Path(self.temporary.name);evidence=root/'evidence';evidence.mkdir();upload=root/'export'
+        contents={'migration-hour-source-commit.txt':'a'*40+'\n',
+            'migration-hour.json':'{"passed": false, "error": "InterruptedError"}\n',
+            'migration-hour.log':'native job interrupted\n',
+            'native-publication.json':'{"passed": false,', 'unit-coverage.json':''}
+        for name,value in contents.items():(evidence/name).write_text(value,encoding='utf-8')
+        manifest=collect(evidence,upload)
+        self.assertFalse(manifest['complete'])
+        records={entry['source']:entry for entry in manifest['entries']}
         for name in ('migration-hour-source-commit.txt','migration-hour.json','migration-hour.log'):
-            self.assertIn(name,workflow)
+            self.assertEqual((upload/name).read_text(),contents[name])
+            self.assertEqual(records[name]['status'],'copied')
+        self.assertFalse(json.loads((upload/'migration-hour.json').read_text())['passed'])
+        for name in ('native-publication.json','unit-coverage.json'):
+            self.assertFalse((upload/name).exists())
+            self.assertEqual((upload/(name+'.raw.txt')).read_text(),contents[name])
+            self.assertEqual(records[name]['status'],'invalid_json')
+        self.assertEqual(json.loads((upload/'manifest.json').read_text()),manifest)
+        if os.name=='posix':
+            self.assertEqual(upload.stat().st_mode&0o777,0o700)
+            self.assertTrue(all(path.stat().st_mode&0o777==0o600 for path in upload.iterdir()))
+        with self.assertRaisesRegex(ValueError,'fresh_destination'):collect(evidence,upload)
+        with self.assertRaisesRegex(ValueError,'overlapping'):collect(evidence,evidence/'nested')
+        with self.assertRaisesRegex(ValueError,'unsafe_path'):collect(evidence,root/'export'/'..'/'escape')
+        command=[sys.executable,'-B',str(ROOT/'scripts/collect_native_evidence.py'),str(evidence),str(root/'cli-export')]
+        process=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False,text=True)
+        self.assertEqual(process.returncode,1,process.stderr)
+        self.assertFalse(json.loads(process.stdout)['complete'])
+        self.assertEqual((root/'cli-export/native-publication.json.raw.txt').read_text(),contents['native-publication.json'])
 
-    def test_ci_evidence_allowlist_covers_actual_runners_and_operator_cases(self):
-        workflow=(ROOT/'.github/workflows/docker.yml').read_text()
-        collector=workflow.split('- name: Collect only sanitized receipts and test logs',1)[1].split('- uses: actions/upload-artifact',1)[0]
-        root_loop=re.search(r'for name in (.*?); do',collector,re.S).group(1)
-        allowed=set(shlex.split(root_loop.replace('\\\n',' ')))
-        pair_loop=re.search(r'for pair in (.*?); do\n\s+for name in (.*?); do',collector,re.S)
-        if pair_loop:
-            for pair in shlex.split(pair_loop.group(1)):
-                allowed.update(name.replace('$pair',pair) for name in shlex.split(pair_loop.group(2).replace('\\\n',' ')))
+    def test_manual_evidence_allowlist_covers_runners_and_only_known_operator_cases(self):
+        from scripts.collect_native_evidence import allowlist,collect,PREPARE_CASES,INSTALL_CASES,APPLICATION_CASES
+        allowed=allowlist()
         for script in ('test-python-final.sh','test-python-operator.sh'):
             source=(ROOT/'scripts'/script).read_text()
             outputs=re.findall(r'>\s*"\$evidence/([^/"\n]+)"',source)
@@ -258,21 +280,43 @@ class NativeAcceptanceCleanupTests(unittest.TestCase):
                 expanded=[output.replace('$pair',pair) for pair in pairs] if '$pair' in output else [output]
                 for name in expanded:
                     with self.subTest(script=script,name=name):self.assertIn(name,allowed)
-        loops=re.findall(r'for operator_case in (.*?); do(.*?)\n          done',collector,re.S)
-        for module,kind in (('operator_prepare_native','operator-prepare'),('operator_install_native','operator-install'),
-                ('operator_application_native','operator-application')):
+        for module,kind,cases in (('operator_prepare_native','operator-prepare',PREPARE_CASES),
+                ('operator_install_native','operator-install',INSTALL_CASES),
+                ('operator_application_native','operator-application',APPLICATION_CASES)):
             tree=ast.parse((ROOT/'tests'/(module+'.py')).read_text())
             actual={item.name for owner in tree.body if isinstance(owner,ast.ClassDef)
                 for item in owner.body if isinstance(item,ast.FunctionDef) and item.name.startswith('test_')}
-            case_list=next(names for names,body in loops if '/private/'+kind+'/$operator_case/result.json' in body)
-            with self.subTest(module=module):self.assertEqual(actual,set(shlex.split(case_list.replace('\\\n',' '))))
+            with self.subTest(module=module):
+                self.assertEqual(actual,set(cases))
+                self.assertTrue(all(f'private/{kind}/{case}/result.json' in allowed for case in actual))
+        root=Path(self.temporary.name);evidence=root/'evidence';evidence.mkdir();upload=root/'export'
+        safe=('native-partial-cancel-mysql-RR.jsonl','unit-shards/shard-2.json','migration-ui/result.json',
+            f'private/operator-install/{INSTALL_CASES[0]}/result.json')
+        private=('unknown.json','private/vault.key','private/ca.pem','private/media/movie.mp4',
+            's3/private/credentials.json','s3/private/data/db.sqlite3','private/operator-install/test_unknown/result.json')
+        for name in safe+private:
+            path=evidence/name;path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_text('{"passed": false}\n' if name in safe else 'private-fixture-secret',encoding='utf-8')
+        manifest=collect(evidence,upload)
+        self.assertTrue(manifest['complete'])
+        self.assertEqual(set(path.name for path in upload.iterdir()),{allowed[name] for name in safe}|{'manifest.json'})
+        self.assertEqual(manifest['copied'],len(safe))
+        # Even an allowlisted filename cannot export a hard link to private data.
+        os.link(evidence/'private/vault.key',evidence/'federation.json')
+        rejected=collect(evidence,root/'hardlink-export')
+        self.assertFalse(rejected['complete'])
+        self.assertFalse((root/'hardlink-export/federation.json').exists())
+        try:os.symlink(evidence/'private/ca.pem',evidence/'native-inventory.json')
+        except OSError:
+            if os.name!='nt':raise
+        else:
+            linked=collect(evidence,root/'symlink-export')
+            self.assertFalse(linked['complete'])
+            self.assertFalse((root/'symlink-export/native-inventory.json').exists())
 
-    def test_ci_s3_allowlist_covers_public_sinks_and_excludes_private_sinks(self):
-        workflow=(ROOT/'.github/workflows/docker.yml').read_text()
-        collector=workflow.split('- name: Collect only sanitized receipts and test logs',1)[1].split('- uses: actions/upload-artifact',1)[0]
-        loops=re.findall(r'for name in (.*?); do(.*?)\n          done',collector,re.S)
-        names,body=next((names,body) for names,body in loops if '"$FC_EVIDENCE_DIR/s3/$name"' in body)
-        allowed=set(shlex.split(names.replace('\\\n',' ')))
+    def test_manual_s3_allowlist_and_content_scanning_reject_usable_secrets(self):
+        from scripts.collect_native_evidence import collect,S3_FILES
+        allowed=set(S3_FILES)
         source=(ROOT/'scripts/test-python-s3.sh').read_text()
         public=set(re.findall(r'"\$evidence/([^/"\n]+\.(?:json|jsonl|log))"',source))
         private=set(re.findall(r'"\$private/([^/"\n]+\.(?:json|jsonl|log))"',source))
@@ -283,11 +327,36 @@ class NativeAcceptanceCleanupTests(unittest.TestCase):
         self.assertFalse(private.intersection(allowed))
         self.assertTrue(all(re.fullmatch(r'[a-z0-9-]+\.(?:json|jsonl|log)',name) for name in allowed))
         self.assertNotIn('credential-revocation-provider.log',allowed)
+        root=Path(self.temporary.name);evidence=root/'evidence';(evidence/'s3').mkdir(parents=True)
+        (evidence/'s3/browser.json').write_text('{"passed": false, "csrf_present": true}\n')
+        (evidence/'s3/credential-revocation-provider.log').write_text('private-fixture-secret')
+        samples=('-----BEGIN PRIVATE KEY----- private-fixture-secret',
+            '{"url":"https://s3.example.test/a?X-Amz-Signature=private-fixture-secret"}',
+            '{"url":"https://s3.example.test/a?X%252dAmz%252dCredential=private-fixture-secret"}',
+            '{"headers":{"Authorization":"Bearer private-fixture-secret"}}',
+            '{"error":"Authorization: Bearer private-fixture-secret"}',
+            '{"accessKey":"private-fixture-secret"}', '{"token":"private-fixture-secret"}',
+            '{"admin_key":"private-fixture-secret",', 'token=private-fixture-secret',
+            'https://example.test/a?grant=private-fixture-secret')
+        for index,sample in enumerate(samples):
+            with self.subTest(sample=index):
+                (evidence/'s3/transactions.json').write_text(sample)
+                upload=root/f'export-{index}'
+                manifest=collect(evidence,upload)
+                self.assertFalse(manifest['complete'])
+                self.assertTrue((upload/'s3-browser.json').exists())
+                self.assertFalse(any(path.name.startswith('s3-transactions') for path in upload.iterdir()))
+                self.assertFalse((upload/'s3-credential-revocation-provider.log').exists())
+                self.assertNotIn('private-fixture-secret',''.join(path.read_text() for path in upload.iterdir()))
+        # Redacted digests are useful diagnostics, not usable credentials.
+        (evidence/'s3/transactions.json').write_text(json.dumps({'secret_key':{'redacted':True,'sha256':'a'*64}}))
+        redacted=collect(evidence,root/'redacted-export')
+        self.assertTrue(redacted['complete'],[entry for entry in redacted['entries'] if entry['status'] not in {'missing','copied'}])
 
-    def test_ci_operator_input_collection_keeps_actual_argv_but_excludes_private_state(self):
-        from scripts.collect_operator_native_inputs import collect
-        root=Path(self.temporary.name);case=root/'private/operator-install/test_example_entry_install'
-        case.mkdir(parents=True);upload=root/'upload';upload.mkdir()
+    def test_manual_operator_collection_keeps_actual_argv_without_private_state(self):
+        from scripts.collect_native_evidence import collect
+        root=Path(self.temporary.name);evidence=root/'evidence';case=evidence/'private/operator-install/test_example_entry_install'
+        case.mkdir(parents=True);upload=root/'export'
         argv=['python3','-I','-B','/fixture/tests/operator_install_handoff_fixture.py',
             '--directory','/fixture/deploy','--stage','/fixture/source','--command','install','--lose','start']
         def write(name,value):
@@ -309,13 +378,24 @@ class NativeAcceptanceCleanupTests(unittest.TestCase):
             fixture_only=True,simulated_old_discovery_rejects=context_value,inherited_lock_fd=4,
             intent='new_upgrade',working_directory='/fixture/deploy'))
         (case/'cli-install-initial.log').write_text('PRIVATE KEY----- private-fixture-secret')
-        copied=collect(root,upload)
-        self.assertEqual(len(copied),4)
+        # Invalid host receipts stay private but do not discard earlier diagnostics.
+        (case/'cli-broken-input.json').write_text('{"argv":')
+        manifest=collect(evidence,upload)
+        self.assertFalse(manifest['complete'])
+        self.assertEqual(manifest['copied'],4)
         collected=''.join(path.read_text() for path in upload.iterdir())
         self.assertIn('operator_install_handoff_fixture.py',collected)
         self.assertIn('frontiercloud_operator.py',collected)
         self.assertNotIn('private-fixture-secret',collected)
         self.assertTrue(all(path.suffix=='.json' for path in upload.iterdir()))
+        self.assertFalse(any('cli-broken' in path.name for path in upload.iterdir()))
+        broken=next(entry for entry in manifest['entries'] if entry['source'].endswith('cli-broken-input.json'))
+        self.assertEqual(broken['status'],'rejected')
+        # A matching input cannot lend authenticity to a different child result.
+        write('cli-install-initial-result.json',dict(argv=argv+['--leave-helper'],exit_code=0))
+        second=collect(evidence,root/'mismatched-export')
+        self.assertFalse(second['complete'])
+        self.assertFalse((root/'mismatched-export/operator-test_example_entry_install-cli-install-initial-result.json').exists())
 
     def test_timeout_termination_enters_the_exception_cleanup_path(self):
         with self.assertRaisesRegex(InterruptedError,'fixture interrupted'):

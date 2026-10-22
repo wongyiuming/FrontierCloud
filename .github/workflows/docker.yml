@@ -3,8 +3,8 @@ name: Build and Test Python Source
 on:
   push:
     branches: [dev, main]
-  pull_request:
-    branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -12,151 +12,54 @@ permissions:
   actions: read
 
 jobs:
-  source-policy:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      DB_TYPE: sqlite
-      SQLITE_PATH: ${{ github.workspace }}/data/frontiercloud-source.db
-      PYTHONDONTWRITEBYTECODE: '1'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.14.7'
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install pinned Python dependencies
-        run: |
-          python - <<'PY'
-          import pathlib,tomllib
-          packages=tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['dependencies']
-          pathlib.Path('/tmp/frontiercloud-requirements.txt').write_text('\n'.join(packages)+'\n')
-          PY
-          python -m pip install --disable-pip-version-check -r /tmp/frontiercloud-requirements.txt
-      - name: Syntax and deployment contract
-        run: |
-          python -m compileall -q app main.py
-          python scripts/check_release_policy.py
-          python scripts/check_cpu_boundary.py
-          python scripts/validate_env_contract.py
-          python scripts/check_english_comments.py
-          find static/js -name '*.js' -print0 | xargs -0 -n1 node --check
-      - name: Browser JavaScript regression
-        run: |
-          node tests/admin_ui_smoke.mjs
-          node tests/admin_upload_transport_smoke.mjs
-          node tests/player_cache_smoke.mjs
-          node tests/audio_continuous_stream_smoke.mjs
-          node tests/audio_continuous_fetch_retry_smoke.mjs
-          node tests/music_metadata_smoke.mjs
-          node tests/s3_upload_smoke.mjs
-          node tests/business_navigation_smoke.mjs
-          node tests/directory_globe_smoke.mjs
-          node tests/media_crypto_smoke.mjs
-          FC_CRYPTO_COMPILED=1 node tests/media_crypto_smoke.mjs
-          node tests/network_observation_smoke.mjs
-
-  source-unit:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3]
-    env:
-      DB_TYPE: sqlite
-      SQLITE_PATH: ${{ github.workspace }}/data/frontiercloud-source.db
-      PYTHONDONTWRITEBYTECODE: '1'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.14.7'
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install pinned Python dependencies
-        run: |
-          python - <<'PY'
-          import pathlib,tomllib
-          packages=tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['dependencies']
-          pathlib.Path('/tmp/frontiercloud-requirements.txt').write_text('\n'.join(packages)+'\n')
-          PY
-          python -m pip install --disable-pip-version-check -r /tmp/frontiercloud-requirements.txt
-      - name: Complete unit discovery shard
-        run: |
-          python scripts/test_python_units.py run --count 4 --index ${{ matrix.shard }} \
-            --receipt "$RUNNER_TEMP/unit-shard-${{ matrix.shard }}.json"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: unit-shard-${{ matrix.shard }}-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/unit-shard-${{ matrix.shard }}.json
-          if-no-files-found: error
-          retention-days: 14
-
   source:
-    needs: [source-policy, source-unit]
-    if: always() && (github.event_name != 'push' || github.ref != 'refs/heads/main')
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 3
+    concurrency:
+      group: python-source-${{ github.event_name }}-${{ github.ref }}
+      cancel-in-progress: true
     env:
-      DB_TYPE: sqlite
-      SQLITE_PATH: ${{ github.workspace }}/data/frontiercloud-source.db
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - name: Require every source job to succeed
-        env:
-          POLICY_RESULT: ${{ needs.source-policy.result }}
-          UNIT_RESULT: ${{ needs.source-unit.result }}
-        run: test "$POLICY_RESULT" = success && test "$UNIT_RESULT" = success
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14.7'
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - name: Install pinned Python dependencies
-        run: |
-          python - <<'PY'
-          import pathlib,tomllib
-          packages=tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['dependencies']
-          pathlib.Path('/tmp/frontiercloud-requirements.txt').write_text('\n'.join(packages)+'\n')
-          PY
-          python -m pip install --disable-pip-version-check -r /tmp/frontiercloud-requirements.txt
-      - uses: actions/download-artifact@v4
+      - uses: actions/setup-node@v4
         with:
-          pattern: unit-shard-*-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/unit-receipts
-          merge-multiple: true
-      - name: Independently rediscover and verify complete test coverage
-        run: |
-          python scripts/test_python_units.py verify --count 4 \
-            --receipts "$RUNNER_TEMP"/unit-receipts/unit-shard-*.json \
-            --receipt "$RUNNER_TEMP/unit-coverage.json"
-      - uses: actions/upload-artifact@v4
+          node-version: '22'
+      - name: Bounded source policy and JavaScript smoke checks
+        run: timeout --signal=TERM --kill-after=5s 150s bash scripts/test-ci-source.sh
+
+  test-compose:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    concurrency:
+      group: python-compose-${{ github.event_name }}-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: unit-coverage-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/unit-coverage.json
-          if-no-files-found: error
-          retention-days: 14
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+      - name: Compose configuration only; no containers or native acceptance
+        run: timeout --signal=TERM --kill-after=5s 150s python -m tests.compose_layout_native
 
   topology:
     runs-on: ubuntu-latest
@@ -171,205 +74,6 @@ jobs:
             if (p.base.ref !== 'main' || p.head.ref !== 'dev' || p.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
               core.setFailed('Only same-repository dev -> main promotion is allowed');
             }
-
-  test-compose:
-    needs: source
-    if: github.event_name != 'push' || github.ref != 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    env:
-      PYTHONDONTWRITEBYTECODE: '1'
-      PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.14.7'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Prepare isolated native test tools
-        run: |
-          export FC_EVIDENCE_DIR="$RUNNER_TEMP/frontiercloud-native-evidence"
-          export FC_BROWSER_PYTHON="$RUNNER_TEMP/frontiercloud-native-driver/bin/python"
-          printf '%s\n' "FC_EVIDENCE_DIR=$FC_EVIDENCE_DIR" "FC_BROWSER_PYTHON=$FC_BROWSER_PYTHON" >> "$GITHUB_ENV"
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libnss3-tools
-          command -v node
-          command -v certutil
-          test -x "$PLAYWRIGHT_CHROMIUM_EXECUTABLE"
-          "$PLAYWRIGHT_CHROMIUM_EXECUTABLE" --version
-          docker version
-          docker compose version
-          python -m venv "$RUNNER_TEMP/frontiercloud-native-driver"
-          "$FC_BROWSER_PYTHON" -m pip install --disable-pip-version-check \
-            playwright==1.62.0 httpx==0.28.1 cryptography==50.0.1
-          sudo install -d -m 0700 /root/frontiercloud-dev "$FC_EVIDENCE_DIR"
-          sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - name: Complete Compose TLS browser and database acceptance
-        run: |
-          sudo --preserve-env=PYTHONDONTWRITEBYTECODE,FC_EVIDENCE_DIR,FC_BROWSER_PYTHON,PLAYWRIGHT_CHROMIUM_EXECUTABLE \
-            bash -c 'set -euo pipefail; cd "$1"; bash scripts/test-python-final.sh > "$FC_EVIDENCE_DIR/native.log" 2>&1' \
-            bash "$GITHUB_WORKSPACE"
-      - name: Collect only sanitized receipts and test logs
-        id: collect-evidence
-        if: always()
-        run: |
-          upload="$RUNNER_TEMP/frontiercloud-native-artifact"
-          mkdir -p "$upload"
-          chmod 0700 "$upload"
-          for name in source-commit.txt unit-coverage.json compose-layout.json nginx-real.json storage-direct-real.json storage-relay-real.json \
-            federation.json nodes-browser.json nodes-browser.log native-inventory.json native-inventory.log native-planning.json native-planning.log \
-            native-reservations.json native-reservations.log native-admission.json native-admission.log native-transfer.json native-transfer.log \
-            native-publication.json native-publication.log player-storage-browser.json player-storage-browser.log \
-            native-retirement-runtime.json native-retirement-runtime.log native-retirement-api.json native-retirement-api.log \
-            retirement-api-https-mysql.json retirement-api-https-mysql.log \
-            five-node-traffic.json five-node-traffic.log filesystem-upload-faults.json filesystem-upload-faults.log \
-            migration-browser-native.json migration-browser-native.log migration-ui.log \
-            migration-hour-source-commit.txt migration-hour.json migration-hour.log \
-            native-runner-cleanup.json native-runner-cleanup.log \
-            storage-direct-status-concurrent.json storage-direct-status-after-restart.json \
-            storage-relay-status-concurrent.json storage-relay-status-after-restart.json \
-            native-unit-cancel.json native-unit-cancel.log native-unit-cancel-mysql.jsonl native-unit-cancel-mysql.log \
-            native-master-cancel.json native-master-cancel.log native-master-cancel-mysql.jsonl native-master-cancel-mysql.log \
-            operator-sqlite-proof.json operator-mysql-proof.json \
-            operator-endpoint-sqlite-proof.json operator-endpoint-mysql-proof.json \
-            native.log unit.log business-traffic.log certificate-nginx.log certificate-storage.log federation.log s3.log \
-            mysql.log operator.log operator-backup.log operator-endpoint.log operator-discovery.log operator-discovery-inputs.jsonl \
-            operator-prepare.log operator-prepare-inputs.jsonl operator-install.log operator-application.log operator-application-inputs.jsonl; do
-            if sudo test -f "$FC_EVIDENCE_DIR/$name"; then
-              sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" "$FC_EVIDENCE_DIR/$name" "$upload/$name"
-            fi
-          done
-          for pair in DR DD RD RR; do
-            for name in "native-partial-cancel-$pair.json" "native-partial-cancel-$pair.log" \
-              "native-partial-cancel-mysql-$pair.jsonl" "native-partial-cancel-mysql-$pair.log"; do
-              if sudo test -f "$FC_EVIDENCE_DIR/$name"; then
-                sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" "$FC_EVIDENCE_DIR/$name" "$upload/$name"
-              fi
-            done
-          done
-          if sudo test -f "$FC_EVIDENCE_DIR/migration-ui/result.json"; then
-            sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" \
-              "$FC_EVIDENCE_DIR/migration-ui/result.json" "$upload/migration-ui-contract.json"
-          fi
-          for shard in 0 1 2 3; do
-            if sudo test -f "$FC_EVIDENCE_DIR/unit-shards/shard-$shard.json"; then
-              sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" \
-                "$FC_EVIDENCE_DIR/unit-shards/shard-$shard.json" "$upload/unit-shard-$shard.json"
-            fi
-          done
-          for operator_case in test_actual_build_new_service_literal_inputs_and_moved_old_tag \
-            test_real_build_failure_preserves_services_data_and_diagnostics \
-            test_unsupported_persistent_addition_fails_before_build_or_any_new_service \
-            test_real_cold_capture_of_published_generation4_database_and_resume \
-            test_real_mysql_generation4_cold_capture_empty_target_restore_and_resume \
-            test_real_published_sqlite_generation4_to_current_database_prepare \
-            test_real_published_mysql_generation4_to_current_database_prepare \
-            test_real_host_transaction_prepares_published_sqlite_database \
-            test_real_host_transaction_prepares_published_mysql_database \
-            test_real_candidate_configuration_failure_preserves_running_old_deployment \
-            test_real_fenced_sqlite_application_after_database_preparation \
-            test_real_fenced_mysql_application_after_database_preparation; do
-            if sudo test -f "$FC_EVIDENCE_DIR/private/operator-prepare/$operator_case/result.json"; then
-              sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" \
-                "$FC_EVIDENCE_DIR/private/operator-prepare/$operator_case/result.json" "$upload/operator-$operator_case.json"
-            fi
-          done
-          for operator_case in test_business_sqlite_package test_business_mysql_package \
-            test_direct_storage_package test_relay_storage_package \
-            test_business_sqlite_owned_resources test_business_mysql_owned_resources \
-            test_direct_storage_owned_resources test_relay_storage_owned_resources \
-            test_business_sqlite_first_start test_business_mysql_first_start \
-            test_direct_storage_first_start test_relay_storage_first_start \
-            test_installed_sqlite_controlled_recovery test_installed_mysql_controlled_recovery \
-            test_business_sqlite_entry_install test_business_mysql_entry_install \
-            test_direct_storage_entry_install test_relay_storage_entry_install \
-            test_same_directory_foreign_project_refuses_before_build; do
-            if sudo test -f "$FC_EVIDENCE_DIR/private/operator-install/$operator_case/result.json"; then
-              sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" \
-                "$FC_EVIDENCE_DIR/private/operator-install/$operator_case/result.json" "$upload/operator-$operator_case.json"
-            fi
-            for name in http-inputs.jsonl directory-conflict-inputs.jsonl entry-bootstrap-docker-inputs.jsonl entry-target-docker-inputs.jsonl; do
-              if sudo test -f "$FC_EVIDENCE_DIR/private/operator-install/$operator_case/$name"; then
-                sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" \
-                  "$FC_EVIDENCE_DIR/private/operator-install/$operator_case/$name" "$upload/operator-$operator_case-$name"
-              fi
-            done
-          done
-          for operator_case in test_actual_old_sqlite_application_to_prepared_current_generation \
-            test_actual_old_mysql_application_to_prepared_current_generation \
-            test_actual_old_sqlite_master_preserves_fixed_role_identity_and_resources \
-            test_actual_old_mysql_master_preserves_fixed_role_identity_and_resources \
-            test_actual_old_direct_storage_preserves_fixed_follower_identity \
-            test_actual_old_relay_storage_preserves_fixed_follower_identity \
-            test_actual_old_paired_direct_upgrade_preserves_relationship_and_media \
-            test_actual_old_paired_relay_upgrade_preserves_relationship_and_media \
-            test_actual_old_paired_direct_restore_preserves_relationship_and_media \
-            test_actual_old_paired_relay_restore_preserves_relationship_and_media \
-            test_controlled_sqlite_restore_preserves_failed_state_and_payload_inodes \
-            test_controlled_mysql_restore_preserves_failed_state_and_payload_inodes \
-            test_controlled_sqlite_master_restore_preserves_fixed_identity_and_resources \
-            test_controlled_mysql_master_restore_preserves_fixed_identity_and_resources \
-            test_early_sqlite_abort_preserves_incomplete_snapshot_and_original_resources \
-            test_early_mysql_abort_preserves_incomplete_snapshot_and_original_resources \
-            test_staged_host_entry_upgrades_old_sqlite_application \
-            test_staged_host_entry_upgrades_old_mysql_application_and_adds_init \
-            test_staged_recover_preserves_sqlite_original_resources \
-            test_staged_recover_preserves_mysql_original_resources; do
-            if sudo test -f "$FC_EVIDENCE_DIR/private/operator-application/$operator_case/result.json"; then
-              sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" \
-                "$FC_EVIDENCE_DIR/private/operator-application/$operator_case/result.json" "$upload/operator-$operator_case.json"
-            fi
-            for name in http-inputs.jsonl inventory-inputs.jsonl; do
-              if sudo test -f "$FC_EVIDENCE_DIR/private/operator-application/$operator_case/$name"; then
-                sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" \
-                  "$FC_EVIDENCE_DIR/private/operator-application/$operator_case/$name" "$upload/operator-$operator_case-$name"
-              fi
-            done
-          done
-          sudo python3 scripts/collect_operator_native_inputs.py \
-            "$FC_EVIDENCE_DIR" "$upload" --uid "$(id -u)" --gid "$(id -g)"
-          for name in provider-initial.json provider-initial.log provider-restart.json provider-restart-client.log \
-            transactions.json transactions.log browser.json browser.log \
-            credential-revocation-prepare.json credential-revocation-prepare.log \
-            credential-revocation-provider.json credential-revocation.json credential-revocation.log; do
-            if sudo test -f "$FC_EVIDENCE_DIR/s3/$name"; then
-              sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" "$FC_EVIDENCE_DIR/s3/$name" "$upload/s3-$name"
-            fi
-          done
-          for name in native.json resources.jsonl nginx.log; do
-            if sudo test -f "$FC_EVIDENCE_DIR/business-traffic/$name"; then
-              sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" "$FC_EVIDENCE_DIR/business-traffic/$name" "$upload/business-traffic-$name"
-            fi
-          done
-          python - <<'PY'
-          import json, os, pathlib
-          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'frontiercloud-native-artifact'
-          for path in root.iterdir():
-              content = path.read_text()
-              if 'PRIVATE KEY-----' in content:
-                  path.unlink()
-                  raise SystemExit('Refusing evidence containing private key material')
-              if any(marker in content for marker in ('X-Amz-Signature=', 'X-Amz-Credential=', 'AWS4-HMAC-SHA256 Credential=')):
-                  path.unlink()
-                  raise SystemExit('Refusing evidence containing usable S3 authorization')
-              if path.suffix == '.json':
-                  json.loads(content)
-              if path.suffix == '.jsonl':
-                  for line in content.splitlines():
-                      json.loads(line)
-          PY
-      - uses: actions/upload-artifact@v4
-        if: always() && steps.collect-evidence.outcome == 'success'
-        with:
-          name: native-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/frontiercloud-native-artifact/*
-          if-no-files-found: warn
-          retention-days: 14
 
   promote-main:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -427,11 +131,13 @@ jobs:
             const runs = Array.isArray(response.data?.workflow_runs)
               ? response.data.workflow_runs
               : [];
-            const run = runs.find(item =>
+            const matching = runs.filter(item =>
               item?.head_sha === sourceSha &&
               item?.head_branch === 'dev' &&
               item?.event === 'push'
-            ) || null;
+            );
+            matching.sort((a, b) => b.run_number - a.run_number || b.run_attempt - a.run_attempt);
+            const run = matching[0] || null;
             if (!run) {
               core.setFailed(`reviewed dev PR head ${sourceSha} has no dev push CI run`);
               return;
@@ -440,13 +146,15 @@ jobs:
               core.setFailed(`dev CI #${run.run_number} for ${sourceSha} is ${run.status}/${run.conclusion || 'unknown'}`);
               return;
             }
-            const jobResponse = await github.rest.actions.listJobsForWorkflowRun({
-              owner, repo, run_id: run.id, filter: 'latest', per_page: 100,
+            const jobResponse = await github.rest.actions.listJobsForWorkflowRunAttempt({
+              owner, repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
             });
             const jobs = Array.isArray(jobResponse.data?.jobs) ? jobResponse.data.jobs : [];
             for (const required of ['source', 'test-compose']) {
-              const job = jobs.find(item => item.name === required);
-              if (!job || job.status !== 'completed' || job.conclusion !== 'success') {
+              const matches = jobs.filter(item => item.name === required);
+              const job = matches[0];
+              if (matches.length !== 1 || job.status !== 'completed' || job.conclusion !== 'success' ||
+                  job.head_sha !== sourceSha || job.run_id !== run.id) {
                 core.setFailed(`dev CI #${run.run_number} has no successful ${required} job for ${sourceSha}`);
                 return;
               }

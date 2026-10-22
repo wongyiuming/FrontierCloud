@@ -17,40 +17,29 @@ Read the authoritative [architecture boundaries](../../ARCHITECTURE.md) and
 
 ## Source CI
 
-The read-only `docker.yml` workflow installs pinned Python dependencies, checks
-Python/JavaScript syntax, runtime CPU boundaries, deployment/env contracts and
-English source comments, discovers the complete unit suite, and runs the browser
-JavaScript smoke tests. Policy/JavaScript checks and four deterministic unit
-shards each have a sixty-minute budget. Shards retain every discovered case,
-including repeated IDs, and keep each module's fixtures together. The required
-`source` aggregation independently repeats discovery and verifies that four
-successful receipts cover the complete ordered shard lists from the same clean
-commit and source-content hash. Missing, stale, failed or skipped jobs fail the
-gate; dedicated test skips remain visible in receipts. This replaces a measured
-64-minute serial run, without dropping tests or relaxing product CPU/request
-deadlines. Development overlays require an explicit `--allow-dirty` flag and
-cannot stand in for clean release evidence. CI owns no SSH
-credentials, deployment authority, or product CD. Product containers never
-receive a Docker socket or host service control.
+The read-only `docker.yml` workflow follows the Gin hosted-CI boundary: parallel
+test jobs have at most three minutes each, with 150-second command budgets.
+`source` runs `scripts/test-ci-source.sh`: standard-library source-contract tests,
+Python/JavaScript syntax, CPU/deployment/env/comment policies and native Node
+smoke tests. It does not install the application dependencies or discover the
+complete runtime unit suite. `test-compose` renders the default SQLite, explicit
+MySQL and Storage Compose configuration with `tests.compose_layout_native`.
+Rendering does not contact a Docker daemon or build, pull or start an image.
 
-The shard runner retains case IDs for coverage, then releases its discovery
-and selection lists before executing. Unittest can therefore reclaim completed
-fixture instances; complete discovery must not retain every fixture's data
-until the shard exits. An executable collection regression protects this
-memory boundary.
-
-The required `test-compose` check depends on successful source CI and runs the
-actual `scripts/test-python-final.sh` suite on a fresh GitHub-hosted Linux Docker
-runner, with a 360-minute limit. It runs for `dev` pushes, release PRs and
-manual workflow dispatches. Both test jobs check out the exact PR head SHA or
-event SHA with persisted Git credentials disabled. Test-only pinned browser
-dependencies, NSS tools and the runner's verified Chrome support the fixtures;
-no deployment credentials or production machine is involved.
+A `dev` push runs source checks once. Merge groups and manual dispatches can run
+the same bounded checks; release PR events use the separate repository-policy
+workflow for topology. Persisted Git credentials are disabled. CI owns no SSH
+credentials, deployment authority or product CD. Budget regression checks reject
+heavyweight/background commands, long test jobs and serial test-job chains.
+Real SQLite/MySQL, fleets, Chromium, certificate issuance, hour-long retention,
+large files and deployment/recovery all run on the development host.
 
 The `promote-main` guard proves a unique merged same-repository `dev -> main` PR,
 successful exact-source `dev` push CI including both `source` and `test-compose`,
-and identical reviewed/main trees. A `main` push reuses that proven tree rather
-than repeating source or native builds. Missing, skipped or failed required jobs
+and identical reviewed/main trees. The public job names remain compatible with
+the Python source operator; `test-compose` proves configuration checks, not a
+complete native run. A `main` push reuses the proven source tree. Missing,
+skipped or failed required jobs
 cannot satisfy promotion. A newer
 commit invalidates earlier CI and native acceptance evidence.
 
@@ -68,6 +57,12 @@ runs real ACME/Nginx and native Direct/Relay TLS fixtures and the three-node
 Chromium federation harness. The same gate runs real optional-MySQL migrations,
 cold database/control backup and new-project restoration, and the actual offline
 identity-preserving endpoint wrapper for both databases.
+
+The shard runner retains case IDs for coverage, then releases discovery and
+selection lists before execution so completed fixture data can be reclaimed.
+Skips remain visible in the receipts. Development overlays require explicit
+`--allow-dirty` and cannot replace clean release evidence. The full suite and
+its resource limits remain mandatory even though it is outside hosted CI.
 
 `scripts/test-python-business-traffic.sh` also verifies actual rate-limited
 Nginx sendfile and upload observations before transfer completion, TCP refusal
@@ -100,12 +95,14 @@ and test-only trust roots. They do not contact a public CA, publish host HTTP/HT
 ports, disable certificate checking, or affect existing deployments. Test-only
 CA images must never become product deployment images.
 
-CI uploads only explicitly selected sanitized JSON receipts, the source commit
-receipt and test logs. Private CA directories, NSS profiles, database/control
-snapshots, certificate pairs and runtime keys are excluded. The artifact collector
-rejects private-key PEM material; it never uploads the fixture or deployment
-directories. These workflow artifacts expire after 14 days and are not a permanent
-evidence archive. A durable summary belongs in the existing acceptance ledger.
+`scripts/collect_native_evidence.py` retains explicitly selected sanitized
+receipts, source identity and test logs from a development-host run in a fresh
+private output directory. Private CA directories, NSS profiles, database/control
+snapshots, certificate pairs, environment files and runtime keys are excluded.
+The collector rejects private-key PEM and usable S3 authorization. Partial or
+invalid JSON from a failed test remains diagnostic text with its original hash;
+it is never labelled a successful receipt. Nothing is uploaded by hosted CI.
+A durable summary belongs in the existing acceptance ledger.
 Independent exact-source native evidence remains required for the
 final archival deliverable.
 
@@ -123,18 +120,14 @@ Every Web fixture has one ASGI worker and one CPU. A timeout is a failure; stop
 fixtures before cleaning them. After business work, require CPU below 20% for
 five consecutive one-second samples within 30 seconds. STUN probes are serialized.
 
-Source policy and each unit shard have a 60-minute budget; source aggregation
-has 15 minutes, and the complete Compose job has 360 minutes. The ordinary gate
-contains four actual one-hour profiles: mixed
+The complete development-host gate contains four actual one-hour profiles: mixed
 partial cancellation on SQLite and MySQL, successful full-task cleanup over
 native TLS, and complete GUI migration followed by independent retirement with
 a held Nginx Relay reader. Independent waits overlap; their count is not a
-serial wall-time estimate. The 2026-10-20 single-core source sweep took 2,166.579 seconds for
-1,297 cases (ten dedicated-environment skips), exceeding the former 30-minute
-job budget. These job budgets include serial fixture setup, builds and repeated
-regression; they do not change any product CPU limit, per-fixture timeout or
-quiescence requirement. Complete native acceptance still repeats unit discovery;
-no case is removed to fit a shorter workflow. Additional standalone migration
+serial wall-time estimate. Product CPU limits, per-fixture timeouts and
+quiescence requirements remain unchanged. Complete native acceptance repeats
+unit discovery on the development host; no case is removed to fit hosted CI.
+Additional standalone migration
 profiles remain available for diagnosis and retain their own exact-source evidence.
 
 Independent actual-hour profiles overlap unrelated fixture work. SQLite mixed
@@ -183,7 +176,7 @@ refreshes authenticated heartbeats and verifies every Source replica's removal,
 all Target plaintext/ciphertext bytes, exact three-party fence release and both
 native completion receipts. Wrong CA and hostname tests remain enabled. Its
 sanitized `migration-hour.json`, `migration-hour.log` and
-`migration-hour-source-commit.txt` join the ordinary CI artifacts. Neither virtual
+`migration-hour-source-commit.txt` remain in the development-host evidence. Neither virtual
 unit clocks nor the mixed-cancellation or GUI profiles substitute for these
 successful-completion assertions. `scripts/test-python-migration-hour.sh` retains
 the same environment and assertions as an independent diagnostic entry, using
@@ -213,7 +206,7 @@ documented overlay does, preserving MySQL volumes and secret mounts.
 `tests.nodes_browser_native` verifies collapsed/lazy cards, keyboard interaction,
 refresh state, local certificate placement and hashed CSS through actual Nginx
 HTTPS with disposable browser trust. Its keys, profile and screenshot stay private;
-only `nodes-browser.json` and the sanitized log are CI artifacts. Native fleet
+only `nodes-browser.json` and the sanitized log enter the sanitized evidence. Native fleet
 project names hash the entire fixture path, avoiding old suffix-name volume reuse.
 
 `tests.player_storage_browser` uploads separate plain/encrypted MP3 albums
@@ -226,7 +219,7 @@ decryption remains in the ordinary worker; Blob images use the page's allowed
 image surface rather than weakening its connection CSP. Inputs, pipeline
 snapshots, enforced Web limits and CPU recovery belong to
 `player-storage-browser.json`; private uploaded media, keys and browser profiles
-are excluded from CI artifacts. The candidate component passes 46 checks across
+are excluded from sanitized evidence. The historical candidate component passes 46 checks across
 all six albums, with no Web OOM. Master reaches its 512 MiB cgroup limit with
 240 pressure events; an empty paired-fixture comparison attributes most final
 growth to file cache, with about 4–6 MiB higher final process RSS. This is not
@@ -243,7 +236,7 @@ both browser upload watchdogs and server recovery; its default remains 300
 seconds. A continuous transfer can exceed that duration. The separate
 `FC_FILESYSTEM_UPLOAD_FAULTS=1` browser profile uses actual throttled partial
 Local/Direct/Relay uploads, network loss/refresh and unchanged worker deadlines.
-Its source data, private certificates and databases are not CI artifacts.
+Its source data, private certificates and databases stay outside sanitized evidence.
 The five-node `FC_FIVE_NODE_TRAFFIC=1` profile reuses the capped fleet setup,
 checks real business-byte pauses/manual persistence and stops at cleanup grace.
 Neither profile substitutes for the separate actual-hour terminal gate.
@@ -258,7 +251,8 @@ Source proofs and lost native responses over verified TLS. Its actual inputs
 and receipts are distinct from the lower-level per-unit profile. Neither
 profile proves whole-task cancellation or replaces its remaining integration.
 
-Keep sanitized results and exact source identity with the CI run. All
+Keep development-host inputs, sanitized results and exact source identity with
+the release, separately from the bounded public CI run. All
 required gates in [the current renewal ledger](../python-current-parity.md) must
 pass before archival, including the owner-authorized S3 release criterion
 recorded in the ledger.
