@@ -115,6 +115,27 @@
             signal?.removeEventListener('abort', abort);
         }
     }
+    async function metadataBytes(response) {
+        if (!response.body) throw new Error('音乐标签读取失败');
+        const reader = response.body.getReader(), chunks = [];
+        let length = 0;
+        try {
+            while (true) {
+                const {done, value} = await reader.read();
+                if (done) break;
+                length += value.byteLength;
+                if (length > 128 * 1024) throw new Error('音乐标签响应超过上限');
+                chunks.push(value);
+            }
+        } catch (error) {
+            await reader.cancel().catch(() => {});
+            throw error;
+        } finally { reader.releaseLock(); }
+        const bytes = new Uint8Array(length);
+        let offset = 0;
+        for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+        return bytes;
+    }
     async function nativeMetadata(entry, signal) {
         const path = entry.media_path || entry.path, identity = entry.resource_id || '';
         if (typeof path !== 'string' || typeof identity !== 'string' || (identity && !/^[a-f0-9]{64}$/.test(identity)))
@@ -129,7 +150,7 @@
                 credentials: 'same-origin', cache: 'no-store', priority: 'low', signal: controller.signal,
             });
             if (!response.ok) { await response.body?.cancel(); throw new Error('音乐标签读取失败'); }
-            const value = JSON.parse(new TextDecoder().decode(await window.FrontierCryptoCommon.boundedBytes(response, 128 * 1024)));
+            const value = JSON.parse(new TextDecoder().decode(await metadataBytes(response)));
             if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(field =>
                 !['title', 'artist', 'album', 'cover'].includes(field) || typeof value[field] !== 'string'
                 || value[field].length > (field === 'cover' ? 64 * 1024 : 8192))) throw new Error('音乐标签响应无效');

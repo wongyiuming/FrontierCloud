@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
-const context = {window: {addEventListener() {}}, TextDecoder, Uint8Array, DataView, Blob, URL, URLSearchParams, crypto: webcrypto, AbortController, setTimeout, clearTimeout};
+const context = {window: {addEventListener() {}}, TextEncoder, TextDecoder, Uint8Array, DataView, Blob, URL, URLSearchParams, crypto: webcrypto, AbortController, setTimeout, clearTimeout};
 vm.runInNewContext(fs.readFileSync(new URL('../static/js/music-metadata.js', import.meta.url), 'utf8'), context);
 const api = context.window.FrontierMusicMetadata;
 const size = n => [n >> 21 & 127, n >> 14 & 127, n >> 7 & 127, n & 127];
@@ -92,21 +92,22 @@ assert.equal(Object.keys(await api.metadata({media_path: 'music/plain.mp3'})).le
     context.window.FrontierMediaCrypto = {prepareCatalog:async entries=>{entries[0].url='/authorized';}};
     context.window.FrontierCryptoCommon = {validate(){},boundedBytes:async r=>r.bytes};
 }
-{
+for (const commonFile of ['media-crypto-common.js', 'compiled/media-crypto-common.js']) {
     context.window.location = {href: 'https://media.test/album', origin: 'https://media.test'};
     context.setTimeout = setTimeout; context.clearTimeout = clearTimeout;
+    vm.runInNewContext(fs.readFileSync(new URL('../static/js/' + commonFile, import.meta.url), 'utf8'), context);
+    context.window.FrontierCryptoCommon = context.FrontierCryptoCommon;
     const path = 'music/native/one.mp3', requests = [], identity = 'b'.repeat(64);
     let value = {title: 'Native title', artist: 'Native artist', album: 'Original',
         cover: '/api/v1/media/cover?' + new URLSearchParams({file_path: path, resource_id: identity})};
     context.window.FrontierMediaCrypto = {prepareCatalog: async () => {throw new Error('native plaintext must not request a key');}};
-    context.window.FrontierCryptoCommon = {boundedBytes: async (response, limit) => {
-        assert.equal(limit, 128 * 1024); return response.bytes;
-    }};
-    context.fetch = async (url, options) => {
+    let response = () => new Response(JSON.stringify(value), {headers: {'Content-Type': 'application/json'}});
+    const nativeFetch = async (url, options) => {
         requests.push(url); assert.equal(options.priority, 'low'); assert.equal(options.cache, 'no-store');
         assert.equal(options.credentials, 'same-origin'); assert.equal(options.headers, undefined);
-        return {ok: true, bytes: new TextEncoder().encode(JSON.stringify(value))};
+        return response();
     };
+    context.fetch = nativeFetch;
     const entry = {media_path: path, resource_id: identity, native_metadata: true};
     const tags = await api.metadata(entry);
     assert.equal(tags.title, 'Native title'); assert.equal(tags.cover, value.cover);
@@ -117,10 +118,56 @@ assert.equal(Object.keys(await api.metadata({media_path: 'music/plain.mp3'})).le
     const local = await api.metadata({media_path: path, media_id: 'local-stable-id', native_metadata: true});
     assert.equal(local.title, 'Local title');
     assert.equal(new URL(requests.at(-1), context.window.location.href).searchParams.get('resource_id'), '', 'Standalone must not invent a global resource ID');
+    function streamed(chunks, fail = false) {
+        const stats = {cancelled: 0, released: 0, underlyingCancelled: 0};
+        let index = 0;
+        const body = new ReadableStream({
+            pull(controller) {
+                if (index < chunks.length) controller.enqueue(chunks[index++]);
+                else if (fail) controller.error(new Error('native metadata stream broke'));
+                else controller.close();
+            },
+            cancel() { stats.underlyingCancelled++; },
+        });
+        const getReader = body.getReader.bind(body);
+        body.getReader = () => {
+            const reader = getReader(), cancel = reader.cancel.bind(reader), release = reader.releaseLock.bind(reader);
+            reader.cancel = reason => { stats.cancelled++; return cancel(reason); };
+            reader.releaseLock = () => { stats.released++; return release(); };
+            return reader;
+        };
+        return {response: new Response(body), body, stats};
+    }
+    const bytes = new TextEncoder().encode(JSON.stringify({title: 'Chunked 中文'}));
+    const chunked = streamed([bytes.subarray(0, 21), bytes.subarray(21, 22), bytes.subarray(22)]);
+    response = () => chunked.response;
+    assert.equal((await api.metadata({...entry})).title, 'Chunked 中文');
+    assert.equal(chunked.stats.released, 1); assert.equal(chunked.body.locked, false);
+    const maximum = 128 * 1024, boundary = new TextEncoder().encode('{"title":"Limit"}');
+    const exactLimit = streamed([boundary, new Uint8Array(maximum - boundary.length).fill(32)]);
+    response = () => exactLimit.response;
+    assert.equal((await api.metadata({...entry})).title, 'Limit', 'the JSON byte limit is inclusive');
+    assert.equal(exactLimit.stats.released, 1);
+    const oversized = streamed([new Uint8Array(maximum), new Uint8Array(1), new Uint8Array(1)]);
+    response = () => oversized.response;
+    await assert.rejects(api.metadata({...entry}), /标签响应超过上限/);
+    assert.equal(oversized.stats.cancelled, 1); assert.equal(oversized.stats.underlyingCancelled, 1);
+    assert.equal(oversized.stats.released, 1); assert.equal(oversized.body.locked, false);
+    const broken = streamed([new TextEncoder().encode('{"title":')], true);
+    response = () => broken.response;
+    await assert.rejects(api.metadata({...entry}), /native metadata stream broke/);
+    assert.equal(broken.stats.cancelled, 1); assert.equal(broken.stats.released, 1);
+    assert.equal(broken.body.locked, false);
+    response = () => new Response('{"title":"unfinished');
+    await assert.rejects(api.metadata({...entry}), error => error.name === 'SyntaxError');
+    response = () => new Response(JSON.stringify(value));
     value = {cover: 'https://untrusted.test/secret'};
     await assert.rejects(api.metadata({...entry, media_path: 'music/native/bad.mp3'}), /来源无效/);
-    value = {title: 'x'.repeat(8193)};
-    await assert.rejects(api.metadata({...entry, media_path: 'music/native/large.mp3'}), /标签响应无效/);
+    for (value of [{title: 'x'.repeat(8193)}, {title: 3}, {unknown: 'field'}, [], null]) {
+        await assert.rejects(api.metadata({...entry}), /标签响应无效/);
+    }
+    await assert.rejects(context.FrontierCryptoCommon.boundedBytes(new Response(new Uint8Array(9)), 10),
+        /加密数据分块不完整/, 'encrypted Range reads still require the exact byte count');
     const controller = new AbortController();
     context.fetch = async (_url, options) => new Promise((_resolve, reject) => {
         options.signal.addEventListener('abort', () => reject(new Error('native cancelled')), {once: true});
@@ -130,7 +177,7 @@ assert.equal(Object.keys(await api.metadata({media_path: 'music/plain.mp3'})).le
     await new Promise(setImmediate); controller.abort();
     await assert.rejects(pending, /native cancelled/);
     value = {title: 'Retry title'};
-    context.fetch = async () => ({ok: true, bytes: new TextEncoder().encode(JSON.stringify(value))});
+    context.fetch = nativeFetch;
     assert.equal((await api.metadata(cancelledEntry)).title, 'Retry title');
     context.window.FrontierMediaCrypto = {prepareCatalog: async entries => {entries[0].url = '/authorized';}};
     context.window.FrontierCryptoCommon = {validate() {}, boundedBytes: async response => response.bytes};
