@@ -36,6 +36,19 @@
     white-space: nowrap;
 }
 
+.media-node-address {
+    flex: 0 1 auto;
+    min-width: 0;
+    color: #91a8b8;
+    font-size: 11px;
+    line-height: 1.5;
+    max-width: min(32ch, 30%);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: text;
+}
+
 .media-site-badge {
     display: inline-flex;
     align-items: center;

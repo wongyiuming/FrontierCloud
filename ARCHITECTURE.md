@@ -76,8 +76,8 @@ old part grants. It cannot change namespace or authorize new uploads. This is
 required to clean up with revoked or expired credentials without losing state.
 The candidate supplies multipart transactions, published read/delete adapters,
 Admin metadata routes, native configuration controls and a bounded browser
-uploader/recovery worker. The complete browser matrix and owner acceptance remain release gates. Its
-implementation and release gates are tracked in `docs/python-s3-storage.md`.
+uploader/recovery worker. Its implementation, complete browser matrix and release
+criteria are tracked in `docs/python-s3-storage.md`.
 
 ## 4. Heartbeat and Backup
 

@@ -320,11 +320,66 @@ def _path_hidden(path: str, hidden: set[str]) -> bool:
     return any("/".join(parts[:index]) in hidden for index in range(1, len(parts) + 1))
 
 
+def _storage_address(endpoint: str | None) -> str | None:
+    if not isinstance(endpoint, str) or not endpoint:
+        return None
+    try:
+        return p.endpoint(endpoint)
+    except (p.ProtocolError, ValueError):
+        return None
+
+
+def _local_tree_storage_addresses(result: dict) -> dict:
+    for item in result.get('items', []):
+        if item.get('kind') == 'file':
+            item['storage_address'] = _storage_address(node_state.node.get('endpoint'))
+            item['storage_address_local'] = True
+    return result
+
+
+async def _tree_storage_addresses(conn, owners: list[str]) -> dict[str, tuple[str | None, bool]]:
+    from app.services import s3_schema
+    from app.services.s3_signing import Location
+
+    addresses = {}
+    for offset in range(0, len(owners), 500):
+        batch = owners[offset:offset + 500]
+        native = (await conn.execute(select(s.storage_members.c.member_id,
+            s.storage_members.c.member_kind, s.storage_members.c.transport,
+            s.relationships.c.peer_endpoint).outerjoin(s.relationships,
+                (s.storage_members.c.relationship_id == s.relationships.c.relationship_id)
+                & (s.storage_members.c.member_id == s.relationships.c.peer_id)
+                & (s.relationships.c.direction == 'downstream'))
+            .where(s.storage_members.c.member_id.in_(batch)))).mappings().all()
+        native_ids = {row['member_id'] for row in native}
+        for row in native:
+            local = row['member_kind'] == 'MasterLocal' and row['member_id'] == node_state.node['node_id']
+            endpoint = node_state.node.get('endpoint') if local else row['peer_endpoint'] if (
+                row['member_kind'] == 'Follower' and row['transport'] in {'Direct', 'Relay'}) else None
+            addresses[row['member_id']] = (_storage_address(endpoint), local)
+        external = (await conn.execute(select(s3_schema.members.c.member_id,
+            s3_schema.members.c.location_json).where(s3_schema.members.c.member_id.in_(batch),
+                s3_schema.members.c.master_id == node_state.node['node_id']))).mappings()
+        for row in external:
+            address = None
+            if row['member_id'] not in native_ids:
+                try:
+                    address = Location(**json.loads(row['location_json'])).url('')
+                except (p.ProtocolError, ValueError, TypeError):
+                    pass
+            addresses[row['member_id']] = (address, False)
+    return addresses
+
+
 async def _tree_storage_modes(items: list[dict]) -> list[dict]:
     files = [item for item in items if item['kind'] == 'file']
+    if not files:
+        return items
     identifiers = [item['media_id'] for item in files]
+    owners = sorted({item['storage_member_id'] for item in files})
     from app.services import s3_schema
     async with node_state.database.connect() as conn:
+        addresses = await _tree_storage_addresses(conn, owners)
         descriptors = await media_crypto.encryption_for_ids(conn, identifiers)
         for offset in range(0, len(identifiers), 500):
             rows = (await conn.execute(select(s3_schema.objects.c.media_id,
@@ -338,6 +393,7 @@ async def _tree_storage_modes(items: list[dict]) -> list[dict]:
                     raise media_crypto.MetadataError('S3 encryption descriptor missing or inconsistent')
     for item in files:
         item['encrypted'] = item['media_id'] in descriptors
+        item['storage_address'], item['storage_address_local'] = addresses.get(item['storage_member_id'], (None, False))
     return items
 
 
@@ -393,7 +449,7 @@ async def _global_tree(path: str, query: str | None = None) -> dict:
 async def admin_tree(request: Request, path: str = "", session_hash: str = Depends(require_session)):
     if node_state.node["role"] == "Master" and path and path.split("/", 1)[0] in {"music", "vido"}:
         return await _global_tree(path)
-    return await legacy_admin.admin_tree(request, path, session_hash)
+    return _local_tree_storage_addresses(await legacy_admin.admin_tree(request, path, session_hash))
 
 
 @router.get("/tree/search")
@@ -401,7 +457,7 @@ async def admin_tree_search(request: Request, q: str, path: str = "",
                             session_hash: str = Depends(require_session)):
     if node_state.node["role"] == "Master" and path.split("/", 1)[0] in {"music", "vido"}:
         return await _global_tree(path, q)
-    return await legacy_admin.admin_tree_search(request, q, path, session_hash)
+    return _local_tree_storage_addresses(await legacy_admin.admin_tree_search(request, q, path, session_hash))
 
 
 @router.get("/storage-pool")

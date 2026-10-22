@@ -339,4 +339,5 @@ assert(adminCss.includes('.filename-toggle'));
 assert(directoryAdminCss.includes('.priority-directory-row'));
 assert(directoryAdminCss.includes('.priority-directory-control'));
 
+await import('./admin_media_address_smoke.mjs');
 console.log('admin-ui-smoke-ok');

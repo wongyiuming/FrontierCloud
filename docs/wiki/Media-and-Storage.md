@@ -103,6 +103,13 @@ Master Local does not require a downstream relationship row. Follower Storage me
 
 Playback and download resolve the current placement and use Local, Direct, or Relay transport transparently.
 
+Admin media rows show file size, owner address, encryption state and site type,
+in that order. The address comes from the stored owner relationship; an offline
+node can still show its configured address. For S3 it is the unsigned bucket
+endpoint, without credentials or a read grant. Long addresses are shortened on
+the row and remain available in the tooltip. This observation does not change
+ownership or fetch media bytes.
+
 ## 5. Admin upload site types
 
 Admin does not ask the user to pick a concrete Storage Follower. The site selector starts empty and the operator explicitly chooses:

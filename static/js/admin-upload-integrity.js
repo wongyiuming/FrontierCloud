@@ -28,6 +28,7 @@ function ensureUploadSiteTypeSelector() {
 const uploadSiteType = ensureUploadSiteTypeSelector();
 const mediaSiteTypes = new Map();
 const mediaEncryptionStates = new Map();
+const mediaStorageAddresses = new Map();
 
 function chooseUploadStorageMode(inputId) {
     const input = $(inputId);
@@ -85,6 +86,17 @@ function siteTypeFromItem(item) {
     if (item?.transport === 'Relay') return 'relay';
     if (item?.transport === 'S3') return 's3';
     return 'primary';
+}
+
+function mediaStorageAddress(item) {
+    const value = item.storage_address || (item.storage_address_local === true ? window.location.origin : '');
+    if (typeof value !== 'string' || !value) return '';
+    try {
+        const address = new URL(value);
+        if (!['https:', 'http:'].includes(address.protocol) || address.username || address.password
+            || address.search || address.hash) return '';
+        return address.origin + address.pathname.replace(/\/$/, '');
+    } catch (_) { return ''; }
 }
 
 function readyMember(member) {
@@ -160,8 +172,12 @@ api = async function apiWithPlacementObservation(url, options = {}) {
     if (String(url).startsWith('/api/v1/media/admin/tree') && Array.isArray(data?.items)) {
         mediaSiteTypes.clear();
         mediaEncryptionStates.clear();
+        mediaStorageAddresses.clear();
         for (const item of data.items) {
-            if (item.kind === 'file') mediaEncryptionStates.set(item.path, Boolean(item.encryption || item.encrypted));
+            if (item.kind === 'file') {
+                mediaEncryptionStates.set(item.path, Boolean(item.encryption || item.encrypted));
+                mediaStorageAddresses.set(item.path, mediaStorageAddress(item));
+            }
             const root = String(item.path || '').split('/', 1)[0];
             if (item.kind === 'file' && (root === 'music' || root === 'vido')) {
                 mediaSiteTypes.set(item.path, siteTypeFromItem(item));
@@ -175,6 +191,16 @@ function decorateMediaSiteBadges() {
     for (const row of document.querySelectorAll('.tree-row[data-path]')) {
         row.querySelector('.media-site-badge')?.remove();
         row.querySelector('.media-encryption-badge')?.remove();
+        row.querySelector('.media-node-address')?.remove();
+        if (mediaStorageAddresses.has(row.dataset.path)) {
+            const address = mediaStorageAddresses.get(row.dataset.path);
+            const nodeAddress = document.createElement('small');
+            nodeAddress.className = 'media-node-address';
+            nodeAddress.textContent = address ? address.slice(address.indexOf('://') + 3) : '地址不可用';
+            nodeAddress.title = address || '节点地址不可用';
+            nodeAddress.setAttribute('aria-label', `节点地址：${address || '不可用'}`);
+            row.append(nodeAddress);
+        }
         if (mediaEncryptionStates.has(row.dataset.path)) {
             const encrypted = mediaEncryptionStates.get(row.dataset.path);
             const encryptionBadge = document.createElement('span');
