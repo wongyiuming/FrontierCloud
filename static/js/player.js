@@ -1360,7 +1360,7 @@ function observePlaylistMetadata(list) {
                     void paintPlayerThumbnail(media, entry.target.querySelector?.('img'));
                 } else visibleArtworkTracks.delete(media);
             }
-            if ((!media?.encryption && media?.browser_metadata !== true)
+            if ((!media?.encryption && media?.browser_metadata !== true && media?.native_metadata !== true)
                 || !/\.mp3$/i.test(media.media_path || media.path || '')) continue;
             if (entry.isIntersecting) visibleMetadataTracks.add(media);
             else visibleMetadataTracks.delete(media);
@@ -1379,8 +1379,25 @@ function mediaIdentity(item) {
     return item?.resource_id || item?.media_id || item?.media_path || '';
 }
 
+function reuseNativeAlbumCover(media) {
+    if (media?.native_metadata !== true || media.encryption || media.encrypted || !media.album) return;
+    const parent = path => String(path || '').slice(0, String(path || '').lastIndexOf('/'));
+    const directory = parent(media.media_path);
+    const siblings = currentMediaList.filter(item => item.native_metadata === true && !item.encryption && !item.encrypted
+        && item.album === media.album && parent(item.media_path) === directory);
+    const cover = siblings.find(item => String(item.cover || '').startsWith('/api/v1/media/cover?'))?.cover;
+    if (!cover) return;
+    for (const item of siblings) {
+        if (!item.cover || item.cover === '/favicon.ico') {
+            item.cover = cover;
+            updateMetadataRow(item);
+            if (currentMediaList[currentIndex] === item) updateMediaSession(item);
+        }
+    }
+}
+
 function loadSelectedMetadata(media, priority = true) {
-    if ((!media?.encryption && media?.browser_metadata !== true)
+    if ((!media?.encryption && media?.browser_metadata !== true && media?.native_metadata !== true)
         || !window.FrontierMusicMetadata) return Promise.resolve(true);
     if (metadataTracks.has(media)) return metadataPromises.get(media) || Promise.resolve(true);
     if (!playerArtworkReady()) return Promise.resolve(null);
@@ -1403,6 +1420,7 @@ function loadSelectedMetadata(media, priority = true) {
         if (!tags || signal.aborted) { metadataTracks.delete(media); return null; }
         for (const field of ['title', 'artist', 'album', 'cover']) if (tags[field]) media[field] = tags[field];
         if (!currentMediaList.includes(media)) return true;
+        reuseNativeAlbumCover(media);
         updateMetadataRow(media);
         if (currentMediaList[currentIndex] === media) {
             if (art) art.title = middleEllipsis(media.title, 54);

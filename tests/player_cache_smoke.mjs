@@ -168,14 +168,15 @@ for (const failure of ['network', 'status', 'truncated']) {
     assert.equal(p.run('art.notice.show'), '媒体暂不可用，请稍后重试');
 }
 
-{
+for (const native of [false, true]) {
     const p = playerContext(async () => new Response('unused'));
     const scheduled = [];
+    p.context.native = native;
     p.context.window.FrontierMusicMetadata = {metadata(entry) { scheduled.push(entry); return Promise.resolve({}); }};
     p.context.window.FrontierMediaCrypto = {prepareCatalog: async () => {}, resetFault() {}};
-    p.run(`currentMediaList = Array.from({length: 500}, (_, i) => ({media_id: String(i), type: 'audio', url: '/track-' + i, cover: '', title: String(i), encryption: {version: 1}}));
+    p.run(`currentMediaList = Array.from({length: 500}, (_, i) => ({media_id: String(i), media_path: 'music/'+i+'.mp3', type: 'audio', url: '/track-' + i, cover: '', title: String(i), encryption: native ? undefined : {version: 1}, native_metadata: native}));
         cryptoPreparedCatalogs.add(currentMediaList); applyMediaCatalog(currentMediaList);`);
-    assert.equal(scheduled.length, 1, 'opening a large encrypted album reads only the selected track');
+    assert.equal(scheduled.length, 1, 'opening a large encrypted or native album reads only the selected track');
     assert.equal(scheduled[0].media_id, '0');
     p.run('selectMedia(400)');
     assert.equal(scheduled.length, 2, 'selecting a distant track must not queue intervening tracks');
@@ -183,16 +184,48 @@ for (const failure of ['network', 'status', 'truncated']) {
     p.run('selectMedia(0)');
     assert.equal(scheduled.length, 2, 'already requested metadata is reused');
 }
-{
+for (const flag of ['browser_metadata', 'native_metadata']) {
     const p = playerContext(async () => new Response('unused'));
+    p.context.metadataFlag = flag;
     let reads = 0;
     p.context.window.FrontierMusicMetadata = {metadata() {
         reads += 1; return Promise.resolve({title: 'S3 original title'});
     }};
-    p.run('currentMediaList[0].browser_metadata=true; loadSelectedMetadata(currentMediaList[0]);');
+    p.run('currentMediaList[0][metadataFlag]=true; loadSelectedMetadata(currentMediaList[0]);');
     await flush();
-    assert.equal(reads, 1, 'plain S3 tracks require browser metadata without a crypto descriptor');
+    assert.equal(reads, 1, 'plain S3 and native tracks load optional metadata without a crypto descriptor');
     assert.equal(p.run('currentMediaList[0].title'), 'S3 original title');
+}
+{
+    const p = playerContext(async () => new Response('unused'));
+    p.run(`currentMediaList=Array.from({length:6},(_,i)=>({media_id:String(i),media_path:'music/album/'+i+'.mp3',
+        type:'audio',native_metadata:true,title:String(i),album:'Same album',cover:'/favicon.ico'}));
+        currentMediaList[2].cover='/api/v1/media/cover?own-picture';currentMediaList[3].media_path='music/other/3.mp3';
+        currentMediaList[4].encryption={version:1};currentMediaList[5].native_metadata=false;currentMediaList[5].browser_metadata=true;`);
+    p.context.window.FrontierMusicMetadata = {metadata(entry) { return Promise.resolve(entry.media_id === '0'
+        ? {album: 'Same album', cover: '/api/v1/media/cover?original-picture'} : {album: 'Same album'}); }};
+    await p.run('loadSelectedMetadata(currentMediaList[1])');
+    assert.equal(p.run('currentMediaList[1].cover'), '/api/v1/media/cover?own-picture', 'a known original can fill an absent native picture');
+    p.run("currentMediaList[1].cover='/favicon.ico'");
+    await p.run('loadSelectedMetadata(currentMediaList[0])');
+    assert.equal(p.run('currentMediaList[1].cover'), '/api/v1/media/cover?original-picture', 'late picture discovery also updates an already loaded sibling');
+    assert.equal(p.run('currentMediaList[2].cover'), '/api/v1/media/cover?own-picture', 'own pictures are never replaced');
+    for (const index of [3, 4, 5]) assert.equal(p.run(`currentMediaList[${index}].cover`), '/favicon.ico', 'no cross-directory, encrypted or S3 fallback');
+}
+{
+    const p = playerContext(async () => new Response('unused'));
+    let reads = 0;
+    p.context.PLAYER_KIND = 'audio';
+    p.context.window.requestIdleCallback = callback => setImmediate(() => callback({timeRemaining: () => 20}));
+    p.context.window.cancelIdleCallback = clearImmediate;
+    p.context.window.FrontierMusicMetadata = {metadata() { reads++; return Promise.resolve({title: 'Idle title'}); }};
+    p.run('currentMediaList[0].native_metadata=true;art.video={paused:false,seeking:false,readyState:3,currentTime:5,duration:100,buffered:{length:1,start:()=>0,end:()=>10}}');
+    assert.equal(await p.run('loadSelectedMetadata(currentMediaList[0])'), null);
+    assert.equal(reads, 0, 'native plaintext metadata cannot consume a low playback buffer');
+    p.run('art.video.buffered.end=()=>30');
+    assert.equal(await p.run('loadSelectedMetadata(currentMediaList[0])'), true);
+    assert.equal(reads, 1, 'native metadata starts only after idle and buffer admission');
+    assert.equal(p.run('currentMediaList[0].title'), 'Idle title');
 }
 {
     const p = playerContext(async () => new Response('unused'));
@@ -208,9 +241,10 @@ for (const failure of ['network', 'status', 'truncated']) {
     assert.equal(attempts, 2, 'a failed selected-track read must be retryable');
     assert.equal(p.run('currentMediaList[0].title'), 'Recovered');
 }
-{
+for (const flag of ['browser_metadata', 'native_metadata']) {
     const p = playerContext(async () => new Response('unused'));
     let observer;
+    p.context.metadataFlag = flag;
     const scheduled = [], releases = [];
     const rows = Array.from({length: 500}, (_, index) => ({dataset: {index: String(index)}}));
     p.context.window.IntersectionObserver = class {
@@ -224,7 +258,8 @@ for (const failure of ['network', 'status', 'truncated']) {
     }};
     p.elements.set('mediaList', {querySelectorAll: () => rows});
     p.run(`currentMediaList = Array.from({length:500},(_,i)=>({media_id:String(i),media_path:'music/'+i+'.mp3',encryption:{version:1}}));
-        currentMediaList[499].encryption=undefined;currentMediaList[499].browser_metadata=true;renderPlaylist()`);
+        currentMediaList[499].encryption=undefined;currentMediaList[499][metadataFlag]=true;
+        currentMediaList[400].encryption=undefined;currentMediaList[400].native_metadata=true;renderPlaylist()`);
     observer(rows.slice(0, 3).map(target => ({target, isIntersecting: true})));
     await new Promise(resolve => setTimeout(resolve, 10));
     assert.deepEqual(scheduled, [{id: '0', priority: false}]);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
-const context = {window: {addEventListener() {}}, TextDecoder, Uint8Array, DataView, Blob, URL, crypto: webcrypto, AbortController, setTimeout, clearTimeout};
+const context = {window: {addEventListener() {}}, TextDecoder, Uint8Array, DataView, Blob, URL, URLSearchParams, crypto: webcrypto, AbortController, setTimeout, clearTimeout};
 vm.runInNewContext(fs.readFileSync(new URL('../static/js/music-metadata.js', import.meta.url), 'utf8'), context);
 const api = context.window.FrontierMusicMetadata;
 const size = n => [n >> 21 & 127, n >> 14 & 127, n >> 7 & 127, n & 127];
@@ -91,6 +91,49 @@ assert.equal(Object.keys(await api.metadata({media_path: 'music/plain.mp3'})).le
     assert.equal(requests.length,2,'invalid sources never initiate requests');
     context.window.FrontierMediaCrypto = {prepareCatalog:async entries=>{entries[0].url='/authorized';}};
     context.window.FrontierCryptoCommon = {validate(){},boundedBytes:async r=>r.bytes};
+}
+{
+    context.window.location = {href: 'https://media.test/album', origin: 'https://media.test'};
+    context.setTimeout = setTimeout; context.clearTimeout = clearTimeout;
+    const path = 'music/native/one.mp3', requests = [], identity = 'b'.repeat(64);
+    let value = {title: 'Native title', artist: 'Native artist', album: 'Original',
+        cover: '/api/v1/media/cover?' + new URLSearchParams({file_path: path, resource_id: identity})};
+    context.window.FrontierMediaCrypto = {prepareCatalog: async () => {throw new Error('native plaintext must not request a key');}};
+    context.window.FrontierCryptoCommon = {boundedBytes: async (response, limit) => {
+        assert.equal(limit, 128 * 1024); return response.bytes;
+    }};
+    context.fetch = async (url, options) => {
+        requests.push(url); assert.equal(options.priority, 'low'); assert.equal(options.cache, 'no-store');
+        assert.equal(options.credentials, 'same-origin'); assert.equal(options.headers, undefined);
+        return {ok: true, bytes: new TextEncoder().encode(JSON.stringify(value))};
+    };
+    const entry = {media_path: path, resource_id: identity, native_metadata: true};
+    const tags = await api.metadata(entry);
+    assert.equal(tags.title, 'Native title'); assert.equal(tags.cover, value.cover);
+    assert.equal(requests.length, 1); assert.equal(new URL(requests[0], context.window.location.href).pathname, '/api/v1/media/metadata');
+    await api.metadata(entry); assert.equal(requests.length, 1, 'selected and visible native metadata share a bounded cache');
+    await api.metadata({...entry}); assert.equal(requests.length, 2, 'a fresh native catalog reauthorizes instead of reusing a source without a version stamp');
+    value = {title: 'Local title', cover: '/api/v1/media/cover?' + new URLSearchParams({file_path: path, resource_id: ''})};
+    const local = await api.metadata({media_path: path, media_id: 'local-stable-id', native_metadata: true});
+    assert.equal(local.title, 'Local title');
+    assert.equal(new URL(requests.at(-1), context.window.location.href).searchParams.get('resource_id'), '', 'Standalone must not invent a global resource ID');
+    value = {cover: 'https://untrusted.test/secret'};
+    await assert.rejects(api.metadata({...entry, media_path: 'music/native/bad.mp3'}), /来源无效/);
+    value = {title: 'x'.repeat(8193)};
+    await assert.rejects(api.metadata({...entry, media_path: 'music/native/large.mp3'}), /标签响应无效/);
+    const controller = new AbortController();
+    context.fetch = async (_url, options) => new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(new Error('native cancelled')), {once: true});
+    });
+    const cancelledEntry = {...entry, media_path: 'music/native/cancel.mp3'};
+    const pending = api.metadata(cancelledEntry, {signal: controller.signal});
+    await new Promise(setImmediate); controller.abort();
+    await assert.rejects(pending, /native cancelled/);
+    value = {title: 'Retry title'};
+    context.fetch = async () => ({ok: true, bytes: new TextEncoder().encode(JSON.stringify(value))});
+    assert.equal((await api.metadata(cancelledEntry)).title, 'Retry title');
+    context.window.FrontierMediaCrypto = {prepareCatalog: async entries => {entries[0].url = '/authorized';}};
+    context.window.FrontierCryptoCommon = {validate() {}, boundedBytes: async response => response.bytes};
 }
 {
     context.window.location = {href: 'https://media.test/album', origin: 'https://media.test'};

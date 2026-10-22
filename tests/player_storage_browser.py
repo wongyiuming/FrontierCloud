@@ -98,9 +98,11 @@ def exercise(browser,master,root,report,check):
                 page.evaluate('() => {art.currentTime=art.duration-2;return art.play();}')
                 fleet.wait_page(page,f'currentIndex==={next_index} && art.currentTime>0.1 && !art.video.paused && !art.video.error',timeout=45000)
                 check(name+'_real_tail_automatic_next',True)
+                fleet.wait_page(page,"currentMediaList.every(item => ['Long original','Next original'].includes(item.title) && item.cover && item.cover !== '/favicon.ico')",timeout=30000)
+                check(name+'_selected_and_visible_metadata_arrive_without_bulk_forcing',True)
                 tags=page.evaluate("""async () => {
                     const rows=await Promise.all(currentMediaList.map(async item=>{
-                        const value=item.encryption ? await FrontierMusicMetadata.metadata(item) : item;
+                        const value=item;
                         let picture;
                         if(item.encryption){
                             const url=FrontierMediaCrypto.virtualUrl(item.media_path,false,item.encryption.file_id);

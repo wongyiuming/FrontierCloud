@@ -135,6 +135,17 @@ class MusicMetadataRuntimeTests(unittest.IsolatedAsyncioTestCase):
         with patch('app.middleware.native_storage._open_beneath', side_effect=AssertionError('ciphertext opened')):
             self.assertEqual(await m.music_metadata(self.obj['path']), m.Tags())
 
+    async def test_plain_s3_tags_remain_browser_only_without_a_native_or_object_read(self):
+        from app.services.federation import routing
+        self.obj['resource_id'] = 'd' * 64
+        with patch.object(state, 'node', {'role': 'Master'}), \
+                patch.object(routing, 'resolve', AsyncMock(return_value=({'transport': 'S3'}, None))), \
+                patch.object(m, '_remote_tags', AsyncMock(side_effect=AssertionError('S3 bytes relayed'))) as remote, \
+                patch('app.middleware.native_storage._open_beneath', side_effect=AssertionError('S3 opened locally')):
+            self.assertEqual(await m.music_metadata(self.obj['path'], self.obj['resource_id']), m.Tags())
+        self.authorize.assert_awaited_once_with(self.obj['path'], self.obj['resource_id'])
+        remote.assert_not_awaited()
+
     async def test_cancelled_reads_join_before_releasing_the_mutation_lease(self):
         entered, release = threading.Event(), threading.Event()
         writer_entered = asyncio.Event()

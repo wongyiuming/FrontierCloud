@@ -1,4 +1,5 @@
 """Fresh resource intents survive lost replies without claiming an upgrade."""
+from contextlib import contextmanager
 from pathlib import Path
 import sys
 import unittest
@@ -18,12 +19,24 @@ class ResourceTests(unittest.TestCase):
         fixture=fixtures.InstallPackageTests('runTest');fixture.setUp();self.fixture=fixture
         self.addCleanup(fixture.doCleanups)
         self.package=fixture.prepare()
+        # These unit tests model Docker/resources, not a root-owned host lock.
+        # Keep the shared fixture out of /var/lock on non-root CI workers.
+        self.project_lock_held=False;self.project_lock_calls=[]
+        @contextmanager
+        def project_lock(name):
+            self.assertFalse(self.project_lock_held)
+            self.project_lock_calls.append(name);self.project_lock_held=True
+            try:yield
+            finally:self.project_lock_held=False
+        lock_patch=patch.object(backup,'operation_lock',project_lock)
+        lock_patch.start();self.addCleanup(lock_patch.stop)
         (fixture.root/'docker').mkdir()
         parent=fixture.Docker;outer=self
         self.lost_volume_reply=False
         class Docker(parent):
             def run(self,arguments, *, json_output=False):
                 if arguments[:3]==['docker','volume','create']:
+                    outer.assertTrue(outer.project_lock_held)
                     name=arguments[-1];labels={}
                     for index,argument in enumerate(arguments):
                         if argument=='--label':
@@ -48,6 +61,11 @@ class ResourceTests(unittest.TestCase):
 
     def provision(self,operation):
         with patch.object(mapping,'ComposeDocker',self.Docker):return operation.resources()
+
+    def test_initial_index_and_each_resource_resume_enter_the_same_project_lock(self):
+        operation=self.begin();self.provision(operation);self.provision(self.load())
+        self.assertEqual(self.project_lock_calls,[self.package.receipt['project']]*3)
+        self.assertFalse(self.project_lock_held)
 
     def test_explicit_install_reference_and_resources_never_start_services_or_forge_old_state(self):
         operation=self.begin();result=self.provision(operation)

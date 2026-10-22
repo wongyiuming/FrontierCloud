@@ -14,7 +14,6 @@ import weakref
 
 from fastapi import HTTPException
 import httpx
-from sqlalchemy.exc import SQLAlchemyError
 
 
 TAG_LIMIT = 8 * 1024 * 1024
@@ -313,28 +312,12 @@ async def music_metadata(path: str, identifier: str = '') -> Tags:
             os.close(descriptor)
 
 
-async def decorate_tracks(tracks: list[dict]) -> list[dict]:
-    from urllib.parse import urlencode
-    from app.services.federation import protocol
-    from app.services.media_crypto import MetadataError
-    covers = {}
+def lazy_tracks(tracks: list[dict]) -> list[dict]:
+    """Catalog construction never reads optional tags or attachment bytes."""
     for track in tracks:
-        if (track.get('type') != 'audio' or not isinstance(track.get('media_path'), str)
-                or track.get('encryption') or track.get('encrypted')):
-            continue
-        try:
-            tags = await music_metadata(track['media_path'], track.get('resource_id', ''))
-        except (HTTPException, MetadataError, protocol.ProtocolError, OSError, ValueError, httpx.HTTPError, SQLAlchemyError):
-            continue
-        if tags.title:
-            track['title'] = tags.title
-        if tags.artist:
-            track['artist'] = tags.artist
-        track['album'] = tags.album
-        if tags.picture:
-            track['cover'] = '/api/v1/media/cover?' + urlencode({'file_path': track['media_path'], 'resource_id': track.get('resource_id', '')})
-            covers[Path(track['media_path']).parent.as_posix(), tags.album] = track['cover']
-    for track in tracks:
-        if not track.get('encryption') and not track.get('encrypted') and track.get('cover') == '/favicon.ico' and track.get('album'):
-            track['cover'] = covers.get((Path(track['media_path']).parent.as_posix(), track['album']), track['cover'])
+        if (track.get('type') == 'audio' and isinstance(track.get('media_path'), str)
+                and track['media_path'].lower().endswith('.mp3')
+                and not track.get('encryption') and not track.get('encrypted')
+                and track.get('browser_metadata') is not True):
+            track['native_metadata'] = True
     return tracks

@@ -30,10 +30,21 @@ class StartTests(unittest.TestCase):
         self.Docker=Docker
         self.identity={'version':1,'phase':'original_identity_verified','node_id':'b'*32,'generation':7,
             'role':'Standalone','endpoint':'','public_key_sha256':'c'*64,'keys':{'node-vault':'d'*64}}
-        self.calls=[]
+        self.calls=[];self.identity_owners=[]
         self.patchers=[patch.object(mapping,'ComposeDocker',Docker),patch.object(mapping.Deployment,'discover',self.discover),
-            patch.object(probes,'run',self.probe)]
+            patch.object(probes,'run',self.probe),
+            # Model this one root-only host operation, not the shared os module.
+            patch.object(startup,'os',SimpleNamespace(chown=self.chown_identity))]
         for item in self.patchers:item.start();self.addCleanup(item.stop)
+
+    def chown_identity(self,path,uid,gid, *, follow_symlinks):
+        self.assertEqual(path.parent,self.package.directory)
+        self.assertRegex(path.name,r'^install-identity-[a-f0-9]{32}\.json$')
+        self.assertFalse(path.is_symlink());self.assertTrue(path.is_file())
+        self.assertEqual(path.stat().st_mode&0o777,0o600)
+        self.assertEqual(json.loads(path.read_text()),self.identity)
+        self.assertEqual((uid,gid,follow_symlinks),(10001,10001,False))
+        self.identity_owners.append((path,uid,gid,follow_symlinks))
 
     def begin(self):
         return startup.Installation.begin(self.package,verify=lambda _:self.fixture.receipt,
@@ -47,6 +58,7 @@ class StartTests(unittest.TestCase):
     def probe(self,package,command,**values):
         self.calls.append(command)
         if command=='identity-original':return copy.deepcopy(self.identity)
+        self.assertEqual(self.identity_owners,[(values['baseline'],10001,10001,False)])
         return {'version':1,'phase':'endpoint_open','node_id':self.identity['node_id'],'generation':7,
             'baseline_sha256':values['baseline_sha'],'business_opened':True,'readiness_status':200,
             'tls_enabled':False,'certificate_verified':False,'signed_identity_verified':False}
@@ -59,6 +71,7 @@ class StartTests(unittest.TestCase):
     def test_start_then_read_current_and_repeat_without_restarting_or_probing(self):
         operation=self.begin();result=operation.start(execute=self.execute)
         self.assertTrue(result['installation_complete']);self.assertEqual(operation.state['phase'],'ready')
+        self.assertEqual(self.identity_owners,[(Path(operation.state['identity_file']),10001,10001,False)])
         current,receipt=registry.read(self.fixture.directory,self.package.receipt['project'])
         self.assertEqual((current['origin'],receipt['phase']),('source_install','installed_package'))
         calls=list(self.calls)

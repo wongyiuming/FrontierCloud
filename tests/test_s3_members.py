@@ -1,5 +1,6 @@
 """Actual SQLite configuration, encrypted secrets and retained S3 state."""
 import asyncio
+import hashlib
 import json
 import tempfile
 import unittest
@@ -15,8 +16,47 @@ from app.core import db, schema_migrations
 from app.core.sqlite_compat import create_sqlite_engine
 from app.services import s3_schema as s
 from app.services.federation.state import State
-from app.services.s3_members import Conflict, Members
+from app.services.s3_members import Conflict, Members, namespace
 from app.services.s3_signing import Credentials, Location, S3Error
+
+
+class S3NamespaceTests(unittest.TestCase):
+    def test_aws_service_aliases_keep_the_same_partition_bucket_and_prefix(self):
+        endpoints = [
+            ('https://s3.amazonaws.com','us-east-1','aws'),
+            ('https://s3-us-west-2.amazonaws.com','us-west-2','aws'),
+            ('https://s3.dualstack.us-east-1.amazonaws.com','us-east-1','aws'),
+            ('https://s3-fips.us-east-1.amazonaws.com','us-east-1','aws'),
+            ('https://s3-fips.dualstack.us-west-2.amazonaws.com','us-west-2','aws'),
+            ('https://s3-accelerate.amazonaws.com','us-east-1','aws'),
+            ('https://s3-accelerate.dualstack.amazonaws.com','us-east-1','aws'),
+            ('https://s3.dualstack.us-gov-west-1.amazonaws.com','us-gov-west-1','aws-us-gov'),
+            ('https://s3-fips.us-gov-west-1.amazonaws.com','us-gov-west-1','aws-us-gov'),
+            ('https://s3-fips.dualstack.us-gov-east-1.amazonaws.com','us-gov-east-1','aws-us-gov'),
+            ('https://s3-fips-us-gov-west-1.amazonaws.com','us-gov-west-1','aws-us-gov'),
+            ('https://s3.dualstack.cn-north-1.amazonaws.com.cn','cn-north-1','aws-cn'),
+            ('https://s3.us-east-1.amazonaws.com','us-gov-west-1','aws'),
+            ('https://s3.amazonaws.com','us-gov-west-1','aws'),
+            ('https://s3.us-gov-west-1.amazonaws.com','us-east-1','aws-us-gov'),
+        ]
+        for endpoint,region,partition in endpoints:
+            with self.subTest(endpoint=endpoint,region=region):
+                location = Location('private-bucket',region,endpoint=endpoint,style='virtual',prefix='frontier')
+                self.assertEqual(namespace(location),(partition,'private-bucket','frontier'))
+
+    def test_custom_origins_and_aws_lookalikes_are_not_aws_namespaces(self):
+        for endpoint in ('https://s3.example.test',
+                'https://s3.dualstack.us-east-1.amazonaws.com.example.test',
+                'https://s3-fips.us-east-1.example.test',
+                'https://s3.dualstack.us-east-1.amazonaws.com:9443',
+                'https://s3-accesspoint.us-east-1.amazonaws.com',
+                'https://s3.dualstack.us-east-1.example.test'):
+            with self.subTest(endpoint=endpoint):
+                expected = (endpoint,'private-bucket','frontier')
+                self.assertEqual(namespace(Location('private-bucket','us-east-1',endpoint=endpoint,
+                    style='path',prefix='frontier')),expected)
+                self.assertEqual(namespace(Location('private-bucket','us-gov-west-1',endpoint=endpoint,
+                    style='virtual',prefix='frontier')),expected)
 
 
 class S3MembersTests(unittest.IsolatedAsyncioTestCase):
@@ -94,11 +134,59 @@ class S3MembersTests(unittest.IsolatedAsyncioTestCase):
     async def test_namespace_prefix_overlap_and_aws_endpoint_style_alias_are_not_two_members(self):
         for location in (self.location,Location('private-bucket','us-west-2',prefix='frontier/child',style='path'),
                          Location('private-bucket','us-east-1',endpoint='https://s3.amazonaws.com',prefix='frontier'),
-                         Location('private-bucket','us-east-1',prefix='')):
+                         Location('private-bucket','us-east-1',prefix=''),
+                         *[Location('private-bucket','us-east-1',endpoint=endpoint,style='virtual',prefix='frontier/child')
+                           for endpoint in ('https://s3.dualstack.us-east-1.amazonaws.com',
+                               'https://s3-fips.us-east-1.amazonaws.com','https://s3-fips.dualstack.us-east-1.amazonaws.com',
+                               'https://s3-accelerate.amazonaws.com','https://s3-accelerate.dualstack.amazonaws.com')],
+                         Location('private-bucket','us-gov-west-1',endpoint='https://s3.us-east-1.amazonaws.com',prefix='frontier')):
             with self.assertRaisesRegex(Conflict,'namespace_conflict'):
                 await self.members.add('Other',location,self.credentials,1024,'admin')
         await self.members.add('Sibling',Location('private-bucket','us-east-1',prefix='frontiers'),self.credentials,1024,'admin')
         self.assertEqual(len(await self.members.list()),2)
+
+    async def test_preexisting_alias_digest_cannot_bypass_standard_namespace_admission(self):
+        location = Location('alias-bucket','us-west-2',endpoint='https://s3-fips.dualstack.us-west-2.amazonaws.com',
+                            style='virtual',prefix='owned')
+        member = await self.members.add('Existing alias',location,self.credentials,1024,'admin')
+        # Simulate the persisted admission digest from before alias recognition.
+        legacy = json.dumps((location.endpoint,location.bucket,location.prefix),separators=(',',':'))
+        async with self.database.begin() as conn:
+            await conn.execute(update(s.members).where(s.members.c.member_id==member).values(
+                namespace_sha256=hashlib.sha256(legacy.encode()).hexdigest()))
+            before = list((await conn.execute(select(s.members).order_by(s.members.c.member_id))).tuples())
+        for prefix in ('','owned','owned/child'):
+            with self.assertRaisesRegex(Conflict,'namespace_conflict'):
+                await self.members.add('Conflicting',Location('alias-bucket','us-east-1',prefix=prefix),self.credentials,1024,'admin')
+        async with self.database.connect() as conn:
+            self.assertEqual(list((await conn.execute(select(s.members).order_by(s.members.c.member_id))).tuples()),before)
+
+    async def test_partitions_and_custom_stores_keep_distinct_bucket_owners(self):
+        for region in ('us-gov-west-1','cn-north-1'):
+            await self.members.add('Separate partition',Location('private-bucket',region,prefix='frontier'),self.credentials,1024,'admin')
+            suffix = 'amazonaws.com.cn' if region.startswith('cn-') else 'amazonaws.com'
+            with self.assertRaisesRegex(Conflict,'namespace_conflict'):
+                await self.members.add('Same partition',Location('private-bucket',region,
+                    endpoint=f'https://s3.dualstack.{region}.{suffix}',prefix='frontier/child'),self.credentials,1024,'admin')
+        endpoint = 'https://s3.dualstack.us-east-1.amazonaws.com.example.test'
+        await self.members.add('Compatible store',Location('private-bucket','us-east-1',endpoint=endpoint,
+            prefix='frontier'),self.credentials,1024,'admin')
+        with self.assertRaisesRegex(Conflict,'namespace_conflict'):
+            await self.members.add('Same compatible store',Location('private-bucket','us-east-1',endpoint=endpoint,
+                style='virtual',prefix='frontier/child'),self.credentials,1024,'admin')
+        self.assertEqual(len(await self.members.list()),4)
+
+    async def test_reconfigure_to_overlapping_aws_alias_preserves_existing_configuration(self):
+        other = await self.members.add('Other',Location('other-bucket','us-east-1'),self.credentials,1024,'admin')
+        async with self.database.connect() as conn:
+            before = (await conn.execute(select(s.members).where(s.members.c.member_id==other))).one()
+        for endpoint in ('https://s3.dualstack.us-east-1.amazonaws.com',
+                         'https://s3-fips.dualstack.us-east-1.amazonaws.com'):
+            with self.assertRaisesRegex(Conflict,'namespace_conflict'):
+                await self.members.configure(other,1,name='Other',quota=1024,enabled=False,actor='admin',
+                    location=Location('private-bucket','us-east-1',endpoint=endpoint,style='virtual',prefix='frontier/child'))
+            async with self.database.connect() as conn:
+                self.assertEqual((await conn.execute(select(s.members).where(s.members.c.member_id==other))).one(),before)
 
     async def test_parallel_namespace_registration_has_only_one_winner(self):
         location = Location('parallel-bucket','us-east-1')

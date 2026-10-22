@@ -41,8 +41,15 @@ def namespace(location):
     # AWS bucket names are global inside a partition. Endpoint style, region
     # spelling and path-style access must not admit a second owner of the prefix.
     origin = location.endpoint
-    if re.fullmatch(r'https://s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com(?:\.cn)?',origin):
-        origin = 'aws-cn' if origin.endswith('.cn') else ('aws-us-gov' if location.region.startswith('us-gov-') else 'aws')
+    region = r'[a-z]{2}(?:-[a-z0-9]+){1,4}-[0-9]'
+    aws = re.fullmatch(
+        rf'https://s3(?P<variant>(?:[.-][a-z0-9-]+|(?:-fips)?\.(?:dualstack\.)?{region}|-accelerate\.dualstack)?)'
+        r'\.amazonaws\.com(?P<china>\.cn)?',origin)
+    if aws:
+        # The endpoint selects the partition; a different signing region does
+        # not make another owner of the same bucket safe.
+        origin = 'aws-cn' if aws['china'] else ('aws-us-gov' if re.search(
+            r'(?:[.-])us-gov-[a-z0-9-]+$',aws['variant']) else 'aws')
     return origin,location.bucket,location.prefix
 
 

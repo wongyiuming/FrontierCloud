@@ -399,8 +399,8 @@ async def _player_entries(
         )
     karaoke_identity.attach(media_list)
     if playback_type == 'audio':
-        from app.services.music_tags import decorate_tracks
-        await decorate_tracks(media_list)
+        from app.services.music_tags import lazy_tracks
+        lazy_tracks(media_list)
     return media_list
 
 

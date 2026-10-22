@@ -488,16 +488,51 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
                 await runtime.stop()
             self.assertIsNone(runtime.task)
 
-    async def test_migration_lease_release_failure_does_not_leave_heartbeat_or_transport_running(self):
-        from types import SimpleNamespace
-        runtime=Runtime()
-        stopped=AsyncMock(side_effect=RuntimeError('database unavailable during lease release'))
-        runtime.migrations=SimpleNamespace(stop=stopped)
-        runtime.task=asyncio.create_task(asyncio.Event().wait())
-        with patch('app.services.federation.runtime.transport.close',new=AsyncMock()) as closed:
-            await runtime.stop()
-        self.assertIsNone(runtime.task);self.assertIsNone(runtime.migrations)
-        stopped.assert_awaited_once();closed.assert_awaited_once()
+    async def test_heartbeat_lifecycle_neither_duplicates_nor_stops_the_admin_migration_scheduler(self):
+        from app.api.v1 import admin_migrations
+        from app.services import resource_migration_runtime as migrations
+        from app.services.federation.transport import transport
+        self.assertIs(admin_migrations.runtime,migrations.runtime)
+        await self.store.promote('Master','https://master.example.com','admin',1024**3)
+        application=migrations.Runtime(self.store,transport,fenced=lambda:False)
+        runtime=Runtime();scheduler_seen=asyncio.Event();heartbeat_seen=asyncio.Event()
+        original_tick=application.scheduler.tick;original_cleanup=self.store.cleanup_playback_events
+        async def scheduler_tick():
+            result=await original_tick();scheduler_seen.set();return result
+        async def heartbeat_cleanup():
+            result=await original_cleanup();heartbeat_seen.set();return result
+        with patch('app.services.federation.runtime.state',self.store),\
+                patch('app.services.federation.runtime.settings.TLS_ENABLED',True),\
+                patch('app.services.site_control.hard_fence_active',return_value=False),\
+                patch('app.services.federation.runtime.transport.open'),\
+                patch('app.services.federation.runtime.transport.close',new=AsyncMock()),\
+                patch.object(application.scheduler,'tick',scheduler_tick),\
+                patch.object(self.store,'cleanup_playback_events',heartbeat_cleanup):
+            application.start();scheduler=application.scheduler.task
+            # An actual pending preview also belongs to the process lifecycle.
+            preview=asyncio.create_task(asyncio.Event().wait(),name='unit-migration-preview')
+            application.planner.task=preview
+            try:
+                runtime.start();control=runtime.task;runtime.start()
+                await asyncio.wait_for(asyncio.gather(scheduler_seen.wait(),heartbeat_seen.wait()),2)
+                self.assertIs(runtime.task,control)
+                active=[task for task in asyncio.all_tasks()
+                        if task.get_name()=='resource-migration-scheduler' and not task.done()]
+                self.assertEqual(active,[scheduler])
+                self.assertEqual(application.scheduler.admission.preview_epoch,application.planner.epoch)
+                await runtime.stop()
+                self.assertIsNone(runtime.task);self.assertTrue(control.done())
+                self.assertIs(application.scheduler.task,scheduler);self.assertFalse(scheduler.done())
+                scheduler_seen.clear();application.scheduler.wakeup.set()
+                await asyncio.wait_for(scheduler_seen.wait(),2)
+                self.assertFalse(scheduler.done())
+            finally:
+                try:await application.stop()
+                finally:await runtime.stop()
+            self.assertTrue(application.closed);self.assertIsNone(application.scheduler.task)
+            self.assertTrue(scheduler.done());self.assertTrue(preview.done())
+            self.assertFalse(any(task.get_name()=='resource-migration-scheduler' and not task.done()
+                                 for task in asyncio.all_tasks()))
 
     async def test_fixed_role_cannot_start_with_tls_disabled_or_reset_itself(self):
         await self.store.promote("Master", "https://master.example.com", "admin", 1024 ** 3)

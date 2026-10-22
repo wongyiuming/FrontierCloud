@@ -58,23 +58,17 @@ class Runtime:
         # across followers so a fleet-wide due time cannot multiply database,
         # CPU and disk pressure on the Master.
         self.backup_semaphore = asyncio.Semaphore(1)
-        self.migrations = None
 
     def start(self, *, revocations=False):
+        # The application-owned migration runtime is independent of this loop.
         if state.node["role"] != "Standalone" and not settings.TLS_ENABLED:
             raise p.ProtocolError("固定为 Master/Follower 的节点必须启用有效 HTTPS；请恢复 TLS_ENABLED 后启动，不会自动重置角色")
         if (state.node["role"] != "Standalone" or revocations) and (self.task is None or self.task.done()):
             transport.open()
             self.task = asyncio.create_task(self.run(), name="node-control")
-        if state.node['role']=='Master':
-            if self.migrations is None:
-                from app.services.resource_migration_scheduler import Scheduler
-                self.migrations=Scheduler(state,transport)
-            self.migrations.start()
         self.wakeup.set()
 
     async def stop(self):
-        await self._stop_migrations()
         if self.task:
             self.task.cancel()
             with suppress(asyncio.CancelledError):
@@ -87,15 +81,6 @@ class Runtime:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.backup_tasks.clear()
         await transport.close()
-
-    async def _stop_migrations(self):
-        migrations,self.migrations=self.migrations,None
-        if migrations is not None:
-            try:await migrations.stop()
-            except Exception as exc:
-                # The serial driver is stopped before its short lease release.
-                # A database outage leaves that lease to expire naturally.
-                logger.warning('Migration shutdown lease expiry pending: %s',type(exc).__name__)
 
     async def call(self, relation: dict, path: str, value=None):
         return await transport.request(relation["peer_endpoint"], path,
@@ -305,7 +290,6 @@ class Runtime:
                 except TimeoutError:
                     pass
         finally:
-            await self._stop_migrations()
             await transport.close()
 
 
