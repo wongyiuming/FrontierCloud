@@ -44,6 +44,11 @@ def fixture(version=4):
                   frame(version, names[2], b'\0More'), frame(version, names[3], picture + JPEG))
 
 
+def legacy_fixture():
+    return (b'TAG' + b'Tail title'.ljust(30, b'\0') + b'Tail artist'.ljust(30, b'\0')
+            + b'Tail album'.ljust(30, b'\0') + bytes(35))
+
+
 class MusicTagParsingTests(unittest.TestCase):
     def test_three_versions_preserve_text_and_original_picture(self):
         for version in (2, 3, 4):
@@ -252,6 +257,83 @@ class MusicMetadataRuntimeTests(unittest.IsolatedAsyncioTestCase):
             result = await m._remote_tags(row, relation)
         self.assertEqual(result.picture, JPEG)
         self.assertEqual([r.headers['range'] for r in requests], ['bytes=0-9', f'bytes=10-{len(data)-1}'])
+
+    async def _remote_fixture(self, data, suffix_headers=None):
+        row = {'owner_id': 'b' * 32, 'object_id': 'c' * 64, 'resource_id': 'a' * 64,
+               'payload': {'size': len(data)}}
+        relation = {'credential': 'sealed', 'relationship_id': 'd' * 32,
+                    'peer_endpoint': 'https://storage.4399.com'}
+        credential, requests = p.encode(bytes(32)), []
+        class Stream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield self.value
+        def handler(request):
+            self.assertEqual(request.url.query, b'')
+            self.assertEqual(request.url.path, '/internal/v1/media/' + row['object_id'])
+            token = p.verify_media_token(credential, request.headers['x-media-capability'], int(m.time.time()))
+            self.assertEqual(token['g'], row['resource_id'])
+            start, end = map(int, request.headers['range'].removeprefix('bytes=').split('-'))
+            self.assertTrue(0 <= start <= end < len(data))
+            requests.append((start, end))
+            headers = {'Content-Range': f'bytes {start}-{end}/{len(data)}',
+                       'X-Media-Resource-ID': row['resource_id'], 'X-Media-Owner-ID': row['owner_id'],
+                       'X-Media-Object-ID': row['object_id']}
+            stream = Stream();stream.value = data[start:end+1]
+            if suffix_headers and start == len(data) - 128:
+                headers.update(suffix_headers)
+                class ForbiddenBody(httpx.AsyncByteStream):
+                    async def __aiter__(self):
+                        raise AssertionError('unauthorized suffix body read')
+                        yield b''
+                stream = ForbiddenBody()
+            return httpx.Response(206, headers=headers, stream=stream)
+        original = httpx.AsyncClient
+        def client(**kwargs):
+            self.assertEqual(kwargs['verify'].verify_mode, ssl.CERT_REQUIRED)
+            self.assertFalse(kwargs['trust_env'])
+            self.assertFalse(kwargs['follow_redirects'])
+            return original(transport=httpx.MockTransport(handler), **kwargs)
+        with patch.object(state, 'node', {'node_id': 'e' * 32}), \
+                patch.object(state, 'unseal', return_value=credential), patch.object(m.httpx, 'AsyncClient', client):
+            result = await m._remote_tags(row, relation)
+        return result, requests
+
+    async def test_remote_id3v1_only_and_partial_v2_use_exact_suffix_without_audio_body(self):
+        prefix = tagged(4, frame(4, 'TIT2', b'\x03Modern title'),
+                        frame(4, 'APIC', b'\x03image/jpeg\0\x03\0' + JPEG))
+        for head, title, picture in ((bytes(10), 'Tail title', b''),
+                                     (prefix, 'Modern title', JPEG)):
+            with self.subTest(prefix=bool(picture)):
+                data = head + bytes(2048) + legacy_fixture()
+                result, requests = await self._remote_fixture(data)
+                self.assertEqual((result.title, result.artist, result.album),
+                                 (title, 'Tail artist', 'Tail album'))
+                self.assertEqual(result.picture, picture)
+                self.assertEqual(result.mime, 'image/jpeg' if picture else '')
+                expected = [(0, 9)] + ([(10, len(head) - 1)] if picture else [])
+                self.assertEqual(requests, expected + [(len(data) - 128, len(data) - 1)])
+
+    async def test_remote_malformed_or_oversize_prefix_still_reads_only_suffix(self):
+        for head in (b'ID3\x04\0\0' + safe(m.TAG_LIMIT + 1),
+                     b'ID3\x05\0\0' + safe(50), b'ID3\x04\0\0' + b'\xff' * 4):
+            with self.subTest(header=head):
+                data = head + bytes(256) + legacy_fixture()
+                result, requests = await self._remote_fixture(data)
+                self.assertEqual(result.title, 'Tail title')
+                self.assertEqual(requests, [(0, 9), (len(data) - 128, len(data) - 1)])
+        for size in (9, 127):
+            with self.subTest(size=size):
+                result, requests = await self._remote_fixture(bytes(size))
+                self.assertEqual(result, m.Tags())
+                self.assertEqual(requests, [(0, 9)] if size >= 10 else [])
+
+    async def test_remote_suffix_repeats_identity_range_and_encoding_checks_before_body_read(self):
+        data = bytes(1024) + legacy_fixture()
+        for headers in ({'X-Media-Owner-ID': 'f' * 32}, {'X-Media-Object-ID': 'f' * 64},
+                        {'X-Media-Resource-ID': 'f' * 64}, {'Content-Range': 'bytes 0-127/1152'},
+                        {'Content-Encoding': 'gzip'}):
+            with self.subTest(headers=headers), self.assertRaises(ValueError):
+                await self._remote_fixture(data, headers)
 
     async def test_redirects_and_wrong_range_proofs_are_rejected_before_body_reads(self):
         row = {'owner_id': 'b' * 32, 'object_id': 'c' * 64, 'resource_id': 'a' * 64,

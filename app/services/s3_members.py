@@ -44,7 +44,11 @@ def namespace(location):
     region = r'[a-z]{2}(?:-[a-z0-9]+){1,4}-[0-9]'
     aws = re.fullmatch(
         rf'https://s3(?P<variant>(?:[.-][a-z0-9-]+|(?:-fips)?\.(?:dualstack\.)?{region}|-accelerate\.dualstack)?)'
-        r'\.amazonaws\.com(?P<china>\.cn)?',origin)
+        r'\.amazonaws\.com(?P<china>\.cn)?',origin) or re.fullmatch(
+        # PrivateLink bucket service roots reach the same regional S3 buckets.
+        # Access-point, control and Outposts roots have different semantics.
+        rf'https://bucket\.vpce-(?:[a-f0-9]{{8}}|[a-f0-9]{{17}})-[a-z0-9]+(?:-{region}[a-z])?'
+        rf'\.s3(?:-fips)?(?P<variant>\.{region})\.vpce\.amazonaws\.com(?P<china>\.cn)?',origin)
     if aws:
         # The endpoint selects the partition; a different signing region does
         # not make another owner of the same bucket safe.

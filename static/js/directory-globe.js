@@ -43,8 +43,8 @@
         list = !list; document.documentElement.classList.toggle('frontier-covers', !list);
         stage.classList.toggle('orbit-list', list); toggle.textContent = list ? '前沿UI' : '列表视图';
         toggle.setAttribute('aria-pressed', String(list));
-        stage.setAttribute('aria-label', list ? '音乐目录列表' : '九宫格专辑目录，左右滑动翻页');
-        const hint = document.getElementById('globeHint'); if (hint) hint.textContent = list ? '选择专辑，开始聆听' : hint.dataset.pathLabel || '音乐目录';
+        stage.setAttribute('aria-label', list ? stage.dataset.listLabel || '音乐目录列表' : stage.dataset.gridLabel || '九宫格专辑目录，左右滑动翻页');
+        const hint = document.getElementById('globeHint'); if (hint) hint.textContent = list ? hint.dataset.listLabel || '选择专辑，开始聆听' : hint.dataset.pathLabel || hint.dataset.directoryLabel || '音乐目录';
         refresh();
     });
     grid.addEventListener('scroll', update, {passive: true});

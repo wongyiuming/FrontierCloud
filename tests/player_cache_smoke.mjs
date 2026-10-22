@@ -324,4 +324,65 @@ for (const flag of ['browser_metadata', 'native_metadata']) {
     p.run('document.hidden=true');
     assert.equal(p.run('playerArtworkReady()'), false, 'background pages do no optional artwork work');
 }
+for (const flag of ['encryption', 'browser_metadata', 'native_metadata']) {
+    const p = playerContext(async () => {throw new Error('optional tags must not change the media request');});
+    p.context.PLAYER_KIND = 'audio';
+    p.context.metadataFlag = flag;
+    let reads = 0;
+    p.context.window.FrontierMusicMetadata = {metadata() { reads++; return Promise.resolve({title: 'Timer metadata'}); }};
+    p.run(`currentMediaList[0][metadataFlag]=metadataFlag==='encryption'?{version:1}:true;
+        art.video={paused:false,seeking:false,readyState:3,currentTime:5,duration:100,
+            buffered:{length:1,start:()=>0,end:()=>30}}`);
+    const pending = p.run('loadSelectedMetadata(currentMediaList[0])');
+    assert.equal(reads, 0, 'a browser without idle callbacks must yield before optional metadata');
+    assert.equal(p.run('loadSelectedMetadata(currentMediaList[0])'), pending, 'one pending timer per track');
+    assert.equal(await pending, true);
+    assert.equal(reads, 1, 'timer fallback loads selected native, S3 or encrypted metadata');
+    assert.equal(p.run('currentMediaList[0].title'), 'Timer metadata');
+    assert.equal(p.run('art.url'), '/a'); assert.equal(p.run('art.currentTime'), 5);
+    assert.equal(p.requests.length, 0);
+}
+{
+    const p = playerContext(async () => new Response('unused'));
+    p.context.PLAYER_KIND = 'audio';
+    let reads = 0, scheduled = 0, cancelled = 0;
+    p.context.setTimeout = (callback, delay) => {
+        assert.equal(delay, 250); scheduled++;
+        return setTimeout(callback, delay);
+    };
+    p.context.clearTimeout = timer => { cancelled++; clearTimeout(timer); };
+    p.context.window.FrontierMusicMetadata = {metadata() { reads++; return Promise.resolve({}); }};
+    p.run(`currentMediaList[0].native_metadata=true;
+        art.video={paused:false,seeking:false,readyState:3,currentTime:5,duration:100,
+            buffered:{length:1,start:()=>0,end:()=>30}}`);
+    const pending = p.run('loadSelectedMetadata(currentMediaList[0])');
+    p.run('cancelPlayerArtwork()');
+    assert.equal(await pending, null);
+    assert.equal(scheduled, 1); assert.equal(cancelled, 1); assert.equal(reads, 0);
+    assert.equal(await p.run('loadSelectedMetadata(currentMediaList[0])'), true, 'cancellation leaves metadata retryable');
+    assert.equal(reads, 1);
+}
+for (const block of ['art.video.buffered.end=()=>10', 'art.video.seeking=true', 'document.hidden=true']) {
+    const p = playerContext(async () => new Response('unused'));
+    p.context.PLAYER_KIND = 'audio';
+    let reads = 0;
+    p.context.window.FrontierMusicMetadata = {metadata() { reads++; return Promise.resolve({}); }};
+    p.run(`currentMediaList[0].native_metadata=true;
+        art.video={paused:false,seeking:false,readyState:3,currentTime:5,duration:100,
+            buffered:{length:1,start:()=>0,end:()=>30}}`);
+    const pending = p.run('loadSelectedMetadata(currentMediaList[0])');
+    p.run(block);
+    assert.equal(await pending, null, 'timer must repeat playback/visibility admission before I/O');
+    assert.equal(reads, 0);
+}
+{
+    const p = playerContext(async () => {throw new Error('no thumbnail original fallback');});
+    p.context.PLAYER_KIND = 'audio';
+    p.context.image = {src: 'placeholder'};
+    p.context.window.FrontierMusicMetadata = {canThumbnail: () => true, thumbnail() {throw new Error('no idle renderer');}};
+    p.run(`art.video={paused:false,seeking:false,readyState:3,currentTime:5,duration:100,
+        buffered:{length:1,start:()=>0,end:()=>30}};visibleArtworkTracks.add(currentMediaList[0])`);
+    await p.run('paintPlayerThumbnail(currentMediaList[0], image)');
+    assert.equal(p.context.image.src, 'placeholder'); assert.equal(p.requests.length, 0);
+}
 console.log('player-cache-smoke-ok');

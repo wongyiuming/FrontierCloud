@@ -2,7 +2,9 @@
 
 This document defines the optional S3 adapter's scope and acceptance contract.
 The Python renewal and original Direct/Relay migration scope remain required.
-The owner must accept this feature before the repository is archived again.
+The owner authorizes publication after positive automatic review, without a
+separate S3 experience gate. Complete native acceptance and the other renewal
+release gates remain mandatory before the repository is archived again.
 
 ## Product boundary
 

@@ -20,6 +20,15 @@ from app.services.s3_members import Conflict, Members, namespace
 from app.services.s3_signing import Credentials, Location, S3Error
 
 
+BUCKET_VPCE_ENDPOINTS = (
+    ('https://bucket.vpce-1a2b3c4d-5e6f.s3.us-east-1.vpce.amazonaws.com','us-east-1','aws'),
+    ('https://bucket.vpce-0e25b8cdd720f900e-argc85vg-us-east-1a.s3.us-east-1.vpce.amazonaws.com','us-east-1','aws'),
+    ('https://bucket.vpce-0e25b8cdd720f900e-argc85vg.s3-fips.us-west-2.vpce.amazonaws.com','us-west-2','aws'),
+    ('https://bucket.vpce-0e25b8cdd720f900e-argc85vg-us-gov-west-1a.s3-fips.us-gov-west-1.vpce.amazonaws.com','us-gov-west-1','aws-us-gov'),
+    ('https://bucket.vpce-0e25b8cdd720f900e-argc85vg-cn-northwest-1a.s3.cn-northwest-1.vpce.amazonaws.com.cn','cn-northwest-1','aws-cn'),
+)
+
+
 class S3NamespaceTests(unittest.TestCase):
     def test_aws_service_aliases_keep_the_same_partition_bucket_and_prefix(self):
         endpoints = [
@@ -44,13 +53,29 @@ class S3NamespaceTests(unittest.TestCase):
                 location = Location('private-bucket',region,endpoint=endpoint,style='virtual',prefix='frontier')
                 self.assertEqual(namespace(location),(partition,'private-bucket','frontier'))
 
+    def test_bucket_private_link_endpoints_share_the_standard_partition_namespace(self):
+        for endpoint,region,partition in BUCKET_VPCE_ENDPOINTS:
+            for signing_region in (region,'us-east-1','us-gov-west-1'):
+                with self.subTest(endpoint=endpoint,signing_region=signing_region):
+                    location = Location('private-bucket',signing_region,endpoint=endpoint,prefix='frontier')
+                    self.assertEqual(location.style,'path')
+                    self.assertEqual(location.url(''),endpoint+'/private-bucket/')
+                    self.assertEqual(namespace(location),(partition,'private-bucket','frontier'))
+
     def test_custom_origins_and_aws_lookalikes_are_not_aws_namespaces(self):
         for endpoint in ('https://s3.example.test',
                 'https://s3.dualstack.us-east-1.amazonaws.com.example.test',
                 'https://s3-fips.us-east-1.example.test',
                 'https://s3.dualstack.us-east-1.amazonaws.com:9443',
                 'https://s3-accesspoint.us-east-1.amazonaws.com',
-                'https://s3.dualstack.us-east-1.example.test'):
+                'https://s3.dualstack.us-east-1.example.test',
+                'https://bucket.vpce-1a2b3c4d-5e6f.s3.us-east-1.vpce.amazonaws.com.example.test',
+                'https://bucket.vpce-1a2b3c4d-5e6f.s3.us-east-1.vpce.amazonaws.com:9443',
+                'https://accesspoint.vpce-1a2b3c4d-5e6f.s3.us-east-1.vpce.amazonaws.com',
+                'https://control.vpce-1a2b3c4d-5e6f.s3.us-east-1.vpce.amazonaws.com',
+                'https://bucket.vpce-1a2b3c4d-5e6f.s3-outposts.us-east-1.vpce.amazonaws.com',
+                'https://vpce-1a2b3c4d-5e6f.s3-outposts.us-east-1.vpce.amazonaws.com',
+                'https://s3-outposts.us-east-1.amazonaws.com'):
             with self.subTest(endpoint=endpoint):
                 expected = (endpoint,'private-bucket','frontier')
                 self.assertEqual(namespace(Location('private-bucket','us-east-1',endpoint=endpoint,
@@ -161,6 +186,40 @@ class S3MembersTests(unittest.IsolatedAsyncioTestCase):
         async with self.database.connect() as conn:
             self.assertEqual(list((await conn.execute(select(s.members).order_by(s.members.c.member_id))).tuples()),before)
 
+    async def test_private_link_overlap_is_rejected_in_both_directions_with_legacy_digests(self):
+        for index,(endpoint,region,_partition) in enumerate(BUCKET_VPCE_ENDPOINTS):
+            for first_private in (False,True):
+                bucket = f'vpce-bucket-{index}-{int(first_private)}'
+                standard = Location(bucket,region,prefix='owned')
+                private = Location(bucket,region,endpoint=endpoint,prefix='owned')
+                first = private if first_private else standard
+                member = await self.members.add('Existing owner',first,self.credentials,1024,'admin')
+                async with self.database.begin() as conn:
+                    if first_private:
+                        legacy = json.dumps((first.endpoint,first.bucket,first.prefix),separators=(',',':'))
+                        await conn.execute(update(s.members).where(s.members.c.member_id==member).values(
+                            namespace_sha256=hashlib.sha256(legacy.encode()).hexdigest()))
+                    before = list((await conn.execute(select(s.members).order_by(s.members.c.member_id))).tuples())
+                for prefix in ('','owned','owned/child'):
+                    other = Location(bucket,region,endpoint='' if first_private else endpoint,prefix=prefix)
+                    with self.subTest(endpoint=endpoint,first_private=first_private,prefix=prefix), \
+                            self.assertRaisesRegex(Conflict,'namespace_conflict'):
+                        await self.members.add('Conflicting',other,self.credentials,1024,'admin')
+                    async with self.database.connect() as conn:
+                        self.assertEqual(list((await conn.execute(select(s.members).order_by(s.members.c.member_id))).tuples()),before)
+                signer,_revision = await self.members.signer(member)
+                self.assertEqual(signer.location,first,'normalizing admission must not rewrite existing signing or recovery locations')
+                await self.members.add('Disjoint prefix',Location(bucket,region,endpoint=endpoint,prefix='owned-sibling'),self.credentials,1024,'admin')
+
+    async def test_private_link_bucket_owners_remain_separate_across_partitions(self):
+        for endpoint,region,_partition in (BUCKET_VPCE_ENDPOINTS[0],BUCKET_VPCE_ENDPOINTS[3],BUCKET_VPCE_ENDPOINTS[4]):
+            await self.members.add('Partition owner',Location('vpce-partition-bucket',region,endpoint=endpoint,
+                prefix='owned'),self.credentials,1024,'admin')
+            with self.assertRaisesRegex(Conflict,'namespace_conflict'):
+                await self.members.add('Standard alias',Location('vpce-partition-bucket',region,
+                    prefix='owned/child'),self.credentials,1024,'admin')
+        self.assertEqual(len(await self.members.list()),4)
+
     async def test_partitions_and_custom_stores_keep_distinct_bucket_owners(self):
         for region in ('us-gov-west-1','cn-north-1'):
             await self.members.add('Separate partition',Location('private-bucket',region,prefix='frontier'),self.credentials,1024,'admin')
@@ -181,7 +240,8 @@ class S3MembersTests(unittest.IsolatedAsyncioTestCase):
         async with self.database.connect() as conn:
             before = (await conn.execute(select(s.members).where(s.members.c.member_id==other))).one()
         for endpoint in ('https://s3.dualstack.us-east-1.amazonaws.com',
-                         'https://s3-fips.dualstack.us-east-1.amazonaws.com'):
+                         'https://s3-fips.dualstack.us-east-1.amazonaws.com',
+                         *(row[0] for row in BUCKET_VPCE_ENDPOINTS[:3])):
             with self.assertRaisesRegex(Conflict,'namespace_conflict'):
                 await self.members.configure(other,1,name='Other',quota=1024,enabled=False,actor='admin',
                     location=Location('private-bucket','us-east-1',endpoint=endpoint,style='virtual',prefix='frontier/child'))

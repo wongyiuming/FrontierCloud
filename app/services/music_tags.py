@@ -86,7 +86,7 @@ def _picture(frame: bytes, old: bool) -> tuple[bytes, str, int]:
 
 
 def read_tags(reader, size: int | None = None) -> Tags:
-    """Read only the bounded ID3 prefix and optional local ID3v1 suffix."""
+    """Read only the bounded ID3 prefix and optional ID3v1 suffix."""
     header = reader.read(10)
     values = {'title': '', 'artist': '', 'album': '', 'picture': b'', 'mime': ''}
     if len(header) == 10 and header[:3] == b'ID3' and header[3] in (2, 3, 4):
@@ -260,9 +260,14 @@ async def _remote_tags(row: dict, relation: dict) -> Tags:
             return Tags()
         header = await part(0, 9)
         length = sync_safe(header[6:10]) if header[:3] == b'ID3' else -1
+        tags = Tags()
         if 0 < length <= min(TAG_LIMIT, size - 10) and header[3] in (2, 3, 4):
-            return read_tags(io.BytesIO(header + await part(10, length + 9)))
-        return Tags()
+            tags = read_tags(io.BytesIO(header + await part(10, length + 9)))
+        if size >= 128 and any(not getattr(tags, key) for key in ('title', 'artist', 'album')):
+            legacy = read_tags(io.BytesIO(await part(size - 128, size - 1)), 128)
+            tags = Tags(title=tags.title or legacy.title, artist=tags.artist or legacy.artist,
+                        album=tags.album or legacy.album, picture=tags.picture, mime=tags.mime)
+        return tags
 
 
 async def music_metadata(path: str, identifier: str = '') -> Tags:

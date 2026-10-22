@@ -54,4 +54,47 @@ assert.deepEqual(grid.children, cards, 'list must use the original cards and ord
 assert.equal(nodes.get('albumPagination').hidden, true);
 nodes.get('globeToggle').handlers.get('click')();
 assert.deepEqual(grid.children.map(group => group.children.length), [9, 9, 5]);
-console.log('directory-paging-smoke-ok: nine covers, swipe, stable order, list retention, reduced motion');
+const template = fs.readFileSync(new URL('../static/media/category.html', import.meta.url), 'utf8');
+for (const fixture of [
+    {kind: 'video', title: '前沿视讯', path: '', category: '视频', item: '视频', action: '观看', planet: '视频星球'},
+    {kind: 'music', title: '前沿音乐', path: '', category: '音乐', item: '专辑', action: '聆听', planet: '音乐星球'},
+    {kind: 'video', title: '前沿视讯 - 演出', path: 'vido/演出', category: '视频', item: '视频', action: '观看', planet: '视频星球'},
+    {kind: 'music', title: '前沿音乐 - 歌手', path: 'music/歌手', category: '音乐', item: '专辑', action: '聆听', planet: '音乐星球'},
+]) {
+    const nodes = new Map([...template.matchAll(/\bid="([^"]+)"/g)].map(match => [match[1], element()]));
+    for (const [id, node] of nodes) {
+        const tag = template.match(new RegExp('<[^>]*\\bid="' + id + '"[^>]*>'))?.[0] || '';
+        const aria = tag.match(/aria-label="([^"]+)"/); if (aria) node.attributes['aria-label'] = aria[1];
+    }
+    nodes.get('pageBrand').dataset.pageTitle = fixture.title;
+    nodes.get('globeTitle').lastElementChild = element();
+    const config = fixture.path ? {bootstrap: [], url: '', cacheKey: ''}
+        : {url: '/api/v1/media/catalog/categories?media_type=' + fixture.kind};
+    const inline = template.match(/<script>([\s\S]*?)<\/script>/)[1]
+        .replace('{{STUN_URLS_JSON}}', '[]').replace('{{WEBRTC_INTERVAL_MS}}', '1000')
+        .replace('{{CATALOG_CONFIG_JSON}}', JSON.stringify(config));
+    const context = {document: {documentElement: element('frontier-covers'),
+        getElementById: id => nodes.get(id), createElement: () => element()}, URL,
+        location: {href: 'https://media.test/api/v1/media/' + fixture.kind + (fixture.path ? '/category?path=' + encodeURIComponent(fixture.path) : '')},
+        window: {dispatchEvent() {}, innerHeight: 800}, Event: class {}, matchMedia: () => ({matches: false}),
+        ResizeObserver: class {observe() {}}};
+    vm.runInNewContext(inline, context);
+    assert.equal(nodes.get('globeStage').attributes['aria-label'], `九宫格${fixture.item}目录，左右滑动翻页`);
+    assert.equal(nodes.get('directoryEyebrow').textContent, '前沿UI / ' + fixture.kind.toUpperCase());
+    assert.equal(nodes.get('globePanel').attributes['aria-label'], fixture.category + '目录');
+    assert.equal(nodes.get('albumPagination').attributes['aria-label'], fixture.item + '翻页');
+    assert.equal(context.window.frontierCloudCatalogRevealKind, fixture.kind);
+    if (!fixture.path) {
+        assert.equal(nodes.get('pageBrandSuffix').textContent, fixture.category + '目录');
+        assert.equal(nodes.get('globeTitle').lastElementChild.textContent, fixture.planet);
+    } else assert.equal(nodes.get('globeTitle').textContent, fixture.path.split('/')[1]);
+    const pathLabel = nodes.get('globeHint').textContent;
+    vm.runInNewContext(fs.readFileSync(new URL('../static/js/directory-globe.js', import.meta.url), 'utf8'), context);
+    nodes.get('globeToggle').handlers.get('click')();
+    assert.equal(nodes.get('globeStage').attributes['aria-label'], fixture.category + '目录列表');
+    assert.equal(nodes.get('globeHint').textContent, `选择${fixture.item}，开始${fixture.action}`);
+    nodes.get('globeToggle').handlers.get('click')();
+    assert.equal(nodes.get('globeStage').attributes['aria-label'], `九宫格${fixture.item}目录，左右滑动翻页`);
+    assert.equal(nodes.get('globeHint').textContent, pathLabel);
+}
+console.log('directory-paging-smoke-ok: nine covers, swipe, stable order, list retention, reduced motion, music/video labels');

@@ -1240,7 +1240,6 @@ function cancelPlayerArtwork() {
 
 function playerArtworkReady() {
     if (typeof PLAYER_KIND === 'undefined' || PLAYER_KIND !== 'audio') return true;
-    if (typeof window.requestIdleCallback !== 'function') return false;
     const video = art?.video;
     if (document.hidden || !video || video.seeking) return false;
     if (video.paused) return !art.playRequested;
@@ -1273,6 +1272,7 @@ function pumpPlayerArtwork() {
 
 async function paintPlayerThumbnail(media, image) {
     if (!image || !usesPlayerThumbnail(media) || !playerArtworkReady()
+        || typeof window.requestIdleCallback !== 'function'
         || window.FrontierMusicMetadata?.canThumbnail?.() !== true) return;
     playerArtworkWasReady = true;
     const source = media.cover;
@@ -1407,12 +1407,19 @@ function loadSelectedMetadata(media, priority = true) {
     const read = () => window.FrontierMusicMetadata.metadata(media, {priority, signal});
     const operation = typeof PLAYER_KIND !== 'undefined' && PLAYER_KIND === 'audio'
         ? new Promise(resolve => {
-            if (typeof window.requestIdleCallback !== 'function') { resolve(null); return; }
-            const cancelled = () => { window.cancelIdleCallback(id); resolve(null); };
-            const id = window.requestIdleCallback(deadline => {
+            const idle = typeof window.requestIdleCallback === 'function';
+            const cancelled = () => {
+                if (idle) window.cancelIdleCallback?.(id); else clearTimeout(id);
                 signal.removeEventListener('abort', cancelled);
-                resolve(!signal.aborted && deadline.timeRemaining() >= 8 && playerArtworkReady() ? Promise.resolve().then(read) : null);
-            });
+                resolve(null);
+            };
+            const ready = deadline => {
+                signal.removeEventListener('abort', cancelled);
+                resolve(!signal.aborted && (!idle || deadline.timeRemaining() >= 8) && playerArtworkReady()
+                    ? Promise.resolve().then(read) : null);
+            };
+            // One delayed attempt yields to playback; it never polls or bypasses buffer admission.
+            const id = idle ? window.requestIdleCallback(ready) : setTimeout(ready, 250);
             signal.addEventListener('abort', cancelled, {once: true});
             if (signal.aborted) cancelled();
         }) : read();

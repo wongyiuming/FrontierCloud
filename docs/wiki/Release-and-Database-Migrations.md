@@ -36,37 +36,44 @@ Web/cache files are regenerated rather than restored.
 ## Database generations
 
 Default SQLite is a repository-owned schema contract. Optional original MySQL
-remains supported. Existing marked generation 1/2 databases migrate in order:
+remains supported.
+
+The renewal candidate reaches generation 9; these additions do not become a
+released schema merely because `dev` is public. The current renewal ledger
+records the separate implementation, acceptance and promotion gates.
+
+Existing marked generation 1/2 databases migrate in order:
 
 - generation 3 widens priorities to signed integers in -7..500000 without
   resetting historical values or unrelated business rows;
 - generation 4 adds browser encryption descriptors/key identity and the signed
   encrypted-storage upload marker without decrypting media in the backend;
-- the current uncommitted generation-5 candidate adds resource-migration plans,
+- the renewal's generation 5 adds resource-migration plans,
   tasks, complete-parent units, object proofs, reservations, drains, scopes,
   runner epochs, storage publication journals, read leases and peer bindings.
-  It adds tables without rewriting previous media or identity rows. This schema
-  foundation is not yet a released migration feature or a completed transfer API.
-- the uncommitted generation-6 candidate adds four independent S3 configuration,
+  It adds tables without rewriting previous media or identity rows. Its runtime
+  supplies the complete-parent transfer pipeline described in the migration contract.
+- generation 6 adds four independent S3 configuration,
   upload, part and object-binding tables. Existing media, keys, identities and
-  generation-5 definitions are unchanged. The tables do not import bucket data
-  or turn the protocol primitives into a completed storage adapter.
-- the separate uncommitted generation-7 candidate extends the migration task's
+  generation-5 definitions are unchanged. These tables support the optional
+  managed S3 adapter; they do not import unrelated bucket data.
+- generation 7 extends the migration task's
   permitted pause/resume phases to publication and delayed cleanup. It does not
   modify old generation signatures or copy media. SQLite replaces the task table
   in one writer transaction with complete row comparisons; unknown task-table
   structures or incoming references refuse the rebuild. MySQL replaces just the
   named check in one native ALTER. An interruption after MySQL DDL keeps the old
   marker and requires idempotent validation/retry before it advances.
-- the uncommitted generation-8 candidate adds the independent retirement
+- generation 8 adds the independent retirement
   journal. Preparation binds the exact relationship, node identities, keys and
   credential, commits its write fence and audit together, and preserves all
   previous tables. Required checks, column collations, indexes and unknown
   triggers are validated before completion. SQLite rolls back interrupted DDL;
-  MySQL retries a committed CREATE and individually missing indexes. This is
-  retirement preparation, not an exposed terminal API. Its remaining physical,
-  authentication and Admin gates are in [the retirement contract](../python-node-retirement.md).
-- the uncommitted generation-9 candidate adds one native cancellation-census
+  MySQL retries a committed CREATE and individually missing indexes. Runtime
+  preparation, terminal authentication and Admin behavior are described in
+  [the retirement contract](../python-node-retirement.md); their acceptance gates
+  remain distinct from schema construction.
+- generation 9 adds one native cancellation-census
   table containing current resource paths, identities, sizes and stat snapshots.
   It does not copy payloads or change generations 2–8 signatures. Snapshot
   indexes, checks and unknown triggers are verified; interrupted SQLite/MySQL
