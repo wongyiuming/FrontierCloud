@@ -562,9 +562,10 @@ The fault is explicitly fixture-only and its signal/input is recorded. V7's
 67 focused cases and four source policies passed. The later wiring snapshot
 adds a helper-record binding regression and passes 101 focused operator,
 repository and deployment cases in 23.091 seconds, all four policies, native
-script Bash syntax and CI artifact-collector Bash syntax. Actual-application
-cases are now wired into the complete operator gate; only their sanitized
-summaries/input records and test log are selected for CI artifacts.
+script Bash syntax and the then-existing CI collector's Bash syntax.
+Actual-application cases remain wired into the complete development-host
+operator gate; sanitized summaries, input records and logs are selected for
+manual collection with `scripts/collect_native_evidence.py`.
 
 The private `operator-application-progress-evidence.json` indexes immutable
 inputs, outputs, source proofs, successful cases and earlier failed attempts.
@@ -739,11 +740,12 @@ Git archive and old-code bootstrap inputs are retained before execution.
 Original failed test inputs remain alongside their fixes. The private evidence
 index is `operator-prepare-capture-evidence.json` outside the repository.
 
-The new native cases are wired into the operator acceptance script, with only
-sanitized summaries/input logs selected for CI artifacts. Whole-pipeline CI
-composition and runtime budgets still need revalidation; this local snapshot
-does not claim GitHub CI or final release acceptance. No upgrade command is
-exposed by these preparation/capture results.
+The native cases remain wired into the development-host operator acceptance
+script, with sanitized summaries and input logs selected for manual collection.
+Their historical component results do not prove current GitHub CI or final
+release acceptance. Hosted CI follows the bounded source-check policy in
+`docs/wiki/Engineering-and-CI.md`. No upgrade command is exposed by these
+preparation/capture results.
 
 ## Authority and source delivery
 

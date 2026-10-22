@@ -94,7 +94,7 @@ unfinished local work is not a new published release.
 ## Repository delivery
 
 FrontierCloud has exactly two canonical branches: `dev` for implementation and
-complete CI, and `main` for reviewed release history. Do not create additional
+bounded source CI, and `main` for reviewed release history. Do not create additional
 branches. The only valid promotion PR is same-repository `dev -> main`; after
 merge, fast-forward `dev` to the resulting `main` commit before the next change.
 Only Python/FastAPI `main` and `dev` are retained. No Gin archive references,

@@ -402,8 +402,10 @@ profile. The runner never installs a system root or ignores certificate errors.
 The native gate exercises provider behavior and service transactions, then the
 actual Compose/Admin browser lifecycle. Waiting for real grant expiry is part
 of the gate: no clock or database deadline is rewritten. On failure it stops
-Web before other fixture cleanup and retains data for diagnosis. Only explicit
-sanitized logs/receipts are CI artifacts; the `private` subtree is never uploaded.
+Web before other fixture cleanup and retains data for diagnosis. Development-host
+evidence is collected explicitly with `scripts/collect_native_evidence.py`;
+private state and credentials are excluded. Hosted CI does not run this gate
+or upload its evidence.
 The S3 child allows 1,000 seconds normally and 2,850 seconds with actual idle
 expiry. These bounded fixture timeouts include actual authorization waits; they
 do not change any product deadline or resource limit.

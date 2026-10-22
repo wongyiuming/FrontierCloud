@@ -86,6 +86,6 @@ bash scripts/test-python-certificate-nginx.sh
 bash scripts/test-python-certificate-storage.sh
 ```
 
-Certificate integration scripts use isolated test containers with a local CA and normal system trust. They do not contact the production CA or publish host ports. Release evidence must come from full CI and review of the final dev commit.
+Certificate integration scripts use isolated development-host test containers with a local CA and normal system trust. They do not contact the production CA or publish host ports. A release requires bounded source CI, complete development-host native acceptance and review of the same final dev commit.
 
 Normal `docker compose down` retains volumes. Do not use `down -v`, clear data, delete upload leases, manually advance schema generation, or globally prune volumes as troubleshooting steps. Follow [operator recovery](../operator-recovery.md) for offline upgrade and complete restore.
