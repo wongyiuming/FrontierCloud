@@ -43,7 +43,13 @@ class FederationContractTests(unittest.TestCase):
         self.assertIn('persist-credentials: false', workflow)
         self.assertIn('contents: read', workflow)
         self.assertIn('actions: read', workflow)
-        self.assertIn('timeout-minutes: 3', workflow)
+        source_job=workflow.split('  source:',1)[1].split('  topology:',1)[0]
+        self.assertIn('    timeout-minutes: 15\n',source_job)
+        self.assertIn('needs: [source-policy, source-unit]',source_job)
+        self.assertIn('if: always() &&',source_job)
+        self.assertIn('test "$POLICY_RESULT" = success && test "$UNIT_RESULT" = success',source_job)
+        self.assertIn('python scripts/test_python_units.py verify --count 4',source_job)
+        self.assertNotIn('--allow-dirty',workflow)
         self.assertIn('SQLITE_PATH: ${{ github.workspace }}/data/frontiercloud-source.db', workflow)
         self.assertNotIn('ignore_https_errors', (ROOT / 'tests/federation_stack.py').read_text())
 
@@ -62,20 +68,29 @@ class FederationContractTests(unittest.TestCase):
 
     def test_ci_runs_complete_unit_suite_and_independent_native_acceptance_remains_required(self):
         workflow = (ROOT / '.github/workflows/docker.yml').read_text()
-        self.assertIn("python -m unittest discover -s tests -p 'test_*.py'", workflow)
+        units=workflow.split('  source-unit:',1)[1].split('  source:',1)[0]
+        self.assertIn('shard: [0, 1, 2, 3]',units)
+        self.assertIn('fail-fast: false',units)
+        self.assertIn('    timeout-minutes: 60\n',units)
+        self.assertIn('python scripts/test_python_units.py run --count 4 --index',units)
+        self.assertIn('if-no-files-found: error',units)
+        runner=(ROOT/'scripts/test_python_units.py').read_text()
+        self.assertIn("loader.discover(str(root / 'tests'), pattern='test_*.py')",runner)
+        self.assertIn('if loader.errors:',runner)
         for check in ('check_cpu_boundary.py', 'validate_env_contract.py',
                       'check_release_policy.py', 'check_english_comments.py'):
             self.assertIn(check, workflow)
         suite = (ROOT / 'scripts/test-python-final.sh').read_text()
         for check in ('--cpus 1', 'check_cpu_quiescence.py', 'tests.federation_stack',
-                      'certificate-nginx', 'certificate-storage', 'unit.log'):
+                      'certificate-nginx', 'certificate-storage', 'unit.log',
+                      'test_python_units.py run --count 4', 'test_python_units.py verify --count 4'):
             self.assertIn(check, suite)
         self.assertIn('complete native acceptance', (ROOT / 'CONTRIBUTING.md').read_text())
 
     def test_required_compose_check_executes_real_native_suite_on_exact_source(self):
         workflow = (ROOT / '.github/workflows/docker.yml').read_text()
         native = workflow.split('  test-compose:', 1)[1].split('  promote-main:', 1)[0]
-        for marker in ('needs: source', 'runs-on: ubuntu-latest', 'timeout-minutes: 15',
+        for marker in ('needs: source', 'runs-on: ubuntu-latest', '    timeout-minutes: 360\n',
                        'persist-credentials: false', 'github.event.pull_request.head.sha || github.sha',
                        "github.event_name != 'push' || github.ref != 'refs/heads/main'",
                        'bash scripts/test-python-final.sh', 'FC_BROWSER_PYTHON',
@@ -83,7 +98,22 @@ class FederationContractTests(unittest.TestCase):
                        'libnss3-tools', 'test -x "$PLAYWRIGHT_CHROMIUM_EXECUTABLE"',
                        'safe.directory "$GITHUB_WORKSPACE"', '/root/frontiercloud-dev',
                        'source-commit.txt', 'operator-endpoint-sqlite-proof.json',
-                       'operator-endpoint-mysql-proof.json'):
+                       'operator-endpoint-mysql-proof.json', 'native-reservations.json', 'native-reservations.log',
+                       'native-admission.json','native-admission.log',
+                       'native-transfer.json','native-transfer.log',
+                       'provider-initial.json', 'provider-restart.json', 'transactions.json', 'browser.json',
+                       'operator-application.log','operator-application-inputs.jsonl','operator-install.log',
+                       'test_business_sqlite_package','test_business_mysql_package','test_direct_storage_package','test_relay_storage_package',
+                       'test_business_sqlite_owned_resources','test_business_mysql_owned_resources',
+                       'test_direct_storage_owned_resources','test_relay_storage_owned_resources',
+                       'test_controlled_sqlite_restore_preserves_failed_state_and_payload_inodes',
+                       'test_controlled_mysql_restore_preserves_failed_state_and_payload_inodes',
+                       'test_early_sqlite_abort_preserves_incomplete_snapshot_and_original_resources',
+                       'test_early_mysql_abort_preserves_incomplete_snapshot_and_original_resources',
+                       'test_staged_host_entry_upgrades_old_sqlite_application',
+                       'test_staged_host_entry_upgrades_old_mysql_application_and_adds_init',
+                       'test_staged_recover_preserves_sqlite_original_resources',
+                       'test_staged_recover_preserves_mysql_original_resources'):
             self.assertIn(marker, native)
         self.assertNotIn('continue-on-error', native)
         self.assertNotIn('secrets.', native)
@@ -95,6 +125,15 @@ class FederationContractTests(unittest.TestCase):
         self.assertIn('frontiercloud-native-artifact/*', artifact)
         self.assertNotIn('frontiercloud-native-evidence', artifact)
         self.assertNotIn('path: .', artifact)
+        runner=(ROOT / 'scripts/test-python-final.sh').read_text()
+        self.assertIn('python -m tests.resource_reservations_native',runner)
+        self.assertIn('python -m tests.resource_admission_native',runner)
+        self.assertIn('python -m tests.resource_transfer_native',runner)
+        for flag in ('FRONTIERCLOUD_CANCEL_SOURCE_RELEASE_NATIVE','FRONTIERCLOUD_CANCEL_TARGET_RELEASE_NATIVE',
+                     'FRONTIERCLOUD_CANCEL_MASTER_RELEASE_NATIVE'):
+            self.assertIn('-e '+flag+'=1',runner)
+            self.assertIn("'"+flag+"':'1'",(ROOT/'tests/resource_cancel_census_https_mysql_native.py').read_text())
+        self.assertIn('FC_S3_EVIDENCE_DIR="$evidence/s3" bash scripts/test-python-s3.sh',runner)
 
     def test_no_product_component_mounts_docker_socket_or_can_replace_software(self):
         for name in ('docker-compose.yaml', 'docker-compose.storage.yaml', 'docker-compose.mysql.yaml'):
@@ -112,3 +151,7 @@ class FederationContractTests(unittest.TestCase):
         self.assertIn('return 503', gate)
         self.assertNotIn('.frontiercloud-force-open', gate)
         self.assertNotIn('internal/v1/cluster-update', gate)
+        configuration = (ROOT/'nginx/nginx.conf').read_text()
+        self.assertIn('map "$request_method:$request_uri" $frontiercloud_identity_probe',configuration)
+        self.assertIn('~^GET:/internal/v1/identity[?]challenge=[a-f0-9]{32}$',configuration)
+        self.assertIn('if ($frontiercloud_identity_probe = 1)',gate)

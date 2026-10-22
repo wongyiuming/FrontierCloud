@@ -179,11 +179,12 @@ async def _hydrate_ip_security_cache() -> None:
         await pipe.execute()
 
 
-async def initialize_ip_security_cache() -> None:
+async def initialize_ip_security_cache(*, read_only=False) -> None:
     """Hydrate permanent whitelist and still-active bans from MySQL on startup."""
     async with _security_state_guard():
         await _hydrate_ip_security_cache()
-        await _refresh_edge_projection()
+        if not read_only:
+            await _refresh_edge_projection()
 
 
 async def _refresh_edge_projection() -> None:
@@ -204,6 +205,9 @@ async def retry_edge_projection() -> None:
     """Batch policy publication; the durable generation survives failed writers."""
     while True:
         await asyncio.sleep(1)
+        from app.services.site_control import hard_fence_active
+        if hard_fence_active():
+            continue
         try:
             async with engine.connect() as conn:
                 pending = await conn.scalar(text("""

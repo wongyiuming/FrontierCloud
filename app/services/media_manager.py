@@ -972,6 +972,9 @@ class MediaManager:
 async def recover_interrupted_media_deletions() -> None:
     """Finish or roll back journaled deletes left by a terminated worker."""
     async with media_mutation_lock:
+        from app.services.site_control import hard_fence_active
+        if hard_fence_active():
+            return
         from app.services import media_publication_recovery
         await media_publication_recovery.recover(MEDIA_ROOT, engine)
         async with engine.connect() as conn:

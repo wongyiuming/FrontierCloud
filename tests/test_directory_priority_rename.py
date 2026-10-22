@@ -8,9 +8,29 @@ from unittest.mock import AsyncMock, patch
 from app.services import media_directories, media_directory_catalog
 
 
+class _GuardConnection:
+    """Model initialized/no-scope state for isolated rename algorithm tests.
+
+    Actual SQL scope refusal is covered by test_resource_fences.
+    """
+    async def execute(self,statement):
+        names = {table.name for table in statement.get_final_froms()}
+        class Result:
+            def first(self):
+                return ('a'*32,) if names == {'node_identity'} else None
+            def scalars(self):return []
+            def mappings(self):return self
+            def all(self):return []
+        return Result()
+
+    async def scalar(self,statement):
+        names={table.name for table in statement.get_final_froms()}
+        return 'a'*32 if names=={'node_identity'} else None
+
+
 class _Context:
     async def __aenter__(self):
-        return object()
+        return _GuardConnection()
 
     async def __aexit__(self, *_args):
         return False

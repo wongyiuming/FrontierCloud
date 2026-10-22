@@ -118,7 +118,9 @@ class AudioContinuousStreamContractTests(unittest.TestCase):
 
     def test_continuous_stream_has_bounded_track_window_and_no_server_cache_contract(self):
         self.assertIn("const LOOKAHEAD_TRACKS = 2;", self.core)
-        self.assertIn("MAX_TRACK_BYTES", self.core)
+        self.assertNotIn("MAX_TRACK_BYTES", self.core)
+        self.assertIn("const MAX_UNDECODED_BYTES = 16 * 1024 * 1024;", self.core)
+        self.assertIn("undecodedBytes >= MAX_UNDECODED_BYTES", self.core)
         self.assertIn("sourceBuffer.remove(0, removeEnd)", self.core)
         self.assertIn("fetch(media.url", self.core)
         self.assertNotIn("/api/v1/media/continuous", self.core)

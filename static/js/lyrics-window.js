@@ -2,7 +2,6 @@
 
 (() => {
   const OFFSETS = Object.freeze([-3, -2, -1, 0, 1, 2, 3]);
-  const ROW_PERCENT = 100 / OFFSETS.length;
 
   function rowClass(offset) {
     if (offset <= -4) return 'sync-lyric departing';
@@ -83,6 +82,7 @@
       const panel = document.getElementById('inlineLyrics');
       const track = document.getElementById('inlineLyricsTrack');
       if (!panel || !track || activeLyricEntries.length === 0) return;
+      panel.style.setProperty('--sync-lyric-row-height', `${panel.clientHeight / OFFSETS.length}px`);
       const visible = Array.from(track.children).slice(0, OFFSETS.length).map(row => row.textContent || '');
       const longest = Math.max(1, ...visible.map(line => Array.from(line).length));
       const heightSize = Math.max(14, panel.clientHeight / 7.3);
@@ -119,7 +119,7 @@
       setActiveLyricTime(panel, nextIndex);
       void track.offsetWidth;
       track.classList.add('sliding');
-      track.style.transform = `translateY(-${ROW_PERCENT}%)`;
+      track.style.transform = `translateY(-${track.children[0].offsetHeight}px)`;
       lyricSlideTimer = setTimeout(() => window.renderLyricWindow(nextIndex), LYRIC_SLIDE_MS + 30);
     };
 

@@ -10,6 +10,12 @@ import httpx
 from . import protocol as p
 
 
+class ControlFailure(p.ProtocolError):
+    def __init__(self,status,envelope):
+        super().__init__(f'Node control HTTP {status}')
+        self.status,self.envelope=status,envelope
+
+
 class Transport:
     def __init__(self):
         self.client: httpx.AsyncClient | None = None
@@ -43,21 +49,34 @@ class Transport:
         if not path.startswith("/internal/v1/"):
             raise p.ProtocolError("Only versioned control endpoints are permitted")
         body = p.canonical(value) if value is not None else b""
-        if len(body) > p.MAX_CONTROL_BYTES:
+        retirement=path=='/internal/v1/retirement'
+        if len(body) > (16384 if retirement else p.MAX_CONTROL_BYTES):
             raise p.ProtocolError("Control message too large")
         headers = {"Content-Type": "application/json"}
         if relation:
             headers.update(p.auth_headers(credential, relation, method, path, body))
         self.open()
-        limit = (p.MAX_LYRIC_RESPONSE_BYTES
+        limit = (16384 if retirement else p.MAX_LYRIC_RESPONSE_BYTES
                  if (path.startswith("/internal/v1/recordings/") and path.endswith("/stat"))
                  else p.MAX_CONTROL_BYTES)
         is_backup = path.startswith("/internal/v1/backup/")
-        timeout = httpx.Timeout(60, connect=8) if is_backup else httpx.Timeout(10, connect=8)
+        is_migration_copy = path == '/internal/v1/migration/transfer/copy'
+        timeout = httpx.Timeout(60, connect=8) if is_backup or is_migration_copy else httpx.Timeout(10, connect=8)
         client = self.backup_client if is_backup else self.client
         async with client.stream(method, origin + path, content=body, headers=headers, timeout=timeout) as response:
+            if response.headers.get('content-encoding') not in (None,'identity'):
+                raise p.ProtocolError('Node control encoded response refused')
             if response.status_code != 200:
                 # Do not log pairing tokens, credentials, or arbitrary upstream bodies.
+                if path.startswith('/internal/v1/migration/') or retirement:
+                    from app.services.resource_control_errors import LIMIT
+                    error=bytearray()
+                    async for chunk in response.aiter_bytes():
+                        if len(error)+len(chunk)>LIMIT:raise p.ProtocolError(f'Node control HTTP {response.status_code}')
+                        error.extend(chunk)
+                    try:envelope=json.loads(error)
+                    except (ValueError,TypeError,RecursionError):envelope=None
+                    raise ControlFailure(response.status_code,envelope)
                 raise p.ProtocolError(f"Node control HTTP {response.status_code}")
             chunks, length = [], 0
             async for chunk in response.aiter_bytes():

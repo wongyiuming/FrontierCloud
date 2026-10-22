@@ -22,6 +22,11 @@ from sqlalchemy.schema import CreateTable
 BASE_SCHEMA_GENERATION = 1
 MIGRATION_HISTORY_TABLE = "frontiercloud_schema_migrations"
 MIGRATION_LOCK_TIMEOUT_SECONDS = 60
+MYSQL_MIGRATION_LOCK_NAME = """CASE
+    WHEN CHAR_LENGTH(CONCAT('frontiercloud:schema-migrations:', DATABASE())) <= 64
+    THEN CONCAT('frontiercloud:schema-migrations:', DATABASE())
+    ELSE SHA2(CONCAT('frontiercloud:schema-migrations:', DATABASE()), 256)
+END"""
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 MIGRATION_HISTORY_DDL = """
@@ -205,6 +210,38 @@ async def _migration_3_to_4(conn: AsyncConnection) -> None:
         await conn.commit()
 
 
+async def _migration_4_to_5(conn: AsyncConnection) -> None:
+    from app.services.resource_migration_schema import create
+    await create(conn)
+
+
+async def _migration_5_to_6(conn: AsyncConnection) -> None:
+    from app.services.s3_schema import create
+    await create(conn)
+
+
+async def _migration_6_to_7(conn: AsyncConnection) -> None:
+    from app.services.resource_pause_schema import apply
+    await apply(conn)
+
+
+async def _migration_7_to_8(conn: AsyncConnection) -> None:
+    from app.services.node_retirement_schema import create
+    await create(conn)
+
+
+async def _migration_8_to_9(conn: AsyncConnection) -> None:
+    from app.services.resource_cancel_census_schema import create
+    await create(conn)
+
+
+from app.services.resource_migration_schema import contract as _resource_migration_contract
+from app.services.s3_schema import contract as _s3_contract
+from app.services.resource_pause_schema import CHECK as _resource_pause_check
+from app.services.node_retirement_schema import contract as _retirement_contract
+from app.services.resource_cancel_census_schema import contract as _cancel_census_contract
+
+
 MIGRATIONS: dict[int, SchemaMigration] = {
     2: SchemaMigration(
         target_generation=2,
@@ -223,6 +260,36 @@ MIGRATIONS: dict[int, SchemaMigration] = {
         name="browser-media-encryption-identities",
         signature="4:browser-media-encryption-identities:v1:media_encryption(object_kind,object_id,file_id-unique,descriptor_json-nullable,created_at):media_crypto_keys(singleton,key_id,created_at):cluster_upload_sessions.content_encrypted(boolean-0-1,default-0,signed-capability)",
         apply=_migration_3_to_4,
+    ),
+    5: SchemaMigration(
+        target_generation=5,
+        name="durable-resource-migration-journal",
+        signature="5:python-durable-resource-migration:v1:" + _resource_migration_contract(),
+        apply=_migration_4_to_5,
+    ),
+    6: SchemaMigration(
+        target_generation=6,
+        name="optional-s3-storage-transactions",
+        signature="6:python-optional-s3-storage:v1:" + _s3_contract(),
+        apply=_migration_5_to_6,
+    ),
+    7: SchemaMigration(
+        target_generation=7,
+        name="preserve-journal-cross-phase-pauses",
+        signature="7:python-cross-phase-pauses:v1:sqlite-transactional-rebuild:mysql-atomic-check-replacement:preserve-all-task-columns:"+_resource_pause_check,
+        apply=_migration_6_to_7,
+    ),
+    8: SchemaMigration(
+        target_generation=8,
+        name='durable-independent-node-retirement',
+        signature='8:python-independent-node-retirement:v1:'+_retirement_contract(),
+        apply=_migration_7_to_8,
+    ),
+    9: SchemaMigration(
+        target_generation=9,
+        name='native-cancellation-current-census',
+        signature='9:python-cancellation-current-census:v1:'+_cancel_census_contract(),
+        apply=_migration_8_to_9,
     ),
 }
 
@@ -263,9 +330,9 @@ async def _acquire_lock(conn: AsyncConnection) -> None:
         await conn.execution_options(fc_write_transaction=True)
         await conn.begin()
         return
-    acquired = await conn.scalar(text("""
+    acquired = await conn.scalar(text(f"""
         SELECT GET_LOCK(
-            CONCAT('frontiercloud:schema-migrations:', DATABASE()),
+            {MYSQL_MIGRATION_LOCK_NAME},
             :timeout_seconds
         )
     """), {"timeout_seconds": MIGRATION_LOCK_TIMEOUT_SECONDS})
@@ -279,8 +346,8 @@ async def _release_lock(conn: AsyncConnection) -> None:
     if _sqlite(conn):
         return
     try:
-        await conn.scalar(text("""
-            SELECT RELEASE_LOCK(CONCAT('frontiercloud:schema-migrations:', DATABASE()))
+        await conn.scalar(text(f"""
+            SELECT RELEASE_LOCK({MYSQL_MIGRATION_LOCK_NAME})
         """))
     except Exception:
         # The lock is connection-scoped and is also released when the connection closes.

@@ -77,6 +77,12 @@ class Database:
         s.metadata.create_all(self.engine)
         from app.services.media_crypto_schema import metadata as crypto_metadata
         crypto_metadata.create_all(self.engine)
+        from app.services.resource_migration_schema import metadata as migration_metadata
+        migration_metadata.create_all(self.engine)
+        from app.services.s3_schema import metadata as s3_metadata
+        s3_metadata.create_all(self.engine)
+        from app.services.node_retirement_schema import metadata as retirement_metadata
+        retirement_metadata.create_all(self.engine)
         with self.engine.begin() as conn:
             conn.execute(text("""CREATE TABLE media_objects (
                 media_id TEXT PRIMARY KEY, object_kind TEXT NOT NULL, media_path TEXT NOT NULL,
@@ -228,7 +234,11 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(p.ProtocolError):
                 await self.store.authenticate(headers, method, wrong_path, body)
         await self.store.authenticate(headers, "GET", path, b"")
-        await self.store.revoke(identifier, "admin")
+        with self.assertRaisesRegex(p.ProtocolError,'retirement_required'):
+            await self.store.revoke(identifier, "admin")
+        # A historical revoked row remains invalid for ordinary authentication.
+        async with self.database.begin() as conn:
+            await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id==identifier).values(state='revoked'))
         new = {k.lower(): v for k, v in p.auth_headers(credential, identifier, "GET", path).items()}
         with self.assertRaises(p.ProtocolError):
             await self.store.authenticate(new, "GET", path, b"")
@@ -254,7 +264,7 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         await restarted.initialize()
         self.assertEqual(restarted.node["role"], "Standalone")
 
-    async def test_authenticated_peer_revocation_needs_no_reverse_notification(self):
+    async def test_legacy_revoke_refuses_active_and_acknowledges_historical_revocation(self):
         from fastapi import FastAPI
         import httpx
         await self.follower()
@@ -265,19 +275,25 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         path, body = "/internal/v1/revoke", b"{}"
         with patch.object(internal_nodes, "state", self.store), patch.object(internal_nodes.settings, "TLS_ENABLED", True), patch("app.services.media_catalog_cache.invalidate_media_catalog", new=AsyncMock()):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="https://follower.example.com") as client:
+                response=await client.post(path,content=body,headers=p.auth_headers(credential,identifier,'POST',path,body))
+                self.assertEqual(response.status_code,409);self.assertEqual(response.json()['detail'],'retirement_required')
+                self.assertEqual((await self.store.relationship(identifier))['state'],'active')
+                async with self.database.begin() as conn:
+                    await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id==identifier).values(state='revoked',summary={'old_note':'retained'}))
                 for _ in range(2):
                     response = await client.post(path, content=body, headers=p.auth_headers(credential, identifier, "POST", path, body))
                     self.assertEqual(response.status_code, 200)
                     row = await self.store.relationship(identifier)
                     self.assertEqual(row["state"], "revoked")
                     self.assertTrue(row["summary"].get("revocation_acknowledged"))
+                    self.assertEqual(row['summary']['old_note'],'retained')
 
     async def test_repair_preserves_unacknowledged_revocation_credentials(self):
         await self.store.promote("Master", "https://master.example.com", "admin", 1024 ** 3)
         owner, old_id, new_id = peer("Follower"), uuid.uuid4().hex, uuid.uuid4().hex
         credential = secrets.token_urlsafe(48)
         await self.store.prepare(old_id, owner, credential, "admin")
-        await self.store.activate(old_id, "admin")
+        # Cancelled pairing credentials must stay until its peer acknowledges.
         await self.store.revoke(old_id, "admin")
         with self.assertRaises(p.ProtocolError):
             await self.store.prepare(new_id, owner, secrets.token_urlsafe(48), "admin")
@@ -333,21 +349,74 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((row["state"], row["chunk_count"], row["size_bytes"]),
                          ("ready", 2, len(payload)))
 
-    async def test_worker_lease_is_idempotent_and_rejects_stale_completion(self):
+    async def test_retired_worker_state_is_preserved_but_cannot_be_scheduled(self):
         from app.services import resource_pool
-        key = hashlib.sha256(b"job").hexdigest()
-        first = await resource_pool.enqueue_job("hash", {"object_id": "b" * 64}, key,
-                                                member_id="c" * 32, database=self.database)
-        second = await resource_pool.enqueue_job("hash", {"object_id": "b" * 64}, key,
-                                                 member_id="c" * 32, database=self.database)
-        self.assertEqual(first, second)
-        leased = await resource_pool.lease_job("c" * 32, ["hash"], self.database)
-        self.assertEqual(leased["job_id"], first)
-        with self.assertRaises(p.ProtocolError):
-            await resource_pool.complete_job("c" * 32, first, "wrong", {}, self.database)
-        await resource_pool.complete_job("c" * 32, first, leased["lease"],
-                                         {"sha256": "d" * 64}, self.database)
-        self.assertIsNone(await resource_pool.lease_job("c" * 32, ["hash"], self.database))
+        await self.follower()
+        member=self.store.node['node_id']
+        historic=dict(member_id=member,enabled=1,worker_slots=8,available_slots=7,
+            cpu_percent=91,memory_available_bytes=123,capabilities=['hash'],updated_at=41)
+        job=dict(job_id='c'*32,idempotency_key='d'*64,job_type='hash',media_id=None,member_id=member,
+            payload={'old':'input'},result={'old':'result'},state='leased',lease_token_hash='e'*64,
+            lease_expires_at=42,attempts=3,created_at=40,updated_at=41)
+        async with self.database.begin() as conn:
+            await conn.execute(insert(s.compute_members).values(**historic))
+            await conn.execute(insert(s.worker_jobs).values(**job))
+        config=dict(storage=dict(enabled=True,allocated_bytes=1024**3),
+            compute=dict(enabled=False,worker_slots=0),backup=dict(enabled=False))
+        await resource_pool.accept_follower_configuration(config,self.store.node,self.database)
+        summary=await resource_pool.follower_resource_summary(self.store.node,self.database)
+        desired=await resource_pool.member_configuration(member,self.database)
+        self.assertEqual(desired['compute'],dict(enabled=False,worker_slots=0))
+        self.assertEqual(summary['compute'],dict(enabled=False,worker_slots=0,available_slots=0,
+            cpu_percent=0,memory_available_bytes=0,capabilities=[]))
+        self.assertNotIn('compute',(await resource_pool.list_members(self.database))[0])
+        async with self.database.connect() as conn:
+            self.assertEqual(dict((await conn.execute(select(s.compute_members))).mappings().one()),historic)
+            self.assertEqual(dict((await conn.execute(select(s.worker_jobs))).mappings().one()),job)
+        for name in ('enqueue_job','lease_job','complete_job','compute_pressure'):
+            self.assertFalse(hasattr(resource_pool,name))
+
+    async def test_active_compute_configuration_is_refused_before_storage_changes(self):
+        from app.services import resource_pool
+        await self.follower()
+        configuration=dict(storage=dict(enabled=True,allocated_bytes=1024**3),backup=dict(enabled=False))
+        await resource_pool.accept_follower_configuration(configuration,self.store.node,self.database)
+        async with self.database.connect() as conn:
+            before=dict((await conn.execute(select(s.storage_members))).mappings().one())
+        for compute in (dict(enabled=True,worker_slots=4),dict(enabled=False,worker_slots=1),
+                        dict(enabled=0,worker_slots=0),dict(enabled=False,worker_slots=False),[],'disabled'):
+            with self.subTest(compute=compute),self.assertRaises(p.ProtocolError):
+                await resource_pool.accept_follower_configuration(
+                    dict(configuration,compute=compute),self.store.node,self.database)
+        async with self.database.connect() as conn:
+            self.assertEqual(dict((await conn.execute(select(s.storage_members))).mappings().one()),before)
+            self.assertEqual(list((await conn.execute(select(s.compute_members))).mappings()),[])
+
+    async def test_master_local_has_no_compute_fallback_or_history_rewrite(self):
+        from app.services import resource_pool
+        await self.store.promote('Master','https://master.example.com','admin',1024**3)
+        async with self.database.begin() as conn:
+            self.assertEqual(list((await conn.execute(select(s.compute_members))).mappings()),[])
+            historic=dict(member_id=self.store.node['node_id'],enabled=1,worker_slots=1,available_slots=1,
+                cpu_percent=0,memory_available_bytes=0,capabilities=['fallback'],updated_at=41)
+            await conn.execute(insert(s.compute_members).values(**historic))
+        await resource_pool.configure_member(self.store.node['node_id'],storage_enabled=True,
+            allocated_bytes=1024**3,backup_enabled=False,actor='test',store=self.store)
+        async with self.database.connect() as conn:
+            self.assertEqual(dict((await conn.execute(select(s.compute_members))).mappings().one()),historic)
+
+    async def test_retired_job_http_paths_are_absent_without_router_filter(self):
+        import httpx
+        from fastapi import FastAPI
+        from app.api import internal_control
+        application=FastAPI()
+        application.include_router(internal_nodes.router)
+        application.include_router(internal_control.router)
+        with patch.object(internal_nodes,'authenticated',new_callable=AsyncMock) as authenticate:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application),base_url='https://test') as client:
+                for path in ('/internal/v1/jobs/lease','/internal/v1/jobs/'+('c'*32)+'/complete'):
+                    self.assertEqual((await client.post(path,json={})).status_code,404)
+            authenticate.assert_not_called()
 
     async def test_master_stats_are_single_authoritative_record(self):
         await self.store.promote("Master", "https://master.example.com", "admin", 1024 ** 3)
@@ -418,6 +487,17 @@ class NodeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await runtime.stop()
             self.assertIsNone(runtime.task)
+
+    async def test_migration_lease_release_failure_does_not_leave_heartbeat_or_transport_running(self):
+        from types import SimpleNamespace
+        runtime=Runtime()
+        stopped=AsyncMock(side_effect=RuntimeError('database unavailable during lease release'))
+        runtime.migrations=SimpleNamespace(stop=stopped)
+        runtime.task=asyncio.create_task(asyncio.Event().wait())
+        with patch('app.services.federation.runtime.transport.close',new=AsyncMock()) as closed:
+            await runtime.stop()
+        self.assertIsNone(runtime.task);self.assertIsNone(runtime.migrations)
+        stopped.assert_awaited_once();closed.assert_awaited_once()
 
     async def test_fixed_role_cannot_start_with_tls_disabled_or_reset_itself(self):
         await self.store.promote("Master", "https://master.example.com", "admin", 1024 ** 3)

@@ -6,6 +6,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SchemaBootstrapContractTests(unittest.TestCase):
+    def test_resource_migration_signature_is_stable_across_process_hash_seeds(self):
+        import os
+        import subprocess
+        import sys
+        command = [sys.executable, '-c', 'from app.core.schema_migrations import MIGRATIONS; print(MIGRATIONS[5].checksum, MIGRATIONS[6].checksum)']
+        values = [subprocess.check_output(command, cwd=ROOT,
+                  env={**os.environ, 'PYTHONHASHSEED': str(seed)}, text=True).strip()
+                  for seed in (1, 42, 123)]
+        self.assertEqual(len(set(values)), 1)
+
     def test_database_startup_supports_versioned_migrations(self):
         source = (ROOT / "app/core/db.py").read_text(encoding="utf-8")
         migrations = (ROOT / "app/core/schema_migrations.py").read_text(encoding="utf-8")

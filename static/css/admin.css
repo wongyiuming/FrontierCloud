@@ -567,7 +567,7 @@ select { color-scheme: dark; }
 .nodes-table select { margin: 3px; }
 .nodes-table select { min-height: 28px; padding: 3px 27px 3px 7px; }
 .nodes-table td:last-child button { min-height: 28px; padding: 4px 8px; }
-.nodes-table td:last-child button:last-child { color: #ffadb7; border-color: #71424c; background: linear-gradient(180deg, #2d1920, #25161b); }
+.nodes-table td:last-child button.danger { color: #ffadb7; border-color: #71424c; background: linear-gradient(180deg, #2d1920, #25161b); }
 #nodeReinitialize { margin-top: 10px; }
 #nodeReinitialize button { color: #ffadb7; border-color: #71424c; background: linear-gradient(180deg, #2d1920, #25161b); }
 #nodeReinitialize span { color: #7f91a6; font-size: 11px; }

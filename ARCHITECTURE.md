@@ -39,6 +39,8 @@ The only supported site types are:
 - `primary` — the Master Local placement (`member_kind=MasterLocal`, transport `Local`);
 - `direct` — Follower placements whose current transport is `Direct`;
 - `relay` — Follower placements whose current transport is `Relay`.
+- `s3` — enabled, connection-checked private S3 placements; browser bytes go
+  directly to the object endpoint, with no Follower relationship.
 
 For Direct and Relay uploads, the user must not name a specific member. FrontierCloud selects among all members of the requested type that are storage-enabled, online, writable, and have enough writable capacity for the object. Placement prefers the lowest current `(used + reserved) / allocated` pressure and then more available bytes, for an empty immediate-parent media folder. Existing active objects and every unreconciled reservation pin that folder to its current owner. An offline, full or conflicting owner rejects the request; FrontierCloud never scatters siblings to work around that condition. Member selection plus durable upload reservation is serialized by the storage write lock so concurrent Admin sessions see current `reserved_bytes`.
 
@@ -47,6 +49,35 @@ Historical media requires **no migration** for this feature. Existing `storage_m
 Site-type colors in Admin are observation aids only: local/primary uses a muted green marker, Direct a muted amber marker, and Relay a muted red marker. They must remain low-saturation badges rather than full-row alert colors.
 
 Compute Worker is **retired**. Worker slots, leased compute scheduling, worker UI, or product-level Compute configuration must not be reintroduced accidentally through compatibility code.
+
+Historical compute tables and rows remain part of upgrade and recovery data.
+Runtime registration, heartbeats and configuration do not read or rewrite them,
+and no job lease/completion endpoint or executable helper remains. An older
+Python peer may receive the fixed disabled compatibility envelope; requests to
+enable compute are refused before any resource configuration changes.
+
+### Optional S3 adapter candidate
+
+S3 is a separate private-bucket adapter, not a Follower with invented heartbeat,
+physical free space, live traffic or certificate-controller status. Master owns
+configuration, catalog authorization and durable upload state. Browser media
+bytes go directly to the configured verified-HTTPS endpoint; browser encryption
+and original ciphertext remain unchanged. The product does not install an S3
+server or import unrelated bucket objects. Credentials use the node vault and
+must be excluded from status, audit details and error messages.
+
+Overlapping managed prefixes in a bucket cannot have separate member owners.
+Unreconciled uploads block credential replacement, endpoint changes and removal;
+owned objects block endpoint/bucket/prefix changes. Disabling new placement does
+not revoke existing object ownership. Identity reset cannot orphan configured S3
+members. A narrow recovery-credential path is allowed only after disabling the
+member, putting every unfinished upload into cancellation, and expiry of all
+old part grants. It cannot change namespace or authorize new uploads. This is
+required to clean up with revoked or expired credentials without losing state.
+The candidate supplies multipart transactions, published read/delete adapters,
+Admin metadata routes, native configuration controls and a bounded browser
+uploader/recovery worker. The complete browser matrix and owner acceptance remain release gates. Its
+implementation and release gates are tracked in `docs/python-s3-storage.md`.
 
 ## 4. Heartbeat and Backup
 
@@ -78,6 +109,115 @@ Folder rename is deliberately narrower than a general move API:
 - offline Followers block a rename that cannot be completed safely.
 
 All Master path mutations participate in one process-local reader/writer fence. Cross-member folder rename owns the exclusive fence from preflight through commit/rollback. Upload-session reservation, global delete, hide/unhide, and priority mutations enter through a shared fence; upload reservations and `pending_delete` then remain durable database fences after that short shared section ends. A new path-mutation entry point must join this protocol instead of creating an independent race window.
+
+The candidate resource-migration layer adds durable whole-parent scopes and source
+drains. New uploads must check both before reserving capacity. File mutations
+check their immediate parent; directory mutations also check descendant units.
+Node mode, allocation, revocation and identity reset must refuse unreconciled
+migration material. Identical heartbeat configuration remains idempotent and
+must not clear reservations or drains. Scope/drain age is never permission to
+discard them. Master-owned visibility, priorities, lyrics and playback facts
+remain available and must survive ownership cutover without being rewritten
+from a historical plan. Reads are not blocked by write exclusions.
+
+Admission must use the same exclusive media lock and node-identity transaction
+as these checks before execution can be exposed. The current candidate supplies
+readonly planning, ordinary-write exclusions and durable Master/native preparation.
+The Master coordinator preserves one task across lost acknowledgements and
+process restart, repeats observations and waits for both native confirmations.
+While a scope list is incomplete, ordinary path mutations fail closed. Source
+drains, parent scopes and target quota survive restart and can be released only
+by controlled reconciliation. Prepared tasks cannot be claimed by a transfer
+runner. The execution coordinator repeats observations, verifies private staging
+writability and a signed direct Source/Target HTTPS path before queueing. Master
+issues short task/epoch/object/range-bound grants; Target proves its own private
+key and pulls Source bytes without receiving a Master relationship credential.
+Copy uses bounded buffers and incremental content verification. Verified copies
+remain private staging material. Execution first registers the entire admitted
+object metadata roster at both peers without copying resource bytes. It then
+copies, verifies, publishes and commits one complete immediate-parent unit before
+copying the next. A later parent's incomplete copy cannot block an earlier
+parent's verified cutover. Task progress never implies that all future parents
+have verified copies. Per-unit publication and commit checks remain mandatory;
+global publication flags do not authorize modifying an already committed unit.
+Explicit cancellation first fences both peers,
+joins active I/O, and deletes only identity-verified private staging. Unknown
+files or changed roots retain reservations. Source originals are never deleted
+by cancellation. The Target can assemble verified files by hard-link/unlink,
+atomically publish one immediate-parent directory and register native resource
+identities. It keeps the same bytes, inode and encryption descriptor, and never
+imports Master business rows. Filesystem intent and SQL phases are reconciled
+after restart or a lost acknowledgement. No payload-sized second copy is made.
+This relies on durable managed-write exclusions and does not coordinate arbitrary
+external filesystem writers. Target publication retains all reservations; fresh
+Source verification is bounded and binds current native identity, metadata and
+directory membership to the original admitted unit digest. It does not rehash
+unchanged payloads. Master then changes complete-parent placement, committed
+bytes and its exact quota in one transaction, preserving current business and
+encryption rows. Native acknowledgements consume Target capacity once; lost
+responses and a new runner must reconcile the same immutable commit record.
+Source originals, drains and every parent scope remain through the cleanup
+grace. Light acknowledgement does not wait for the heavy-work traffic window.
+The catalog cache namespace includes durable committed-byte totals, so a runner
+exit or unavailable Redis notification cannot expose the previous placement.
+Ordinary authenticated media and recording reads now retain durable capability
+leases. Native ASGI delivery tracks the complete response lifetime; the local
+Nginx counter additionally tracks active business requests across graceful reload
+and worker death. Missing or stale observations never mean zero readers. A Source
+cleanup intent must serialize with new leases before any removal is possible.
+The candidate supplies per-unit managed Source cleanup with a durable unlink
+intent, fresh Target proof, exact Source identity and active-reader checks.
+Filesystem completion does not retain a node-row database lock. A restart
+reconciles a known missing file against its own intent and a fresh complete
+roster; unknown or changed material is preserved. Native usage is not clamped
+from a stale cache while replicas are removed. Task completion separately binds
+the original Source roots, performs a bounded empty physical/registry census,
+reconciles native Source usage, repeats Target membership/version checks, and
+requires both durable signed terminal receipts. Only this task's own capacity,
+scopes and migration drain may be released. Terminal replay never mutates later
+usage or new material. Actual one-hour native acceptance remains a release gate.
+A historical publication receipt or a cleaned unit alone cannot authorize task
+completion or independent retirement.
+
+Independent retirement binds one exact Follower identity and relationship to a
+durable operation. Ordinary node authority is fenced after preparation. Only the
+exact versioned retirement POST may authenticate a fresh HMAC nonce for that same
+binding; a completed peer permits status and receipt replay, never a new operation
+or ordinary resource access. Authentication and each business transaction repeat
+the relationship/credential binding. Final completion owns the native request
+exclusion, managed writer barriers, current SQL/history and selected-file census.
+Master requires the peer's signed durable receipt and repeats its own checks.
+Replay verifies current identity, roots and database selection without removing
+later external material. No host, container, volume, identity or audit is deleted.
+Detailed protocol, implementation state and remaining Admin/acceptance gates are
+in `docs/python-node-retirement.md`.
+
+Readonly retirement preflight cannot reserve resources or authorize final
+completion. The Master Admin workflow requires exact member identity confirmation,
+repeats checks and resumes one durable operation after a lost reply. Legacy
+revocation can cancel pending pairing or acknowledge historical revocation only;
+an active relationship must use independent retirement. Known security control
+projections must match bounded current SQL state; directory/name exemptions are
+not physical emptiness proof.
+
+The Master runs one serial migration scheduler independently of heartbeat and
+Backup. It drives short durable control steps; Source and Target carry the
+payload directly. Network loss retains the journal, scopes and capacity.
+Integrity failures require an explicit revision-checked retry. Manual pause is
+durable across restart and cannot be undone by a traffic observation. Copy,
+verification, publication and delayed cleanup may pause between bounded steps;
+pausing never rolls back ownership or removes published data. A stale runner
+cannot record progress after a control revision changes. Lightweight native
+acknowledgements may settle an existing commit before heavy-work traffic pause.
+Post-publication cancellation requires its own controlled reconciliation; a
+generic journal state change cannot authorize deletion or scope release.
+Cancellation reconciles each parent independently: committed placement stays
+final, while an uncommitted private parent needs fresh Source retention proof
+and identity-pinned removal intents. Its complete logical roster is distinct
+from actual partial bytes removed and copies that never existed. Such a task
+must not invent verified copies or claim deletion of the full logical size.
+Only signed native settlements may refund that parent's logical reservation.
+Terminal replay checks durable evidence without a new unlink or quota mutation.
 
 ### Process model for mutation safety
 
@@ -150,9 +290,10 @@ The Admin console order is an intentional product contract and is tested in both
 5. IP security
 6. WebRTC network relations
 7. Nodes
-8. Site access state
-9. Admin Key
-10. Brand Logo
+8. Resource migration
+9. Site access state
+10. Admin Key
+11. Brand Logo
 
 Dynamic modules must join this same final DOM/visual order. Reordering code must be idempotent; DOM mutation observers must not create self-triggering reorder loops.
 
@@ -186,6 +327,14 @@ worker. Business HTTPS uses Nginx; Storage uses Python's native TLS server.
 Published Business and Direct HTTP/HTTPS are fixed to 80/443. Relay Storage exposes
 only its authenticated private node transport. Product components run through
 Compose, without host systemd, Docker sockets or privileged mode.
+
+The optional resource-migration scheduler observes real ongoing HTTP I/O, not
+completed access logs. The approved Nginx C observer is built only in the Nginx
+image builder; the runtime retains Python business/control/TLS processes and
+sendfile. A read-only shared Unix socket exposes bounded byte counters only.
+Native Storage is measured at ASGI receive/send. Missing or stale observations
+stop background work; a restart requires a new continuous quiet interval.
+Traffic observations must never resume a manually paused job or grant access.
 
 TLS_ENABLED is the sole TLS switch. Automatic Python ACME owns durable accounts,
 private cache, certificate validation, retries, atomic publication and reload.
@@ -222,3 +371,20 @@ unique path forever, and live writers cannot be reclaimed based on age alone.
 Software replacement is an operator action. The online updater, upgrade/rollback
 APIs and Admin module are retired. Explicit backup/migration remains available;
 an operator maintenance fence always wins over manual Admin availability.
+
+The approved Python operator is a one-shot host entry invoking local Compose.
+It is not a daemon or systemd service, and business containers receive no Docker
+control permission. Host journals and source/recovery material remain private
+and outside mounted business data. A durable operation reference is loaded
+before live discovery when resuming interrupted work; image tags or incomplete
+container labels cannot substitute for its pinned source/configuration proof.
+
+Upgrade recovery captures control state, SQL, identities and keys, excluding
+media and recordings. Controlled pre-opening restoration retains failed roots
+and occupied volumes, restores old state only into empty replacement resources,
+and journals same-filesystem no-replace payload-directory moves. It never
+deletes the failed deployment or infers a DDL downgrade. Nested mounts, foreign
+leases, changed ownership or competing destinations refuse. Selecting recovery
+blocks forward upgrade. The persisted opening boundary forbids old-state
+restoration even after a lost reply, because new business writes may exist.
+Implementation status and native gates belong in `docs/python-source-operator.md`.

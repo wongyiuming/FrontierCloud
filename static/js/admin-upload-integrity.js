@@ -4,6 +4,7 @@ const uploadSiteLabels = {
     primary: '主站',
     direct: '直连站点',
     relay: '中继站点',
+    s3: 'S3',
 };
 
 function ensureUploadSiteTypeSelector() {
@@ -82,6 +83,7 @@ function siteTypeFromItem(item) {
     if (item?.site_type && uploadSiteLabels[item.site_type]) return item.site_type;
     if (item?.transport === 'Direct') return 'direct';
     if (item?.transport === 'Relay') return 'relay';
+    if (item?.transport === 'S3') return 's3';
     return 'primary';
 }
 
@@ -95,8 +97,10 @@ function readyMember(member) {
 }
 
 function countReadySiteTypes(pool) {
-    if (pool?.standalone) return {primary: 1, direct: 0, relay: 0};
-    const counts = {primary: 0, direct: 0, relay: 0};
+    if (pool?.standalone) return {primary: 1, direct: 0, relay: 0, s3: 0};
+    const counts = {primary: 0, direct: 0, relay: 0, s3: 0};
+    counts.s3 = (pool?.s3_members || []).filter(member=>member.placement_ready===true
+        && member.quota_bytes-member.used_bytes-member.reserved_bytes>0).length;
     for (const member of pool?.members || []) {
         if (!readyMember(member) || member.member_kind === 'Auto') continue;
         if (member.member_kind === 'MasterLocal') counts.primary += 1;
@@ -125,7 +129,7 @@ async function refreshUploadSiteTypes() {
     empty.textContent = '请选择上传站点类型';
     uploadSiteType.append(empty);
 
-    for (const value of ['primary', 'direct', 'relay']) {
+    for (const value of ['primary', 'direct', 'relay', 's3']) {
         const option = document.createElement('option');
         option.value = value;
         option.disabled = counts[value] <= 0;
@@ -196,9 +200,18 @@ renderTree = async function renderTreeWithPlacementObservation() {
 
 async function cancelClusterReservation(reservation) {
     if (!reservation?.upload_id) return;
-    await api(`/api/v1/media/admin/upload/session/${reservation.upload_id}`, {
-        method: 'DELETE', headers: requestHeaders(false),
-    }).catch(() => {});
+    const path=reservation.transport==='S3'?`/api/v1/media/admin/s3/uploads/${reservation.upload_id}`
+        :`/api/v1/media/admin/upload/session/${reservation.upload_id}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+        await api(path, {method: 'DELETE', headers: requestHeaders(false), signal: controller.signal});
+        if (reservation.transport === 'S3') await window.FrontierS3?.refresh({signal: controller.signal});
+    } catch (_) {
+        // Recovery retains authority when a cancellation reply is unavailable.
+    } finally {
+        clearTimeout(timeout);
+    }
 }
 
 runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, relativePaths = null, lyricUpload = false, storageMode = null) {
@@ -246,9 +259,9 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
         // browser-side encryption is running or has already failed.
         if (storageMode === 'encrypted' && !encrypted) return null;
         if (file.size > uploadLimits.max_upload_file_size) return null;
-        const outcome = api('/api/v1/media/admin/upload/session', {
+        const outcome = api(selectedSiteType==='s3'?'/api/v1/media/admin/s3/uploads':'/api/v1/media/admin/upload/session', {
             method: 'POST', headers: requestHeaders(), body: JSON.stringify({
-                site_type: selectedSiteType,
+                ...(selectedSiteType==='s3'?{}:{site_type: selectedSiteType}),
                 target_dir: currentPath,
                 relative_path: relativePaths ? relativePaths[index] : null,
                 filename: file.name,
@@ -314,12 +327,17 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
                 if (clusterUpload && !lyricUpload) {
                     reservation = await takeReservation(index, encrypted);
                     try {
+                        if(reservation.transport==='S3') {
+                            result=await window.FrontierS3.transfer(reservation,outgoingFile,transferProgress,
+                                state=>{$('currentFileLabel').textContent=`${state}：${displayName}`;});
+                        } else {
                         await uploadRaw(reservation.upload_url, outgoingFile, transferProgress, reservation.transport === 'Direct');
                         result = reservation.transport === 'Direct'
                             ? await api(`/api/v1/media/admin/upload/session/${reservation.upload_id}/finalize`, {
                                 method: 'POST', headers: requestHeaders(), body: '{}',
                             })
                             : {path: reservation.path};
+                        }
                     } catch (error) {
                         await cancelClusterReservation(reservation);
                         throw error;
@@ -374,7 +392,7 @@ $('download').onclick = async () => {
     const paths = [...selected];
     try {
         const plan = await api(`/api/v1/media/admin/download/plan?paths=${encodeURIComponent(JSON.stringify(paths))}`, {cache: 'no-store'});
-        if (plan.items?.some(item => item.encryption || item.encrypted)) {
+        if (plan.items?.some(item => item.encryption || item.encrypted || item.browser_download)) {
             await window.FrontierMediaCrypto.downloadPlan(plan.items);
             return;
         }

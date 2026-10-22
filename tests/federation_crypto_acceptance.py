@@ -255,6 +255,9 @@ def certificates(browser,nodes,report):
     context,page=admin_page(browser,master);observations=[]
     roots=Store([x509.load_pem_x509_certificate(master.ca.read_bytes())]);results=[]
     for node in nodes:
+        card=page.locator('.node-card').filter(has_text='Master Local' if node is master else node.hostname)
+        toggle=card.get_by_role('button',name='展开',exact=True)
+        if toggle.count():toggle.click()
         panel=page.locator('.node-resource-panel').filter(has_text=node.hostname).filter(has=page.locator('button').filter(has_text='下载证书及私钥'))
         button=panel.get_by_role('button',name='下载证书及私钥',exact=True)
         expect(button).to_be_enabled(timeout=20000)

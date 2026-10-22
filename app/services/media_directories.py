@@ -302,13 +302,20 @@ async def _rewrite_master_catalog(conn, old_path: str, new_path: str) -> None:
                 updated_at=now,
             )
         )
+    if rows:
+        from app.services import s3_schema
+        await conn.execute(s3_schema.members.update().where(s3_schema.members.c.member_id.in_(
+            sorted({row['storage_member_id'] for row in rows}))).values(catalog_revision=s3_schema.members.c.catalog_revision+1))
 
 
 async def _preflight_master(old_path: str, new_path: str) -> list[dict]:
+    from app.services import resource_fences
+    async with node_state.database.begin() as conn:
+        await resource_fences.paths(conn,'media',[(old_path,True),(new_path,True)])
     rows = await node_catalog.resources(directory=old_path)
     if not rows:
         raise FileNotFoundError(old_path)
-    if any(row.get("health") != "online" and row.get("owner_id") != node_state.node.get("node_id") for row in rows):
+    if any(row.get("transport") != 'S3' and row.get("health") != "online" and row.get("owner_id") != node_state.node.get("node_id") for row in rows):
         raise RuntimeError("目录所在 Follower 当前离线，不能安全改名")
     async with node_state.database.connect() as conn:
         old_prefix = old_path.rstrip("/") + "/"
@@ -364,6 +371,8 @@ async def rename_follower_directory(old_path: str, new_path: str, database=None)
     async with media_mutation_lock:
         ensure_media_mutations_ready()
         async with database.connect() as conn:
+            from app.services import resource_fences
+            await resource_fences.paths(conn,'media',[(old_path,True),(new_path,True)])
             if await _target_metadata_conflict(conn, new_path):
                 raise FileExistsError(new_path)
         _rename_physical_directory(old_path, new_path)
@@ -411,6 +420,8 @@ async def rename_directory(path: str, new_name: str) -> dict:
     moved: list[dict] = []
     try:
         for owner_id, row in owners.items():
+            if row.get('transport') == 'S3':
+                continue
             if owner_id == node_state.node.get("node_id"):
                 _rename_physical_directory(old_path, new_path)
             else:

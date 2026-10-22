@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import httpx
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict
 
 from app.api.internal_nodes import require_https
@@ -40,6 +42,48 @@ class ResourceSettings(BaseModel):
     storage_enabled: bool = False
     storage_capacity_gib: int = Field(ge=0, le=10240)
     backup_enabled: bool = False
+
+
+class RetirementAction(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    action: str = Field(pattern='^(check|apply)$')
+    confirm_node_id: str = Field('', pattern='^([a-f0-9]{32})?$', strict=True)
+
+
+def _retirement_admin():
+    from app.services.node_retirement_admin import Admin
+    return Admin(state,transport)
+
+
+def _retirement_error(exc):
+    from app.services.node_retirement_fences import RetirementError
+    code=exc.code if isinstance(exc,RetirementError) else 'retirement_peer_unavailable'
+    return JSONResponse({'code':code,'detail':code},status_code=409,headers={'Cache-Control':'no-store'})
+
+
+@router.get('/retirements')
+async def retirement_history(after: str = Query('',max_length=32), actor: str = Depends(require_session)):
+    try:return JSONResponse(await _retirement_admin().history(after),headers={'Cache-Control':'no-store'})
+    except p.ProtocolError as exc:return _retirement_error(exc)
+
+
+@router.get('/{identifier}/retirement')
+async def retirement_status(identifier: str, actor: str = Depends(require_session)):
+    try:return JSONResponse(await _retirement_admin().status(identifier),headers={'Cache-Control':'no-store'})
+    except p.ProtocolError as exc:return _retirement_error(exc)
+
+
+@router.post('/{identifier}/retirement')
+async def retirement_action(request: Request,identifier: str,payload: RetirementAction,actor: str = Depends(require_session)):
+    require_https(request)
+    try:
+        admin=_retirement_admin()
+        if payload.action=='check':result=await admin.check(identifier)
+        else:result=await admin.apply(identifier,payload.confirm_node_id,actor)
+        if result.get('state')=='blocked':result={**result,'code':'retirement_preflight_blocked'}
+        return JSONResponse(result,status_code=409 if result.get('state')=='blocked' else 200,headers={'Cache-Control':'no-store'})
+    except p.ProtocolError as exc:return _retirement_error(exc)
+    except (httpx.HTTPError,OSError,TimeoutError) as exc:return _retirement_error(exc)
 
 
 def checked(exc):
@@ -89,15 +133,16 @@ def _certificate_unavailable(error: str) -> dict:
 async def _certificate_view():
     from app.core.config import settings
     from app.services.certmanager import certificate_control
+    from app.services.certmanager.client import CertificateControlError,unavailable
     if not settings.TLS_ENABLED:
         return {'enabled': False, 'state': 'DISABLED', 'controller_running': False,
                 'https_ready': False, 'serving_matches': False, 'managed': False, 'auto_renew': False}
     try:
         return await certificate_control()
+    except CertificateControlError as exc:
+        return unavailable(exc.code,settings.SERVER_NAME)
     except Exception:
-        return {'enabled': True, 'hostname': settings.SERVER_NAME, 'state': 'FAILED',
-                'controller_running': False, 'https_ready': False, 'serving_matches': False,
-                'managed': True, 'auto_renew': True, 'last_error': 'controller_unavailable'}
+        return unavailable('controller_unavailable',settings.SERVER_NAME)
 
 
 class CertificateDownload(BaseModel):
@@ -110,6 +155,7 @@ class CertificateDownload(BaseModel):
 async def _node_certificate(identifier, value):
     from app.services.certmanager import certificate_control
     if identifier == state.node['node_id']:
+        if value.get('action')=='status':return await _certificate_view()
         return await certificate_control(**value)
     if state.node['role'] != 'Master':
         raise HTTPException(403, 'Only the Master can observe a paired Storage certificate')
@@ -223,7 +269,6 @@ async def resource_settings(request: Request, identifier: str, payload: Resource
             state.node["node_id"] if relation is None else relation["peer_id"],
             storage_enabled=payload.storage_enabled,
             allocated_bytes=payload.storage_capacity_gib * 1024 ** 3 if payload.storage_enabled else 0,
-            compute_enabled=False, worker_slots=0,
             backup_enabled=payload.backup_enabled, actor=actor, store=state,
         )
         runtime.wakeup.set()

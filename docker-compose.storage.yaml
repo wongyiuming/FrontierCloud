@@ -18,6 +18,8 @@ x-storage-environment: &storage-environment
   STORAGE_PORT: ${STORAGE_PORT:-443}
   STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:?Set the certificate-verified storage root URL}
   REDIS_URL: redis://redis:6379/0
+  # Native TLS has no reverse proxy; trust forwarded identities only by opt-in.
+  TRUSTED_PROXY_NETWORKS: ${TRUSTED_PROXY_NETWORKS:-}
   PYTHONDONTWRITEBYTECODE: "1"
 
 services:

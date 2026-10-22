@@ -5,6 +5,81 @@
     const MAX_CACHE_BYTES = 256 * 1024;
     const HIDDEN_REVEAL_CLICK_LIMIT = 15;
     const HIDDEN_REVEAL_WINDOW_MS = 60 * 1000;
+    const artworkJobs = new WeakMap();
+    const artworkCache = new Map();
+    const ARTWORK_CONCURRENCY = 3, ARTWORK_CACHE_LIMIT = 32, ARTWORK_CACHE_MS = 30000;
+    let artworkRunning = 0, artworkCursor = 0, artworkPage = null, renderedCategories = '';
+
+    function lookupArtwork(url) {
+        const cached = artworkCache.get(url);
+        if (cached && Date.now() - cached.at < ARTWORK_CACHE_MS) return cached.promise;
+        if (artworkCache.size >= ARTWORK_CACHE_LIMIT) artworkCache.delete(artworkCache.keys().next().value);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const entry = {at: Date.now()};
+        entry.promise = fetch(url, {credentials: 'same-origin', cache: 'no-store', signal: controller.signal})
+            .then(response => {
+                if (!response.ok) {
+                    if (response.status === 401 || response.status === 403) artworkCache.clear();
+                    throw new Error('Artwork candidates unavailable');
+                }
+                return response.json();
+            }).catch(error => { if (artworkCache.get(url) === entry) artworkCache.delete(url); throw error; })
+            .finally(() => clearTimeout(timeout));
+        artworkCache.set(url, entry);
+        return entry.promise;
+    }
+
+    function hydrateVisibleArtwork() {
+        const grid = document.getElementById('categoryGrid');
+        const cards = window.FrontierDirectoryGlobe?.visibleCards?.() || [];
+        if (!grid || !cards.length) return;
+        if (artworkPage !== cards[0]) { artworkPage = cards[0]; artworkCursor = 0; }
+        const start = artworkCursor;
+        for (let inspected = 0; inspected < cards.length && artworkRunning < ARTWORK_CONCURRENCY; inspected++) {
+            const index = (start + inspected) % cards.length;
+            const card = cards[index];
+            const job = artworkJobs.get(card);
+            if (!job || job.running || job.done || job.retryAt > Date.now() || (job.tracks && !job.cover && job.next >= job.tracks.length) || !grid.contains(card)) continue;
+            const box = card.getBoundingClientRect();
+            if (box.bottom < 0 || box.top > window.innerHeight + 200) continue;
+            // Bounded workers select visible cards afresh after each phase.
+            // A slow album cannot own the entire page's request queue.
+            job.running = true;
+            artworkRunning++;
+            artworkCursor = (index + 1) % cards.length;
+            void (async () => {
+                try {
+                    if (!job.tracks) {
+                        const artwork = await lookupArtwork(job.url);
+                        if (String(artwork.cover || '').startsWith('/api/v1/media/cover?')) {
+                            job.cover = artwork.cover;
+                        }
+                        job.tracks = Array.isArray(artwork.metadata_tracks) ? artwork.metadata_tracks.slice(0, 8) : [];
+                    }
+                    if (job.cover) {
+                        if (grid.contains(card) && window.FrontierDirectoryGlobe.visibleCards().includes(card)) { job.show(job.cover); job.done = true; }
+                        return;
+                    }
+                    if (!grid.contains(card) || !window.FrontierDirectoryGlobe.visibleCards().includes(card)) return;
+                    if (job.next >= job.tracks.length) { job.done = true; return; }
+                    if (!window.FrontierMusicMetadata) { job.done = true; return; }
+                    const tags = await window.FrontierMusicMetadata.metadata(job.tracks[job.next]);
+                    job.next++;
+                    if (tags.cover) job.cover = tags.cover;
+                    if (job.cover && grid.contains(card) && window.FrontierDirectoryGlobe.visibleCards().includes(card)) { job.show(job.cover); job.done = true; }
+                } catch (_) { job.retryAt = Date.now() + 2000; /* Retry on a later visibility event without a tight failure loop. */ }
+                finally {
+                    job.running = false;
+                    artworkRunning--;
+                    hydrateVisibleArtwork();
+                }
+            })();
+        }
+    }
+    window.addEventListener('frontier-directory-visible', hydrateVisibleArtwork);
+    window.addEventListener('scroll', hydrateVisibleArtwork, {passive: true});
+    window.addEventListener('pagehide', event => { if (!event.persisted) artworkCache.clear(); });
 
     function cacheRead(key) {
         if (!key) return null;
@@ -54,12 +129,16 @@
     function renderCategories(entries) {
         const grid = document.getElementById('categoryGrid');
         if (!grid) return;
+        const signature = JSON.stringify(entries);
+        if (renderedCategories && signature !== renderedCategories) artworkCache.clear();
+        renderedCategories = signature;
         grid.replaceChildren();
         if (!entries.length) {
             const empty = document.createElement('div');
             empty.className = 'empty';
             empty.textContent = window.frontierCloudCatalogConfig?.emptyText || '暂无分类目录';
             grid.append(empty);
+            initDirectoryGlobe();
             return;
         }
         const fragment = document.createDocumentFragment();
@@ -68,16 +147,43 @@
             card.className = 'card';
             card.href = String(entry.url || '#');
             card.title = String(entry.name || '');
+            const artwork = document.createElement('div');
+            artwork.className = 'card-artwork';
+            artwork.ariaHidden = 'true';
+            const placeholder = document.createElement('div');
+            placeholder.className = 'card-placeholder';
+            placeholder.textContent = Array.from(String(entry.name || '音'))[0];
+            artwork.append(placeholder);
+            const show = source => {
+                artwork.querySelector('img')?.remove();
+                const image = document.createElement('img');
+                image.src = source;
+                image.alt = '';
+                image.decoding = 'async';
+                image.draggable = false;
+                placeholder.hidden = true;
+                image.addEventListener('error', () => { image.hidden = true; placeholder.hidden = false; }, {once: true});
+                artwork.append(image);
+            };
+            if (String(entry.cover || '').startsWith('/api/v1/media/cover?')) {
+                show(entry.cover);
+            }
+            if (String(entry.artwork_url || '').startsWith('/api/v1/media/catalog/artwork?')) artworkJobs.set(card, {url: entry.artwork_url, tracks: null, show, next: 0, done: false});
             const title = document.createElement('div');
             title.className = 'card-title';
-            title.textContent = `📁 ${middleEllipsis(entry.name || '')}`;
+            title.textContent = middleEllipsis(entry.name || '');
             const arrow = document.createElement('div');
             arrow.className = 'card-arrow';
             arrow.textContent = '→';
-            card.append(title, arrow);
+            card.append(artwork, title, arrow);
             fragment.append(card);
         }
         grid.append(fragment);
+        initDirectoryGlobe();
+    }
+
+    function initDirectoryGlobe() {
+        window.FrontierDirectoryGlobe?.refresh();
     }
 
     function idle(callback) {
@@ -179,7 +285,7 @@
         const config = window.frontierCloudCatalogConfig;
         if (!config) return;
         const heading = document.querySelector('h1');
-        if (heading) {
+        if (heading && !document.getElementById('globeStage')) {
             heading.title = heading.textContent;
             heading.textContent = middleEllipsis(heading.textContent, 52);
         }

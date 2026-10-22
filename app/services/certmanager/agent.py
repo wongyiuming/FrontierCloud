@@ -77,7 +77,7 @@ def main():
         pass
     app = create_control_app(manager)
     server = uvicorn.Config(app, uds=str(socket), workers=1, proxy_headers=False, access_log=False,
-                            log_config=None, limit_concurrency=2, timeout_keep_alive=1)
+                            log_config=None, limit_concurrency=8, timeout_keep_alive=1)
     old_umask = os.umask(0o117)  # Unix socket 0660, group 10001; Web only sees this RPC volume.
     listener = sockets.socket(sockets.AF_UNIX, sockets.SOCK_STREAM)
     listener.bind(str(socket))

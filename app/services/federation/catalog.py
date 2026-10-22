@@ -12,25 +12,41 @@ from sqlalchemy import func, select, text
 from . import protocol as p
 from . import schema as s
 from .state import State, state
+from app.services import s3_schema
 
 
 class Catalog:
     def __init__(self, store: State = state):
         self.store = store
 
+    def _query(self):
+        return select(s.global_media,s.storage_members.c.relationship_id,s.storage_members.c.health,s.storage_members.c.transport,
+            s.storage_members.c.member_id.label('_native_id'),s3_schema.members.c.member_id.label('_s3_id'),
+            s3_schema.members.c.master_id.label('_s3_master'),s3_schema.objects.c.member_id.label('_s3_owner'),
+            s3_schema.objects.c.state.label('_s3_state'),s3_schema.objects.c.object_id.label('_s3_object'),
+            s3_schema.objects.c.size_bytes.label('_s3_bytes'),s3_schema.objects.c.etag.label('_s3_etag'))\
+            .outerjoin(s.storage_members,s.global_media.c.storage_member_id == s.storage_members.c.member_id)\
+            .outerjoin(s3_schema.members,s.global_media.c.storage_member_id == s3_schema.members.c.member_id)\
+            .outerjoin(s3_schema.objects,s.global_media.c.media_id == s3_schema.objects.c.media_id)\
+            .where(s.global_media.c.state == 'active')
+
+    def _placement(self,row):
+        row = dict(row)
+        if row['_s3_id'] is not None:
+            if (row['_native_id'] is not None or row['_s3_state'] != 'active' or row['_s3_object'] != row['object_id'] or
+                row['_s3_owner'] != row['storage_member_id'] or row['_s3_master'] != self.store.node.get('node_id') or
+                row['_s3_bytes'] != row['size_bytes'] or row['_s3_etag'] != row['etag']):
+                raise p.ProtocolError('S3 资源归属或对象记录不一致')
+            row.update(relationship_id=None,health='external',transport='S3')
+        elif row['_native_id'] is None:
+            return None
+        return row
+
     async def resources(self, directory: str | None = None, root: str | None = None,
                         path: str | None = None) -> list[dict]:
         if self.store.node["role"] != "Master":
             return []
-        query = select(
-            s.global_media,
-            s.storage_members.c.relationship_id,
-            s.storage_members.c.health,
-            s.storage_members.c.transport,
-        ).join(
-            s.storage_members,
-            s.global_media.c.storage_member_id == s.storage_members.c.member_id,
-        ).where(s.global_media.c.state == "active")
+        query = self._query()
         if path is not None:
             query = query.where(
                 s.global_media.c.path_locator == hashlib.sha256(path.encode("utf-8")).hexdigest(),
@@ -41,8 +57,8 @@ class Catalog:
             query = query.where(s.global_media.c.media_path.startswith(prefix, autoescape=True))
 
         async with self.store.database.connect() as conn:
-            media_rows = [dict(row) for row in (await conn.execute(query.order_by(
-                s.global_media.c.media_path, s.global_media.c.media_id))).mappings()]
+            media_rows = [placed for row in (await conn.execute(query.order_by(
+                s.global_media.c.media_path, s.global_media.c.media_id))).mappings() if (placed := self._placement(row)) is not None]
             identifiers = [row["media_id"] for row in media_rows]
             stats: dict[str, dict] = {}
             linked: set[str] = set()
@@ -85,21 +101,14 @@ class Catalog:
         if self.store.node["role"] != "Master" or not p.OBJECT_ID.fullmatch(identifier):
             raise p.ProtocolError("Invalid resource identity")
         async with self.store.database.connect() as conn:
-            row = (await conn.execute(select(
-                s.global_media,
-                s.storage_members.c.relationship_id,
-                s.storage_members.c.health,
-                s.storage_members.c.transport,
-            ).join(
-                s.storage_members,
-                s.global_media.c.storage_member_id == s.storage_members.c.member_id,
-            ).where(
+            row = (await conn.execute(self._query().where(
                 s.global_media.c.media_id == identifier,
-                s.global_media.c.state == "active",
             ))).mappings().first()
         if not row:
             raise p.ProtocolError("Resource not found")
-        row = dict(row)
+        row = self._placement(row)
+        if row is None:
+            raise p.ProtocolError('Resource placement not found')
         return {
             "resource_id": row["media_id"], "owner_id": row["storage_member_id"],
             "object_id": row["object_id"], "relationship_id": row["relationship_id"],

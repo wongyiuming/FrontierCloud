@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.exc import IntegrityError
@@ -116,6 +116,8 @@ async def _reserve_upload(path: str, size: int, preferred: str | None, encryptio
     media_id = hashlib.sha256((upload_id + ":" + path).encode()).hexdigest()
     try:
         async with node_state.database.begin() as conn:
+            from app.services import resource_fences
+            await resource_fences.new_upload(conn,member['member_id'],'media',path)
             current = (await conn.execute(select(s.storage_members).where(
                 s.storage_members.c.member_id == member["member_id"]).with_for_update()
             )).mappings().first()
@@ -260,6 +262,15 @@ async def _cleanup_upload_session_unlocked(upload_id: str, *, allow_unindexed_lo
 async def _cleanup_upload_session(upload_id: str, *, allow_unindexed_local: bool = False, expired_only: bool = False) -> bool:
     from app.services.upload_claims import claim, UploadBusy
     try:
+        if getattr(node_state,'_s3_configured',False):
+            from app.services import s3_schema
+            async with node_state.database.connect() as conn:
+                is_s3 = await conn.scalar(select(s3_schema.uploads.c.session_id).where(s3_schema.uploads.c.session_id == upload_id))
+            if is_s3:
+                from app.services.s3_uploads import Uploads
+                service = Uploads(node_state)
+                result = await service.reconcile(upload_id) if expired_only else await service.cancel(upload_id,actor='admin')
+                return result['state'] in ('published','aborted')
         with claim(upload_id):
             return await _cleanup_upload_session_unlocked(upload_id, allow_unindexed_local=allow_unindexed_local, expired_only=expired_only)
     except UploadBusy:
@@ -270,10 +281,14 @@ async def _cleanup_expired_uploads(limit: int = 50, time_budget=2.0) -> int:
     from app.core.config import settings
     now = int(time.time())
     async with node_state.database.connect() as conn:
-        upload_ids = list((await conn.execute(select(s.upload_sessions.c.upload_id).where(
+        query = select(s.upload_sessions.c.upload_id).where(
             s.upload_sessions.c.state == "reserved",
             ((s.upload_sessions.c.updated_at <= now - settings.ADMIN_UPLOAD_INACTIVITY_TIMEOUT) | (s.upload_sessions.c.expires_at <= now)),
-        ).order_by(s.upload_sessions.c.created_at).limit(limit))).scalars())
+        )
+        if getattr(node_state,'_s3_configured',False):
+            from app.services import s3_schema
+            query = query.where(~select(s3_schema.uploads.c.session_id).where(s3_schema.uploads.c.session_id == s.upload_sessions.c.upload_id).exists())
+        upload_ids = list((await conn.execute(query.order_by(s.upload_sessions.c.created_at).limit(limit))).scalars())
     cleaned = 0
     try:
         async with asyncio.timeout(time_budget):
@@ -305,6 +320,27 @@ def _path_hidden(path: str, hidden: set[str]) -> bool:
     return any("/".join(parts[:index]) in hidden for index in range(1, len(parts) + 1))
 
 
+async def _tree_storage_modes(items: list[dict]) -> list[dict]:
+    files = [item for item in items if item['kind'] == 'file']
+    identifiers = [item['media_id'] for item in files]
+    from app.services import s3_schema
+    async with node_state.database.connect() as conn:
+        descriptors = await media_crypto.encryption_for_ids(conn, identifiers)
+        for offset in range(0, len(identifiers), 500):
+            rows = (await conn.execute(select(s3_schema.objects.c.media_id,
+                s3_schema.objects.c.content_encrypted, s3_schema.objects.c.size_bytes).where(
+                    s3_schema.objects.c.media_id.in_(identifiers[offset:offset+500]),
+                    s3_schema.objects.c.state == 'active'))).mappings()
+            for row in rows:
+                descriptor = descriptors.get(row['media_id'])
+                if (bool(descriptor) != bool(row['content_encrypted'])
+                        or descriptor is not None and descriptor.ciphertext_size != row['size_bytes']):
+                    raise media_crypto.MetadataError('S3 encryption descriptor missing or inconsistent')
+    for item in files:
+        item['encrypted'] = item['media_id'] in descriptors
+    return items
+
+
 async def _global_tree(path: str, query: str | None = None) -> dict:
     scope = legacy_admin._media_priority_scope(path)
     parts = scope.split("/")
@@ -327,7 +363,7 @@ async def _global_tree(path: str, query: str | None = None) -> dict:
                     "storage_member_id": row["owner_id"], "transport": row.get("transport"),
                     "node_health": row.get("health"),
                 })
-        return {"path": path, "query": query, "items": matches[:legacy_admin.media_search.MAX_SEARCH_RESULTS],
+        return {"path": path, "query": query, "items": await _tree_storage_modes(matches[:legacy_admin.media_search.MAX_SEARCH_RESULTS]),
                 "truncated": len(matches) > legacy_admin.media_search.MAX_SEARCH_RESULTS}
 
     prefix = scope.rstrip("/") + "/"
@@ -350,7 +386,7 @@ async def _global_tree(path: str, query: str | None = None) -> dict:
                 "node_health": row.get("health"),
             }
     return {"path": scope,
-            "items": sorted(items.values(), key=lambda item: (item["kind"] != "directory", item["name"].casefold()))}
+            "items": await _tree_storage_modes(sorted(items.values(), key=lambda item: (item["kind"] != "directory", item["name"].casefold())))}
 
 
 @router.get("/tree")
@@ -689,6 +725,18 @@ def _remote_source(row: dict, relation: dict):
 
 
 async def _download_rows(rows: list[dict], exact_single: bool, request: Request, session_hash: str):
+    s3_rows = [row for row in rows if row.get('transport') == 'S3']
+    if s3_rows:
+        if not exact_single or len(rows) != 1:
+            raise HTTPException(409,'S3 批量下载请使用浏览器下载计划')
+        from app.services.s3_objects import Objects
+        from app.services.s3_signing import S3Error
+        try:
+            grant = await Objects(node_state).grant(rows[0]['resource_id'],method=request.method,download=True)
+        except S3Error as error:
+            raise HTTPException(409,'S3 下载授权失败，请检查节点状态') from error
+        await admin_service.audit(session_hash,'download',1,rows[0]['path'],'success','s3_direct',request)
+        return RedirectResponse(grant.url,status_code=307,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
     relations: dict[str, dict] = {}
     for row in rows:
         if row["relationship_id"]:

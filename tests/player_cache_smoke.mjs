@@ -28,7 +28,7 @@ function playerContext(fetchImpl) {
         window: {addEventListener() {}}, navigator: {},
         document: {
             getElementById: id => elementFor(id),
-            createElement: () => ({className: '', textContent: '', style: {}, children: [], appendChild(child) { this.children.push(child); }}),
+            createElement: () => ({className: '', textContent: '', style: {}, offsetHeight: 100, children: [], appendChild(child) { this.children.push(child); }}),
             querySelector: () => null,
             querySelectorAll: () => [],
         },
@@ -126,7 +126,7 @@ for (const failure of ['network', 'status', 'truncated']) {
     assert.deepEqual(track.children.slice(0, 4).map(row => row.textContent), ['one', 'two', 'three', 'four']);
     assert.equal(track.children[1].className, 'sync-lyric current');
     p.run('updateSynchronizedLyrics(3.1)');
-    assert.equal(track.style.transform, 'translateY(-20%)');
+    assert.equal(track.style.transform, 'translateY(-100px)', 'slide uses the actual departing row height so wrapped lines are not cut');
     assert.equal(track.children[2].className, 'sync-lyric current');
 }
 
@@ -168,4 +168,125 @@ for (const failure of ['network', 'status', 'truncated']) {
     assert.equal(p.run('art.notice.show'), '媒体暂不可用，请稍后重试');
 }
 
+{
+    const p = playerContext(async () => new Response('unused'));
+    const scheduled = [];
+    p.context.window.FrontierMusicMetadata = {metadata(entry) { scheduled.push(entry); return Promise.resolve({}); }};
+    p.context.window.FrontierMediaCrypto = {prepareCatalog: async () => {}, resetFault() {}};
+    p.run(`currentMediaList = Array.from({length: 500}, (_, i) => ({media_id: String(i), type: 'audio', url: '/track-' + i, cover: '', title: String(i), encryption: {version: 1}}));
+        cryptoPreparedCatalogs.add(currentMediaList); applyMediaCatalog(currentMediaList);`);
+    assert.equal(scheduled.length, 1, 'opening a large encrypted album reads only the selected track');
+    assert.equal(scheduled[0].media_id, '0');
+    p.run('selectMedia(400)');
+    assert.equal(scheduled.length, 2, 'selecting a distant track must not queue intervening tracks');
+    assert.equal(scheduled[1].media_id, '400');
+    p.run('selectMedia(0)');
+    assert.equal(scheduled.length, 2, 'already requested metadata is reused');
+}
+{
+    const p = playerContext(async () => new Response('unused'));
+    let reads = 0;
+    p.context.window.FrontierMusicMetadata = {metadata() {
+        reads += 1; return Promise.resolve({title: 'S3 original title'});
+    }};
+    p.run('currentMediaList[0].browser_metadata=true; loadSelectedMetadata(currentMediaList[0]);');
+    await flush();
+    assert.equal(reads, 1, 'plain S3 tracks require browser metadata without a crypto descriptor');
+    assert.equal(p.run('currentMediaList[0].title'), 'S3 original title');
+}
+{
+    const p = playerContext(async () => new Response('unused'));
+    let attempts = 0;
+    p.context.window.FrontierMusicMetadata = {metadata() {
+        return ++attempts === 1 ? Promise.reject(new Error('transient Range failure')) : Promise.resolve({title: 'Recovered'});
+    }};
+    p.run('currentMediaList[0].encryption = {version: 1}; loadSelectedMetadata(currentMediaList[0]); loadSelectedMetadata(currentMediaList[0]);');
+    assert.equal(attempts, 1, 'an in-flight selected-track read remains deduplicated');
+    await flush();
+    p.run('loadSelectedMetadata(currentMediaList[0])');
+    await flush();
+    assert.equal(attempts, 2, 'a failed selected-track read must be retryable');
+    assert.equal(p.run('currentMediaList[0].title'), 'Recovered');
+}
+{
+    const p = playerContext(async () => new Response('unused'));
+    let observer;
+    const scheduled = [], releases = [];
+    const rows = Array.from({length: 500}, (_, index) => ({dataset: {index: String(index)}}));
+    p.context.window.IntersectionObserver = class {
+        constructor(callback) { observer = callback; }
+        observe() {}
+        disconnect() {}
+    };
+    p.context.window.FrontierMusicMetadata = {metadata(entry, options) {
+        scheduled.push({id: entry.media_id, priority: options.priority});
+        return new Promise(resolve => releases.push(() => resolve({cover: 'blob:own-' + entry.media_id})));
+    }};
+    p.elements.set('mediaList', {querySelectorAll: () => rows});
+    p.run(`currentMediaList = Array.from({length:500},(_,i)=>({media_id:String(i),media_path:'music/'+i+'.mp3',encryption:{version:1}}));
+        currentMediaList[499].encryption=undefined;currentMediaList[499].browser_metadata=true;renderPlaylist()`);
+    observer(rows.slice(0, 3).map(target => ({target, isIntersecting: true})));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(scheduled, [{id: '0', priority: false}]);
+    p.run('loadSelectedMetadata(currentMediaList[400])');
+    assert.deepEqual(scheduled[1], {id: '400', priority: true}, 'selection must have a slot while visible artwork is pending');
+    observer(rows.slice(0, 3).map(target => ({target, isIntersecting: false})));
+    observer([{target: rows[499], isIntersecting: true}]);
+    releases[0](); releases[1]();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(scheduled.map(item => item.id), ['0', '400', '499'], 'scrolling must discard queued offscreen rows');
+    releases[2]();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(p.run('currentMediaList[499].cover'), 'blob:own-499');
+    assert.equal(scheduled.length, 3, 'the other 497 tracks remain unread');
+}
+{
+    const p = playerContext(async () => new Response('unused'));
+    let timers = 0;
+    p.context.setTimeout = (fn, delay) => { timers++; return setTimeout(fn, delay); };
+    p.run('currentMediaList[0].encryption={version:1}; visibleMetadataTracks.add(currentMediaList[0]); schedulePlaylistMetadata()');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(timers, 1, 'a missing metadata script must not spin a zero-delay timer loop');
+    let reads = 0;
+    p.context.window.FrontierMusicMetadata = {metadata() { reads++; return Promise.resolve({}); }};
+    p.run('schedulePlaylistMetadata()');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(reads, 1, 'restoring the helper permits a later visible-row read');
+}
+{
+    const p = playerContext(async () => new Response('unused'));
+    p.context.PLAYER_KIND = 'audio';
+    p.context.window.IntersectionObserver = class {observe() {} disconnect() {}};
+    p.context.window.FrontierMusicMetadata = {thumbnail() { throw new Error('unsupported renderer must not be queued'); }, canThumbnail: () => false};
+    p.run("currentMediaList[0].cover='/api/v1/media/cover?legacy'; document.getElementById('mediaList').querySelectorAll=()=>[]; renderPlaylist()");
+    assert.match(p.elements.get('mediaList').innerHTML, /src="data:image\/svg\+xml/, 'unsupported thumbnail browsers use a network-free placeholder');
+    assert.doesNotMatch(p.elements.get('mediaList').innerHTML, /src="\/api\/v1\/media\/cover/, 'no original fallback download');
+}
+{
+    const p = playerContext(async () => {throw new Error('thumbnail must not fetch media');});
+    p.context.PLAYER_KIND = 'audio';
+    p.context.window.requestIdleCallback = callback => setImmediate(() => callback({timeRemaining: () => 20}));
+    p.context.window.cancelIdleCallback = clearImmediate;
+    p.run("art.video={paused:false,seeking:false,readyState:3,currentTime:5,duration:100,buffered:{length:1,start:()=>0,end:()=>10}}; currentMediaList[0].cover='/api/v1/media/cover?low'; visibleArtworkTracks.add(currentMediaList[0])");
+    let calls = 0, signal;
+    p.context.image = {src: 'placeholder'};
+    p.context.window.FrontierMusicMetadata = {canThumbnail: () => true, thumbnail(_source, options) {
+        calls++; signal = options.signal;
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('cancelled'))));
+    }};
+    await p.run('paintPlayerThumbnail(currentMediaList[0],image)');
+    assert.equal(calls, 0, 'five seconds of buffer is reserved for playback, not pictures');
+    p.run('art.video.buffered.end=()=>30; void paintPlayerThumbnail(currentMediaList[0],image)');
+    assert.equal(calls, 1);
+    p.run('art.video.buffered.end=()=>10; pumpPlayerArtwork()'); await flush();
+    assert.equal(signal.aborted, true); assert.equal(p.context.image.src, 'placeholder');
+    assert.equal(p.run('art.url'), '/a'); assert.equal(p.run('art.currentTime'), 5);
+    p.context.window.FrontierMusicMetadata.thumbnail = async () => {throw new Error('cache miss');};
+    p.run('art.video.buffered.end=()=>30');
+    await p.run('paintPlayerThumbnail(currentMediaList[0],image)');
+    assert.equal(p.context.image.src, 'placeholder', 'cache miss does not load an original');
+    assert.equal(p.requests.length, 0);
+    p.run('document.hidden=true');
+    assert.equal(p.run('playerArtworkReady()'), false, 'background pages do no optional artwork work');
+}
 console.log('player-cache-smoke-ok');

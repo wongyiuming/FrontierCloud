@@ -138,7 +138,7 @@ class SQLiteDatabaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await conn.scalar(text("PRAGMA journal_mode")), "wal")
             self.assertEqual(await conn.scalar(text("PRAGMA foreign_keys")), 1)
             self.assertEqual(await conn.scalar(text("PRAGMA integrity_check")), "ok")
-            self.assertEqual(await conn.scalar(text("SELECT generation FROM frontiercloud_schema")), 4)
+            self.assertEqual(await conn.scalar(text("SELECT generation FROM frontiercloud_schema")), schema_migrations.CURRENT_SCHEMA_GENERATION)
         await self.database.dispose()
         await db.init_db()
         async with self.database.connect() as conn:
@@ -155,9 +155,9 @@ class SQLiteDatabaseTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await self._stats(), before)
                 async with self.database.begin() as conn:
                     await conn.execute(text("UPDATE media_playback_stats SET preference=500000 WHERE media_id='500'"))
-                    self.assertEqual(await conn.scalar(text("SELECT generation FROM frontiercloud_schema")), 4)
+                    self.assertEqual(await conn.scalar(text("SELECT generation FROM frontiercloud_schema")), schema_migrations.CURRENT_SCHEMA_GENERATION)
                     history = list((await conn.execute(text("SELECT generation FROM frontiercloud_schema_migrations ORDER BY generation"))).scalars())
-                    self.assertEqual(history, list(range(generation + 1, 5)))
+                    self.assertEqual(history, list(range(generation + 1, schema_migrations.CURRENT_SCHEMA_GENERATION+1)))
                     self.assertTrue(await schema_migrations.column_exists(conn, "cluster_upload_sessions", "content_encrypted"))
                     self.assertEqual(await conn.scalar(text("SELECT content_encrypted FROM cluster_upload_sessions")), 0)
                     self.assertEqual(await conn.scalar(text("SELECT expected_bytes FROM cluster_upload_sessions")), 17)
@@ -189,12 +189,14 @@ class SQLiteDatabaseTests(unittest.IsolatedAsyncioTestCase):
             async with database.connect() as conn:
                 return await schema_migrations.migrate_schema(conn, 2)
         try:
-            self.assertEqual(await asyncio.gather(migrate(self.database), migrate(other)), [4, 4])
+            self.assertEqual(await asyncio.gather(migrate(self.database), migrate(other)),
+                             [schema_migrations.CURRENT_SCHEMA_GENERATION]*2)
         finally:
             await other.dispose()
         self.assertEqual(await self._stats(), before)
         async with self.database.connect() as conn:
-            self.assertEqual(await conn.scalar(text("SELECT COUNT(*) FROM frontiercloud_schema_migrations")), 2)
+            self.assertEqual(await conn.scalar(text("SELECT COUNT(*) FROM frontiercloud_schema_migrations")),
+                             schema_migrations.CURRENT_SCHEMA_GENERATION-2)
 
     async def test_unmarked_and_future_database_fail_without_schema_changes(self):
         self.file.parent.mkdir()
@@ -253,12 +255,12 @@ class SQLiteDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_wal_reader_allows_nested_lookup_and_parallel_writer(self):
         await db.init_db()
         async with self.database.connect() as reader:
-            self.assertEqual(await reader.scalar(text("SELECT generation FROM frontiercloud_schema")), 4)
+            self.assertEqual(await reader.scalar(text("SELECT generation FROM frontiercloud_schema")), schema_migrations.CURRENT_SCHEMA_GENERATION)
             async with asyncio.timeout(2):
                 async with self.database.begin() as writer:
                     await writer.execute(text("UPDATE ip_security_projection SET generation=42"))
                     async with self.database.connect() as nested_reader:
-                        self.assertEqual(await nested_reader.scalar(text("SELECT generation FROM frontiercloud_schema")), 4)
+                        self.assertEqual(await nested_reader.scalar(text("SELECT generation FROM frontiercloud_schema")), schema_migrations.CURRENT_SCHEMA_GENERATION)
             # The reader retains its pre-write snapshot, and a fresh reader
             # sees the durable update. Neither read reserved a writer lock.
             self.assertEqual(await reader.scalar(text("SELECT generation FROM ip_security_projection")), 0)

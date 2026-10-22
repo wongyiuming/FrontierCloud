@@ -82,6 +82,11 @@ The [final Python acceptance ledger](docs/python-final-parity.md),
 Online software upgrade/rollback APIs and their Admin module are removed.
 Use the documented maintenance-window procedure for installation and migration.
 
+The [current Python alignment ledger](docs/python-current-parity.md) tracks the
+new alignment cycle separately from that historical acceptance. It records
+runtime decisions, missing capabilities and exact-source evidence requirements;
+unfinished local work is not a new published release.
+
 ## Repository delivery
 
 FrontierCloud has exactly two canonical branches: `dev` for implementation and

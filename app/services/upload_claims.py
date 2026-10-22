@@ -71,6 +71,18 @@ async def digest_file(path):
 
 @contextmanager
 def claim(identifier: str, *, root=None):
+    from app.services.node_retirement_runtime import work
+    from app.services.node_retirement_gate import GateError
+    root=Path(root or ROOT)
+    try:
+        with work(root.parent),_claim(identifier,root=root):yield
+    except GateError as exc:
+        if exc.code=='retirement_requests_busy':raise UploadBusy('Node is completing retirement') from exc
+        raise RuntimeError('Native retirement gate is unavailable') from exc
+
+
+@contextmanager
+def _claim(identifier: str, *, root):
     import fcntl
     if not _ID.fullmatch(identifier):
         raise ValueError('Invalid upload lease identity')

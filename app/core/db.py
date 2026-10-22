@@ -73,12 +73,20 @@ def _required_tables() -> set[str]:
     from app.services.federation import schema as federation_schema
     from app.services import karaoke_schema
     from app.services import media_crypto_schema
+    from app.services import resource_migration_schema
+    from app.services import s3_schema
+    from app.services import node_retirement_schema
+    from app.services import resource_cancel_census_schema
 
     return (
         LOCAL_TABLES
         | {table.name for table in federation_schema.metadata.sorted_tables}
         | {table.name for table in karaoke_schema.metadata.sorted_tables}
         | {table.name for table in media_crypto_schema.metadata.sorted_tables}
+        | set(resource_migration_schema.metadata.tables)
+        | set(s3_schema.metadata.tables)
+        | set(node_retirement_schema.metadata.tables)
+        | set(resource_cancel_census_schema.metadata.tables)
         | {SCHEMA_MARKER_TABLE}
     )
 
@@ -115,6 +123,35 @@ async def _validate_initialized_schema(conn: AsyncConnection, tables: set[str]) 
     await validate_migration_history(conn)
     if not await column_exists(conn, "cluster_upload_sessions", "content_encrypted"):
         raise RuntimeError("当前代际数据库结构不完整；缺少 cluster_upload_sessions.content_encrypted")
+    from app.services.resource_migration_schema import validate as validate_resource_migration
+    await validate_resource_migration(conn)
+    from app.services.s3_schema import validate as validate_s3
+    await validate_s3(conn)
+    from app.services.resource_pause_schema import validate as validate_pause
+    await validate_pause(conn)
+    from app.services.node_retirement_schema import validate as validate_retirement
+    await validate_retirement(conn)
+    from app.services.resource_cancel_census_schema import validate as validate_cancel_census
+    await validate_cancel_census(conn)
+
+
+async def validate_existing_database() -> None:
+    """Fenced Web startup validates prepared state without creating or migrating it."""
+    import stat
+    reader = engine
+    if engine.dialect.name == 'sqlite':
+        path = Path(engine.url.database).absolute()
+        if (not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_nlink != 1 or not path.stat().st_size
+                or any(not stat.S_ISDIR(parent.lstat().st_mode) for parent in path.parents)):
+            raise RuntimeError('Fenced startup requires an existing regular database without symbolic links')
+        reader = create_async_engine(engine.url.set(database=path.as_uri(), query={'mode': 'ro', 'uri': 'true'}))
+    try:
+        async with reader.connect() as connection:
+            await connection.exec_driver_sql('BEGIN' if reader.dialect.name == 'sqlite' else 'START TRANSACTION READ ONLY')
+            await _validate_initialized_schema(connection, await _table_names(connection))
+    finally:
+        if reader is not engine:
+            await reader.dispose()
 
 
 async def init_db() -> None:
@@ -177,6 +214,16 @@ async def init_db() -> None:
             await conn.run_sync(federation_metadata.create_all)
             await conn.run_sync(karaoke_metadata.create_all)
             await conn.run_sync(crypto_metadata.create_all)
+            from app.services.resource_migration_schema import create as create_resource_migration
+            await create_resource_migration(conn)
+            from app.services.s3_schema import create as create_s3
+            await create_s3(conn)
+            from app.services.resource_pause_schema import apply as prepare_pause
+            await prepare_pause(conn)
+            from app.services.node_retirement_schema import create as create_retirement
+            await create_retirement(conn)
+            from app.services.resource_cancel_census_schema import create as create_cancel_census
+            await create_cancel_census(conn)
             await conn.execute(text("INSERT INTO ip_security_projection(singleton) VALUES (1)"))
             await conn.execute(text("INSERT INTO frontiercloud_schema(singleton,generation,created_at) VALUES (1,:generation,:created_at)"), {"generation": SCHEMA_GENERATION, "created_at": int(time.time())})
             await conn.commit()
@@ -387,6 +434,16 @@ async def init_db() -> None:
             await _commit_ddl(conn, str(CreateTable(table, if_not_exists=True).compile(dialect=mysql.dialect())))
 
         await _commit_ddl(conn, MIGRATION_HISTORY_DDL)
+        from app.services.resource_migration_schema import create as create_resource_migration
+        await create_resource_migration(conn)
+        from app.services.s3_schema import create as create_s3
+        await create_s3(conn)
+        from app.services.resource_pause_schema import apply as prepare_pause
+        await prepare_pause(conn)
+        from app.services.node_retirement_schema import create as create_retirement
+        await create_retirement(conn)
+        from app.services.resource_cancel_census_schema import create as create_cancel_census
+        await create_cancel_census(conn)
         await _commit_ddl(conn, """
             CREATE TABLE frontiercloud_schema (
                 singleton TINYINT NOT NULL PRIMARY KEY,

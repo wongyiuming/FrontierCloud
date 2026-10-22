@@ -37,6 +37,12 @@ class MediaPublicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((self.media/'music/artist/cipher.mp3').read_bytes(), cipher)
         self.assertIsNotNone(await self.stored_descriptor())
         self.assertTrue(publication.pending(self.media))
+        journal = publication.pending(self.media)[0]
+        original = journal.read_bytes()
+        with patch('app.services.site_control.hard_fence_active', return_value=True):
+            await media.recover_interrupted_media_deletions()
+        self.assertEqual(journal.read_bytes(), original)
+        self.assertEqual((self.media/'music/artist/cipher.mp3').read_bytes(), cipher)
         await media.recover_interrupted_media_deletions()
         self.assertEqual((self.media/'music/artist/cipher.mp3').read_bytes(), cipher)
         self.assertFalse(publication.pending(self.media)); media.ensure_media_mutations_ready()

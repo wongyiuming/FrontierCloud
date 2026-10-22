@@ -4,17 +4,10 @@
     const panel = $('nodesPanel');
     if (!panel) return;
 
-    if (!document.querySelector('link[data-node-observability]')) {
-        const link = document.createElement('link');
-        link.rel = 'stylesheet';
-        link.href = '/static/css/nodes-observability.css?v=20260927';
-        link.dataset.nodeObservability = '1';
-        document.head.append(link);
-    }
-
     let refreshTimer = null;
     let refreshQueue = Promise.resolve();
     const certificateViews = new Map();
+    const expandedNodes = new Set();
     const setStatus = text => { $('nodeOperationStatus').textContent = text || ''; };
     const visible = (id, show) => $(id).classList.toggle('hidden', !show);
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -254,6 +247,10 @@
 
     function controls(member, relation) {
         const shell = make('div', 'node-card-controls');
+        if (relation?.state === 'retiring') {
+            shell.append(retirementButton(relation, '继续退役'));
+            return shell;
+        }
         if (!relation || relation.state !== 'active') {
             if (member.member_kind === 'MasterLocal') {
                 const input = document.createElement('input');
@@ -282,13 +279,157 @@
             });
             return await waitForEffective(member.member_id);
         }, 'apply', '只有 存储节点回报的 Observed 配置与 Desired 一致才显示已生效。'),
-        button('撤销关系', () => post(`/${relation.relationship_id}/revoke`), 'danger',
-            '存储节点仍持有有效 Storage Pool 文件时后端会拒绝撤销。'));
+        retirementButton(relation));
         shell.append(config.grid, actions);
         return shell;
     }
 
-    function memberCard(member, relation, observed) {
+    const retirementLabels = {
+        retirement_owned_media: '仍有媒体', retirement_owned_recordings: '仍有录音',
+        retirement_unfinished_upload: '上传尚未结束', retirement_member_usage: '资源尚未排空',
+        retirement_backup_retained: '仍有备份', retirement_native_media: '仍有本地媒体',
+        retirement_unknown_file: '存在未核实文件', retirement_requests_busy: '仍有活动请求',
+        retirement_readers_active: '仍有播放或下载', migration_member_busy: '迁移或资源预留未结束',
+        retirement_peer_unavailable: '节点通信失败', retirement_reader_observation_unavailable: '流量状态无法核实',
+        retirement_reader_observation_not_fresh: '等待最新流量状态',
+        retirement_confirmation_mismatch: '节点 ID 不一致', retirement_preflight_blocked: '预检未通过',
+    };
+    const retirementMessage = code => retirementLabels[code] || '状态冲突，请核查节点';
+
+    async function retirementRequest(path, value) {
+        const options = value ? {method: 'POST', headers: requestHeaders(), body: JSON.stringify(value)} : {cache: 'no-store'};
+        const response = await fetch(`/api/v1/media/admin/nodes${path}`, activityRequestOptions(options));
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 401) { location.href = '/api/v1/media'; throw new Error('特权模式已失效'); }
+        if (!response.ok) {
+            const error = new Error(retirementMessage(data.code)); error.code = data.code; error.report = data.report; throw error;
+        }
+        return data;
+    }
+
+    function retirementButton(relation, label = '安全退役') {
+        const control = make('button', 'danger', label); control.type = 'button';
+        control.onclick = () => showRetirement(relation);
+        return control;
+    }
+
+    function retirementDialog(title) {
+        const dialog = make('dialog', 'node-retirement-dialog');
+        dialog.append(make('h3', '', title));
+        dialog.addEventListener('close', () => dialog.remove(), {once: true});
+        document.body.append(dialog); dialog.showModal(); return dialog;
+    }
+
+    function showRetirement(relation) {
+        const dialog = retirementDialog('安全退役');
+        const member = relation.peer_id;
+        dialog.append(make('code', 'node-retirement-identity', member), make('p', 'node-note', '保留数据与身份，撤销节点关系。'));
+        const status = make('div', 'node-retirement-status'); status.setAttribute('role', 'status');
+        const confirmation = document.createElement('input'); confirmation.autocomplete = 'off'; confirmation.maxLength = 32;
+        confirmation.placeholder = '输入节点 ID'; confirmation.setAttribute('aria-label', '确认退役节点 ID');
+        const actions = make('div', 'node-card-actions');
+        const check = make('button', '', '预检'), apply = make('button', 'danger', '确认退役');
+        const receipt = make('button', '', '下载凭据'), close = make('button', '', '关闭');
+        for (const control of [check, apply, receipt, close]) control.type = 'button';
+        actions.append(check, apply, receipt, close); dialog.append(status, confirmation, actions);
+        let operation = null, ready = false, busy = false;
+        const sync = () => {
+            const completed = operation?.phase === 'completed';
+            check.disabled = busy || operation?.phase !== 'not_started';
+            apply.disabled = busy || completed || confirmation.value !== member || (!ready && operation?.phase !== 'retiring');
+            apply.textContent = operation?.phase === 'retiring' ? '继续退役' : '确认退役';
+            confirmation.hidden = Boolean(completed); confirmation.disabled = busy;
+            receipt.hidden = !completed; receipt.disabled = busy; close.disabled = busy;
+        };
+        const observe = report => {
+            ready = report.ready === true;
+            status.replaceChildren(...['master', 'peer'].map(side => {
+                const result = report[side]; const text = result.state === 'passed' ? '通过' : retirementMessage(result.code);
+                const row = make('p', '', `${side === 'master' ? 'Master' : '存储节点'} · ${text}`); row.title = result.code || ''; return row;
+            }));
+        };
+        const load = async () => {
+            operation = await retirementRequest(`/${relation.relationship_id}/retirement`);
+            status.textContent = ({not_started: '先预检，再确认', retiring: '退役待完成，可安全重试', completed: '已退役'})[operation.phase];
+        };
+        const run = async work => {
+            if (busy) return; busy = true; sync();
+            try { await work(); }
+            catch (error) {
+                if (error.report) observe(error.report);
+                else { status.textContent = error.message; status.title = error.code || ''; }
+                // A lost response may have committed preparation. Reload the
+                // durable phase without erasing the original error message.
+                try { operation = await retirementRequest(`/${relation.relationship_id}/retirement`); } catch (_) {}
+            } finally { busy = false; sync(); }
+        };
+        confirmation.oninput = sync;
+        check.onclick = () => run(async () => observe(await retirementRequest(`/${relation.relationship_id}/retirement`, {action: 'check'})));
+        apply.onclick = () => run(async () => {
+            ready = false;
+            const result = await retirementRequest(`/${relation.relationship_id}/retirement`, {action: 'apply', confirm_node_id: confirmation.value});
+            operation = result.operation; status.textContent = '已退役'; await refresh();
+        });
+        receipt.onclick = () => {
+            if (!operation?.receipt) return;
+            const url = URL.createObjectURL(new Blob([JSON.stringify(operation.receipt, null, 2)], {type: 'application/json'}));
+            const link = document.createElement('a'); link.href = url; link.download = `retirement-${operation.retirement_id}.json`; link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        };
+        close.onclick = () => dialog.close(); dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+        run(load);
+    }
+
+    function showRetirementHistory() {
+        const dialog = retirementDialog('退役记录'), list = make('div'), more = make('button', '', '加载更多'), close = make('button', '', '关闭');
+        more.type = close.type = 'button'; dialog.append(list, more, close); close.onclick = () => dialog.close();
+        let after = '';
+        const load = async () => {
+            more.disabled = true;
+            try {
+                const result = await retirementRequest(`/retirements${after ? `?after=${encodeURIComponent(after)}` : ''}`);
+                if (!after && !result.items.length) list.textContent = '暂无记录';
+                for (const item of result.items) {
+                    const row = make('p', 'node-retirement-history-row');
+                    row.append(make('span', '', `${shortId(item.member_id)} · ${item.phase === 'completed' ? '已退役' : '待完成'}`),
+                        retirementButton({relationship_id: item.relationship_id, peer_id: item.member_id}, '查看'));
+                    list.append(row);
+                }
+                after = result.next_cursor; more.hidden = !after;
+            } catch (error) { list.append(make('p', '', error.message)); }
+            finally { more.disabled = false; }
+        };
+        more.onclick = load; load();
+    }
+
+    function collapsibleNodeCard(card, header, identity, summary, renderDetails) {
+        const details = make('div', 'node-card-details');
+        details.id = `node-details-${identity}`;
+        const toggle = make('button', 'node-details-toggle');
+        toggle.type = 'button';
+        toggle.setAttribute('aria-controls', details.id);
+        let rendered = false;
+        const sync = () => {
+            const expanded = expandedNodes.has(identity);
+            toggle.textContent = expanded ? '收起' : '展开';
+            toggle.setAttribute('aria-expanded', String(expanded));
+            details.hidden = !expanded;
+            if (expanded && !rendered) {
+                details.append(...renderDetails());
+                rendered = true;
+            }
+        };
+        toggle.onclick = () => {
+            if (expandedNodes.has(identity)) expandedNodes.delete(identity);
+            else expandedNodes.add(identity);
+            sync();
+        };
+        header.append(toggle);
+        card.append(header, make('p', 'node-card-summary', summary), details);
+        sync();
+    }
+
+    function memberCard(member, relation, observed, localCertificate) {
         const row = document.createElement('tr'); row.className = 'node-card-row';
         const cell = document.createElement('td'); cell.colSpan = 4;
         const card = make('article', 'node-card');
@@ -298,10 +439,15 @@
         const badges = make('div', 'node-card-badges');
         badges.append(pill(member.member_kind === 'MasterLocal' ? 'LOCAL' : String(relation?.status || 'UNKNOWN').toUpperCase(), member.member_kind === 'MasterLocal' ? 'info' : relation?.status === 'online' ? 'good' : 'bad'), pill(member.transport || relation?.mode || 'Local', 'muted'));
         header.append(title, badges);
-        const grid = make('div', 'node-card-grid');
-        grid.append(connectionPanel(relation, observed), storagePanel(member, observed), backupPanel(member, observed));
-        if (relation?.direction === 'downstream' && relation.state === 'active') grid.append(certificatePanel(relation));
-        card.append(header, grid, controls(member, relation)); cell.append(card); row.append(cell);
+        const facts = storageFacts(observed?.storage || member);
+        collapsibleNodeCard(card, header, member.member_id, `已使用 / 已分配 ${gib(facts.used)} / ${gib(facts.allocated)} · Backup ${member.backup?.enabled ? '已启用' : '未启用'}`, () => {
+            const grid = make('div', 'node-card-grid');
+            grid.append(connectionPanel(relation, observed), storagePanel(member, observed), backupPanel(member, observed));
+            if (localCertificate && member.member_kind === 'MasterLocal') grid.append(certificatePanel(localCertificate));
+            if (relation?.direction === 'downstream' && relation.state === 'active') grid.append(certificatePanel(relation));
+            return [grid, controls(member, relation)];
+        });
+        cell.append(card); row.append(cell);
         return row;
     }
 
@@ -337,6 +483,13 @@
             awaiting_serving_confirmation: '证书已保存，等待 HTTPS 服务握手确认',
             storage_offline: '存储节点离线，证书状态尚未确认',
             authenticated_observation_unavailable: '已认证的证书查询暂不可用',
+            controller_busy: '证书状态查询繁忙，请稍后刷新',
+            controller_timeout: '证书状态查询超时，实际状态待确认',
+            controller_request_rejected: '证书控制器拒绝请求',
+            controller_response_invalid: '证书状态响应无效',
+            controller_response_too_large: '证书状态响应超过限制',
+            ca_request_timeout: 'CA 请求超时，自动退避重试',
+            ca_connection_failed: '无法连接 CA，自动退避重试',
         });
         const diagnostic = !facts.last_error ? '无' : typeof facts.last_error !== 'string' ? '未知错误'
             : Object.hasOwn(codes, facts.last_error) ? codes[facts.last_error]
@@ -409,15 +562,22 @@
 
     function renderRows(node, observed) {
         const body = $('nodeRelationships'); body.replaceChildren();
-        if (node.certificate) {
-            const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = 4;
-            cell.append(certificatePanel({local: true, relationship_id: node.node_id, summary: {certificate: node.certificate}})); row.append(cell); body.append(row);
-        }
+        const localCertificate = node.certificate ? {local: true, relationship_id: node.node_id, summary: {certificate: node.certificate}} : null;
         const relations = new Map((node.relationships || []).map(item => [item.peer_id, item]));
         const observedMembers = new Map((observed.members || []).map(item => [item.member_id, item]));
-        if (node.storage_pool) {
-            for (const member of node.storage_pool.members || []) body.append(memberCard(member, relations.get(member.member_id), observedMembers.get(member.member_id)));
-
+        const members = (node.storage_pool?.members || []).filter(member => member.member_id !== 'auto' && member.member_kind !== 'Auto');
+        for (const member of members) {
+            body.append(memberCard(member, relations.get(member.member_id), observedMembers.get(member.member_id), localCertificate));
+        }
+        if (localCertificate && !members.some(member => member.member_kind === 'MasterLocal')) {
+            const row = make('tr', 'node-card-row'), cell = make('td'); cell.colSpan = 4;
+            const card = make('article', 'node-card');
+            const header = make('header', 'node-card-header');
+            header.append(make('strong', '', `${node.role} · ${node.node_id}`));
+            collapsibleNodeCard(card, header, node.node_id, '本机证书', () => {
+                const grid = make('div', 'node-card-grid'); grid.append(certificatePanel(localCertificate)); return [grid];
+            });
+            cell.append(card); row.append(cell); body.append(row);
         }
     }
 
@@ -427,6 +587,7 @@
             $('nodeIdentity').textContent = `${node.role} · ${node.node_id} · ${node.app_version} / v${node.protocol}${node.endpoint ? ' · ' + node.endpoint : ''}`;
             visible('nodePromotion', node.role === 'Standalone'); visible('nodePairing', node.role !== 'Standalone');
             visible('nodeImportPair', node.role === 'Master'); visible('nodeReinitialize', node.role !== 'Standalone');
+            visible('nodeRetirementHistory', node.role === 'Master');
             $('nodePairPackage').readOnly = false;
             const role = $('nodeRole'), capacity = $('masterLocalCapacity'); capacity.disabled = role.value !== 'Master'; role.onchange = () => { capacity.disabled = role.value !== 'Master'; };
             renderOverview(node, observability);
@@ -444,6 +605,7 @@
     function stopAutoRefresh() { if (refreshTimer) clearInterval(refreshTimer); refreshTimer = null; }
 
     $('nodesRefresh').onclick = () => action(async () => {}, '已刷新');
+    $('nodeRetirementHistory').onclick = showRetirementHistory;
     panel.querySelector('.module-heading').addEventListener('click', () => { if (panel.classList.contains('expanded')) { refresh().catch(error => setStatus(error.message)); startAutoRefresh(); } else stopAutoRefresh(); });
     $('nodePromotion').onsubmit = event => { event.preventDefault(); const role = $('nodeRole').value; action(() => post('/promote', {role, endpoint: $('nodeEndpoint').value, local_capacity_gib: role === 'Master' ? Number($('masterLocalCapacity').value) : null})); };
     $('nodeImportPair').onclick = () => action(() => post('/pair', {package: JSON.parse($('nodePairPackage').value)}));

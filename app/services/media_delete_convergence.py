@@ -126,9 +126,13 @@ def install() -> None:
         if store.node.get("role") != "Master":
             return 0
         async with store.database.connect() as conn:
-            ids = list((await conn.execute(select(s.global_media.c.media_id).where(
+            query = select(s.global_media.c.media_id).where(
                 s.global_media.c.state == "pending_delete"
-            ).limit(limit))).scalars())
+            )
+            if getattr(store,'_s3_configured',False):
+                from app.services import s3_schema
+                query = query.where(~select(s3_schema.objects.c.media_id).where(s3_schema.objects.c.media_id == s.global_media.c.media_id).exists())
+            ids = list((await conn.execute(query.limit(limit))).scalars())
         completed = 0
         for media_id in ids:
             try:

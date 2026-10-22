@@ -90,10 +90,16 @@ def inject_page_runtime(html: str, stun_urls: list[str] | None = None) -> str:
         "{{LYRICS_JS_URL}}": html_escape.escape(static_asset_url("js/lyrics.js"), quote=True),
         "{{LYRICS_CSS_URL}}": html_escape.escape(static_asset_url("css/lyrics.css"), quote=True),
         "{{MEDIA_BROWSER_JS_URL}}": html_escape.escape(static_asset_url("js/media-browser.js"), quote=True),
+        "{{DIRECTORY_GLOBE_JS_URL}}": html_escape.escape(static_asset_url("js/directory-globe.js"), quote=True),
+        "{{DIRECTORY_GLOBE_CSS_URL}}": html_escape.escape(static_asset_url("css/directory-globe.css"), quote=True),
         "{{MEDIA_PREFETCH_ASSETS_JSON}}": safe_json_dumps(player_assets),
     }
     for marker, value in replacements.items():
         html = html.replace(marker, value)
+    if 'id="categoryGrid"' in html:
+        extra = ''.join(f'<script src="{static_asset_url(name)}"></script>\n'
+                        for name in ('js/business-navigation.js', 'js/music-metadata.js'))
+        html = html.replace('<script', extra + '<script', 1)
     crypto_scripts = "".join(f'<script src="{html_escape.escape(static_asset_url(name), quote=True)}"></script>\n'
         for name in ("js/compiled/media-crypto-common.js", "js/compiled/media-crypto.js"))
     # Crypto must be available before player/lyrics/Karaoke business listeners.
@@ -219,6 +225,8 @@ async def get_media_categories_data(
 ):
     valid_exts = AUDIO_EXTS if media_type == "music" else VIDEO_EXTS
     entries = await get_media_categories(media_type, valid_exts, include_hidden=include_hidden)
+    from app.api.v1.music_artwork import category_artwork
+    entries = category_artwork(entries, media_type, include_hidden)
     return JSONResponse(
         {"entries": entries},
         headers={"Cache-Control": "private, max-age=15" if include_hidden else "private, max-age=30, stale-while-revalidate=300"},
@@ -390,6 +398,9 @@ async def _player_entries(
             playback_session_id,
         )
     karaoke_identity.attach(media_list)
+    if playback_type == 'audio':
+        from app.services.music_tags import decorate_tracks
+        await decorate_tracks(media_list)
     return media_list
 
 
@@ -421,7 +432,7 @@ def load_html_template(filename: str) -> str:
 async def stream_media_file(file_path: str | None = None, resource_id: str | None = None, request: Request = None):
     if resource_id is not None:
         require_https(request)
-        response = await node_routing.stream(resource_id, file_path)
+        response = await node_routing.stream(resource_id, file_path,**({'method':'HEAD'} if request is not None and request.method == 'HEAD' else {}))
         _bind_response_media_audit(request, response)
         return response
     if not file_path:
@@ -457,7 +468,7 @@ async def _local_stream_response(file_path: str, request: Request | None) -> Res
             rows = await node_catalog.resources(path=file_path)
             if rows:
                 require_https(request)
-                response = await node_routing.stream(rows[0]["resource_id"], file_path)
+                response = await node_routing.stream(rows[0]["resource_id"], file_path,**({'method':'HEAD'} if request is not None and request.method == 'HEAD' else {}))
                 _bind_response_media_audit(request, response)
                 return response
         raise HTTPException(status_code=404, detail="Media file not found")
@@ -560,6 +571,10 @@ def _validated_public_directory(path: str, media_type: str) -> tuple[Path, tuple
 
 
 async def _render_subcategory_page(page_title: str, back_url: str, categories) -> HTMLResponse:
+    from app.api.v1.music_artwork import category_artwork
+    media_type = 'music' if page_title.startswith('前沿音乐') else 'video'
+    include_hidden = urllib.parse.parse_qs(urllib.parse.urlsplit(back_url).query).get('include_hidden', ['false'])[0] == 'true'
+    categories = category_artwork(categories, media_type, include_hidden)
     return await _render_category_page(
         page_title,
         back_url,

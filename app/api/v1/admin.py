@@ -212,8 +212,10 @@ async def admin_page(
     content = path.read_text(encoding="utf-8")
     for marker, asset in {
         "{{ADMIN_CSS_URL}}": "css/admin.css",
+        "{{NODES_CSS_URL}}": "css/nodes-observability.css",
         "{{ADMIN_JS_URL}}": "js/admin.js",
         "{{NODES_JS_URL}}": "js/nodes.js",
+        "{{MIGRATIONS_JS_URL}}": "js/migrations.js",
     }.items():
         content = content.replace(marker, static_asset_url(asset))
     return HTMLResponse(
@@ -250,6 +252,7 @@ async def admin_status(
             "max_upload_task_files": settings.ADMIN_MAX_UPLOAD_TASK_FILES,
             "max_batch_files": settings.ADMIN_MAX_BATCH_FILES,
             "max_lyric_file_size": MediaManager.LYRIC_MAX_BYTES,
+            "upload_inactivity_timeout": settings.ADMIN_UPLOAD_INACTIVITY_TIMEOUT,
         },
         "csrf_cookie_name": settings.ADMIN_CSRF_COOKIE_NAME,
         "credential_kind": request.scope.get("admin_credential_kind", "persistent"),

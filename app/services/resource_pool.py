@@ -1,7 +1,7 @@
-"""Master-owned storage, compute and backup resource facts.
+"""Master-owned storage and backup resource facts.
 
-Nodes execute byte and compute operations, but only the Master commits business
-state.  Every media object therefore has one global identity and exactly one
+Nodes serve byte operations, but only the Master commits business state.
+Every media object therefore has one global identity and exactly one
 complete-file placement.
 """
 from __future__ import annotations
@@ -109,24 +109,6 @@ def local_filesystem_bytes(root: Path) -> int:
                for item in (root / root_name).rglob("*") if item.is_file() and not item.is_symlink())
 
 
-def compute_pressure() -> tuple[int, int]:
-    """Return bounded host load and available memory without adding an agent dependency."""
-    cores = max(1, os.cpu_count() or 1)
-    try:
-        cpu_percent = max(0, min(100, round(os.getloadavg()[0] * 100 / cores)))
-    except (AttributeError, OSError):
-        cpu_percent = 0
-    memory_available = 0
-    try:
-        for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
-            if line.startswith("MemAvailable:"):
-                memory_available = int(line.split()[1]) * 1024
-                break
-    except (OSError, ValueError, IndexError):
-        pass
-    return cpu_percent, memory_available
-
-
 async def ensure_master_local(node: dict, allocation_bytes: int | None = None, *, conn=None) -> dict | None:
     if node["role"] not in ("Master", "Standalone"):
         return None
@@ -158,7 +140,7 @@ async def ensure_master_local(node: dict, allocation_bytes: int | None = None, *
         used = max(int(used or 0), physical_committed) + recording_used
         allocation = int(allocation_bytes if allocation_bytes is not None
                          else (current["allocated_bytes"] if current else max(used, GIB)))
-        if allocation < used:
+        if allocation < used or (allocation_bytes is not None and allocation < used+int(current['reserved_bytes'] if current else 0)):
             raise p.ProtocolError("Master Local Storage Allocation 不能低于现有托管媒体用量")
         values = dict(member_id=node["node_id"], relationship_id=None, member_kind="MasterLocal",
                       transport="Local", storage_enabled=1, allocated_bytes=allocation,
@@ -166,10 +148,6 @@ async def ensure_master_local(node: dict, allocation_bytes: int | None = None, *
                       physical_free_bytes=physical_free(MEDIA_ROOT), health="online", writable=1,
                       updated_at=now)
         await _upsert(conn, s.storage_members, values, ("member_id",))
-        compute = dict(member_id=node["node_id"], enabled=1, worker_slots=1,
-                       available_slots=1, cpu_percent=0, memory_available_bytes=0,
-                       capabilities=["fallback"], updated_at=now)
-        await _upsert(conn, s.compute_members, compute, ("member_id",), ("updated_at",))
         return values
 
 
@@ -204,23 +182,10 @@ async def register_follower(relation: dict, *, conn=None) -> None:
             writable=int(bool(current and current["storage_enabled"] and relation["status"] == "online")),
             updated_at=now)
         await _upsert(conn, s.storage_members, values, ("member_id",))
-        for table, defaults in (
-            (s.compute_members, dict(enabled=0, worker_slots=0, available_slots=0, cpu_percent=0,
-                                     memory_available_bytes=0, capabilities=[])),
-            (s.backup_members, dict(enabled=0, generation=0, last_success=0, lag_seconds=0,
-                                    checksum="", state="disabled")),
-        ):
-            await _upsert(conn, table,
-                          dict(member_id=relation["peer_id"], updated_at=now, **defaults),
-                          ("member_id",), ("updated_at",))
-        compute_report = summary.get("compute") if isinstance(summary.get("compute"), dict) else {}
-        if compute_report:
-            await conn.execute(update(s.compute_members).where(s.compute_members.c.member_id == relation["peer_id"]).values(
-                available_slots=max(0, int(compute_report.get("available_slots") or 0)),
-                cpu_percent=max(0, min(100, int(compute_report.get("cpu_percent") or 0))),
-                memory_available_bytes=max(0, int(compute_report.get("memory_available_bytes") or 0)),
-                capabilities=compute_report.get("capabilities") if isinstance(compute_report.get("capabilities"), list) else [],
-                updated_at=now))
+        await _upsert(conn, s.backup_members,
+                      dict(member_id=relation["peer_id"], updated_at=now,
+                           enabled=0, generation=0, last_success=0, lag_seconds=0,
+                           checksum="", state="disabled"), ("member_id",), ("updated_at",))
         backup_report = summary.get("backup") if isinstance(summary.get("backup"), dict) else {}
         if backup_report:
             await conn.execute(update(s.backup_members).where(s.backup_members.c.member_id == relation["peer_id"]).values(
@@ -232,19 +197,19 @@ async def register_follower(relation: dict, *, conn=None) -> None:
 
 
 async def configure_member(member_id: str, *, storage_enabled: bool, allocated_bytes: int,
-                           compute_enabled: bool, worker_slots: int, backup_enabled: bool,
+                           backup_enabled: bool,
                            actor: str, store) -> None:
     if allocated_bytes < 0 or allocated_bytes > 10 * 1024 ** 4:
         raise p.ProtocolError("Storage allocation is outside the supported range")
     if storage_enabled and allocated_bytes < GIB:
         raise p.ProtocolError("Storage allocation must be at least 1 GiB")
-    if not 0 <= worker_slots <= 256:
-        raise p.ProtocolError("Worker slots are outside the supported range")
     now = int(time.time())
     async with store.database.begin() as conn:
         node = await store.lock(conn)
         if node["role"] != "Master":
             raise p.ProtocolError("Only Master configures resource members")
+        from app.services import resource_fences
+        await resource_fences.member_clear(conn,member_id)
         if member_id == node["node_id"]:
             if not storage_enabled or backup_enabled:
                 raise p.ProtocolError("Master Local storage is mandatory and is not a backup target")
@@ -257,14 +222,11 @@ async def configure_member(member_id: str, *, storage_enabled: bool, allocated_b
         if not member:
             raise p.ProtocolError("Unknown resource member")
         used = int(member["used_bytes"] or 0)
-        if allocated_bytes < used:
-            raise p.ProtocolError("Storage allocation cannot be lower than used capacity")
+        if allocated_bytes < used+int(member['reserved_bytes']):
+            raise p.ProtocolError("Storage allocation cannot be lower than used and reserved capacity")
         await conn.execute(update(s.storage_members).where(s.storage_members.c.member_id == member_id).values(
             storage_enabled=int(storage_enabled), allocated_bytes=allocated_bytes,
             writable=int(storage_enabled and member["health"] == "online"), updated_at=now))
-        await conn.execute(update(s.compute_members).where(s.compute_members.c.member_id == member_id).values(
-            enabled=int(compute_enabled), worker_slots=worker_slots,
-            available_slots=worker_slots if compute_enabled else 0, updated_at=now))
         current_backup = (await conn.execute(select(s.backup_members).where(
             s.backup_members.c.member_id == member_id).with_for_update())).mappings().first()
         if not backup_enabled:
@@ -277,8 +239,7 @@ async def configure_member(member_id: str, *, storage_enabled: bool, allocated_b
             enabled=int(backup_enabled), state=backup_state, updated_at=now))
         await store.log(conn, "resource-member-configured", actor, member.get("relationship_id"),
                         member_id=member_id, storage_enabled=storage_enabled,
-                        allocated_bytes=allocated_bytes, compute_enabled=compute_enabled,
-                        worker_slots=worker_slots, backup_enabled=backup_enabled)
+                        allocated_bytes=allocated_bytes, backup_enabled=backup_enabled)
 
 
 async def member_configuration(member_id: str, database=engine) -> dict:
@@ -288,43 +249,46 @@ async def member_configuration(member_id: str, database=engine) -> dict:
         raise p.ProtocolError("Unknown resource member")
     return {"storage": {"enabled": bool(row["storage_enabled"]),
                         "allocated_bytes": int(row["allocated_bytes"])},
-            "compute": {"enabled": bool(row["compute"].get("enabled")),
-                        "worker_slots": int(row["compute"].get("worker_slots") or 0)},
+            # Disabled compatibility envelope for older Python peers only.
+            "compute": {"enabled": False, "worker_slots": 0},
             "backup": {"enabled": bool(row["backup"].get("enabled"))}}
 
 
 async def accept_follower_configuration(configuration: dict, node: dict, database=engine) -> None:
     try:
         storage = configuration["storage"]
-        compute = configuration["compute"]
+        compute = configuration.get("compute", {"enabled": False, "worker_slots": 0})
         backup = configuration["backup"]
         allocated = int(storage["allocated_bytes"])
-        slots = int(compute["worker_slots"])
-        if (type(storage["enabled"]) is not bool or type(compute["enabled"]) is not bool
+        if (not isinstance(compute, dict) or compute.get("enabled") is not False
+                or type(compute.get("worker_slots")) is not int or compute["worker_slots"] != 0):
+            raise ValueError()
+        if (type(storage["enabled"]) is not bool
                 or type(backup["enabled"]) is not bool or not 0 <= allocated <= 10 * 1024 ** 4
-                or not 0 <= slots <= 256):
+                ):
             raise ValueError()
     except (KeyError, TypeError, ValueError) as exc:
         raise p.ProtocolError("Invalid resource configuration") from exc
     from app.api.v1.media import MEDIA_ROOT
     now = int(time.time())
     async with database.begin() as conn:
+        from app.services import resource_fences
+        await resource_fences.lock_node(conn)
+        current = (await conn.execute(select(s.storage_members).where(
+            s.storage_members.c.member_id == node['node_id']).with_for_update())).mappings().first()
+        if current and (bool(current['storage_enabled']) != storage['enabled'] or current['allocated_bytes'] != allocated):
+            await resource_fences.member_clear(conn,node['node_id'])
         used = int((await conn.execute(select(func.coalesce(func.sum(s.global_media.c.size_bytes), 0)).where(
             s.global_media.c.storage_member_id == node["node_id"],
             s.global_media.c.state.in_(("active", "pending_delete"))))).scalar_one() or 0)
-        if allocated < used:
-            raise p.ProtocolError("Storage allocation cannot be lower than used capacity")
+        if allocated < max(used,int(current['used_bytes']) if current else 0)+int(current['reserved_bytes'] if current else 0):
+            raise p.ProtocolError("Storage allocation cannot be lower than used and reserved capacity")
         values = dict(member_id=node["node_id"], relationship_id=None, member_kind="Follower",
             transport="Local", storage_enabled=int(storage["enabled"]), allocated_bytes=allocated,
             used_bytes=used, reserved_bytes=0, physical_free_bytes=physical_free(MEDIA_ROOT),
             health="online", writable=int(storage["enabled"]), updated_at=now)
         await _upsert(conn, s.storage_members, values, ("member_id",), tuple(
             key for key in values if key not in ("member_id", "used_bytes", "reserved_bytes")))
-        await _upsert(conn, s.compute_members, dict(member_id=node["node_id"],
-            enabled=int(compute["enabled"]), worker_slots=slots,
-            available_slots=slots if compute["enabled"] else 0, cpu_percent=0,
-            memory_available_bytes=0, capabilities=["hash", "probe", "metadata"], updated_at=now),
-            ("member_id",), ("enabled", "worker_slots", "available_slots", "capabilities", "updated_at"))
         current_backup = (await conn.execute(select(s.backup_members).where(
             s.backup_members.c.member_id == node["node_id"]))).mappings().first()
         enabled = bool(backup["enabled"])
@@ -360,17 +324,8 @@ async def follower_resource_summary(node: dict, database=engine) -> dict:
         free = physical_free(MEDIA_ROOT)
         await conn.execute(update(s.storage_members).where(s.storage_members.c.member_id == node["node_id"]).values(
             physical_free_bytes=free, updated_at=now))
-        compute = (await conn.execute(select(s.compute_members).where(
-            s.compute_members.c.member_id == node["node_id"]))).mappings().first()
         backup = (await conn.execute(select(s.backup_members).where(
             s.backup_members.c.member_id == node["node_id"]))).mappings().first()
-        if compute:
-            cpu_percent, memory_available = compute_pressure()
-            await conn.execute(update(s.compute_members).where(
-                s.compute_members.c.member_id == node["node_id"]
-            ).values(cpu_percent=cpu_percent, memory_available_bytes=memory_available, updated_at=now))
-            compute = dict(compute)
-            compute.update(cpu_percent=cpu_percent, memory_available_bytes=memory_available)
         if backup:
             backup = dict(backup)
             backup["lag_seconds"] = max(0, now - int(backup.get("last_success") or 0)) if backup.get("enabled") else 0
@@ -390,7 +345,9 @@ async def follower_resource_summary(node: dict, database=engine) -> dict:
                         "used_bytes": int(member["used_bytes"]),
                         "reserved_bytes": int(member["reserved_bytes"]),
                         "physical_free_bytes": free},
-            "compute": dict(compute) if compute else {}, "backup": dict(backup) if backup else {}}
+            "compute": {"enabled": False, "worker_slots": 0, "available_slots": 0,
+                        "cpu_percent": 0, "memory_available_bytes": 0, "capabilities": []},
+            "backup": dict(backup) if backup else {}}
 
 
 BACKUP_TABLES = (
@@ -546,87 +503,20 @@ def re_full_hash(value: str) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
-async def enqueue_job(job_type: str, payload: dict, idempotency_key: str,
-                      media_id: str | None = None, member_id: str | None = None,
-                      database=engine) -> str:
-    if not re_full_hash(idempotency_key) or job_type not in {"hash", "probe", "metadata"}:
-        raise p.ProtocolError("Invalid worker job")
-    now, job_id = int(time.time()), uuid.uuid4().hex
-    async with database.begin() as conn:
-        statement = mysql_insert(s.worker_jobs).values(job_id=job_id, idempotency_key=idempotency_key,
-            job_type=job_type, media_id=media_id, member_id=member_id, payload=payload, result={},
-            state="queued", lease_token_hash=None, lease_expires_at=0, attempts=0,
-            created_at=now, updated_at=now).prefix_with("IGNORE")
-        await conn.execute(statement)
-        existing = await conn.scalar(select(s.worker_jobs.c.job_id).where(
-            s.worker_jobs.c.idempotency_key == idempotency_key))
-    return str(existing)
-
-
-async def lease_job(member_id: str, capabilities: list[str], database=engine) -> dict | None:
-    allowed = [value for value in capabilities if value in {"hash", "probe", "metadata"}]
-    if not allowed:
-        return None
-    now, lease = int(time.time()), uuid.uuid4().hex
-    async with database.begin() as conn:
-        row = (await conn.execute(select(s.worker_jobs).where(
-            s.worker_jobs.c.job_type.in_(allowed),
-            ((s.worker_jobs.c.state == "queued") | ((s.worker_jobs.c.state == "leased") &
-              (s.worker_jobs.c.lease_expires_at <= now))),
-            ((s.worker_jobs.c.member_id.is_(None)) | (s.worker_jobs.c.member_id == member_id)),
-        ).order_by((s.worker_jobs.c.member_id == member_id).desc(), s.worker_jobs.c.created_at)
-          .limit(1).with_for_update(skip_locked=True))).mappings().first()
-        if not row:
-            return None
-        pinned = row["member_id"] == member_id
-        result = dict(row.get("result") or {})
-        result["_placement"] = {
-            "reason": "pinned" if pinned else "capability-fifo",
-            "leased_at": now,
-            "capability": row["job_type"],
-        }
-        await conn.execute(update(s.worker_jobs).where(s.worker_jobs.c.job_id == row["job_id"]).values(
-            member_id=member_id, state="leased", lease_token_hash=p.digest(lease),
-            lease_expires_at=now + 120, attempts=int(row["attempts"]) + 1,
-            result=result, updated_at=now))
-    return {"job_id": row["job_id"], "job_type": row["job_type"], "media_id": row["media_id"],
-            "payload": row["payload"], "lease": lease, "expires_at": now + 120}
-
-
-async def complete_job(member_id: str, job_id: str, lease: str, result: dict,
-                       database=engine) -> None:
-    now = int(time.time())
-    async with database.begin() as conn:
-        row = (await conn.execute(select(s.worker_jobs).where(
-            s.worker_jobs.c.job_id == job_id).with_for_update())).mappings().first()
-        if (not row or row["state"] != "leased" or row["member_id"] != member_id
-                or row["lease_expires_at"] <= now
-                or not row["lease_token_hash"] or not secrets_compare(row["lease_token_hash"], p.digest(lease))):
-            raise p.ProtocolError("Worker lease is stale or invalid")
-        merged = dict(row.get("result") or {})
-        merged.update(result)
-        await conn.execute(update(s.worker_jobs).where(s.worker_jobs.c.job_id == job_id).values(
-            result=merged, state="complete", lease_token_hash=None, lease_expires_at=0, updated_at=now))
-
-
-def secrets_compare(left: str, right: str) -> bool:
-    import secrets
-    return secrets.compare_digest(left, right)
-
-
 async def list_members(database=engine) -> list[dict]:
     async with database.connect() as conn:
         storage = [dict(row) for row in (await conn.execute(select(s.storage_members).order_by(
             s.storage_members.c.member_kind, s.storage_members.c.member_id))).mappings()]
-        compute = {row["member_id"]: dict(row) for row in (await conn.execute(select(s.compute_members))).mappings()}
         backup = {row["member_id"]: dict(row) for row in (await conn.execute(select(s.backup_members))).mappings()}
+        from app.services import resource_migration_schema as migration
+        draining = set((await conn.execute(select(migration.drains.c.member_id))).scalars())
     for row in storage:
+        row['draining'] = row['member_id'] in draining
         logical = max(0, int(row["allocated_bytes"]) - int(row["used_bytes"]) - int(row["reserved_bytes"]))
         physical = max(0, int(row["physical_free_bytes"]) - PHYSICAL_RESERVE_BYTES)
-        row["available_bytes"] = min(logical, physical) if row["health"] == "online" and row["writable"] else 0
+        row["available_bytes"] = min(logical, physical) if row["health"] == "online" and row["writable"] and not row['draining'] else 0
         row["online_writable_bytes"] = row["available_bytes"]
         row["offline_stored_bytes"] = int(row["used_bytes"]) if row["health"] != "online" else 0
-        row["compute"] = compute.get(row["member_id"], {})
         row["backup"] = backup.get(row["member_id"], {})
     return storage
 
@@ -680,6 +570,8 @@ async def reserve_upload(path: str, size: int, preferred: str | None, database=e
     media_id = hashlib.sha256((upload_id + ":" + path).encode()).hexdigest()
     try:
         async with database.begin() as conn:
+            from app.services import resource_fences
+            await resource_fences.new_upload(conn,member['member_id'],'media',path)
             current = (await conn.execute(select(s.storage_members).where(
                 s.storage_members.c.member_id == member["member_id"]).with_for_update())).mappings().first()
             logical_available = (int(current["allocated_bytes"]) - int(current["used_bytes"])
@@ -827,11 +719,28 @@ async def list_media(database=engine) -> list[dict]:
 
 async def mark_pending_delete(media_ids: list[str], database=engine) -> list[dict]:
     async with database.begin() as conn:
+        from app.services import resource_fences
+        await resource_fences.lock_node(conn)
         rows = [dict(row) for row in (await conn.execute(select(s.global_media).where(
             s.global_media.c.media_id.in_(media_ids)).with_for_update())).mappings()]
+        from app.services import resource_fences
+        for offset in range(0,len(rows),64):
+            await resource_fences.paths(conn,'media',[(row['media_path'],False) for row in rows[offset:offset+64]])
         if rows:
             await conn.execute(update(s.global_media).where(s.global_media.c.media_id.in_(media_ids)).values(
                 state="pending_delete", updated_at=int(time.time())))
+            from app.services.federation.state import state
+            if getattr(state,'_s3_configured',False):
+                from app.services import s3_schema
+                owned = [dict(row) for row in (await conn.execute(select(s3_schema.objects.c.media_id,s3_schema.objects.c.member_id).where(
+                    s3_schema.objects.c.media_id.in_([row['media_id'] for row in rows]),s3_schema.objects.c.state == 'active').with_for_update())).mappings()]
+                if owned:
+                    await conn.execute(update(s3_schema.objects).where(s3_schema.objects.c.media_id.in_([row['media_id'] for row in owned])).values(
+                        state='deleting',revision=s3_schema.objects.c.revision+1,updated_at=int(time.time())))
+                    await conn.execute(update(s3_schema.members).where(s3_schema.members.c.member_id.in_(sorted({row['member_id'] for row in owned})))
+                        .values(catalog_revision=s3_schema.members.c.catalog_revision+1))
+                    for row in owned:
+                        await state.log(conn,'s3_media_delete_requested','admin',media_id=row['media_id'])
         return rows
 
 

@@ -290,6 +290,10 @@ class MediaDeleteRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(media_manager, "MEDIA_ROOT", root),
                 patch.object(media_manager, "engine", _RecoveryEngine(connection)),
             ):
+                with patch("app.services.site_control.hard_fence_active", return_value=True):
+                    await media_manager.recover_interrupted_media_deletions()
+                self.assertEqual((quarantine / "0").read_bytes(), b"ID3recover")
+                self.assertEqual(connection.executed, [])
                 await media_manager.recover_interrupted_media_deletions()
 
             restored = root / "music" / "album" / "song.mp3"

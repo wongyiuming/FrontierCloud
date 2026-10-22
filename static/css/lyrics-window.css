@@ -1,5 +1,5 @@
-.inline-lyrics .sync-lyrics-track { height: 100%; }
-.inline-lyrics .sync-lyric { height: 14.2857142857%; }
+.inline-lyrics .sync-lyrics-track { height: auto; min-height: 100%; }
+.inline-lyrics .sync-lyric { height: auto; min-height: var(--sync-lyric-row-height, 0px); }
 .sync-lyric.previous.farthest { opacity: .28; transform: scale(.76); }
 .sync-lyric.previous.far { opacity: .46; transform: scale(.82); }
 .sync-lyric.previous { opacity: .7; transform: scale(.9); }
@@ -58,20 +58,22 @@
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  justify-content: center;
+  justify-content: safe center;
   gap: .2em;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .fullscreen-lyric-line {
+  flex-shrink: 0;
   margin: 0;
-  overflow: hidden;
+  overflow: visible;
   color: #aebfca;
   font-size: var(--fullscreen-lyric-font-size);
   font-weight: 800;
   line-height: 1.18;
   text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   transition: color .25s ease, opacity .25s ease, transform .25s ease;
 }
 .fullscreen-lyric-line:nth-child(6n+2) { color: #b9c4a6; }

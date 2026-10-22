@@ -60,13 +60,14 @@ class DeploymentContractTests(unittest.TestCase):
         nginx = (ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
         admin = (ROOT / "static/media/admin.html").read_text(encoding="utf-8")
         self.assertIn('"~^[0-9a-f]{16}$" "public, max-age=31536000, immutable"', nginx)
-        for asset in ("admin.js", "admin.css", "player.js", "player.css", "network-observation.js", "karaoke.js", "karaoke.css"):
+        for asset in ("admin.js", "admin.css", "nodes-observability.css", "player.js", "player.css", "network-observation.js", "karaoke.js", "karaoke.css"):
             line = next(value for value in nginx.splitlines() if f"/{asset}" in value)
             self.assertIn("$versioned_static_cache_control", line)
             self.assertNotIn("no-store", line)
         self.assertIn("{{ADMIN_CSS_URL}}", admin)
         self.assertIn("{{ADMIN_JS_URL}}", admin)
         self.assertIn("{{NODES_JS_URL}}", admin)
+        self.assertIn("{{NODES_CSS_URL}}", admin)
 
     def test_karaoke_and_hidden_home_gestures_match_the_product_contract(self):
         player = (ROOT / "static/js/player.js").read_text(encoding="utf-8")
@@ -145,6 +146,11 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("TLS_ENABLED: ${TLS_ENABLED:-false}", compose)
         self.assertIn("UPLOAD_INACTIVITY_TIMEOUT: ${ADMIN_UPLOAD_INACTIVITY_TIMEOUT:-300}", compose)
         self.assertIn("client_body_timeout ${UPLOAD_INACTIVITY_TIMEOUT}s", nginx)
+
+    def test_native_storage_does_not_inherit_business_proxy_trust_by_default(self):
+        compose=(ROOT/'docker-compose.storage.yaml').read_text(encoding='utf-8')
+        self.assertIn('TRUSTED_PROXY_NETWORKS: ${TRUSTED_PROXY_NETWORKS:-}',compose)
+        self.assertNotIn('TRUSTED_PROXY_NETWORKS: ${TRUSTED_PROXY_NETWORKS:-172.',compose)
 
     def test_public_bind_defaults_to_ipv4_and_requires_an_explicit_ipv6_address(self):
         compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
@@ -258,7 +264,10 @@ class DeploymentContractTests(unittest.TestCase):
 
     def test_nginx_uses_a_current_patched_stable_image(self):
         dockerfile = (ROOT / "nginx/Dockerfile").read_text(encoding="utf-8")
-        self.assertTrue(dockerfile.startswith("FROM nginx:1.30.4-alpine\n"))
+        stages = [line for line in dockerfile.splitlines() if line.startswith("FROM ")]
+        self.assertEqual(stages, ["FROM nginx:1.30.4-alpine AS traffic-module-builder", "FROM nginx:1.30.4-alpine"])
+        self.assertIn("sha256sum -c -", dockerfile)
+        self.assertIn("COPY --from=traffic-module-builder", dockerfile)
 
     def test_duplicate_uvicorn_access_log_is_disabled(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
