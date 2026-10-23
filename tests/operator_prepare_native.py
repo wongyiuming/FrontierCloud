@@ -336,6 +336,9 @@ asyncio.run(run())
         for name in ("media", "recordings"):
             (data / name).mkdir(exist_ok=True)
             (data / name / "existing.bin").write_bytes(b"preserved payload bytes\x00\xff" * 4096)
+            # Seed payloads with the old application's private non-root owner.
+            for path in (data / name, data / name / "existing.bin"):
+                os.chown(path, 10001, 10001)
         payload_hashes = {name: backup.digest(data / name / "existing.bin")[1] for name in ("media", "recordings")}
         old = mapping.Deployment.discover(directory)
         stage, verify = self.candidate(old, helper_source=True, application_source=fenced_application)
