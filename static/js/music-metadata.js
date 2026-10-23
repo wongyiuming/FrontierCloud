@@ -146,10 +146,32 @@
         if (signal?.aborted) controller.abort();
         const timeout = setTimeout(abort, 15000);
         try {
-            const response = await fetch('/api/v1/media/metadata?' + query, {
-                credentials: 'same-origin', cache: 'no-store', priority: 'low', signal: controller.signal,
-            });
-            if (!response.ok) { await response.body?.cancel(); throw new Error('音乐标签读取失败'); }
+            let response;
+            for (let attempt = 0; attempt < 2; attempt++) {
+                controller.signal.throwIfAborted();
+                response = await fetch('/api/v1/media/metadata?' + query, {
+                    credentials: 'same-origin', cache: 'no-store', priority: 'low', signal: controller.signal,
+                });
+                if (response.ok) break;
+                const retry = response.status === 503 ? response.headers.get('Retry-After') : null;
+                await response.body?.cancel();
+                const seconds = typeof retry === 'string' && /^\d+$/.test(retry) ? Number(retry) : NaN;
+                if (attempt !== 0 || !Number.isInteger(seconds) || seconds < 1 || seconds >= 15)
+                    throw new Error('音乐标签读取失败');
+                await new Promise((resolve, reject) => {
+                    const abortDelay = () => {
+                        clearTimeout(timer);
+                        controller.signal.removeEventListener('abort', abortDelay);
+                        reject(controller.signal.reason || new Error('音乐标签读取已取消'));
+                    };
+                    const timer = setTimeout(() => {
+                        controller.signal.removeEventListener('abort', abortDelay);
+                        resolve();
+                    }, seconds * 1000);
+                    controller.signal.addEventListener('abort', abortDelay, {once: true});
+                    if (controller.signal.aborted) abortDelay();
+                });
+            }
             const value = JSON.parse(new TextDecoder().decode(await metadataBytes(response)));
             if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(field =>
                 !['title', 'artist', 'album', 'cover'].includes(field) || typeof value[field] !== 'string'

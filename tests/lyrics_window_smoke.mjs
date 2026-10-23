@@ -98,3 +98,89 @@ test('columns without vertical overflow do not scroll', () => {
   ui.syncFullscreenLyrics(overlay, 4);
   assert.ok(columns.every(column => column.scrollWrites === 0));
 });
+
+function inlineFixture() {
+  const panel = element(), viewport = element(), track = element(), styles = new Map(), timers = [];
+  panel.clientWidth = 300;
+  panel.style = {setProperty(name, value) {styles.set(name, value);}};
+  track.style = {};
+  panel.append(viewport); viewport.append(track);
+  function rowElement() {
+    const row = element();
+    Object.defineProperty(row, 'offsetHeight', {get: () => row.textContent?.length > 20 ? 120 : 32});
+    row.getBoundingClientRect = () => {
+      const preceding = track.children.slice(0, track.children.indexOf(row)).reduce((sum, child) => sum + child.offsetHeight, 0);
+      const translation = Number(track.style.transform?.match(/translateY\((-?[\d.]+)px\)/)?.[1] || 0);
+      const top = viewport.rect.top + preceding - viewport.scrollTop + translation;
+      return {top, bottom: top + row.offsetHeight};
+    };
+    return row;
+  }
+  Object.defineProperty(viewport, 'scrollHeight', {get: () => track.children.reduce((sum, row) => sum + row.offsetHeight, 0)});
+  const window = {renderLyricWindow() {}, updateSynchronizedLyrics() {},
+    getComputedStyle() {return {lineHeight: '28px', paddingTop: '2px', paddingBottom: '2px'};},
+    scrollTo() {assert.fail('lyrics must never scroll the page');}};
+  const context = {window, activeLyricEntries: Array.from({length: 12}, () => ({text: '歌词'})), activeLyricIndex: null,
+    document: {createElement: rowElement, getElementById: id => ({inlineLyrics: panel, inlineLyricsTrack: track})[id]},
+    clearLyricSlide() {}, setActiveLyricTime() {}, setTimeout(callback) {timers.push(callback); return timers.length;},
+    lyricSlideTimer: null, LYRIC_SLIDE_MS: 480, requestAnimationFrame() {}};
+  vm.runInNewContext(source, context);
+  const current = () => track.children.find(row => row.classList.contains('current'));
+  const visible = () => {const row = current().getBoundingClientRect(); return row.top >= viewport.rect.top && row.bottom <= viewport.rect.top + viewport.clientHeight;};
+  return {window, context, panel, viewport, track, styles, timers, current, visible};
+}
+
+test('inline long and short lines keep the same height-derived font and bounds', () => {
+  const {window, context, panel, styles} = inlineFixture();
+  window.renderLyricWindow(3);
+  const short = styles.get('--sync-lyric-font-size');
+  assert.equal(short, `${200 / 7.3}px`);
+  context.activeLyricEntries = context.activeLyricEntries.map(() => ({text: '长'.repeat(100)}));
+  window.renderLyricWindow(3);
+  assert.equal(styles.get('--sync-lyric-font-size'), short, 'long text must wrap instead of shrinking');
+  panel.clientWidth = 90;
+  window.sizeSynchronizedLyrics();
+  assert.equal(styles.get('--sync-lyric-font-size'), short);
+  panel.clientHeight = 800;
+  window.sizeSynchronizedLyrics();
+  assert.equal(styles.get('--sync-lyric-font-size'), '44px');
+  assert.equal(styles.get('--sync-lyric-row-height'), `${800 / 7}px`);
+  panel.clientHeight = 70;
+  window.sizeSynchronizedLyrics();
+  assert.equal(styles.get('--sync-lyric-font-size'), '14px');
+});
+
+test('wrapped preceding lines reveal the inline current line only within its own viewport', () => {
+  const {window, context, panel, viewport, track, visible} = inlineFixture();
+  context.activeLyricEntries = context.activeLyricEntries.map((_, index) => ({text: index < 3 ? '长'.repeat(100) : '歌词'}));
+  window.renderLyricWindow(3);
+  assert.equal(visible(), true);
+  assert.ok(viewport.scrollTop > 0);
+  assert.equal(panel.scrollWrites, 0);
+  assert.equal(track.scrollWrites, 0);
+});
+
+test('wrapped unequal-height adjacent lines render directly and keep the new current line visible', () => {
+  const {window, context, track, timers, current, visible} = inlineFixture();
+  context.activeLyricEntries[3].text = '长'.repeat(100);
+  window.renderLyricWindow(3);
+  window.animateLyricForward(4);
+  assert.equal(current().textContent, '歌词');
+  assert.equal(track.children.length, 7);
+  assert.equal(track.style.transform, 'translateY(0)');
+  assert.equal(timers.length, 0, 'wrapped rows must not combine scrolling with a pending track animation');
+  assert.equal(visible(), true);
+});
+
+test('ordinary single-line windows retain their measured first-row slide animation', () => {
+  const {window, track, timers} = inlineFixture();
+  window.renderLyricWindow(3);
+  const firstHeight = track.children[0].offsetHeight;
+  window.animateLyricForward(4);
+  assert.equal(track.children.length, 8);
+  assert.equal(track.style.transform, `translateY(-${firstHeight}px)`);
+  assert.equal(timers.length, 1);
+  timers[0]();
+  assert.equal(track.children.length, 7);
+  assert.equal(track.style.transform, 'translateY(0)');
+});

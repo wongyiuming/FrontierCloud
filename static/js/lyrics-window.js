@@ -84,6 +84,16 @@
     renderFullscreenColumns(columns, entries, active, overlay);
   }
 
+  function revealInlineLyric(track) {
+    const viewport = track.parentElement;
+    const row = Array.from(track.children).find(line => line.classList.contains('current'));
+    if (!row || !viewport || viewport.scrollHeight <= viewport.clientHeight) return;
+    const bounds = viewport.getBoundingClientRect(), line = row.getBoundingClientRect();
+    const top = bounds.top + viewport.clientTop, bottom = top + viewport.clientHeight;
+    if (line.top < top) viewport.scrollTop += line.top - top;
+    else if (line.bottom > bottom) viewport.scrollTop += Math.min(line.bottom - bottom, line.top - top);
+  }
+
   function installAudioPlayerOverrides() {
     if (typeof window.renderLyricWindow !== 'function' || typeof window.updateSynchronizedLyrics !== 'function') return;
 
@@ -93,11 +103,9 @@
       const track = document.getElementById('inlineLyricsTrack');
       if (!panel || !track || activeLyricEntries.length === 0) return;
       panel.style.setProperty('--sync-lyric-row-height', `${panel.clientHeight / OFFSETS.length}px`);
-      const visible = Array.from(track.children).slice(0, OFFSETS.length).map(row => row.textContent || '');
-      const longest = Math.max(1, ...visible.map(line => Array.from(line).length));
       const heightSize = Math.max(14, panel.clientHeight / 7.3);
-      const widthSize = Math.max(14, (panel.clientWidth - 40) / Math.max(6, longest * 1.02));
-      panel.style.setProperty('--sync-lyric-font-size', `${Math.max(14, Math.min(44, heightSize, widthSize))}px`);
+      panel.style.setProperty('--sync-lyric-font-size', `${Math.max(14, Math.min(44, heightSize))}px`);
+      revealInlineLyric(track);
     };
 
     window.renderLyricWindow = function renderSevenLineWindow(index) {
@@ -124,6 +132,15 @@
       Array.from(track.children).forEach((row, rowIndex) => {
         row.className = rowClass(OFFSETS[rowIndex] - 1);
       });
+      const wrapped = Array.from(track.children).some(row => {
+        const style = window.getComputedStyle(row);
+        const singleLine = parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+        return row.offsetHeight > Math.max(panel.clientHeight / OFFSETS.length, singleLine) + 1;
+      });
+      if (wrapped) {
+        window.renderLyricWindow(nextIndex);
+        return;
+      }
       track.append(makeRow(activeLyricEntries[nextIndex + 3], 3));
       activeLyricIndex = nextIndex;
       setActiveLyricTime(panel, nextIndex);

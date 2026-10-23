@@ -54,6 +54,67 @@ assert.equal(Object.keys(await api.metadata({media_path: 'music/plain.mp3'})).le
         encryption: {plaintext_size: 256}}), /浏览器解密组件未加载/, 'encrypted reads retain the required crypto boundary');
 }
 {
+    function busyNative(responder) {
+        const timers = new Map(), signals = [], state = {requests: 0, cancelled: 0};
+        let next = 0;
+        const sandbox = {window: {addEventListener() {}, location: {href: 'https://media.test/', origin: 'https://media.test'}},
+            TextDecoder, Uint8Array, DataView, Blob, URL, URLSearchParams, AbortController,
+            setTimeout(callback, delay) {const id = ++next; timers.set(id, {callback, delay}); return id;},
+            clearTimeout(id) {timers.delete(id);},
+            fetch: async (_url, options) => {state.requests++; signals.push(options.signal); return responder(state.requests, state);}};
+        vm.runInNewContext(fs.readFileSync(new URL('../static/js/music-metadata.js', import.meta.url), 'utf8'), sandbox);
+        return {api: sandbox.window.FrontierMusicMetadata, state, timers, signals,
+            fire(delay) {const found = [...timers].find(([, value]) => value.delay === delay);
+                assert.ok(found, `expected scheduled delay ${delay}`);timers.delete(found[0]);found[1].callback();}};
+    }
+    function busyResponse(state, retry = '2', status = 503) {
+        const body = new ReadableStream({start(controller) {controller.enqueue(new TextEncoder().encode('busy'));},
+            cancel() {state.cancelled++;}});
+        return new Response(body, {status, headers: retry === null ? {} : {'Retry-After': retry}});
+    }
+    const entry = () => ({media_path: 'music/busy-native.mp3', resource_id: 'd'.repeat(64), native_metadata: true});
+    const recovered = busyNative((count, state) => count === 1 ? busyResponse(state) : new Response('{"title":"Recovered"}'));
+    const success = recovered.api.metadata(entry());
+    // Attach a handler before advancing turns, so the old implementation gives
+    // an assertion failure rather than an unhandled rejection in the RED run.
+    const settled = success.then(value => ({value}), error => ({error}));
+    await new Promise(setImmediate);
+    assert.equal(recovered.state.requests, 1);
+    assert.equal(recovered.state.cancelled, 1, 'the busy response body is cancelled before backoff');
+    assert.ok([...recovered.timers.values()].some(timer => timer.delay === 2000), '503 must own one Retry-After delay');
+    assert.ok([...recovered.timers.values()].some(timer => timer.delay === 15000), 'the original total deadline remains armed');
+    recovered.fire(2000);
+    const outcome = await settled;
+    assert.ifError(outcome.error);assert.equal(outcome.value.title, 'Recovered');
+    assert.equal(recovered.state.requests, 2);assert.equal(recovered.signals[0], recovered.signals[1]);
+    assert.equal(recovered.timers.size, 0, 'successful retry releases its deadline and delay');
+
+    const permanent = busyNative((_count, state) => busyResponse(state));
+    const failed = assert.rejects(permanent.api.metadata(entry()), /音乐标签读取失败/);
+    await new Promise(setImmediate);permanent.fire(2000);await failed;
+    assert.equal(permanent.state.requests, 2, 'a permanent 503 is retried only once');
+    assert.equal(permanent.state.cancelled, 2);assert.equal(permanent.timers.size, 0);
+
+    const controller = new AbortController(), abandoned = busyNative((_count, state) => busyResponse(state));
+    const cancelled = assert.rejects(abandoned.api.metadata(entry(), {signal: controller.signal}), error => error.name === 'AbortError');
+    await new Promise(setImmediate);controller.abort();await cancelled;
+    assert.equal(abandoned.state.requests, 1, 'track cancellation while waiting must prevent the second HTTP request');
+    assert.equal(abandoned.timers.size, 0);
+
+    const deadline = busyNative((_count, state) => busyResponse(state));
+    const expired = assert.rejects(deadline.api.metadata(entry()), error => error.name === 'AbortError');
+    await new Promise(setImmediate);deadline.fire(15000);await expired;
+    assert.equal(deadline.state.requests, 1, 'the original timeout also aborts backoff');
+    assert.equal(deadline.timers.size, 0);
+
+    for (const [status, retry] of [[503, null], [503, 'invalid'], [503, '1.5'], [503, '15'], [429, '2'], [404, '2']]) {
+        const refused = busyNative((_count, state) => busyResponse(state, retry, status));
+        await assert.rejects(refused.api.metadata(entry()), /音乐标签读取失败/);
+        assert.equal(refused.state.requests, 1, 'only a bounded supported 503 delay permits one retry');
+        assert.equal(refused.state.cancelled, 1);assert.equal(refused.timers.size, 0);
+    }
+}
+{
     const withIndicator = (name, body, indicator = size(body.length), unsync = false) => {
         const payload = unsync ? body.flatMap(byte => byte === 255 ? [255, 0] : [byte]) : body;
         const bytes = frame(4, name, [...indicator, ...payload]); bytes[9] = unsync ? 3 : 1; return bytes;

@@ -694,11 +694,16 @@ window.addEventListener('pagehide', () => {
 });
 
 requestAnimationFrame(lyricClock);
-Promise.all([initialize(), refreshAccount()]).then(() => {
+initialize().then(() => {
   state.ready = true;
   elements.record.disabled = false;
 }).catch(error => {
+  state.ready = false;
   setStatus(`卡拉OK页面初始化失败：${errorText(error)}`, true);
   elements.record.disabled = true;
+});
+refreshAccount().catch(error => {
+  renderAccount();
+  accountElements.authMessage.textContent = errorText(error);
 });
 setAuthMode('login');
