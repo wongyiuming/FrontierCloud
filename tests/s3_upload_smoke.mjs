@@ -43,4 +43,91 @@ assert.equal(progress.at(-1),1);assert.ok(phases.includes('确认中'));assert.o
 failComplete=true;progress.length=0;
 await assert.rejects(context.window.FrontierS3.transfer({upload_id:'b'.repeat(32),part_bytes:bytes},new Blob(['small']),value=>progress.push(value)),/completion uncertain/);
 assert.ok(progress.every(value=>value<1),'an unconfirmed completion never displays success');
-console.log('s3-upload-smoke-ok: bounded direct parts, retry checksum, credential isolation, confirmed progress');
+
+// Transfer cleanup and the subsequent cancellation both refresh this panel.
+// Resolve their real API calls separately, as they can finish out of order.
+class Element {
+    constructor(){this.children=[];this.textContent='';}
+    append(...children){this.children.push(...children);}
+    replaceChildren(...children){this.children=[...children];}
+    setAttribute(){}
+}
+const content=new Element(),panel={querySelector:()=>content},requests=[];
+let controlled=false;
+const panelContext={window:{},document:{getElementById:id=>id==='nodesPanel'?panel:null,createElement:()=>new Element()},
+    requestHeaders:()=>({}),setTimeout,clearTimeout,setInterval,clearInterval,
+    api:(url,options={})=>{
+        if(!controlled)return Promise.resolve(url.endsWith('/members')?{members:[]}:{uploads:[]});
+        return new Promise((resolve,reject)=>{
+            const abort=()=>reject(new Error('status request aborted'));
+            if(options.signal?.aborted){abort();return;}
+            options.signal?.addEventListener('abort',abort,{once:true});
+            const finish=work=>value=>{options.signal?.removeEventListener('abort',abort);work(value);};
+            requests.push({url,options,resolve:finish(resolve),reject:finish(reject)});
+        });
+    }};
+vm.runInNewContext(fs.readFileSync(new URL('../static/js/s3-admin.js',import.meta.url),'utf8'),panelContext);
+const settle=()=>new Promise(resolve=>setImmediate(resolve));
+await settle();controlled=true;
+const pending=content.children[0].children[2];
+const cancelled={upload_id:'c'.repeat(32),path:'music/failed-album/interrupted.wav',state:'aborting',confirmed_bytes:bytes,expected_bytes:bytes*2};
+const firstRefresh=panelContext.window.FrontierS3.refresh();
+await settle();
+const cancelledRefresh=panelContext.window.FrontierS3.refresh();
+await settle();
+// Drain in request order. The old renderer cleared the shared list for both
+// member replies, then appended the same cancellation for both upload replies.
+while(requests.length){
+    const request=requests.shift();
+    request.resolve(request.url.endsWith('/members')?{members:[]}:{uploads:[cancelled]});
+    await settle();
+}
+await Promise.all([firstRefresh,cancelledRefresh]);
+assert.equal(pending.children.length,1,'overlapping cancellation refreshes must render one pending task');
+assert.match(pending.children[0].children[0].textContent,/待回收/);
+
+const staleRefresh=panelContext.window.FrontierS3.refresh();
+await settle();
+const oldMembers=requests.shift();
+const latestRefresh=panelContext.window.FrontierS3.refresh();
+await settle();
+assert.equal(requests.length,1,'a stalled refresh must not block a later cancellation refresh');
+requests.shift().resolve({members:[]});
+await settle();
+assert.equal(pending.children.length,1,'keep the previous complete status until both new replies arrive');
+requests.shift().resolve({uploads:[cancelled]});
+await latestRefresh;
+oldMembers.resolve({members:[]});
+await settle();
+requests.shift().resolve({uploads:[{...cancelled,state:'uploading'}]});
+await staleRefresh;
+assert.equal(pending.children.length,1);
+assert.match(pending.children[0].children[0].textContent,/待回收/,'a late pre-cancellation snapshot must not overwrite newer state');
+
+const failedRefresh=panelContext.window.FrontierS3.refresh();
+const rejected=assert.rejects(failedRefresh,/temporary control failure/);
+await settle();requests.shift().reject(new Error('temporary control failure'));
+await rejected;
+const controller=new AbortController(),recoveredRefresh=panelContext.window.FrontierS3.refresh({signal:controller.signal});
+await settle();
+while(requests.length){
+    const request=requests.shift();
+    assert.equal(request.options.signal,controller.signal,'queued refresh preserves the caller cancellation signal');
+    request.resolve(request.url.endsWith('/members')?{members:[]}:{uploads:[cancelled]});
+    await settle();
+}
+await recoveredRefresh;
+assert.equal(pending.children.length,1,'an earlier failed refresh must not poison later cancellation status');
+
+const abortedController=new AbortController(),abortedRefresh=panelContext.window.FrontierS3.refresh({signal:abortedController.signal});
+const aborted=assert.rejects(abortedRefresh,/status request aborted/);
+await settle();requests.shift().resolve({members:[]});
+await settle();requests.shift(); // Its upload response never arrives.
+abortedController.abort();await aborted;
+assert.equal(pending.children.length,1,'aborting an incomplete snapshot must not blank existing status');
+const emptyRefresh=panelContext.window.FrontierS3.refresh();
+await settle();requests.shift().resolve({members:[]});
+await settle();requests.shift().resolve({uploads:[]});
+await emptyRefresh;
+assert.equal(pending.children.length,0,'the latest successful empty response clears recovered pending tasks');
+console.log('s3-upload-smoke-ok: bounded direct parts, retry checksum, credential isolation, confirmed progress, atomic latest cancellation status');

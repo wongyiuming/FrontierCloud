@@ -70,9 +70,13 @@
         dialog.showModal();
     }
     add.onclick=()=>form(null);
+    let refreshGeneration=0;
     async function refresh({signal} = {}) {
+        const generation=++refreshGeneration;
         if(!panel)return;
         const data=await api(root+'/members',{cache:'no-store',signal});
+        const dataUploads=await api(root+'/uploads',{cache:'no-store',signal});
+        if(generation!==refreshGeneration||signal?.aborted)return;
         area.hidden=false;summary.textContent=`${data.members.length} 个`;list.replaceChildren();pending.replaceChildren();
         for(const member of data.members) {
             const details=make('details'),title=make('summary');
@@ -89,7 +93,6 @@
             if(!member.enabled&&member.reserved_bytes>0)actions.append(button('恢复凭据',()=>{form(member,true);}));
             details.append(actions);if(member.error_code)details.append(make('p',member.error_code));list.append(details);
         }
-        const dataUploads=await api(root+'/uploads',{cache:'no-store',signal});
         if(dataUploads.truncated)pending.append(make('p','仅显示前 50 项'));
         for(const upload of dataUploads.uploads) {
             const row=make('div');row.className='s3-pending';
