@@ -33,7 +33,7 @@ def exercise_inline_scrolling(page,context,report,check):
     fleet.wait_page(page,'document.getElementById("inlineLyricsLines").scrollTop<=1')
     first=inline_scroll_state(page)
     report['inputs'].append(dict(action='native lyric wheel',x=x,y=y,delta_y=10000));page.mouse.wheel(0,10000)
-    fleet.wait_page(page,'(()=>{const v=document.getElementById("inlineLyricsLines");return v.scrollTop>=v.scrollHeight-v.clientHeight-1;})()')
+    fleet.wait_page(page,'()=>{const v=document.getElementById("inlineLyricsLines");return v.scrollTop>=v.scrollHeight-v.clientHeight-1;}')
     last=inline_scroll_state(page)
     check('native_wheel_reaches_first_and_last_glyphs_of_tall_inline_lyrics',first['first'] and last['last'] and last['top']>first['top'])
     page.evaluate("""() => {window.lyricPointerCancels=0;
