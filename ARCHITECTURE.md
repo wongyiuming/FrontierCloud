@@ -261,6 +261,12 @@ Same-name auto-link is fallback automation, not an authority over user decisions
 
 An accepted lyric upload is successful only after the file and its managed-object registration are durable together. A failed registration/audit transaction removes the newly published file. A later cache-invalidation failure must never delete an already committed lyric.
 
+Synchronized lyrics wrap at the existing font size. An active line that fits its
+local viewport stays fully visible; a taller line must allow native scrolling
+inside that viewport so its beginning and end remain accessible. Vertical lyric
+scrolling must not seek or switch tracks. Audio taps and horizontal seeking,
+video gestures, media bytes and encryption boundaries remain unchanged.
+
 ## 8. Catalog and cache consistency
 
 Redis catalog generations cache expensive scans/sorts. Browser/API cache headers must not make mutable directory structure remain stale after a successful Admin mutation.

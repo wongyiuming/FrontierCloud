@@ -1,3 +1,11 @@
+.audio-player-page .player-section { touch-action: pan-y; }
+.inline-lyrics .sync-lyrics-lines {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  pointer-events: auto;
+  user-select: none;
+}
 .inline-lyrics .sync-lyrics-track { height: auto; min-height: 100%; }
 .inline-lyrics .sync-lyric { height: auto; min-height: var(--sync-lyric-row-height, 0px); }
 .sync-lyric.previous.farthest { opacity: .28; transform: scale(.76); }
