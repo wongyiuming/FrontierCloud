@@ -24,7 +24,7 @@ def inline_scroll_state(page):
 
 def exercise_inline_scrolling(page,context,report,check):
     viewport=page.locator('#inlineLyricsLines');box=viewport.bounding_box()
-    x,y=box['x']+box['width']/2,box['y']+box['height']/2
+    x,y=box['x']+box['width']/4,box['y']+box['height']/2
     before=inline_scroll_state(page)
     check('tall_inline_lyrics_are_focusable_native_scroll_content',before['maximum']>0
         and before['overflow']=='auto' and before['pointerEvents']=='auto' and before['touchAction']=='pan-y'
@@ -44,6 +44,8 @@ def exercise_inline_scrolling(page,context,report,check):
         for direction,label in ((-1,'first'),(1,'last')):
             for _ in range(8):
                 start=box['y']+box['height']*(.8 if direction==1 else .2)
+                check('native_lyric_touch_starts_outside_playback_controls',viewport.evaluate(
+                    '(node,point)=>node.contains(document.elementFromPoint(point.x,point.y))',{'x':x,'y':start}))
                 for index in range(7):
                     point={'x':x,'y':start-direction*box['height']*.6*index/6}
                     value={'type':'touchStart' if index==0 else 'touchMove','touchPoints':[point]}
