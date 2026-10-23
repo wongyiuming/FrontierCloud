@@ -67,7 +67,7 @@ for (const fixture of [
         const aria = tag.match(/aria-label="([^"]+)"/); if (aria) node.attributes['aria-label'] = aria[1];
     }
     nodes.get('pageBrand').dataset.pageTitle = fixture.title;
-    nodes.get('globeTitle').lastElementChild = element();
+    nodes.get('globeTitle').textContent = template.match(/<h1 id="globeTitle">([^<]+)<\/h1>/)[1];
     const config = fixture.path ? {bootstrap: [], url: '', cacheKey: ''}
         : {url: '/api/v1/media/catalog/categories?media_type=' + fixture.kind};
     const inline = template.match(/<script>([\s\S]*?)<\/script>/)[1]
@@ -86,13 +86,13 @@ for (const fixture of [
     assert.equal(context.window.frontierCloudCatalogRevealKind, fixture.kind);
     if (!fixture.path) {
         assert.equal(nodes.get('pageBrandSuffix').textContent, fixture.category + '目录');
-        assert.equal(nodes.get('globeTitle').lastElementChild.textContent, fixture.planet);
+        assert.equal(nodes.get('globeTitle').textContent, 'This is my party');
     } else assert.equal(nodes.get('globeTitle').textContent, fixture.path.split('/')[1]);
     const pathLabel = nodes.get('globeHint').textContent;
     vm.runInNewContext(fs.readFileSync(new URL('../static/js/directory-globe.js', import.meta.url), 'utf8'), context);
     nodes.get('globeToggle').handlers.get('click')();
     assert.equal(nodes.get('globeStage').attributes['aria-label'], fixture.category + '目录列表');
-    assert.equal(nodes.get('globeHint').textContent, `选择${fixture.item}，开始${fixture.action}`);
+    assert.equal(nodes.get('globeHint').textContent, fixture.kind === 'video' ? '选择视频，开始观看' : '');
     nodes.get('globeToggle').handlers.get('click')();
     assert.equal(nodes.get('globeStage').attributes['aria-label'], `九宫格${fixture.item}目录，左右滑动翻页`);
     assert.equal(nodes.get('globeHint').textContent, pathLabel);

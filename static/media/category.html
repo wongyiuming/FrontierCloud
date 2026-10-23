@@ -18,7 +18,7 @@
         <main class="orbit-layout">
             <section class="orbit-intro" aria-label="目录信息">
                 <div id="directoryEyebrow" class="orbit-eyebrow">前沿UI</div>
-                <h1 id="globeTitle">探索你的<br><span>媒体星球</span></h1>
+                <h1 id="globeTitle">This is my party</h1>
                 <div id="globeCount" class="orbit-stat">加载中</div>
             </section>
             <section id="globePanel" class="orbit-panel" aria-label="媒体目录">
@@ -64,7 +64,7 @@
         stage.dataset.listLabel = categoryLabel + '目录列表';
         stage.setAttribute('aria-label', stage.dataset.gridLabel);
         const hint = document.getElementById('globeHint');
-        hint.dataset.listLabel = `选择${itemLabel}，开始${isVideo ? '观看' : '聆听'}`;
+        hint.dataset.listLabel = isVideo ? '选择视频，开始观看' : '';
         hint.dataset.directoryLabel = categoryLabel + '目录';
         const brandLogo = document.getElementById('pageBrandLogo');
         brandLogo.src = `/api/v1/media/brand/logo/${brandKind}`;
@@ -73,7 +73,6 @@
             pageTitle.slice(sourcePrefix.length).replace(/^\s*-\s*/, '') || categoryLabel + '目录';
         const directoryLabel = pageTitle.slice(sourcePrefix.length).replace(/^\s*-\s*/, '');
         if (directoryLabel) document.getElementById('globeTitle').textContent = directoryLabel;
-        else document.getElementById('globeTitle').lastElementChild.textContent = categoryLabel + '星球';
         const directoryPath = new URL(location.href).searchParams.get('path') || (isVideo ? 'vido' : 'music');
         const pathLabel = directoryPath.split('/').map(part => part === 'music' ? '音乐' : part === 'vido' ? '视频' : part).join(' / ');
         document.getElementById('globeHint').dataset.pathLabel = pathLabel;
