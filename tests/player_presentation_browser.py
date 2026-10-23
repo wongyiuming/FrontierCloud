@@ -1,4 +1,5 @@
 """Actual HTTPS assets: logo reuse, long header, wrapping and failed artwork."""
+import math
 import os
 from urllib.parse import quote
 
@@ -75,11 +76,19 @@ def exercise_inline_scrolling(page,context,report,check):
     check('same_cue_real_playback_clock_preserves_manual_lyric_scroll',clock_after['cue']==clock_before['cue']==3
         and clock_after['sequence']==clock_before['sequence'] and abs(clock_after['top']-clock_before['top'])<=1)
     # Retain the original surface semantics on the same served audio player.
-    report['inputs'].append(dict(action='native horizontal mouse drag',start=[x+25,y],end=[x-25,y],steps=6))
-    page.mouse.move(x+25,y);page.mouse.down();page.mouse.move(x-25,y,steps=6);page.mouse.up()
-    fleet.wait_page(page,'!art.video.seeking&&art.currentTime<.05')
+    duration=page.evaluate('Number(art.duration)')
+    check('horizontal_seek_uses_actual_loaded_media_duration',math.isfinite(duration) and duration>1)
+    start_time=duration*.6
+    report['inputs'].append(dict(action='horizontal seek setup',duration_seconds=duration,start_seconds=start_time))
+    page.evaluate('time=>{art.pause();art.currentTime=time;}',start_time)
+    fleet.wait_page(page,f'!art.video.seeking&&Math.abs(art.currentTime-{start_time})<.15')
+    started=inline_scroll_state(page);expected=max(0,started['time']-12*.2)
+    report['inputs'].append(dict(action='native horizontal mouse drag',start=[x+6,y],end=[x-6,y],steps=6,expected_seconds=expected))
+    page.mouse.move(x+6,y);page.mouse.down();page.mouse.move(x-6,y,steps=6);page.mouse.up()
+    fleet.wait_page(page,f'!art.video.seeking&&Math.abs(art.currentTime-{expected})<.15')
     dragged=inline_scroll_state(page)
-    check('inline_lyric_horizontal_drag_keeps_original_audio_seek',dragged['sequence']==clock_after['sequence'] and dragged['time']<.05)
+    check('inline_lyric_horizontal_drag_keeps_original_audio_seek',dragged['sequence']==started['sequence']
+        and abs(dragged['time']-expected)<.15 and abs(dragged['time']-started['time'])>.3)
     # The existing drag suppresses follow-up clicks for 500ms.
     page.wait_for_timeout(550)
     sequence=dragged['sequence'];report['inputs'].append(dict(action='native touchscreen single tap',x=x,y=y));page.touchscreen.tap(x,y)
@@ -89,9 +98,11 @@ def exercise_inline_scrolling(page,context,report,check):
     page.touchscreen.tap(x,y);page.wait_for_timeout(80);page.touchscreen.tap(x,y)
     fleet.wait_page(page,f'playerSwitchSequence==={sequence+1}&&art.video.readyState>=2')
     page.evaluate('()=>art.pause()')
-    check('inline_lyric_surface_retains_single_next_and_double_previous',page.evaluate('clickTimer===null'))
+    check('inline_lyric_surface_invokes_switch_once_per_single_or_double_tap',page.evaluate('clickTimer===null'))
     report['inline_scroll']=dict(before=before,wheel_first=first,wheel_last=last,touch=touched,touch_ends=touch_ends,
-        clock_before=clock_before,clock_after=clock_after,horizontal_drag=dragged,
+        clock_before=clock_before,clock_after=clock_after,horizontal_drag=dragged,horizontal_start=started,
+        horizontal_expected_seconds=expected,media_duration_seconds=duration,
+        single_track_switch_invocation_only=True,next_previous_direction_proved=False,
         actual_media_clock=True,clock_replaced=False)
 
 
