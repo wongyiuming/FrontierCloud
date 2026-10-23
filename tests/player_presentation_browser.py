@@ -106,6 +106,64 @@ def exercise_inline_scrolling(page,context,report,check):
         actual_media_clock=True,clock_replaced=False)
 
 
+def exercise_center_play_button(page,report,check):
+    original_viewport=page.viewport_size
+    results=[]
+    try:
+        for width,height in ((390,844),(768,1024),(1360,768)):
+            page.set_viewport_size({'width':width,'height':height})
+            for label,repetitions in (('short',4),('long',20)):
+                text='天地有情'*repetitions
+                for mechanism in ('mouse','touch'):
+                    report['inputs'].append(dict(action='center play setup',viewport=[width,height],
+                        lyric=label,text_length=len(text),pause=True,setup_seek_seconds=0))
+                    page.evaluate('()=>{art.pause();art.currentTime=0;}')
+                    fleet.wait_page(page,'art.video.paused&&!art.video.seeking&&art.currentTime<.05&&art.video.readyState>=2&&inlineLyricsRequest===null')
+                    page.evaluate('''text=>{const clock=art.currentTime;
+                        activeLyricEntries=Array.from({length:7},(_,index)=>({time:index<=3?0:clock+(index-3)*60,text:index===3?text:'短句'}));
+                        document.getElementById('inlineLyrics').classList.remove('hidden');renderLyricWindow(3);}''',text)
+                    fleet.wait_page(page,'text=>activeLyricIndex===3&&document.querySelector("#inlineLyricsTrack .sync-lyric.current").textContent===text',arg=text)
+                    target=page.locator('.art-center-play').evaluate('''button=>{const box=button.getBoundingClientRect(),
+                        x=box.left+box.width/2,y=box.top+box.height/2,hit=document.elementFromPoint(x,y),
+                        lyrics=document.getElementById('inlineLyrics').getBoundingClientRect();
+                        return {x,y,hit:hit?.closest('.art-center-play')===button,visible:getComputedStyle(button).display!=='none',
+                            lyrics_overlap:x>=lyrics.left&&x<=lyrics.right&&y>=lyrics.top&&y<=lyrics.bottom};}''')
+                    key=f'center_play_{width}_{label}_{mechanism}'
+                    check(key+'_is_the_actual_hit_target',target['hit'] and target['visible'] and target['lyrics_overlap'])
+                    captured=page.evaluate_handle('''()=>{const video=art.video,value={video,seeks:0,before:{index:currentIndex,
+                        sequence:playerSwitchSequence,currentSrc:video.currentSrc,time:art.currentTime,
+                        paused:video.paused,rate:video.playbackRate,observed:performance.now()}};
+                        value.onSeek=()=>value.seeks++;video.addEventListener('seeking',value.onSeek);return value;}''')
+                    try:
+                        before=captured.evaluate('value=>value.before')
+                        report['inputs'].append(dict(action='native center play '+mechanism,viewport=[width,height],
+                            lyric=label,text_length=len(text),x=target['x'],y=target['y'],before=before))
+                        if mechanism=='mouse':page.mouse.click(target['x'],target['y'])
+                        else:page.touchscreen.tap(target['x'],target['y'])
+                        fleet.wait_page(page,'!art.video.paused&&art.currentTime>.05&&!art.video.error',timeout=10000)
+                        # The background single-tap handler defers next by 250ms.
+                        page.wait_for_timeout(350)
+                        after=captured.evaluate('''value=>({same_element:art.video===value.video,index:currentIndex,
+                            sequence:playerSwitchSequence,currentSrc:art.video.currentSrc,time:art.currentTime,
+                            paused:art.video.paused,seeking:art.video.seeking,seeks:value.seeks,
+                            elapsed:(performance.now()-value.before.observed)/1000})''')
+                        check(key+'_resumes_current_media_without_seek_or_switch',before['paused'] and bool(before['currentSrc'])
+                            and after['same_element'] and after['index']==before['index']
+                            and after['sequence']==before['sequence'] and after['currentSrc']==before['currentSrc']
+                            and not after['paused'] and not after['seeking'] and after['seeks']==0
+                            and after['elapsed']>=.35 and after['time']>before['time']+.05
+                            and after['time']-before['time']<=after['elapsed']*before['rate']+.15)
+                        results.append(dict(viewport=[width,height],lyric=label,text_length=len(text),
+                            mechanism=mechanism,target=target,before=before,after=after))
+                    finally:
+                        captured.evaluate('value=>value.video.removeEventListener("seeking",value.onSeek)')
+                        captured.dispose()
+                        page.evaluate('()=>art.pause()')
+        report['center_play']=results
+    finally:
+        if original_viewport:page.set_viewport_size(original_viewport)
+
+
 def exercise(browser,master,root,report,check):
     previous=ui.BASE_URL
     try:
@@ -208,6 +266,7 @@ def exercise(browser,master,root,report,check):
             and inline['height']>inline['lineHeight'] and inline['glyphsInside'] and inline['visibleRows']==7)
         check('tall_inline_fixture_really_exceeds_the_viewport',inline['height']>inline['panelHeight'])
         exercise_inline_scrolling(page,context,report,check)
+        exercise_center_play_button(page,report,check)
         page.locator('.back-btn').click()
         fleet.wait_page(page,"new URL(location.href).searchParams.get('path')==='music/黄耀明'",timeout=15000)
         check('long_album_return_uses_the_business_parent',True)

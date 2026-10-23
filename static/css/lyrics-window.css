@@ -1,4 +1,5 @@
 .audio-player-page .player-section { touch-action: pan-y; }
+.audio-player-page .art-mask { z-index: 8; }
 .inline-lyrics .sync-lyrics-lines {
   overflow-x: hidden;
   overflow-y: auto;
