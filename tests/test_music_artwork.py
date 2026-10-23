@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import httpx
 from sqlalchemy import insert, text, update
 
@@ -163,18 +163,43 @@ class MusicArtworkTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(scans.await_count, 8, 'the root and children share a finite visit budget')
             self.assertEqual(result, {'cover': '', 'metadata_tracks': []})
 
-    async def test_artwork_deadline_cancels_pending_scan_and_keeps_optional_result(self):
+    async def test_artwork_deadline_cancels_pending_scan_and_is_retryable(self):
         cancelled = asyncio.Event()
-        async def stalled(*_args, **_kwargs):
+        blocked = True
+        async def scan(*_args, **_kwargs):
+            if not blocked:
+                return [{'media_path': 'music/a/recovered.mp3', 'type': 'audio'}]
             try:
                 await asyncio.Event().wait()
             finally:
                 cancelled.set()
         with patch.object(a, 'ARTWORK_TIMEOUT_SECONDS', 0.01), \
-                patch.object(media, 'scan_media_files_by_category', side_effect=stalled):
-            result = await asyncio.wait_for(a._artwork('music/a', False), 0.5)
+                patch.object(media, '_public_category_parts', AsyncMock(return_value=('music', 'a'))), \
+                patch.object(media, 'scan_media_files_by_category', side_effect=scan) as scans:
+            first = await asyncio.wait_for(self.client.get('/api/v1/media/catalog/artwork?path=music/a'), 0.5)
+            self.assertEqual(first.status_code, 503)
+            self.assertEqual(first.headers['retry-after'], '2')
+            self.assertEqual(first.headers['cache-control'], 'private, no-store')
+            self.assertNotIn('metadata_tracks', first.json(), 'timeout cannot look like a completed empty directory')
+            blocked = False
+            second = await self.client.get('/api/v1/media/catalog/artwork?path=music/a')
+            self.assertEqual(second.status_code, 200)
+            self.assertEqual([entry['media_path'] for entry in second.json()['metadata_tracks']],
+                             ['music/a/recovered.mp3'])
+            self.assertEqual(scans.await_count, 2)
         self.assertTrue(cancelled.is_set())
-        self.assertEqual(result, {'cover': '', 'metadata_tracks': []})
+
+    async def test_non_temporary_metadata_errors_keep_status_detail_and_headers(self):
+        for endpoint in ('metadata', 'cover'):
+            for status in (401, 403, 404, 409):
+                with self.subTest(endpoint=endpoint, status=status), \
+                        patch.object(m, 'music_metadata', AsyncMock(side_effect=HTTPException(
+                            status, 'Original failure', headers={'Retry-After': '30', 'Cache-Control': 'no-store'}))):
+                    response = await self.client.get(f'/api/v1/media/{endpoint}?file_path=music/a/one.mp3')
+                self.assertEqual(response.status_code, status)
+                self.assertEqual(response.json(), {'detail': 'Original failure'})
+                self.assertEqual(response.headers['retry-after'], '30')
+                self.assertEqual(response.headers['cache-control'], 'no-store')
 
     async def test_single_track_metadata_is_small_and_keeps_original_picture_separate(self):
         with patch.object(m, 'music_metadata', AsyncMock(return_value=m.Tags(
@@ -312,6 +337,40 @@ class MusicArtworkSQLiteTests(unittest.IsolatedAsyncioTestCase):
             response=await self.client.get(url);self.assertEqual(response.status_code,200);self.assertEqual(reads.await_count,2)
             self.assertEqual(reads.await_args.args[0]['payload']['etag'],'second-source-version')
             self.assertNotIn('etag',reads.await_args.args[0])
+
+    async def test_real_offline_owner_has_bounded_metadata_retry_and_recovers_without_stale_cover(self):
+        path, identifier = await self.remote_object()
+        async with self.database.begin() as conn:
+            await conn.execute(update(fs.storage_members).where(
+                fs.storage_members.c.member_id == 'c' * 32).values(health='offline'))
+        with patch.object(state, 'node', {'role': 'Master', 'node_id': 'a' * 32}), \
+                patch.object(state, 'database', self.database), patch.object(m, '_cache', OrderedDict()), \
+                patch.object(m, '_cache_bytes', 0), patch.object(m, '_remote_tags',
+                    AsyncMock(return_value=m.Tags(title='Recovered', picture=JPEG, mime='image/jpeg'))) as reads:
+            for endpoint in ('metadata', 'cover'):
+                response = await self.client.get(f'/api/v1/media/{endpoint}?file_path={path}&resource_id={identifier}')
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(response.json()['detail'], 'Media temporarily unavailable')
+                self.assertEqual(response.headers['retry-after'], '2')
+                self.assertEqual(response.headers['cache-control'], 'no-store')
+            reads.assert_not_awaited()
+            async with self.database.begin() as conn:
+                await conn.execute(update(fs.storage_members).where(
+                    fs.storage_members.c.member_id == 'c' * 32).values(health='online'))
+            for endpoint in ('metadata', 'cover'):
+                response = await self.client.get(f'/api/v1/media/{endpoint}?file_path={path}&resource_id={identifier}')
+                self.assertEqual(response.status_code, 200)
+                if endpoint == 'cover':
+                    self.assertEqual(response.content, JPEG)
+                    self.assertEqual(response.headers['cache-control'], 'private, max-age=300')
+            self.assertEqual(reads.await_count, 1)
+            async with self.database.begin() as conn:
+                await conn.execute(update(fs.storage_members).where(
+                    fs.storage_members.c.member_id == 'c' * 32).values(health='offline'))
+            response = await self.client.get(f'/api/v1/media/cover?file_path={path}&resource_id={identifier}')
+            self.assertEqual(response.status_code, 503, 'a cached original must still reauthorize its current owner')
+            self.assertEqual(response.headers['retry-after'], '2')
+            self.assertEqual(reads.await_count, 1)
 
     async def test_remote_source_change_during_metadata_read_is_a_conflict_not_a_cached_cover(self):
         path,identifier=await self.remote_object()

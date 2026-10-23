@@ -17,14 +17,32 @@
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 8000);
         const entry = {at: Date.now()};
-        entry.promise = fetch(url, {credentials: 'same-origin', cache: 'no-store', signal: controller.signal})
-            .then(response => {
-                if (!response.ok) {
-                    if (response.status === 401 || response.status === 403) artworkCache.clear();
+        entry.promise = (async () => {
+            for (let attempt = 0; attempt < 2; attempt++) {
+                controller.signal.throwIfAborted();
+                const response = await fetch(url, {credentials: 'same-origin', cache: 'no-store', signal: controller.signal});
+                if (response.ok) return response.json();
+                if (response.status === 401 || response.status === 403) artworkCache.clear();
+                const retry = response.status === 503 ? response.headers?.get('Retry-After') : null;
+                await response.body?.cancel();
+                const seconds = typeof retry === 'string' && /^\d+$/.test(retry) ? Number(retry) : NaN;
+                if (attempt !== 0 || !Number.isInteger(seconds) || seconds < 1 || seconds >= 8)
                     throw new Error('Artwork candidates unavailable');
-                }
-                return response.json();
-            }).catch(error => { if (artworkCache.get(url) === entry) artworkCache.delete(url); throw error; })
+                await new Promise((resolve, reject) => {
+                    const abortDelay = () => {
+                        clearTimeout(timer);
+                        controller.signal.removeEventListener('abort', abortDelay);
+                        reject(controller.signal.reason || new Error('Artwork lookup canceled'));
+                    };
+                    const timer = setTimeout(() => {
+                        controller.signal.removeEventListener('abort', abortDelay);
+                        resolve();
+                    }, seconds * 1000);
+                    controller.signal.addEventListener('abort', abortDelay, {once: true});
+                    if (controller.signal.aborted) abortDelay();
+                });
+            }
+        })().catch(error => { if (artworkCache.get(url) === entry) artworkCache.delete(url); throw error; })
             .finally(() => clearTimeout(timeout));
         artworkCache.set(url, entry);
         return entry.promise;

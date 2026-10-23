@@ -59,9 +59,9 @@ async def _artwork(path: str, include_hidden: bool) -> dict:
                     if not remaining:
                         break
                     await collect(path + '/' + child['name'])
-    except TimeoutError:
-        # Artwork is optional; cancellation does not turn a directory into an error.
-        pass
+    except TimeoutError as exc:
+        raise HTTPException(503, 'Music artwork lookup timed out',
+                            headers={'Retry-After': '2', 'Cache-Control': 'private, no-store'}) from exc
     return result
 
 
@@ -77,6 +77,12 @@ async def track_metadata(file_path: str = Query(..., min_length=1, max_length=40
                          resource_id: str = Query('', max_length=64)):
     try:
         tags = await music_tags.music_metadata(file_path, resource_id)
+    except HTTPException as exc:
+        if exc.status_code == 503:
+            headers = {name: value for name, value in (exc.headers or {}).items()
+                       if name.lower() != 'retry-after'}
+            raise HTTPException(503, exc.detail, headers={**headers, 'Retry-After': '2'}) from exc
+        raise
     except ValueError as exc:
         raise HTTPException(404, 'Music metadata not found') from exc
     value = {field: getattr(tags, field)[:4096] for field in ('title', 'artist', 'album') if getattr(tags, field)}
@@ -90,6 +96,12 @@ async def music_cover(request: Request, file_path: str = Query(..., min_length=1
                       resource_id: str = Query('', max_length=64)):
     try:
         tags = await music_tags.music_metadata(file_path, resource_id)
+    except HTTPException as exc:
+        if exc.status_code == 503:
+            headers = {name: value for name, value in (exc.headers or {}).items()
+                       if name.lower() != 'retry-after'}
+            raise HTTPException(503, exc.detail, headers={**headers, 'Retry-After': '2'}) from exc
+        raise
     except ValueError as exc:
         raise HTTPException(404, 'Album cover not found') from exc
     if not tags.picture:
