@@ -22,6 +22,29 @@ class CurrentPlayerAssetsTests(unittest.TestCase):
                     self.assertIn(f'"{static_asset_url(asset)}"', content)
                     self.assertNotIn(f'"/static/{asset}"', content)
 
+    def test_common_runtime_versions_raw_karaoke_lyrics_without_reordering_scripts(self):
+        # /karaoke/ reads its own raw template, bypassing load_html_template.
+        # The common runtime must version those assets too.
+        for name, parent_script in (("audio-player.html", "js/player.js"),
+                                    ("karaoke.html", "js/karaoke.js")):
+            with self.subTest(template=name):
+                raw = (ROOT / "static/media" / name).read_text(encoding="utf-8")
+                if name == "karaoke.html":
+                    raw = raw.replace("{{KARAOKE_JS_URL}}", static_asset_url(parent_script))
+                content = media.inject_page_runtime(raw, [])
+                for asset in ("css/lyrics-window.css", "js/lyrics-window.js"):
+                    quoted = f'"{static_asset_url(asset)}"'
+                    self.assertEqual(content.count(quoted), 1)
+                    self.assertNotIn(f'"/static/{asset}"', content)
+                self.assertLess(content.index(static_asset_url(parent_script)),
+                                content.index(static_asset_url("js/lyrics-window.js")))
+                if name == "karaoke.html":
+                    self.assertLess(content.index(static_asset_url("js/lyrics-window.js")),
+                                    content.index('"/static/js/karaoke-ui.js"'))
+                    self.assertIn(f'src="{static_asset_url("js/lyrics-window.js")}" defer', content)
+                else:
+                    self.assertNotIn('"/static/js/lyrics-window.js" defer', content)
+
     def test_player_scripts_are_versioned_ordered_and_not_duplicated(self):
         player_directory_label_integrity.install()
         player_directory_label_integrity.install()

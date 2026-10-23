@@ -96,6 +96,8 @@ def inject_page_runtime(html: str, stun_urls: list[str] | None = None) -> str:
     }
     for marker, value in replacements.items():
         html = html.replace(marker, value)
+    for asset in ("css/lyrics-window.css", "js/lyrics-window.js"):
+        html = html.replace(f'"/static/{asset}"', f'"{html_escape.escape(static_asset_url(asset), quote=True)}"')
     if 'id="categoryGrid"' in html:
         extra = ''.join(f'<script src="{static_asset_url(name)}"></script>\n'
                         for name in ('js/business-navigation.js', 'js/music-metadata.js'))
