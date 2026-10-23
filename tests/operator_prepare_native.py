@@ -206,7 +206,9 @@ class PreparationTests(unittest.TestCase):
         archive = self.evidence / "legacy-source.tar.gz"
         prepare._command(docker, ["git", "-C", str(git), "archive", "--format=tar.gz", "--prefix=wongyiuming-FrontierCloud-" + revision[:7] + "/", "--output=" + str(archive), revision], self.evidence, "legacy-git-archive")
         destination = self.evidence / "legacy-source"
-        destination.mkdir()
+        destination.mkdir(mode=0o755)
+        # The UID 10001 bootstrap must traverse /app even under umask 077.
+        destination.chmod(0o755)
         source_io.extract(archive, destination, files, directories, revision)
         return destination, revision, tree
 
