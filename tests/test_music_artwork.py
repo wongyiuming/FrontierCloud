@@ -131,6 +131,27 @@ class MusicArtworkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scans.await_count, 2, 'a full candidate budget must not traverse the other 99 albums')
         reads.assert_not_awaited()
 
+    async def test_mixed_formats_spend_budget_only_on_mp3_candidates(self):
+        tracks = [{'media_path': f'music/a/{i}.wav', 'type': 'audio'} for i in range(8)]
+        tracks += [{'media_path': f'music/a/{i}.mp3', 'type': 'audio'} for i in range(10)]
+        with patch.object(media, 'scan_media_files_by_category', AsyncMock(return_value=tracks)) as scans, \
+                patch.object(m, 'music_metadata', AsyncMock(side_effect=AssertionError('artwork read media'))) as reads:
+            result = await a._artwork('music/a', False)
+        self.assertEqual([entry['media_path'] for entry in result['metadata_tracks']],
+                         [f'music/a/{i}.mp3' for i in range(8)])
+        scans.assert_awaited_once()
+        reads.assert_not_awaited()
+
+    async def test_artist_with_only_unsupported_files_still_checks_child_album(self):
+        async def tracks(path, *_args, **_kwargs):
+            extension = 'wav' if path == 'music/a' else 'mp3'
+            return [{'media_path': f'{path}/song.{extension}', 'type': 'audio'}]
+        with patch.object(media, 'scan_media_files_by_category', AsyncMock(side_effect=tracks)) as scans, \
+                patch.object(media, 'get_media_subcategories', AsyncMock(return_value=[{'name': 'album'}])):
+            result = await a._artwork('music/a', False)
+        self.assertEqual([entry['media_path'] for entry in result['metadata_tracks']], ['music/a/album/song.mp3'])
+        self.assertEqual(scans.await_count, 2)
+
     async def test_artist_directory_and_track_inspection_budgets_are_shared(self):
         for empty in (True, False):
             async def tracks(path, *_args, **_kwargs):

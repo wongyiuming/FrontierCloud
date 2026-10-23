@@ -167,9 +167,9 @@
     }
     async function load(entry, signal) {
         signal?.throwIfAborted();
-        if (!window.FrontierMediaCrypto || !window.FrontierCryptoCommon) throw new Error('浏览器解密组件未加载');
         if (entry.native_metadata === true && !entry.encryption && entry.browser_metadata !== true)
             return nativeMetadata(entry, signal);
+        if (!window.FrontierMediaCrypto || !window.FrontierCryptoCommon) throw new Error('浏览器解密组件未加载');
         const source = {...entry};
         let size;
         if (entry.encryption) {

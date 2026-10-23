@@ -37,13 +37,19 @@ async def _artwork(path: str, include_hidden: bool) -> dict:
     async def collect(directory):
         nonlocal remaining
         tracks = await media.scan_media_files_by_category(directory, media.AUDIO_EXTS, 'audio', include_hidden=include_hidden)
-        # One request-wide inspection budget, including unsupported candidates.
-        for entry in islice(tracks, remaining):
-            remaining -= 1
+        # Spend the shared budget only on metadata-capable MP3 candidates.
+        found = False
+        for entry in tracks:
+            if not entry.get('media_path', '').lower().endswith('.mp3'):
+                continue
             entry = music_tags.lazy_tracks([dict(entry)])[0]
-            if (entry.get('encryption') or entry.get('browser_metadata') or entry.get('native_metadata')) and entry.get('media_path', '').lower().endswith('.mp3'):
+            if entry.get('encryption') or entry.get('browser_metadata') or entry.get('native_metadata'):
                 result['metadata_tracks'].append(entry)
-        return bool(tracks)
+                found = True
+                remaining -= 1
+                if not remaining:
+                    break
+        return found
 
     try:
         async with asyncio.timeout(ARTWORK_TIMEOUT_SECONDS):

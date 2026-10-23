@@ -25,6 +25,7 @@ node tests/audio_continuous_fetch_retry_smoke.mjs
 node tests/music_metadata_smoke.mjs
 node tests/s3_upload_smoke.mjs
 node tests/business_navigation_smoke.mjs
+node tests/lyrics_window_smoke.mjs
 node tests/directory_globe_smoke.mjs
 node tests/media_crypto_smoke.mjs
 FC_CRYPTO_COMPILED=1 node tests/media_crypto_smoke.mjs

@@ -26,6 +26,34 @@ for (const invalid of [new Uint8Array(), Uint8Array.from([73, 68, 51, 4, 0, 0, 1
 }
 assert.equal(Object.keys(await api.metadata({media_path: 'music/plain.mp3'})).length, 0);
 {
+    const path = 'music/plain-without-crypto.mp3', identity = 'c'.repeat(64), requests = [];
+    const cover = '/api/v1/media/cover?' + new URLSearchParams({file_path: path, resource_id: identity});
+    // A plaintext page may never load either browser encryption component.
+    const plain = {window: {addEventListener() {}, location: {href: 'https://media.test/album', origin: 'https://media.test'}},
+        TextEncoder, TextDecoder, Uint8Array, DataView, Blob, URL, URLSearchParams,
+        AbortController, setTimeout, clearTimeout,
+        fetch: async (url, options) => {
+            requests.push(url);
+            const actual = new URL(url, 'https://media.test');
+            assert.equal(actual.pathname, '/api/v1/media/metadata');
+            assert.equal(actual.searchParams.get('file_path'), path);
+            assert.equal(actual.searchParams.get('resource_id'), identity);
+            assert.equal(options.credentials, 'same-origin');
+            return new Response(JSON.stringify({title: 'Plain native title', cover}));
+        }};
+    vm.runInNewContext(fs.readFileSync(new URL('../static/js/music-metadata.js', import.meta.url), 'utf8'), plain);
+    assert.equal(plain.window.FrontierMediaCrypto, undefined);
+    assert.equal(plain.window.FrontierCryptoCommon, undefined);
+    const entry = {media_path: path, resource_id: identity, native_metadata: true};
+    const tags = await plain.window.FrontierMusicMetadata.metadata(entry);
+    assert.equal(tags.title, 'Plain native title');
+    assert.equal(tags.cover, cover);
+    assert.equal((await plain.window.FrontierMusicMetadata.metadata(entry)).title, tags.title);
+    assert.equal(requests.length, 1, 'plaintext selected and visible metadata share their own cache without crypto globals');
+    await assert.rejects(plain.window.FrontierMusicMetadata.metadata({media_path: 'music/still-encrypted.mp3',
+        encryption: {plaintext_size: 256}}), /浏览器解密组件未加载/, 'encrypted reads retain the required crypto boundary');
+}
+{
     const withIndicator = (name, body, indicator = size(body.length), unsync = false) => {
         const payload = unsync ? body.flatMap(byte => byte === 255 ? [255, 0] : [byte]) : body;
         const bytes = frame(4, name, [...indicator, ...payload]); bytes[9] = unsync ? 3 : 1; return bytes;

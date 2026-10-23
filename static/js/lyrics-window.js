@@ -30,20 +30,30 @@
   function sizeFullscreenLyrics(overlay, entries) {
     if (!overlay || overlay.classList.contains('hidden') || !entries.length) return;
     const rowsPerColumn = Math.max(1, Math.ceil(entries.length / 3));
-    const longest = Math.max(1, ...entries.map(entry => Array.from(entry.text || '').length));
     const heightSize = Math.max(10, (overlay.clientHeight - 80) / (rowsPerColumn * 1.22));
-    const widthSize = Math.max(10, (overlay.clientWidth / 3 - 56) / Math.max(4, longest * 1.02));
-    const fontSize = Math.round(Math.max(10, Math.min(48, heightSize, widthSize)));
+    const fontSize = Math.round(Math.max(10, Math.min(48, heightSize)));
     Array.from(overlay.classList)
       .filter(name => /^fs-\d+$/.test(name))
       .forEach(name => overlay.classList.remove(name));
     overlay.classList.add(`fs-${fontSize}`);
+    revealFullscreenLyric(overlay.querySelector('.fullscreen-lyric-line.current'));
+  }
+
+  function revealFullscreenLyric(row) {
+    const column = row?.closest('.fullscreen-lyrics-column');
+    if (!column || column.scrollHeight <= column.clientHeight) return;
+    const bounds = column.getBoundingClientRect(), line = row.getBoundingClientRect();
+    const top = bounds.top + column.clientTop, bottom = top + column.clientHeight;
+    if (line.top < top) column.scrollTop += line.top - top;
+    else if (line.bottom > bottom) column.scrollTop += Math.min(line.bottom - bottom, line.top - top);
   }
 
   function syncFullscreenLyrics(container, active) {
     if (!container) return;
     container.querySelector('.fullscreen-lyric-line.current')?.classList.remove('current');
-    if (active >= 0) container.querySelector(`[data-lyric-index="${active}"]`)?.classList.add('current');
+    const row = active >= 0 ? container.querySelector(`[data-lyric-index="${active}"]`) : null;
+    row?.classList.add('current');
+    revealFullscreenLyric(row);
   }
 
   function renderFullscreenColumns(columns, entries, active, overlay) {
