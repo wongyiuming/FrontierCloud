@@ -45,7 +45,7 @@ class PreparationTests(unittest.TestCase):
             shutil.copytree(Path(__file__).resolve().parents[1] / 'app', source / 'app', ignore=shutil.ignore_patterns('__pycache__'))
             dockerfile += 'COPY app /app/app\nWORKDIR /app\nRUN chmod -R a+rX /app/app && mkdir -p /app/data\nUSER 10001:10001\n'
         if application_source:
-            shutil.copyfile(Path(__file__).resolve().parents[1]/'main.py', source/'main.py')
+            shutil.copy2(Path(__file__).resolve().parents[1]/'main.py', source/'main.py')
             shutil.copytree(Path(__file__).resolve().parents[1]/'static', source/'static')
             dockerfile += 'COPY main.py /app/main.py\nCOPY static /app/static\n'
         (source / "Dockerfile").write_text("INVALID_DIRECTIVE\n" if invalid_dockerfile else dockerfile)
