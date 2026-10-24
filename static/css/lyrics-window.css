@@ -3,6 +3,7 @@
 .inline-lyrics .sync-lyrics-lines {
   overflow-x: hidden;
   overflow-y: auto;
+  touch-action: pan-y;
   overscroll-behavior-y: contain;
   overflow-anchor: none;
   pointer-events: auto;

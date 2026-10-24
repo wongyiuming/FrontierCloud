@@ -97,6 +97,10 @@ node tests/directory_globe_smoke.mjs
 node tests/media_crypto_smoke.mjs
 FC_CRYPTO_COMPILED=1 node tests/media_crypto_smoke.mjs
 node tests/network_observation_smoke.mjs
+
+# Native touch negotiation uses the prepared browser runtime before long fixtures.
+timeout --kill-after=10s 180s "$browser_python" -B tests/player_touch_seek_browser.py \
+  --output "$evidence/private/player-touch-seek" > "$evidence/player-touch-seek.log" 2>&1
 docker run --rm --cpus 1 --memory 512m --network none --user 0 \
   --add-host node.4399.com:127.0.0.1 --add-host wrong.4399.com:127.0.0.1 \
   --mount "type=bind,source=$PWD,target=/workspace,readonly" \

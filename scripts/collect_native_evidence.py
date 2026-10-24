@@ -35,6 +35,7 @@ storage-direct-status-after-restart.json storage-relay-status-concurrent.json st
 native-unit-cancel.json native-unit-cancel.log native-unit-cancel-mysql.jsonl native-unit-cancel-mysql.log
 native-master-cancel.json native-master-cancel.log native-master-cancel-mysql.jsonl native-master-cancel-mysql.log
 operator-sqlite-proof.json operator-mysql-proof.json operator-endpoint-sqlite-proof.json operator-endpoint-mysql-proof.json
+player-touch-seek.log
 native.log unit.log business-traffic.log certificate-nginx.log certificate-storage.log federation.log s3.log
 mysql.log operator.log operator-backup.log operator-endpoint.log operator-discovery.log operator-discovery-inputs.jsonl
 operator-prepare.log operator-prepare-inputs.jsonl operator-install.log operator-application.log operator-application-inputs.jsonl'''.split())
@@ -101,6 +102,7 @@ def allowlist():
                 f'native-partial-cancel-mysql-{pair}.jsonl', f'native-partial-cancel-mysql-{pair}.log'):
             result[name] = name
     result['migration-ui/result.json'] = 'migration-ui-contract.json'
+    result['private/player-touch-seek/result.json'] = 'player-touch-seek.json'
     result.update({f'unit-shards/shard-{index}.json': f'unit-shard-{index}.json' for index in range(4)})
     for kind, cases in (('operator-prepare', PREPARE_CASES), ('operator-install', INSTALL_CASES),
             ('operator-application', APPLICATION_CASES)):
