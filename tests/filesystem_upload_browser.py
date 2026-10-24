@@ -32,6 +32,10 @@ def exercise(browser,nodes,root,report,check):
     with wave.open(buffer,'wb') as output:
         output.setparams((1,2,8000,0,'NONE','not compressed'));output.writeframes(b'\x02\0'*(8*1024**2))
     payload=buffer.getvalue();digest=hashlib.sha256(payload).hexdigest()
+    queued=io.BytesIO()
+    with wave.open(queued,'wb') as output:
+        output.setparams((1,2,8000,0,'NONE','not compressed'));output.writeframes(b'\x03\0'*800)
+    queued_payload=queued.getvalue()
     for site in ('primary','direct','relay'):
         row=master.upload_media(payload,site+'.wav',site_type=site,target_dir='music/upload-baseline-'+site)
         with master.client.stream('GET',master.endpoint+row['url']) as response:
@@ -48,9 +52,12 @@ def exercise(browser,nodes,root,report,check):
         for mode in ('明文落盘','加密落盘'):
             parent='fault-interrupted-'+site+('-plain' if mode=='明文落盘' else '-encrypted')
             folder=root/parent;folder.mkdir();(folder/'sample.wav').write_bytes(payload)
-            context,page=fleet.admin_page(browser,master);reservations=[]
+            (folder/'zz-unstarted.wav').write_bytes(queued_payload)
+            context,page=fleet.admin_page(browser,master);reservations=[];reservation_requests=[]
             context.add_init_script("""(() => {
  const send=XMLHttpRequest.prototype.send;window.faultUpload={loaded:0,total:0,events:0};
+ window.faultBatchEvents={offline:0,online:0};
+ for(const name of ['offline','online'])window.addEventListener(name,()=>{window.faultBatchEvents[name]+=1;});
  XMLHttpRequest.prototype.send=function(body){
   if(body instanceof Blob)this.upload.addEventListener('progress',event=>{window.faultUpload={loaded:event.loaded,total:event.total,events:window.faultUpload.events+1};});
   return send.call(this,body);
@@ -58,8 +65,12 @@ def exercise(browser,nodes,root,report,check):
 })();""")
             def observed(response):
                 if response.request.method=='POST' and response.url.endswith('/admin/upload/session') and response.status==200:
-                    value=response.json();reservations.append(dict(upload_id=value['upload_id'],media_id=value['media_id'],transport=value['transport']))
+                    value=response.json();reservations.append(dict(upload_id=value['upload_id'],media_id=value['media_id'],transport=value['transport'],path=value['path']))
+            def requested(request):
+                if request.method=='POST' and request.url.endswith('/admin/upload/session'):
+                    reservation_requests.append(request.method)
             page.on('response',observed)
+            page.on('request',requested)
             page.on('dialog',lambda dialog:dialog.accept())
             try:
                 page.reload(wait_until='domcontentloaded')
@@ -73,6 +84,7 @@ def exercise(browser,nodes,root,report,check):
                 selected.value.set_files(str(folder))
                 fleet.wait_page(page,'window.faultUpload.loaded>=256*1024 && window.faultUpload.loaded<window.faultUpload.total',timeout=90000)
                 assert len(reservations)==1
+                check(parent+'_two_file_batch_starts_with_sample',reservations[0]['path']=='music/'+parent+'/sample.wav')
                 transfer=page.evaluate('window.faultUpload');upload_id=reservations[0]['upload_id']
                 pending=next(row for row in state(master)['sessions'] if row['upload_id']==upload_id)
                 part_id=upload_id if site=='primary' else reservations[0]['media_id']
@@ -89,20 +101,30 @@ def exercise(browser,nodes,root,report,check):
                 check(parent+'_active_path_conflict_refuses_second_reservation',True)
                 record=dict(site_type=site,storage_mode=mode,parent=parent,upload_id=upload_id,part_id=part_id,actual_xhr_progress=transfer,
                     receiver_partial_bytes=part_bytes,expected_bytes=pending['expected_bytes'],observed_at=time.time(),
-                    actual_network_throttle_bytes_per_second=128*1024,source_sha256=digest)
+                    actual_network_throttle_bytes_per_second=128*1024,source_sha256=digest,batch_files=2,
+                    queued_file='zz-unstarted.wav',queued_bytes=len(queued_payload),queued_sha256=hashlib.sha256(queued_payload).hexdigest())
                 report['upload_faults'].append(record)
                 report['inputs'].append(dict(action='GUI folder upload then '+('network offline' if mode=='明文落盘' else 'actual page refresh'),
-                    site_type=site,storage_mode=mode,parent=parent,source_bytes=len(payload),upload_id=upload_id))
+                    site_type=site,storage_mode=mode,parent=parent,source_bytes=len(payload),upload_id=upload_id,
+                    batch_files=['sample.wav','zz-unstarted.wav']))
                 if mode=='明文落盘':
                     context.set_offline(True)
-                    fleet.wait_page(page,"document.querySelector('#uploadSummary').textContent.startsWith('完成：')",timeout=90000)
+                    fleet.wait_page(page,"document.querySelector('#uploadSummary').textContent.startsWith('已中断：')",timeout=90000)
                     text=page.locator('#uploadSummary').inner_text();record['failure_summary']=text
                     check(parent+'_network_failure_is_visible','成功 0，失败 1' in text)
+                    check(parent+'_remaining_file_is_not_started','未上传 1' in text and len(reservation_requests)==1)
                     context.set_offline(False)
+                    fleet.wait_page(page,'window.faultBatchEvents.offline>=1 && window.faultBatchEvents.online>=1')
+                    page.wait_for_timeout(300)
+                    record['network_events']=page.evaluate('window.faultBatchEvents')
+                    check(parent+'_online_does_not_resume_old_batch',len(reservation_requests)==1 and len(reservations)==1
+                        and page.locator('#uploadSummary').inner_text()==text)
                     page.reload(wait_until='domcontentloaded')
                 else:
                     page.reload(wait_until='domcontentloaded')
                     check(parent+'_actual_refresh_interrupts_upload',True)
+                    check(parent+'_refresh_does_not_reserve_remaining_file',len(reservation_requests)==1 and len(reservations)==1)
+                record['reservation_request_attempts']=len(reservation_requests)
             finally:context.close()
     retained=state(master);report['after_browser_interruptions']=retained
     check('uncompleted_uploads_do_not_publish_catalog_objects',master.resources()==before_catalog)
@@ -129,4 +151,4 @@ def exercise(browser,nodes,root,report,check):
         with (node.data/('media/music/upload-baseline-'+site)/(site+'.wav')).open('rb') as stream:
             check(site+'_original_file_sha256_unchanged',hashlib.file_digest(stream,'sha256').hexdigest()==digest)
     report.update(independent_compose_nodes=3,filesystem_sites=['primary','direct','relay'],browser_interruption_cases=6,
-        actual_master_restart=True,actual_inactivity_seconds=300,baseline_sha256=digest)
+        files_per_interrupted_batch=2,actual_master_restart=True,actual_inactivity_seconds=300,baseline_sha256=digest)

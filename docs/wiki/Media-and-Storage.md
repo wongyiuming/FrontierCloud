@@ -97,11 +97,13 @@ This simplifies ownership, playback, delete, rename, and accounting semantics.
 The Storage Pool contains:
 
 - Master Local;
-- enabled Storage Followers.
+- enabled Storage Followers;
+- optional configured private S3 members.
 
 Master Local does not require a downstream relationship row. Follower Storage members use `relationship_id` to reach the paired endpoint.
 
-Playback and download resolve the current placement and use Local, Direct, or Relay transport transparently.
+Playback and download resolve the current placement and use Local, Direct, or
+Relay transport, or direct object-endpoint grants for S3.
 
 Admin media rows show file size, owner address, encryption state and site type,
 in that order. The address comes from the stored owner relationship; an offline
@@ -118,6 +120,7 @@ Admin does not ask the user to pick a concrete Storage Follower. The site select
 primary
 direct
 relay
+s3
 ```
 
 ### primary
@@ -132,6 +135,12 @@ An eligible Direct Follower.
 
 An eligible Relay Follower.
 
+### s3
+
+An enabled, connection-checked private S3 member. This option requires an
+administrator-configured bucket; it does not install an object store. See the
+[S3 contract](../python-s3-storage.md) for supported operations and exclusions.
+
 For Direct/Relay, the physical member is selected by FrontierCloud according to the media-folder affinity contract below.
 
 ## 6. Placement requirements and media-folder affinity
@@ -145,6 +154,9 @@ A candidate member must be:
 - large enough within logical allocation;
 - large enough after current reservations;
 - physically able to hold the incoming object.
+
+Physical capacity applies to filesystem members. S3 admission uses configured
+logical quota and provider checks; its physical free space is unavailable.
 
 ### Empty media folder
 
@@ -441,11 +453,18 @@ checks capability, hash, size, ownership and durable encryption identity.
 Deletion preserves a key/nonce reuse tombstone; rename preserves file identity.
 Local, Direct and Relay media use the same versioned browser contract.
 
+Going offline or leaving the page stops the current upload batch. Restoring the
+network does not resume its remaining files; select them again to start a new
+batch. The summary distinguishes confirmed successes, failures and files not
+started. Already confirmed published files remain available.
+
 Timeouts select stale upload candidates, rather than granting permission to
-delete. Whole-writer kernel leases protect active streams and finalization.
+delete. For filesystem uploads, whole-writer kernel leases protect active streams and finalization.
 Authenticated Storage reconciliation may prove incomplete objects cleared or
 complete objects ready for recovery. A timeout, offline node or HTTP 404 alone
 never clears ownership.
+S3 uses its durable multipart journal and grant expiry instead of filesystem
+leases; cancellation and background reconciliation retain uncertain outcomes.
 
 Priority is bounded to -7..500000 and existing values are inherited. Ties sort by
 canonical path/identity, without per-session randomness. Drag uses the entire

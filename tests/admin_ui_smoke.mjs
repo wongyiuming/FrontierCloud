@@ -43,6 +43,7 @@ function makeElement() {
 
 const elements = new Map();
 const documentListeners = new Map();
+const windowListeners = new Map();
 const fetchCalls = [];
 const element = id => {
     if (!elements.has(id)) elements.set(id, makeElement());
@@ -55,6 +56,10 @@ class TestFormData {
 }
 
 const context = {
+    window: {addEventListener(name, callback) {
+        if (!windowListeners.has(name)) windowListeners.set(name, new Set());
+        windowListeners.get(name).add(callback);
+    }},
     document: {
         cookie: 'admin_csrf=test-csrf',
         hidden: false,

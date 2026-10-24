@@ -6,6 +6,19 @@ const selectedItemKinds = new Map();
 let currentPath = '';
 let csrfCookieName = '__Host-admin-csrf';
 let uploadRunning = false;
+let uploadInterrupted = false;
+const activeUploadRequests = new Map();
+function interruptUploadTask(event) {
+    uploadInterrupted = true;
+    const message = event.type === 'offline' ? '网络连接中断' : '上传已取消';
+    for (const stop of activeUploadRequests.values()) stop(message);
+}
+function requireUploadTaskActive() {
+    if (navigator.onLine === false) interruptUploadTask({type: 'offline'});
+    if (uploadInterrupted) throw new Error('上传已中断，请重新选择文件重试');
+}
+window.addEventListener('offline', interruptUploadTask);
+window.addEventListener('pagehide', interruptUploadTask);
 let clusterUpload = false;
 let mediaSearchTimer = null;
 let securityTimer = null;
@@ -398,6 +411,7 @@ function parseXhrData(xhr) {
 
 function uploadRequest(method, url, body, onProgress, {direct = false, raw = false} = {}) {
     return new Promise((resolve, reject) => {
+        requireUploadTaskActive();
         const xhr = new XMLHttpRequest();
         let settled = false, timer, lastSent = 0, lastReceived = 0, abortReason;
         const seconds = Number(uploadLimits.upload_inactivity_timeout);
@@ -405,11 +419,13 @@ function uploadRequest(method, url, body, onProgress, {direct = false, raw = fal
         const finish = (error, value) => {
             if (settled) return;
             settled = true;
+            activeUploadRequests.delete(xhr);
             clearTimeout(timer);
             window.removeEventListener('offline', offline);
             if (error) reject(error); else resolve(value);
         };
         const stop = message => {
+            if (settled) return;
             abortReason = new Error(message);
             xhr.abort();
             finish(abortReason);
@@ -449,6 +465,7 @@ function uploadRequest(method, url, body, onProgress, {direct = false, raw = fal
                 finish(error);
             }
         };
+        activeUploadRequests.set(xhr, stop);
         window.addEventListener('offline', offline);
         if (navigator.onLine === false) { stop('网络连接中断'); return; }
         activity();

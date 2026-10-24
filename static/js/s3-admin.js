@@ -107,41 +107,53 @@
 
     function directPart(grant,blob,onProgress) {
         return new Promise((resolve,reject)=>{
-            const xhr=new XMLHttpRequest();let idle;
-            const touch=()=>{clearTimeout(idle);idle=setTimeout(()=>xhr.abort(),90000);};
-            const finish=(error)=>{clearTimeout(idle);error?reject(error):resolve();};
+            requireUploadTaskActive();
+            const xhr=new XMLHttpRequest();let idle,settled=false,abortReason;
+            const touch=()=>{if(settled)return;clearTimeout(idle);idle=setTimeout(()=>stop('S3 上传超时，等待回收'),90000);};
+            const finish=error=>{if(settled)return;settled=true;activeUploadRequests.delete(xhr);clearTimeout(idle);error?reject(error):resolve();};
+            const stop=message=>{if(settled)return;abortReason=new Error(message);xhr.abort();finish(abortReason);};
             xhr.open('PUT',grant.url);xhr.withCredentials=false;
             // Content-Length is a forbidden browser header. A Blob body makes
             // the browser supply the exact signed length automatically.
             for(const [name,value] of Object.entries(grant.headers))if(name.toLowerCase()!=='content-length')xhr.setRequestHeader(name,value);
-            xhr.upload.onprogress=event=>{touch();if(event.lengthComputable)onProgress(event.loaded);};
+            xhr.upload.onprogress=event=>{if(settled)return;touch();if(event.lengthComputable)onProgress(event.loaded);};
             xhr.onerror=()=>finish(new Error('S3 连接失败，上传未确认'));
-            xhr.onabort=()=>finish(new Error('S3 上传超时，等待回收'));
+            xhr.onabort=()=>finish(abortReason||new Error('S3 上传已取消，等待回收'));
             xhr.onload=()=>finish(xhr.status>=200&&xhr.status<300?null:new Error(`S3 上传失败（${xhr.status}）`));
-            touch();xhr.send(blob);
+            activeUploadRequests.set(xhr,stop);
+            touch();try{xhr.send(blob);}catch(error){finish(error);}
         });
     }
     async function transfer(reservation,file,onProgress,onState=()=>{}) {
         const prefix=`/uploads/${reservation.upload_id}`;
         let timer,touching=false;
         try {
+            requireUploadTaskActive();
             onState('建立上传');const status=await post(prefix+'/initialize');
+            requireUploadTaskActive();
             if(status.state!=='uploading')throw new Error('上传尚未就绪');
-            timer=setInterval(async()=>{if(touching)return;touching=true;try{await post(prefix+'/touch');}catch(_){}finally{touching=false;}},45000);
+            timer=setInterval(async()=>{if(touching||uploadInterrupted)return;touching=true;try{requireUploadTaskActive();await post(prefix+'/touch');}catch(_){}finally{touching=false;}},45000);
             for(let offset=0,number=1;offset<file.size;offset+=reservation.part_bytes,number++) {
+                requireUploadTaskActive();
                 onState('上传中');const chunk=file.slice(offset,Math.min(file.size,offset+reservation.part_bytes));
                 const hash=new Uint8Array(await crypto.subtle.digest('SHA-256',await chunk.arrayBuffer()));
+                requireUploadTaskActive();
                 const checksum=btoa(String.fromCharCode(...hash));
                 let confirmed=false;
                 for(let attempt=0;attempt<2&&!confirmed;attempt++) {
+                    requireUploadTaskActive();
                     const grant=await post(prefix+`/parts/${number}`,{checksum_sha256:checksum});
+                    requireUploadTaskActive();
                     try {
                         await directPart(grant,chunk,loaded=>onProgress(Math.min(.99,(offset+loaded)/file.size)));
+                        requireUploadTaskActive();
                         onState('确认中');await post(prefix+`/parts/${number}/confirm`);confirmed=true;
-                    }catch(error){if(attempt===1)throw error;}
+                    }catch(error){requireUploadTaskActive();if(attempt===1)throw error;}
                 }
+                requireUploadTaskActive();
                 onProgress(Math.min(.99,(offset+chunk.size)/file.size));
             }
+            requireUploadTaskActive();
             onState('校验中');const result=await post(prefix+'/complete');
             if(result.state!=='published')throw new Error('尚待存储确认');
             onProgress(1);return result;

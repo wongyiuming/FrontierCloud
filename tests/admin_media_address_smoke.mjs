@@ -51,7 +51,7 @@ function element(tag = 'div') {
 }
 const flush = async () => { for (let count = 0; count < 12; count++) await new Promise(resolve => setImmediate(resolve)); };
 function fixture(holdTree) {
-    const elements = new Map(), listeners = new Map(), requests = [], intervals = [];
+    const elements = new Map(), listeners = new Map(), windowListeners = new Map(), requests = [], intervals = [];
     const byId = id => { if (id === 'usersPanel') return null;
         if (!elements.has(id)) elements.set(id, element()); return elements.get(id); };
     const document = {cookie: '', hidden: false, readyState: 'loading', body: element(), getElementById: byId,
@@ -67,6 +67,10 @@ function fixture(holdTree) {
     const response = data => ({status: 200, ok: true, json: async () => data});
     const context = vm.createContext({document, location: {origin: 'https://admin.example.test', href: 'https://admin.example.test/admin'},
         URL, URLSearchParams, AbortController, console, setTimeout, clearTimeout,
+        addEventListener(name, callback) {
+            if (!windowListeners.has(name)) windowListeners.set(name, new Set());
+            windowListeners.get(name).add(callback);
+        },
         setInterval: (_callback, delay) => { intervals.push(delay); return intervals.length; }, clearInterval() {},
         alert: text => { throw new Error(text); },
         fetch: async url => { const value = String(url); requests.push(value);

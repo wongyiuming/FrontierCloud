@@ -262,7 +262,12 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
         alert('上传文件前请先进入 data/media/music 或 data/media/vido 下的分类目录');
         return;
     }
+    if (navigator.onLine === false) {
+        alert('网络连接已中断，请恢复网络后重新选择文件');
+        return;
+    }
 
+    uploadInterrupted = false;
     setUploadControlsDisabled(true);
     $('uploadProgress').classList.remove('hidden');
     $('uploadResults').innerHTML = '';
@@ -313,6 +318,7 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
 
     try {
         for (let index = 0; index < files.length; index += 1) {
+            if (uploadInterrupted) break;
             const file = files[index];
             const displayName = relativePaths ? relativePaths[index] : file.name;
             const fileUnits = Math.max(file.size, 1);
@@ -347,17 +353,20 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
                     encrypted = await window.FrontierMediaCrypto.encryptUploadFile(file, fraction => progress(fraction * 0.25));
                     $('currentFileLabel').textContent = `密文上传：${displayName}`;
                 }
+                requireUploadTaskActive();
                 const outgoingFile = encrypted?.file || file;
                 const transferProgress = fraction => progress(encrypted ? 0.25 + fraction * 0.75 : fraction);
                 let result;
                 if (clusterUpload && !lyricUpload) {
                     reservation = await takeReservation(index, encrypted);
                     try {
+                        requireUploadTaskActive();
                         if(reservation.transport==='S3') {
                             result=await window.FrontierS3.transfer(reservation,outgoingFile,transferProgress,
                                 state=>{$('currentFileLabel').textContent=`${state}：${displayName}`;});
                         } else {
                         await uploadRaw(reservation.upload_url, outgoingFile, transferProgress, reservation.transport === 'Direct');
+                        if (reservation.transport === 'Direct') requireUploadTaskActive();
                         result = reservation.transport === 'Direct'
                             ? await api(`/api/v1/media/admin/upload/session/${reservation.upload_id}/finalize`, {
                                 method: 'POST', headers: requestHeaders(), body: '{}',
@@ -407,8 +416,10 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
             }
         }
         setUploadControlsDisabled(false);
-        $('uploadSummary').textContent = `完成：成功 ${successCount}，失败 ${failedCount}`;
-        $('currentFileLabel').textContent = '当前文件处理完成';
+        $('uploadSummary').textContent = uploadInterrupted
+            ? `已中断：成功 ${successCount}，失败 ${failedCount}，未上传 ${files.length - successCount - failedCount}`
+            : `完成：成功 ${successCount}，失败 ${failedCount}`;
+        $('currentFileLabel').textContent = uploadInterrupted ? '请重新选择剩余文件' : '当前文件处理完成';
         await renderTree().catch(() => {});
         if (lyricUpload) await loadLyricCatalog().catch(() => {});
     }
