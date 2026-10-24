@@ -131,8 +131,8 @@ async def main():
                     "session": session})
             results = await asyncio.gather(*(remote(identifier, session) for identifier in identifiers))
             assert all(result["counted"] for result in results)
-            # A follower holding active pool objects cannot be revoked. Drain its
-            # placements first, then revocation must block future updates.
+            # The legacy endpoint cannot revoke an active node, including after
+            # logical placements are drained. Physical retirement is separate.
             try:
                 await store.revoke(relation_id, "fixture")
             except p.ProtocolError:
@@ -145,7 +145,15 @@ async def main():
                 await conn.execute(text(
                     "DELETE FROM global_media_objects WHERE storage_member_id=:member_id"
                 ), {"member_id": owner})
-            await store.revoke(relation_id, "fixture")
+            try:
+                await store.revoke(relation_id, "fixture")
+            except p.ProtocolError as exc:
+                assert str(exc)=='retirement_required'
+            else:
+                raise AssertionError('legacy revoke bypassed physical retirement')
+            # Historical revoked-row admission is an independent protocol check.
+            async with database.begin() as conn:
+                await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id==relation_id).values(state='revoked'))
             try:
                 await remote(identifiers[0], str(uuid.uuid4()))
             except HTTPException as exc:

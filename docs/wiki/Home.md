@@ -96,7 +96,7 @@ Backup is not live SQL replication, HA storage, automatic Master election, or au
 The repository has exactly two canonical branches:
 
 ```text
-dev   implementation + complete CI authority
+dev   implementation + bounded source CI authority
 main  reviewed release history
 ```
 

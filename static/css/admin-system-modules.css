@@ -66,9 +66,15 @@
 .admin-console > .admin-module[data-admin-module="security"] { order: 50; }
 .admin-console > .admin-module[data-admin-module="network"] { order: 60; }
 .admin-console > .admin-module[data-admin-module="nodes"] { order: 70; }
+.admin-console > .admin-module[data-admin-module="migrations"] { order: 75; }
 .admin-console > .admin-module[data-admin-module="site"] { order: 80; }
 .admin-console > .admin-module[data-admin-module="key"] { order: 100; }
 .admin-console > .admin-module[data-admin-module="brand"] { order: 110; }
+.migration-card { margin: 12px 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.migration-card progress { display: block; width: 100%; margin-top: 12px; }
+.migration-path, .migration-card strong { overflow-wrap: anywhere; word-break: break-word; }
+#migrationHistory { display: grid; gap: 6px; margin: 12px 0; }
+#migrationPlanForm select { min-width: 0; max-width: 100%; }
 
 /* The expand/collapse marker belongs to the module itself, not to the width
    left over inside its title button. Keep it pinned to the same far-right

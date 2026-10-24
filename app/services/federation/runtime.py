@@ -60,6 +60,7 @@ class Runtime:
         self.backup_semaphore = asyncio.Semaphore(1)
 
     def start(self, *, revocations=False):
+        # The application-owned migration runtime is independent of this loop.
         if state.node["role"] != "Standalone" and not settings.TLS_ENABLED:
             raise p.ProtocolError("固定为 Master/Follower 的节点必须启用有效 HTTPS；请恢复 TLS_ENABLED 后启动，不会自动重置角色")
         if (state.node["role"] != "Standalone" or revocations) and (self.task is None or self.task.done()):
@@ -135,6 +136,8 @@ class Runtime:
     async def tick(self, relation: dict):
         from app.services.site_control import hard_fence_active
         if hard_fence_active():
+            return
+        if relation['state']=='retiring':
             return
         identifier = relation["relationship_id"]
         if relation["state"] == "revoked":

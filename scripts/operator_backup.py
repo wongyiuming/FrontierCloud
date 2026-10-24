@@ -35,7 +35,7 @@ PERSISTENT_TARGETS = {
     "/var/lib/frontiercloud-certificate": "certificate_state",
     "/run/frontiercloud-tls": "certificate_published",
 }
-EPHEMERAL_TARGETS = frozenset({"/tmp", "/run/frontiercloud-certificate", "/var/run/mysqld"})
+EPHEMERAL_TARGETS = frozenset({"/tmp", "/run/frontiercloud-certificate", "/run/frontiercloud-traffic", "/var/run/mysqld"})
 KNOWN_SERVICES = frozenset({"web", "redis", "mysql", "nginx", "stun", "secrets-init", "media-init", "certificate-init", "certificate-agent"})
 RESOURCE_KEYS = frozenset(PERSISTENT_TARGETS.values()) | {"redis", "mysql"}
 NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
@@ -47,6 +47,21 @@ class BackupError(RuntimeError):
 
 def json_bytes(value) -> bytes:
     return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode()
+
+
+def compose_values(value, *, encode=False):
+    """Convert between Compose's reloadable escaping and literal runtime data.
+
+    This applies only to rendered Compose models, never Docker inspect data.
+    Mapping keys are not interpolated by Compose and must stay unchanged.
+    """
+    if isinstance(value, str):
+        return value.replace("$", "$$") if encode else value.replace("$$", "$")
+    if isinstance(value, list):
+        return [compose_values(item, encode=encode) for item in value]
+    if isinstance(value, dict):
+        return {key: compose_values(item, encode=encode) for key, item in value.items()}
+    return value
 
 
 def relative(value: str) -> PurePosixPath:
@@ -236,7 +251,7 @@ class Docker:
         return result.stdout.decode().strip()
 
     def config(self):
-        return self.run(self.base + ["--profile", "*", "config", "--format", "json"], json_output=True)
+        return compose_values(self.run(self.base + ["--profile", "*", "config", "--format", "json"], json_output=True))
 
     def containers(self):
         ids = self.run(["docker", "ps", "-aq"]).splitlines()

@@ -31,11 +31,14 @@ def _open_beneath(root: Path, parts: list[str]) -> tuple[int, os.stat_result]:
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
             os.close(directory);directory=child
         descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-        info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode):
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("A regular storage file is required")
+            return descriptor, info
+        except BaseException:
             os.close(descriptor)
-            raise ValueError("A regular storage file is required")
-        return descriptor, info
+            raise
     finally:
         os.close(directory)
 

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>前沿娱乐 · Admin</title>
     <link rel="stylesheet" href="{{ADMIN_CSS_URL}}">
+    <link rel="stylesheet" href="{{NODES_CSS_URL}}">
 </head>
 <body>
     <aside id="adminNavigation" class="admin-navigation" aria-label="控制台导航">
@@ -188,15 +189,33 @@
             </div>
         </section>
         <section id="nodesPanel" class="admin-module nodes-panel" data-admin-module="nodes">
-            <button class="module-heading" type="button" aria-expanded="false"><span><strong>存储节点管理</strong><small>主节点控制存储配对、类型与额度</small></span><b>＋</b></button>
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>节点管理</strong><small>配对、类型与额度</small></span><b>＋</b></button>
             <div class="module-content nodes-content">
-                <div class="nodes-toolbar"><strong id="nodeIdentity">尚未加载</strong><button id="nodesRefresh" type="button">刷新</button></div>
-                <form id="nodePromotion" class="nodes-toolbar hidden"><select id="nodeRole" aria-label="节点角色"><option>Master</option></select><input id="nodeEndpoint" type="url" required placeholder="当前节点 HTTPS 根地址"><input id="masterLocalCapacity" type="number" min="1" max="10240" value="1" aria-label="Master 本地存储池额度 GiB" placeholder="Master Local GiB"><button type="submit">固定角色</button></form>
-                <div id="nodePairing" class="hidden"><div class="nodes-toolbar"><button id="nodeImportPair" type="button">导入存储节点密钥包</button></div><textarea id="nodePairPackage" rows="4" aria-label="一次性配对包" placeholder="配对包只用于建立当前关系，五分钟后过期"></textarea></div>
+                <div class="nodes-toolbar"><strong id="nodeIdentity">尚未加载</strong><button id="nodesRefresh" type="button">刷新</button><button id="nodeRetirementHistory" type="button" class="hidden">退役记录</button></div>
                 <div id="storagePoolSummary" class="nodes-pool-summary">Standalone 本地存储</div>
                 <div class="nodes-table-scroll"><table class="nodes-table"><thead><tr><th>节点 / HTTPS 地址</th><th>状态 / RTT / 心跳</th><th>Storage</th><th>Backup / Transport</th></tr></thead><tbody id="nodeRelationships"></tbody></table></div>
+                <details class="node-pairing-details"><summary>配对与初始化</summary>
+                <form id="nodePromotion" class="nodes-toolbar hidden"><select id="nodeRole" aria-label="节点角色"><option>Master</option></select><input id="nodeEndpoint" type="url" required placeholder="当前节点 HTTPS 根地址"><input id="masterLocalCapacity" type="number" min="1" max="10240" value="1" aria-label="Master 本地存储池额度 GiB" placeholder="Master Local GiB"><button type="submit">固定角色</button></form>
+                <div id="nodePairing" class="hidden"><div class="nodes-toolbar"><button id="nodeImportPair" type="button">导入存储节点密钥包</button></div><textarea id="nodePairPackage" rows="4" aria-label="一次性配对包" placeholder="配对包只用于建立当前关系，五分钟后过期"></textarea></div>
                 <form id="nodeReinitialize" class="nodes-toolbar hidden"><input id="nodeResetConfirmation" autocomplete="off" placeholder="输入当前节点 ID 确认重置"><button type="submit">重新初始化节点</button><span>撤销旧关系，保留媒体文件</span></form>
+                </details>
                 <div id="nodeOperationStatus" role="status"></div>
+            </div>
+        </section>
+
+        <section id="migrationsPanel" class="admin-module nodes-panel" data-admin-module="migrations">
+            <button class="module-heading" type="button" aria-expanded="false"><span><strong>资源迁移</strong></span><b>＋</b></button>
+            <div class="module-content nodes-content">
+                <form id="migrationPlanForm" class="nodes-toolbar">
+                    <select id="migrationSource" aria-label="源节点" required><option value="">源节点</option></select>
+                    <span aria-hidden="true">→</span>
+                    <select id="migrationTarget" aria-label="目标节点" required><option value="">目标节点</option></select>
+                    <button type="submit">只读计划</button><button id="migrationsRefresh" type="button">刷新</button>
+                    <button id="migrationMembersMore" type="button" hidden>更多节点</button>
+                </form>
+                <div id="migrationOperationStatus" role="status" aria-live="polite"></div>
+                <div id="migrationPreview"></div><div id="migrationTask"></div><div id="migrationHistory"></div>
+                <button id="migrationHistoryMore" type="button" hidden>更多记录</button>
             </div>
         </section>
 
@@ -273,5 +292,6 @@
 
     <script src="{{ADMIN_JS_URL}}"></script>
     <script src="{{NODES_JS_URL}}"></script>
+    <script src="{{MIGRATIONS_JS_URL}}"></script>
 </body>
 </html>

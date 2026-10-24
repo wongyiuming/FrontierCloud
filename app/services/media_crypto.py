@@ -456,7 +456,7 @@ async def business_role() -> str:
     return role
 
 
-async def initialize() -> None:
+async def initialize(*, read_only=False) -> None:
     global manager
     from sqlalchemy import func, select
     from app.core.db import engine
@@ -469,9 +469,13 @@ async def initialize() -> None:
         key_id = await conn.scalar(select(keys.c.key_id).where(keys.c.singleton == 1))
     # Same durable data root as media and database, separate from node-signing secrets.
     from app.services.media_manager import MEDIA_ROOT
-    opened = open_premaster(MEDIA_ROOT.parent / "media-keys", has_encrypted_data=has_encrypted or key_id is not None)
-    async with engine.begin() as conn:
-        await check_encryption_key(conn, opened.key_id())
+    opened = open_premaster(MEDIA_ROOT.parent / "media-keys", has_encrypted_data=read_only or has_encrypted or key_id is not None)
+    if read_only:
+        if key_id != opened.key_id():
+            raise PremasterError('Fenced startup requires the existing premaster/database key identity')
+    else:
+        async with engine.begin() as conn:
+            await check_encryption_key(conn, opened.key_id())
     manager = opened
 
 
@@ -651,10 +655,10 @@ async def browser_download_plan(paths: list[str], *, limit: int = 5000) -> list[
     if role == "Follower":
         raise HTTPException(409, "存储节点不提供业务下载")
     entries, pending, seen = [], [], set()
-    encrypted, total = False, 0
+    browser_only, total = False, 0
 
     async def flush():
-        nonlocal encrypted
+        nonlocal browser_only
         if not pending:
             return
         local = [(item["path"], item["kind"]) for item in pending if not item["media_id"]]
@@ -664,10 +668,19 @@ async def browser_download_plan(paths: list[str], *, limit: int = 5000) -> list[
                 item["media_id"] = identities[item["path"]]
         async with engine.connect() as conn:
             descriptors = await encryption_for_ids(conn, [item["media_id"] for item in pending])
+            from app.services import s3_schema
+            s3_objects = {row['media_id']:dict(row) for row in (await conn.execute(select(s3_schema.objects.c.media_id,
+                s3_schema.objects.c.content_encrypted).where(s3_schema.objects.c.media_id.in_([item['media_id'] for item in pending]),
+                    s3_schema.objects.c.state == 'active'))).mappings()} if role == 'Master' else {}
         for item in pending:
             descriptor = descriptors.get(item["media_id"])
+            if item['media_id'] in s3_objects:
+                if bool(descriptor) != bool(s3_objects[item['media_id']]['content_encrypted']):
+                    raise MetadataError('S3 encryption descriptor missing or inconsistent')
+                item['browser_download'] = True
+                browser_only = True
             if descriptor is not None:
-                encrypted = True
+                browser_only = True
                 if item["size_bytes"] != descriptor.ciphertext_size:
                     raise MetadataError("Download ciphertext size does not match descriptor")
                 item["encryption"] = descriptor.to_dict()
@@ -693,7 +706,7 @@ async def browser_download_plan(paths: list[str], *, limit: int = 5000) -> list[
             # Resolve current placement and health; a visible catalog row alone
             # cannot promise bytes from an unavailable or revoked member.
             logical, relation = await routing.resolve(identifier, canonical)
-            if relation is None:
+            if relation is None and logical.get('transport') != 'S3':
                 info = resolve_safe_path(MEDIA_ROOT, canonical).stat()
                 if not stat.S_ISREG(info.st_mode) or info.st_size != size:
                     raise MetadataError("Local global placement does not match catalog")
@@ -755,8 +768,8 @@ async def browser_download_plan(paths: list[str], *, limit: int = 5000) -> list[
                 await local_selection(path)
         await flush()
     if total > limit:
-        if encrypted:
-            raise HTTPException(413, "含加密文件的下载最多包含 5000 个文件，请分批下载")
+        if browser_only:
+            raise HTTPException(413, "浏览器下载最多包含 5000 个文件，请分批下载")
         return []
     return entries
 

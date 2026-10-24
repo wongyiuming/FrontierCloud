@@ -86,7 +86,7 @@
 .node-card { min-width: 0; }
 .node-card-header {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 12px;
     align-items: center;
     padding: 12px 14px 10px;
@@ -94,6 +94,11 @@
     border-bottom: 1px solid #23364a;
 }
 .node-card-title { min-width: 0; }
+.node-card-summary { margin: 0; padding: 9px 14px; color: #9eb1c5; font-size: 12px; overflow-wrap: anywhere; }
+.node-card-details[hidden] { display: none; }
+.node-details-toggle { min-width: 58px; padding: 6px 10px; font-size: 12px; }
+.node-pairing-details { margin-top: 12px; }
+.node-pairing-details > summary { cursor: pointer; padding: 9px 0; color: #9eb1c5; font-size: 12px; }
 .node-card-title strong {
     display: block;
     color: #edf7ff;
@@ -278,6 +283,14 @@
     box-shadow: 0 7px 22px rgba(0,0,0,.25);
 }
 #nodeOperationStatus:empty { display: none; }
+
+.node-retirement-dialog { width: min(560px, 90vw); max-height: 85vh; overflow: auto; color: #deebf5; background: #101e2b; border: 1px solid #3c586f; border-radius: 12px; padding: 22px; }
+.node-retirement-dialog::backdrop { background: rgba(0, 0, 0, .65); }
+.node-retirement-dialog [hidden] { display: none !important; }
+.node-retirement-identity { display: block; overflow-wrap: anywhere; }
+.node-retirement-dialog input { box-sizing: border-box; width: 100%; margin: 10px 0; }
+.node-retirement-status { min-height: 3em; overflow-wrap: anywhere; }
+.node-retirement-history-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
 @media (max-width: 1180px) {
     .node-card-grid { grid-template-columns: 1fr 1fr; }

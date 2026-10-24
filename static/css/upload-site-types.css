@@ -36,6 +36,19 @@
     white-space: nowrap;
 }
 
+.media-node-address {
+    flex: 0 1 auto;
+    min-width: 0;
+    color: #91a8b8;
+    font-size: 11px;
+    line-height: 1.5;
+    max-width: min(32ch, 30%);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: text;
+}
+
 .media-site-badge {
     display: inline-flex;
     align-items: center;
@@ -67,3 +80,17 @@
     background: rgba(139, 69, 62, .13);
     border-color: rgba(181, 105, 97, .34);
 }
+
+.media-site-badge.site-s3 { color: #a9acbd; background: rgba(93, 98, 125, .13); border-color: #575f77; }
+.s3-admin { margin-top: 1rem; }
+.s3-admin details { padding: .75rem; border-top: 1px solid #344956; }
+.s3-admin summary { cursor: pointer; overflow-wrap: anywhere; }
+.s3-admin p { margin: .5rem 0; overflow-wrap: anywhere; }
+.s3-pending { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .5rem 0; }
+.s3-pending span { overflow-wrap: anywhere; flex: 1 1 200px; }
+.s3-config-dialog { width: min(480px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; padding: 1.25rem;
+    color: #d7e1e7; background: #15212a; border: 1px solid #536773; border-radius: 12px; }
+.s3-config-dialog::backdrop { background: rgba(0,0,0,.64); }
+.s3-config-dialog label { display: grid; grid-template-columns: 100px minmax(0,1fr); align-items: center; gap: .5rem; margin: .6rem 0; }
+.s3-config-dialog input, .s3-config-dialog select { min-width: 0; padding: .5rem; color: inherit; background: #0c1720; border: 1px solid #536773; border-radius: 5px; }
+.s3-config-dialog button { margin-right: .5rem; }

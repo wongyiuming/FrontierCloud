@@ -67,6 +67,8 @@ def _same_upload(row, original, path, expected):
 async def _reserve(original, path, expected, *, encrypted=False):
     now = int(time.time())
     async with state.database.begin() as conn:
+        from app.services import resource_fences
+        await resource_fences.new_upload(conn,state.node['node_id'],'media',path)
         row = await _session(original, conn)
         _same_upload(row, original, path, expected)
         if row and bool(row["content_encrypted"]) != encrypted:
@@ -80,7 +82,7 @@ async def _reserve(original, path, expected, *, encrypted=False):
         if await conn.scalar(text("SELECT media_id FROM media_objects WHERE path_locator=:locator"), {"locator": resource_pool.path_locator(path)}):
             raise HTTPException(409, "Storage path already has a durable owner")
         member = (await conn.execute(select(s.storage_members).where(s.storage_members.c.member_id == state.node["node_id"]).with_for_update())).mappings().first()
-        physical = resource_pool.physical_free(MEDIA_ROOT) - resource_pool.PHYSICAL_RESERVE_BYTES
+        physical = resource_pool.physical_free(MEDIA_ROOT) - resource_pool.PHYSICAL_RESERVE_BYTES - int(member['reserved_bytes'] if member else 0)
         logical = int(member["allocated_bytes"]) - int(member["used_bytes"]) - int(member["reserved_bytes"]) if member else 0
         if not member or not member["storage_enabled"] or not member["writable"] or min(physical, logical) < expected:
             raise HTTPException(507, "Follower storage is not writable or lacks capacity")
@@ -118,6 +120,15 @@ async def _complete(original, path, expected):
 
 
 async def _reconcile_unlocked(original, path, expected, *, expired_only=False):
+    from app.services import resource_fences
+    from app.services.media_manager import media_mutation_lock
+    async with media_mutation_lock.shared():
+        async with state.database.begin() as conn:
+            await resource_fences.paths(conn,'media',[(path,False)],member_id=state.node['node_id'])
+        return await _reconcile_checked(original,path,expected,expired_only=expired_only)
+
+
+async def _reconcile_checked(original, path, expected, *, expired_only=False):
     """The caller holds the same kernel lease as the byte writer."""
     target = _target(path)
     temporary = MEDIA_ROOT / f".cluster-upload-{original}.part"
@@ -251,6 +262,8 @@ async def storage_upload(request: Request, original: str):
                 raise
     except UploadBusy as exc:
         raise HTTPException(409, str(exc)) from exc
+    except p.ProtocolError as exc:
+        raise HTTPException(409,str(exc)) from exc
 
 
 async def _control(request, original):
@@ -294,6 +307,8 @@ async def storage_reconcile(request: Request, original: str):
             return await _reconcile_unlocked(original, path, expected, expired_only=expired_only)
     except UploadBusy:
         return {"object_id": original, "state": "busy", "cleared": False}
+    except p.ProtocolError as exc:
+        raise HTTPException(409,str(exc)) from exc
 
 
 @router.post("/storage/{original}/delete")
@@ -307,6 +322,8 @@ async def storage_delete(request: Request, original: str):
             return {"status": "deleted"}
     except UploadBusy as exc:
         raise HTTPException(409, "Storage deletion found an active writer") from exc
+    except p.ProtocolError as exc:
+        raise HTTPException(409,str(exc)) from exc
 
 
 async def cleanup_expired_storage(limit=50):

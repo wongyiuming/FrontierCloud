@@ -9,13 +9,17 @@ import argparse
 import base64
 import copy
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import shutil
+import signal
 import socket
 import ssl
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import traceback
@@ -26,10 +30,10 @@ from pathlib import Path
 
 import httpx
 from playwright.sync_api import expect, sync_playwright
+from tests.native_runner_cleanup import finalize_cleanup, interrupt_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 ACCEPTANCE_SUBNET = "172.30.251.0/24"
-ACCEPTANCE_GATEWAY = "172.30.251.1"
 DOMAIN_ADDRESSES = {}
 _original_getaddrinfo = socket.getaddrinfo
 
@@ -68,16 +72,16 @@ def wait_for(work, seconds=150, description="condition"):
 
 
 class Node:
-    def __init__(self, name, directory, base, ca, bundle, index, *, network):
+    def __init__(self, name, directory, base, ca, bundle, index, *, network, address=None, private_subnet=None):
         self.name, self.directory = name, directory / name
         self.directory.mkdir()
-        self.host = f"172.30.251.{11+index}"
+        self.host = address or str(ipaddress.ip_network(ACCEPTANCE_SUBNET).network_address+11+index)
         self.hostname = name+".4399.com"
         self.storage = index != 0
         self.profile = "relay" if index == 2 else "direct"
         self.port = 8443 if self.storage and self.profile == "relay" else 443
         DOMAIN_ADDRESSES[self.hostname] = self.host
-        self.project = "fc-acceptance-" + directory.name[-12:] + "-" + name
+        self.project = "fc-acceptance-" + hashlib.sha256(str(directory.resolve()).encode()).hexdigest()[:12] + "-" + name
         self.configuration = self.directory / "compose.json"
         self.ca, self.client = ca, None
         self.endpoint = f"https://{self.hostname}"+(f":{self.port}" if self.port!=443 else "")
@@ -98,6 +102,19 @@ class Node:
         for volume in configuration.get("volumes", {}).values():
             volume.pop("name", None)
         configuration["networks"] = {"default": {"name": self.project+"-private"},"fleet":{"external":True,"name":network}}
+        if not self.storage:
+            # The shared fleet advertises several services named web. Resolve
+            # our backend only on this node's private network, without trusting
+            # fleet clients to assert forwarded HTTPS or client identities.
+            upstream = "fc-fixture-web-"+hashlib.sha256(self.project.encode()).hexdigest()[:16]
+            templates = self.directory/"nginx-templates";templates.mkdir()
+            template = (ROOT/"nginx/nginx.conf").read_text(encoding="utf-8")
+            if "proxy_pass http://web:8000;" not in template:
+                raise RuntimeError("fixture_web_upstream_marker_missing")
+            (templates/"nginx.conf.template").write_text(
+                template.replace("proxy_pass http://web:8000;",f"proxy_pass http://{upstream}:8000;"),encoding="utf-8")
+        if private_subnet:
+            configuration['networks']['default']['ipam']={'config':[{'subnet':str(private_subnet)}]}
         for name, service in configuration["services"].items():
             service.pop("container_name", None)
             service.pop("env_file", None)
@@ -114,6 +131,9 @@ class Node:
                     service["environment"].update(STORAGE_TRANSPORT=self.profile,STORAGE_PORT=str(self.port),STORAGE_ENDPOINT=self.endpoint)
             if name == "web":
                 service["cpus"] = 1.0
+                service['mem_limit']='512m'
+                if not self.storage and private_subnet:
+                    service.setdefault('environment',{})['TRUSTED_PROXY_NETWORKS']=str(private_subnet)
             if name == "certificate-agent":
                 service["command"]=["python","-m","tests.storage_certificate_agent_fixture"]
                 service.setdefault("volumes",[]).append({"type":"bind","source":str(ca.parent),"target":"/test-ca","read_only":True})
@@ -123,7 +143,12 @@ class Node:
             if name == "web" and not self.storage:
                 # Business makes verified outbound requests to both appliances;
                 # its Nginx remains the only public entry on this test network.
+                service["networks"]["default"]["aliases"] = [upstream]
                 service["networks"]["fleet"] = {}
+            if name == "nginx" and not self.storage:
+                # Startup's normal sed/envsubst writes only this disposable copy.
+                service.setdefault("volumes",[]).append(dict(type="bind",source=str(templates),
+                    target="/etc/nginx/templates",read_only=False))
             public_service = name == ("web" if self.storage else "nginx")
             if public_service:
                 service["networks"]["default"]["aliases"]=[self.hostname]
@@ -362,9 +387,18 @@ print(json.dumps({key:sum(row[key] for row in rows) for key in ['rss','fd','sock
             subprocess.run(["sudo", "nsenter", "-t", pid, "-n", "tc", "qdisc", "del", "dev", "eth0", "root"], capture_output=True)
 
     def stop(self):
+        errors = []
         if self.client:
-            self.client.close()
-        self.compose("down", "--timeout", "5", "--volumes", "--remove-orphans")
+            try:
+                self.client.close()
+            except Exception as error:
+                errors.append(error)
+        try:
+            self.compose("down", "--timeout", "5", "--volumes", "--remove-orphans")
+        except Exception as error:
+            errors.append(error)
+        if errors:
+            raise errors[0]
 
     def failure_diagnostics(self):
         from urllib.parse import urlsplit
@@ -455,6 +489,8 @@ def admin_page(browser, node):
 
 def browser_promote(browser, node, role):
     context, page = admin_page(browser, node)
+    pairing=page.locator('.node-pairing-details')
+    if pairing.count() and not pairing.evaluate('(element)=>element.open'):pairing.locator('summary').click()
     page.select_option('#nodeRole', role)
     page.fill('#nodeEndpoint', node.endpoint)
     page.locator('#nodePromotion button[type="submit"]').click()
@@ -471,6 +507,8 @@ def browser_pair(browser, master, follower):
     # ready. It has no business AdminGUI; import is exercised on the Master UI.
     package = follower.api("/api/v1/media/admin/nodes/pair-package", {})
     master_context, master_page = admin_page(browser, master)
+    pairing=master_page.locator('.node-pairing-details')
+    if pairing.count() and not pairing.evaluate('(element)=>element.open'):pairing.locator('summary').click()
     master_page.fill('#nodePairPackage', json.dumps(package))
     master_page.locator('#nodeImportPair').click()
     wait_page(master_page, "document.querySelector('#nodeOperationStatus').textContent === '已完成'", timeout=60000)
@@ -485,13 +523,6 @@ def browser_pair(browser, master, follower):
     )
     master_context.close()
     return package
-
-
-def browser_revoke(browser, master):
-    context, page = admin_page(browser, master)
-    page.locator('#nodeRelationships button').filter(has_text='撤销关系').click()
-    wait_page(page, "document.querySelector('#nodeRelationships').rows.length === 0", timeout=60000)
-    context.close()
 
 
 def browser_checks(browser, master, resource):
@@ -571,9 +602,11 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("/tmp/federation-acceptance.json"))
     arguments = parser.parse_args()
     report, nodes = {"checks": Checks(), "samples": []}, []
+    cleanup=[]
+    created=False
     network = "fc-acceptance-" + uuid.uuid4().hex[:12]
-    with tempfile.TemporaryDirectory(prefix="frontiercloud-acceptance-") as temporary:
-        directory = Path(temporary)
+    directory = Path(tempfile.mkdtemp(prefix="frontiercloud-acceptance-"))
+    try:
         from tests.certificate_fixtures import TestCA
         from cryptography.hazmat.primitives import serialization
         test_ca=TestCA()
@@ -599,10 +632,23 @@ def main():
         base = json.loads(command("docker", "compose", "-f", str(ROOT / "docker-compose.yaml"),
                                   "config", "--format", "json"))
         try:
-            command("docker", "network", "create", "--subnet", ACCEPTANCE_SUBNET,
-                    "--gateway", ACCEPTANCE_GATEWAY, network)
+            names=command('docker','network','ls','-q').splitlines()
+            networks=json.loads(command('docker','network','inspect',*names)) if names else []
+            occupied=[ipaddress.ip_network(row['Subnet']) for item in networks
+                for row in ((item.get('IPAM') or {}).get('Config') or []) if row.get('Subnet')]
+            subnet=next((value for index in range(250,160,-1) for value in [ipaddress.ip_network(f'10.252.{index}.0/24')]
+                if not any(value.overlaps(other) for other in occupied if other.version==4)),None)
+            if subnet is None:raise RuntimeError('No free isolated fleet subnet')
+            command("docker", "network", "create", "--subnet", str(subnet),
+                    "--gateway", str(subnet.network_address+1), network)
+            created=True
+            report['fixture_subnet']=str(subnet)
+            private_subnets=[value for index in range(250,160,-1) for value in [ipaddress.ip_network(f'10.251.{index}.0/24')]
+                if not any(value.overlaps(other) for other in occupied+[subnet] if other.version==4)][:3]
+            if len(private_subnets)!=3:raise RuntimeError('No free isolated private node subnets')
             for index, name in enumerate(("master-a", "direct-b", "relay-c")):
-                node = Node(name, directory, base, ca, bundle, index,network=network)
+                node = Node(name, directory, base, ca, bundle, index,network=network,address=str(subnet.network_address+11+index),
+                    private_subnet=private_subnets[index])
                 nodes.append(node)
             a, b, c = nodes
             # Master Local content is imported once during promotion. A Follower
@@ -820,22 +866,37 @@ print(asyncio.run(read_enabled()))
             report["failure"] = {"type": type(exc).__name__, "message": str(exc)}
             traceback.print_exc()
             raise
-        finally:
-            arguments.output.write_text(json.dumps(report, indent=2))
-            if report.get("result") != "passed":
+    finally:
+        business_failed=sys.exc_info()[0] is not None
+        if report.get("result") != "passed":
+            try:
                 browser_network_failure(directory)
-                for node in nodes:
-                    try:
-                        node.failure_diagnostics()
-                        logs = node.compose("logs", "--no-color", "--tail", "60", "web", "certificate-agent",*([] if node.storage else ["nginx"]))
-                        print("\n".join(line for line in logs.splitlines()
-                                         if "initial_runtime_secrets" not in line), flush=True)
-                    except Exception:
-                        pass
-            for node in reversed(nodes):node.stop()
+            except Exception:
+                pass
+            for node in nodes:
+                try:
+                    node.failure_diagnostics()
+                    logs = node.compose("logs", "--no-color", "--tail", "60", "web", "certificate-agent",*([] if node.storage else ["nginx"]))
+                    print("\n".join(line for line in logs.splitlines()
+                                     if "initial_runtime_secrets" not in line), flush=True)
+                except Exception:
+                    pass
+        for node in reversed(nodes):
+            try:node.stop();cleanup.append(dict(project=node.project,stopped=True))
+            except Exception as error:cleanup.append(dict(project=node.project,stopped=False,error=type(error).__name__))
+        try:
             command("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(directory))
-            subprocess.run(["docker", "network", "rm", network], capture_output=True)
-            socket.getaddrinfo=_original_getaddrinfo
+            cleanup.append(dict(directory=str(directory),step='ownership',stopped=True))
+        except Exception as error:cleanup.append(dict(directory=str(directory),step='ownership',stopped=False,error=type(error).__name__))
+        if created:
+            try:command("docker", "network", "rm", network);cleanup.append(dict(network=network,stopped=True))
+            except Exception as error:cleanup.append(dict(network=network,stopped=False,error=type(error).__name__))
+        socket.getaddrinfo=_original_getaddrinfo
+        try:shutil.rmtree(directory);cleanup.append(dict(directory=str(directory),step='temporary-directory',stopped=True))
+        except Exception as error:cleanup.append(dict(directory=str(directory),step='temporary-directory',stopped=False,error=type(error).__name__))
+        report['passed']=report.get('result')=='passed'
+        if business_failed or any(not item['stopped'] for item in cleanup):report['result']='failed'
+        finalize_cleanup(report,cleanup,arguments.output,business_failed=business_failed)
     print(json.dumps({"result": report.get("result", "failed"), "checks": report["checks"],
                       "samples": len(report["samples"])}))
 
@@ -846,4 +907,5 @@ def urlsplit_origin(value):
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, interrupt_fixture)
     main()

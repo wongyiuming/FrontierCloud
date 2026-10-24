@@ -41,6 +41,8 @@ class AudioPlayer extends BasePlayer {}
 let legacyApplyCalls = 0;
 let selectedIndex = null;
 let querySelectorCalls = 0;
+const metadataSelections = [];
+const artworkActivationOrder = [];
 const windowObject = {
     setTimeout() { return 1; },
     clearTimeout() {},
@@ -53,6 +55,8 @@ const context = {
     checkAndPreloadNext() {},
     applyMediaCatalog() { legacyApplyCalls += 1; },
     renderPlaylist() {},
+    cancelPlayerArtwork() { artworkActivationOrder.push('cancel'); },
+    loadSelectedMetadata(media) { artworkActivationOrder.push('metadata'); metadataSelections.push(media); },
     selectMedia(index) { selectedIndex = index; },
     FrontierMediaPlayer: BasePlayer,
     FrontierAudioPlayer: AudioPlayer,
@@ -80,6 +84,7 @@ vm.createContext(context);
 const instrumented = source.replace(
     'window.frontierCloudContinuousAudio = {',
     'window.__estimateMp3Duration = estimateMp3Duration;\n'
+        + '    window.__activateBusinessTrack = activateBusinessTrack;\n'
         + '    window.__presentationDuration = presentationDuration;\n'
         + '    window.__latchPresentationDuration = latchPresentationDuration;\n'
         + '    window.__seekRangePlan = seekRangePlan;\n'
@@ -97,6 +102,8 @@ assert.equal(api.append_batch_bytes, 512 * 1024);
 assert.equal(api.append_max_wait_ms, 1000);
 assert.equal(api.first_append_bytes, 64 * 1024);
 assert.equal(api.max_buffer_ahead_seconds, 30);
+assert.equal(api.max_buffer_behind_seconds, 30);
+assert.doesNotMatch(source, /MAX_TRACK_BYTES|audio response exceeds byte guard/);
 assert.equal(api.supported(), true);
 assert.equal(api.compatible({type: 'audio', media_path: 'music/a/track.mp3'}), true);
 assert.equal(api.compatible({type: 'audio', media_path: 'music/a/track.flac'}), false);
@@ -179,12 +186,11 @@ const target = {
         operations.push(kind);
         setImmediate(() => {
             this.updating = false;
-            if (kind === 'remove') low = 316 - 0.08;
             for (const callback of [...(listeners.get('updateend') || [])]) callback();
         });
     },
     appendBuffer() { this.run('append'); },
-    remove() { this.run('remove'); },
+    remove(_start, end) { low = end; this.run('remove'); },
 };
 const serial = Object.create(windowObject.__ContinuousAudioSession.prototype);
 const active = {index: 1, start: 316, end: null};
@@ -200,6 +206,15 @@ await Promise.all([
 ]);
 assert.equal(operations.filter(v => v === 'append').length, 2);
 assert.equal(operations.filter(v => v === 'remove').length, 1, 'queued duplicate pruning must recheck ranges');
+assert.equal(low, 290, 'keep thirty seconds behind the playback clock');
+active.start = 0; // The same track can last hours: it must prune before any boundary.
+context.art.video.currentTime = 400;
+await serial.pruneBeforeActive();
+assert.equal(low, 370, 'played frames within a long active track must be released');
+assert.equal(active.start, 0, 'pruning must preserve the business timeline');
+context.art.video.currentTime = 402;
+await serial.pruneBeforeActive();
+assert.equal(low, 370, 'avoid frequent tiny SourceBuffer removals');
 
 // A slow Direct transfer must deliver partial batches while its next read is
 // pending, without consuming that read twice or changing byte order.
@@ -272,6 +287,44 @@ assert.equal(large.batches[0].length, 65536);
 assert.ok(large.batches.every(bytes => bytes.length <= 512 * 1024), 'MSE append size must not depend on native fetch chunk size');
 assert.deepEqual(Buffer.concat(large.batches), Buffer.from(largeChunk));
 
+// Cross the former 128 MiB ceiling with both known and unknown response lengths.
+// Reuse one bounded network chunk and discard appended bytes in the test sink.
+for (const advertisedLength of [200 * 1024 * 1024, 0]) {
+    // The encrypted transport supplies authenticated plaintext chunks through
+    // this same reader contract; the continuous core must not bypass it.
+    if (!advertisedLength) context.currentMediaList[0].encryption = {version: 1};
+    const chunk = new Uint8Array(512 * 1024);
+    let reads = 0, delivered = 0, maxAppend = 0;
+    const long = transferCandidate({
+        read: async () => reads++ < 400 ? {done: false, value: chunk} : {done: true},
+        cancel: async () => {},
+    }, advertisedLength);
+    long.candidate.appendBytes = async bytes => {
+        delivered += bytes.byteLength;
+        maxAppend = Math.max(maxAppend, bytes.byteLength);
+    };
+    long.candidate.bufferedEnd = () => delivered / 32768;
+    await long.candidate.appendTrack(0);
+    assert.equal(delivered, 200 * 1024 * 1024);
+    assert.ok(maxAppend <= 512 * 1024);
+    assert.ok(long.candidate.segments[0].end > 0);
+    delete context.currentMediaList[0].encryption;
+}
+
+// Removing the total-file cap must not let a malformed body accumulate forever
+// in the browser's MPEG parser without producing any decodable audio.
+let malformedReads = 0, malformedCancelled = false;
+const malformed = transferCandidate({
+    read: async () => { malformedReads++; return {done: false, value: new Uint8Array(512 * 1024)}; },
+    cancel: async () => { malformedCancelled = true; },
+}, 0);
+malformed.candidate.bufferedEnd = () => 0;
+malformed.candidate.appendBytes = async () => {};
+await assert.rejects(malformed.candidate.appendTrack(0), /decoder made no progress/);
+assert.ok(malformedReads <= 33, 'stop a non-decoding stream after a bounded number of batches');
+assert.equal(malformedCancelled, true);
+assert.equal(malformed.candidate.segments[0].end, null);
+
 let errorRead = 0;
 const broken = transferCandidate({
     read: async () => errorRead++ === 0 ? {done: false, value: largeChunk} : {done: true},
@@ -339,5 +392,27 @@ assert.equal(selectedIndex, 1, 'auto-next must skip incompatible audio and selec
 const videoWindow = {};
 vm.runInNewContext(source, {PLAYER_KIND: 'video', window: videoWindow});
 assert.equal(videoWindow.frontierCloudContinuousAudio, undefined, 'video pages must not install audio continuity');
+
+Object.assign(context, {
+    accountPlaybackTime() {}, reportValidPlayback() {}, resetPlaybackAccounting() {},
+    showSynchronizedLyrics() {}, loadInlineLyrics() {}, updateMediaSession() {},
+    middleEllipsis: text => text,
+    currentMediaList: [{title: 'First', encryption: {version: 1}}, {title: 'Second', encryption: {version: 1}}],
+    art: {video: {currentTime: 11}, playing: false},
+});
+metadataSelections.length = 0;
+artworkActivationOrder.length = 0;
+windowObject.__activateBusinessTrack(0);
+const boundary = Object.create(windowObject.__ContinuousAudioSession.prototype);
+const firstSegment = {index: 0, start: 0, end: 10};
+Object.assign(boundary, {closed: false, generation: 12, activeSegment: firstSegment,
+    segments: [firstSegment, {index: 1, start: 10, end: 20}],
+    ensureLookahead: async () => {}, pruneBeforeActive: async () => {}});
+windowObject.__setContinuousSessionForTest(boundary);
+boundary.syncTrackFromVideo();
+assert.deepEqual(metadataSelections, context.currentMediaList,
+    'both manual activation and automatic MSE boundary crossing must load the active encrypted track tags');
+assert.deepEqual(artworkActivationOrder, ['cancel', 'metadata', 'cancel', 'metadata'],
+    'automatic boundaries must cancel old artwork before scheduling the new track metadata');
 
 console.log('audio-continuous-stream-smoke-ok');

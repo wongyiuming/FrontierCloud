@@ -4,6 +4,7 @@ const uploadSiteLabels = {
     primary: '主站',
     direct: '直连站点',
     relay: '中继站点',
+    s3: 'S3',
 };
 
 function ensureUploadSiteTypeSelector() {
@@ -27,6 +28,7 @@ function ensureUploadSiteTypeSelector() {
 const uploadSiteType = ensureUploadSiteTypeSelector();
 const mediaSiteTypes = new Map();
 const mediaEncryptionStates = new Map();
+const mediaStorageAddresses = new Map();
 
 function chooseUploadStorageMode(inputId) {
     const input = $(inputId);
@@ -82,7 +84,19 @@ function siteTypeFromItem(item) {
     if (item?.site_type && uploadSiteLabels[item.site_type]) return item.site_type;
     if (item?.transport === 'Direct') return 'direct';
     if (item?.transport === 'Relay') return 'relay';
+    if (item?.transport === 'S3') return 's3';
     return 'primary';
+}
+
+function mediaStorageAddress(item) {
+    const value = item.storage_address || (item.storage_address_local === true ? window.location.origin : '');
+    if (typeof value !== 'string' || !value) return '';
+    try {
+        const address = new URL(value);
+        if (!['https:', 'http:'].includes(address.protocol) || address.username || address.password
+            || address.search || address.hash) return '';
+        return address.origin + address.pathname.replace(/\/$/, '');
+    } catch (_) { return ''; }
 }
 
 function readyMember(member) {
@@ -95,8 +109,10 @@ function readyMember(member) {
 }
 
 function countReadySiteTypes(pool) {
-    if (pool?.standalone) return {primary: 1, direct: 0, relay: 0};
-    const counts = {primary: 0, direct: 0, relay: 0};
+    if (pool?.standalone) return {primary: 1, direct: 0, relay: 0, s3: 0};
+    const counts = {primary: 0, direct: 0, relay: 0, s3: 0};
+    counts.s3 = (pool?.s3_members || []).filter(member=>member.placement_ready===true
+        && member.quota_bytes-member.used_bytes-member.reserved_bytes>0).length;
     for (const member of pool?.members || []) {
         if (!readyMember(member) || member.member_kind === 'Auto') continue;
         if (member.member_kind === 'MasterLocal') counts.primary += 1;
@@ -125,7 +141,7 @@ async function refreshUploadSiteTypes() {
     empty.textContent = '请选择上传站点类型';
     uploadSiteType.append(empty);
 
-    for (const value of ['primary', 'direct', 'relay']) {
+    for (const value of ['primary', 'direct', 'relay', 's3']) {
         const option = document.createElement('option');
         option.value = value;
         option.disabled = counts[value] <= 0;
@@ -156,8 +172,12 @@ api = async function apiWithPlacementObservation(url, options = {}) {
     if (String(url).startsWith('/api/v1/media/admin/tree') && Array.isArray(data?.items)) {
         mediaSiteTypes.clear();
         mediaEncryptionStates.clear();
+        mediaStorageAddresses.clear();
         for (const item of data.items) {
-            if (item.kind === 'file') mediaEncryptionStates.set(item.path, Boolean(item.encryption || item.encrypted));
+            if (item.kind === 'file') {
+                mediaEncryptionStates.set(item.path, Boolean(item.encryption || item.encrypted));
+                mediaStorageAddresses.set(item.path, mediaStorageAddress(item));
+            }
             const root = String(item.path || '').split('/', 1)[0];
             if (item.kind === 'file' && (root === 'music' || root === 'vido')) {
                 mediaSiteTypes.set(item.path, siteTypeFromItem(item));
@@ -171,6 +191,16 @@ function decorateMediaSiteBadges() {
     for (const row of document.querySelectorAll('.tree-row[data-path]')) {
         row.querySelector('.media-site-badge')?.remove();
         row.querySelector('.media-encryption-badge')?.remove();
+        row.querySelector('.media-node-address')?.remove();
+        if (mediaStorageAddresses.has(row.dataset.path)) {
+            const address = mediaStorageAddresses.get(row.dataset.path);
+            const nodeAddress = document.createElement('small');
+            nodeAddress.className = 'media-node-address';
+            nodeAddress.textContent = address ? address.slice(address.indexOf('://') + 3) : '地址不可用';
+            nodeAddress.title = address || '节点地址不可用';
+            nodeAddress.setAttribute('aria-label', `节点地址：${address || '不可用'}`);
+            row.append(nodeAddress);
+        }
         if (mediaEncryptionStates.has(row.dataset.path)) {
             const encrypted = mediaEncryptionStates.get(row.dataset.path);
             const encryptionBadge = document.createElement('span');
@@ -196,9 +226,18 @@ renderTree = async function renderTreeWithPlacementObservation() {
 
 async function cancelClusterReservation(reservation) {
     if (!reservation?.upload_id) return;
-    await api(`/api/v1/media/admin/upload/session/${reservation.upload_id}`, {
-        method: 'DELETE', headers: requestHeaders(false),
-    }).catch(() => {});
+    const path=reservation.transport==='S3'?`/api/v1/media/admin/s3/uploads/${reservation.upload_id}`
+        :`/api/v1/media/admin/upload/session/${reservation.upload_id}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+        await api(path, {method: 'DELETE', headers: requestHeaders(false), signal: controller.signal});
+        if (reservation.transport === 'S3') await window.FrontierS3?.refresh({signal: controller.signal});
+    } catch (_) {
+        // Recovery retains authority when a cancellation reply is unavailable.
+    } finally {
+        clearTimeout(timeout);
+    }
 }
 
 runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, relativePaths = null, lyricUpload = false, storageMode = null) {
@@ -223,7 +262,12 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
         alert('上传文件前请先进入 data/media/music 或 data/media/vido 下的分类目录');
         return;
     }
+    if (navigator.onLine === false) {
+        alert('网络连接已中断，请恢复网络后重新选择文件');
+        return;
+    }
 
+    uploadInterrupted = false;
     setUploadControlsDisabled(true);
     $('uploadProgress').classList.remove('hidden');
     $('uploadResults').innerHTML = '';
@@ -246,9 +290,9 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
         // browser-side encryption is running or has already failed.
         if (storageMode === 'encrypted' && !encrypted) return null;
         if (file.size > uploadLimits.max_upload_file_size) return null;
-        const outcome = api('/api/v1/media/admin/upload/session', {
+        const outcome = api(selectedSiteType==='s3'?'/api/v1/media/admin/s3/uploads':'/api/v1/media/admin/upload/session', {
             method: 'POST', headers: requestHeaders(), body: JSON.stringify({
-                site_type: selectedSiteType,
+                ...(selectedSiteType==='s3'?{}:{site_type: selectedSiteType}),
                 target_dir: currentPath,
                 relative_path: relativePaths ? relativePaths[index] : null,
                 filename: file.name,
@@ -274,6 +318,7 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
 
     try {
         for (let index = 0; index < files.length; index += 1) {
+            if (uploadInterrupted) break;
             const file = files[index];
             const displayName = relativePaths ? relativePaths[index] : file.name;
             const fileUnits = Math.max(file.size, 1);
@@ -308,18 +353,26 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
                     encrypted = await window.FrontierMediaCrypto.encryptUploadFile(file, fraction => progress(fraction * 0.25));
                     $('currentFileLabel').textContent = `密文上传：${displayName}`;
                 }
+                requireUploadTaskActive();
                 const outgoingFile = encrypted?.file || file;
                 const transferProgress = fraction => progress(encrypted ? 0.25 + fraction * 0.75 : fraction);
                 let result;
                 if (clusterUpload && !lyricUpload) {
                     reservation = await takeReservation(index, encrypted);
                     try {
+                        requireUploadTaskActive();
+                        if(reservation.transport==='S3') {
+                            result=await window.FrontierS3.transfer(reservation,outgoingFile,transferProgress,
+                                state=>{$('currentFileLabel').textContent=`${state}：${displayName}`;});
+                        } else {
                         await uploadRaw(reservation.upload_url, outgoingFile, transferProgress, reservation.transport === 'Direct');
+                        if (reservation.transport === 'Direct') requireUploadTaskActive();
                         result = reservation.transport === 'Direct'
                             ? await api(`/api/v1/media/admin/upload/session/${reservation.upload_id}/finalize`, {
                                 method: 'POST', headers: requestHeaders(), body: '{}',
                             })
                             : {path: reservation.path};
+                        }
                     } catch (error) {
                         await cancelClusterReservation(reservation);
                         throw error;
@@ -363,8 +416,10 @@ runUploadTask = async function runUploadTaskWithReservationCleanup(fileList, rel
             }
         }
         setUploadControlsDisabled(false);
-        $('uploadSummary').textContent = `完成：成功 ${successCount}，失败 ${failedCount}`;
-        $('currentFileLabel').textContent = '当前文件处理完成';
+        $('uploadSummary').textContent = uploadInterrupted
+            ? `已中断：成功 ${successCount}，失败 ${failedCount}，未上传 ${files.length - successCount - failedCount}`
+            : `完成：成功 ${successCount}，失败 ${failedCount}`;
+        $('currentFileLabel').textContent = uploadInterrupted ? '请重新选择剩余文件' : '当前文件处理完成';
         await renderTree().catch(() => {});
         if (lyricUpload) await loadLyricCatalog().catch(() => {});
     }
@@ -374,7 +429,7 @@ $('download').onclick = async () => {
     const paths = [...selected];
     try {
         const plan = await api(`/api/v1/media/admin/download/plan?paths=${encodeURIComponent(JSON.stringify(paths))}`, {cache: 'no-store'});
-        if (plan.items?.some(item => item.encryption || item.encrypted)) {
+        if (plan.items?.some(item => item.encryption || item.encrypted || item.browser_download)) {
             await window.FrontierMediaCrypto.downloadPlan(plan.items);
             return;
         }

@@ -13,8 +13,8 @@ from app.core.db import engine
 SNAPSHOT_PATH = Path("data/.ip-security/active-bans.tsv")
 
 
-def write_snapshot(rows, whitelist, path: Path = SNAPSHOT_PATH) -> None:
-    """Store only validated addresses and numeric expiry, never Nginx syntax."""
+def snapshot_content(rows, whitelist) -> str:
+    """One canonical projection for publication and readonly control validation."""
     allowed = {normalize_ip(ip) for ip in whitelist}
     bans = {}
     for row in rows:
@@ -26,9 +26,14 @@ def write_snapshot(rows, whitelist, path: Path = SNAPSHOT_PATH) -> None:
         bans[ip] = expiry
     addresses = sorted(bans, key=lambda ip: (ipaddress.ip_address(ip).version,
                                             int(ipaddress.ip_address(ip))))
-    content = "# frontiercloud-ip-security-v1\n" + "".join(
+    return "# frontiercloud-ip-security-v1\n" + "".join(
         f"{ip}\t{bans[ip]}\n" for ip in addresses
     )
+
+
+def write_snapshot(rows, whitelist, path: Path = SNAPSHOT_PATH) -> None:
+    """Store only validated addresses and numeric expiry, never Nginx syntax."""
+    content = snapshot_content(rows, whitelist)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         if path.read_text(encoding="ascii") == content:

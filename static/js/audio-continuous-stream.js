@@ -5,12 +5,16 @@
 
     const MIME = 'audio/mpeg';
     const LOOKAHEAD_TRACKS = 2;
-    const MAX_TRACK_BYTES = 128 * 1024 * 1024;
     const FIRST_APPEND_BYTES = 64 * 1024;
     const APPEND_BATCH_BYTES = 512 * 1024;
     const APPEND_MAX_WAIT_MS = 1000;
     const DURATION_PROBE_BYTES = 128 * 1024;
     const MAX_BUFFER_AHEAD_SECONDS = 30;
+    const MAX_BUFFER_BEHIND_SECONDS = 30;
+    const PRUNE_MIN_STEP_SECONDS = 5;
+    // Bound decoder/parser retention for malformed streams, independently of
+    // total track length. Valid audio continually advances the buffered end.
+    const MAX_UNDECODED_BYTES = 16 * 1024 * 1024;
     const SEEK_RANGE_ALIGNMENT_BYTES = 64 * 1024;
     const SEEK_RESTART_DELAY_MS = 120;
     const BOUNDARY_EPSILON = 0.08;
@@ -140,9 +144,11 @@
         const media = currentMediaList?.[index];
         if (!media || !art) return;
 
+        cancelPlayerArtwork();
         accountPlaybackTime();
         void reportValidPlayback();
         currentIndex = index;
+        loadSelectedMetadata(media);
         resetPlaybackAccounting(media);
         setPlaylistActive(index);
 
@@ -590,10 +596,6 @@
             const responseLength = Number(response.headers.get('Content-Length') || 0);
             const range = responseContentRange(response.headers);
             const totalBytes = range?.total || seek?.totalBytes || responseLength;
-            if (totalBytes > MAX_TRACK_BYTES) {
-                response.body.cancel?.().catch?.(() => {});
-                throw new Error('audio response exceeds byte guard');
-            }
             const contentType = String(response.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
             if (contentType && !['audio/mpeg', 'audio/mp3', 'application/octet-stream'].includes(contentType)) {
                 response.body.cancel?.().catch?.(() => {});
@@ -628,6 +630,8 @@
             let pendingSince = 0;
             let nextRead = null;
             let firstAppend = true;
+            let undecodedBytes = 0;
+            let decodedEnd = start;
 
             const flush = async () => {
                 if (!pendingBytes) return;
@@ -646,6 +650,12 @@
                     }
                 }
                 await this.appendBytes(merged);
+                const nextEnd = this.bufferedEnd();
+                undecodedBytes = nextEnd > decodedEnd ? 0 : undecodedBytes + merged.byteLength;
+                decodedEnd = nextEnd;
+                if (undecodedBytes >= MAX_UNDECODED_BYTES) {
+                    throw new Error('audio decoder made no progress within bounded input window');
+                }
                 if (Number.isFinite(segment.pendingSeekGlobal) && art?.video?.buffered?.length) {
                     const target = segment.pendingSeekGlobal;
                     for (let index = 0; index < art.video.buffered.length; index += 1) {
@@ -687,9 +697,7 @@
                     const {done, value} = result;
                     if (done) break;
                     bytes += value.byteLength;
-                    if (bytes > MAX_TRACK_BYTES) {
-                        throw new Error('audio response exceeds byte guard');
-                    }
+                    if (!Number.isSafeInteger(bytes)) throw new Error('audio response byte count invalid');
                     // Fetch chunk sizes are browser-controlled and may be several
                     // MiB after backpressure. Bound each individual MSE append.
                     let offset = 0;
@@ -762,8 +770,11 @@
                 if (!this.activeSegment || !art?.video) return;
                 const globalTime = Number(art.video.currentTime) || 0;
                 if (globalTime < this.activeSegment.start + PRUNE_AFTER_SECONDS) return;
-                const removeEnd = Math.max(0, this.activeSegment.start - BOUNDARY_EPSILON);
-                if (removeEnd <= this.lastPrunedBefore + 0.1) return;
+                // A long active song must release its own played frames too.
+                // Segment offsets/durations remain independent of retained MSE
+                // ranges; seeking into released audio uses the existing Range path.
+                const removeEnd = Math.max(0, globalTime - MAX_BUFFER_BEHIND_SECONDS);
+                if (removeEnd < this.lastPrunedBefore + PRUNE_MIN_STEP_SECONDS) return;
                 const ranges = this.sourceBuffer.buffered;
                 if (!ranges?.length || ranges.start(0) >= removeEnd) return;
                 try {
@@ -968,11 +979,11 @@
         installed: true,
         mime: MIME,
         lookahead_tracks: LOOKAHEAD_TRACKS,
-        max_track_bytes: MAX_TRACK_BYTES,
         append_batch_bytes: APPEND_BATCH_BYTES,
         append_max_wait_ms: APPEND_MAX_WAIT_MS,
         first_append_bytes: FIRST_APPEND_BYTES,
         max_buffer_ahead_seconds: MAX_BUFFER_AHEAD_SECONDS,
+        max_buffer_behind_seconds: MAX_BUFFER_BEHIND_SECONDS,
         supported: browserSupportsContinuousAudio,
         compatible: streamCompatible,
         status: () => ({
@@ -982,6 +993,8 @@
             active_segment: session?.activeSegment ? {...session.activeSegment} : null,
             buffered_tracks: session?.segments?.length || 0,
             buffered_ahead_seconds: session?.bufferedAhead() || 0,
+            retained_buffer_seconds: session?.sourceBuffer?.buffered?.length
+                ? session.bufferedEnd() - session.sourceBuffer.buffered.start(0) : 0,
             quota_wait_count: session?.quotaWaitCount || 0,
             pipeline_error: session?.blockedError || null,
         }),

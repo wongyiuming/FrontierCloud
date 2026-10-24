@@ -1,0 +1,69 @@
+[
+  {
+    "name": "existing Go parsing contract",
+    "input": "\ufeff[offset:-100]\n[00:01.25][00:02:003]音乐\n[00:01.25]音乐\n[00:00.02]开始\n[ar:artist]\n[00:03.001] 结束 ",
+    "entries": [{"time":0,"text":"开始"},{"time":1.15,"text":"音乐"},{"time":1.903,"text":"音乐"},{"time":2.901,"text":"结束"}]
+  },
+  {
+    "name": "both fraction separators and millisecond precision",
+    "input": "[0:02:003]three\n[00:02.01]two\n[000:02:1]one\n[1:02]minute\n[999:59.999]maximum",
+    "entries": [{"time":2.003,"text":"three"},{"time":2.01,"text":"two"},{"time":2.1,"text":"one"},{"time":62,"text":"minute"},{"time":59999.999,"text":"maximum"}]
+  },
+  {
+    "name": "negative offsets clamp and deduplicate after clamping",
+    "input": "[offset:-2000]\n[00:00.001][00:01]same\n[00:00]different\n[00:01]same",
+    "entries": [{"time":0,"text":"same"},{"time":0,"text":"different"}]
+  },
+  {
+    "name": "first offset only, case insensitive and leading zeros",
+    "input": "[OfFsEt:+000100]\n[offset:900]\n[00:01]first\n[00:01]second\n[00:01]first",
+    "entries": [{"time":1.1,"text":"first"},{"time":1.1,"text":"second"}]
+  },
+  {
+    "name": "positive offset inclusive boundary",
+    "input": "[offset:1000000000]\n[00:00]boundary",
+    "entries": [{"time":1000000,"text":"boundary"}]
+  },
+  {
+    "name": "negative offset inclusive boundary",
+    "input": "[offset:-1000000000]\n[00:01]boundary",
+    "entries": [{"time":0,"text":"boundary"}]
+  },
+  {
+    "name": "only valid time tags removed from lyric text",
+    "input": "[ar:Artist][00:01] [bridge]\n[00:60][00:02]invalid tag kept\n[offset:1.5][00:03]fractional offset kept",
+    "entries": [{"time":1,"text":"[ar:Artist] [bridge]"},{"time":2,"text":"[00:60]invalid tag kept"},{"time":3,"text":"[offset:1.5]fractional offset kept"}]
+  },
+  {
+    "name": "all Go line boundaries preserve source order at equal times",
+    "input": "[00:01]LF\n[00:01]CR\r[00:01]VT\u000b[00:01]FF\u000c[00:01]FS\u001c[00:01]GS\u001d[00:01]RS\u001e[00:01]NEL\u0085[00:01]LS\u2028[00:01]PS\u2029",
+    "entries": [{"time":1,"text":"LF"},{"time":1,"text":"CR"},{"time":1,"text":"VT"},{"time":1,"text":"FF"},{"time":1,"text":"FS"},{"time":1,"text":"GS"},{"time":1,"text":"RS"},{"time":1,"text":"NEL"},{"time":1,"text":"LS"},{"time":1,"text":"PS"}]
+  },
+  {
+    "name": "Go Unicode whitespace trims while internal whitespace stays",
+    "input": "[00:01]\t\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000😀 乐\u3000\u205f\u202f\u200a\u2009\u2008\u2007\u2006\u2005\u2004\u2003\u2002\u2001\u2000\u1680\u00a0\t",
+    "entries": [{"time":1,"text":"😀 乐"}]
+  },
+  {
+    "name": "BOM is removed once and never treated as lyric whitespace",
+    "input": "\ufeff\ufeff[00:01]词\ufeff\n[00:02]\ufeffsecond",
+    "entries": [{"time":1,"text":"\ufeff词\ufeff"},{"time":2,"text":"\ufeffsecond"}]
+  },
+  {
+    "name": "unit separator is text, not a line boundary",
+    "input": "[00:01]first\u001f[00:02]second",
+    "entries": [{"time":1,"text":"first\u001fsecond"},{"time":2,"text":"first\u001fsecond"}]
+  },
+  {"name":"empty payload","input":"","error":"歌词文件必须使用非空 UTF-8 编码"},
+  {"name":"BOM only payload","input":"\ufeff","error":"歌词文件必须使用非空 UTF-8 编码"},
+  {"name":"NUL in payload","input":"[00:01]bad\u0000","error":"歌词文件必须使用非空 UTF-8 编码"},
+  {"name":"no displayable timeline","input":"[ar:artist]\n[00:01] \t","error":"LRC 歌词没有可展示的时间轴内容"},
+  {"name":"seconds 60 invalid","input":"[00:60]bad","error":"LRC 歌词没有可展示的时间轴内容"},
+  {"name":"seconds 99 invalid","input":"[00:99]bad","error":"LRC 歌词没有可展示的时间轴内容"},
+  {"name":"single digit seconds invalid","input":"[00:2]bad","error":"LRC 歌词没有可展示的时间轴内容"},
+  {"name":"four digit minutes invalid","input":"[0000:02]bad","error":"LRC 歌词没有可展示的时间轴内容"},
+  {"name":"four digit fractions invalid","input":"[00:02.0001]bad","error":"LRC 歌词没有可展示的时间轴内容"},
+  {"name":"positive offset over boundary","input":"[offset:1000000001]\n[00:01]bad","error":"invalid lyric offset"},
+  {"name":"negative offset over boundary","input":"[offset:-1000000001]\n[00:01]bad","error":"invalid lyric offset"},
+  {"name":"offset integer overflow","input":"[offset:9223372036854775808]\n[00:01]bad","error":"invalid lyric offset"}
+]

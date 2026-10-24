@@ -7,6 +7,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+class AdminShellAssetsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_effective_admin_route_resolves_the_migration_client_content_hash(self):
+        from fastapi import FastAPI
+        import httpx
+        from app.api.v1.admin import require_session
+        from app.api.v1.endpoints import router
+        from app.core.static_assets import static_asset_url
+        application=FastAPI();application.include_router(router,prefix='/api/v1')
+        application.dependency_overrides[require_session]=lambda:'test-admin'
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application,client=('198.51.100.9',4321)),base_url='https://master.4399.com') as client:
+            response=await client.get('/api/v1/media/admin/')
+        self.assertEqual(response.status_code,200)
+        self.assertIn(static_asset_url('js/migrations.js'),response.text)
+        self.assertNotIn('{{MIGRATIONS_JS_URL}}',response.text)
+
 EXPECTED_ORDER = [
     ("media", 10),
     ("priority", 20),
@@ -15,6 +31,7 @@ EXPECTED_ORDER = [
     ("security", 50),
     ("network", 60),
     ("nodes", 70),
+    ("migrations", 75),
     ("site", 80),
     ("key", 100),
     ("brand", 110),
@@ -35,7 +52,7 @@ class AdminModuleOrderTests(unittest.TestCase):
         names = [name for name, _order in EXPECTED_ORDER]
         self.assertEqual(names[0:3], ["media", "priority", "lyrics"])
         self.assertEqual(names[4:6], ["security", "network"])
-        self.assertEqual(names[6:8], ["nodes", "site"])
+        self.assertEqual(names[6:9], ["nodes", "migrations", "site"])
         self.assertEqual(names[-1], "brand")
 
     def test_static_and_runtime_modules_use_the_order_contract_names(self):
@@ -43,7 +60,7 @@ class AdminModuleOrderTests(unittest.TestCase):
         maintenance = (ROOT / "static/js/maintenance-admin.js").read_text(encoding="utf-8")
         brand = (ROOT / "static/js/brand-admin.js").read_text(encoding="utf-8")
 
-        for module in ("media", "priority", "lyrics", "users", "security", "network", "nodes", "key"):
+        for module in ("media", "priority", "lyrics", "users", "security", "network", "nodes", "migrations", "key"):
             self.assertIn(f'data-admin-module="{module}"', html)
         self.assertIn("panel.dataset.adminModule = 'site'", maintenance)
         self.assertIn("panel.dataset.adminModule = 'brand'", brand)

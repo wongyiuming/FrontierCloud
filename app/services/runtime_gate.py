@@ -14,8 +14,10 @@ class RuntimeBusy(RuntimeError):
 
 
 class Lease:
-    def __init__(self, descriptor):
+    def __init__(self, descriptor,root=None):
         self.descriptor = descriptor
+        self.root=root
+        self.process=os.getpid()
 
     def close(self):
         if self.descriptor is not None:
@@ -61,7 +63,7 @@ def acquire(root=None, *, create=True) -> Lease:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeBusy("Another Web process or offline operator owns this DATA_ROOT") from None
-        return Lease(descriptor)
+        return Lease(descriptor,root)
     except BaseException:
         os.close(descriptor)
         raise

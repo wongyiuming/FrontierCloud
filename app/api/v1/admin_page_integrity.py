@@ -21,8 +21,10 @@ async def admin_page(request: Request,
     content = path.read_text(encoding="utf-8")
     for marker, asset in {
         "{{ADMIN_CSS_URL}}": "css/admin.css",
+        "{{NODES_CSS_URL}}": "css/nodes-observability.css",
         "{{ADMIN_JS_URL}}": "js/admin.js",
         "{{NODES_JS_URL}}": "js/nodes.js",
+        "{{MIGRATIONS_JS_URL}}": "js/migrations.js",
     }.items():
         content = content.replace(marker, static_asset_url(asset))
 
@@ -40,6 +42,7 @@ async def admin_page(request: Request,
         static_asset_url("js/directory-admin.js"),
         static_asset_url("js/lyrics-directory-counts.js"),
         static_asset_url("js/admin-upload-integrity.js"),
+        static_asset_url("js/s3-admin.js"),
         static_asset_url("js/admin-visibility-integrity.js"),
         static_asset_url("js/priority-drag.js"),
     ]

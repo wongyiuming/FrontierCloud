@@ -88,6 +88,30 @@ HKDF-SHA256/AES-256-GCM. Remote download envelopes travel through existing
 authenticated node communication; the Master does not receive Storage plaintext
 private keys. There is no certificate upload/path/manual renew API.
 
+Overlapping identical local status queries share one in-flight Unix RPC. A new
+query after completion is fresh; completed observations are not cached, and
+browser-bound downloads are never shared. Cancellation affects only that waiter.
+The RPC has a six-second total deadline, four-second transport timeout and
+128 KiB response limit. The controller admits at most eight concurrent control
+connections; its existing 0.10 CPU / 128 MiB Compose limits remain unchanged.
+
+An unavailable observation is `UNAVAILABLE`, with unknown controller/handshake
+facts. It is not a statement that the certificate failed. Admin distinguishes
+controller busy, timeout, unavailable, rejected request and invalid/oversized
+response. CA request timeout, connection failure, TLS verification failure and
+CA authorization/rate-limit errors are separate lifecycle diagnostics. Public
+diagnostics contain stable codes, never remote response bodies or private paths.
+The ACME stack already uses Requests; its existing 2.34.2 dependency is now pinned
+explicitly because error classification consumes its exception types.
+
+The dedicated native gate checks verified TLS, actual ACME issuance/renewal,
+Nginx reload/recreation and Storage restarts. Direct and Relay each run four-way
+status queries before and after restart, including independent RPCs alongside
+coalesced callers. It records exact wire inputs and checks the controller's real
+Compose limits. Certificate readiness is checked separately from Web liveness.
+Its private test CA is confined to disposable fixtures; it does not prove public
+Let's Encrypt issuance or change production trust.
+
 ## Upgrade existing external certificates
 
 This release must not be installed by just deleting old certificate mounts. First

@@ -34,8 +34,12 @@ from app.middleware.admin_upload import AdminUploadMiddleware
 from app.middleware.node_role import NodeRoleMiddleware
 from app.middleware.html_security import HtmlSecurityMiddleware
 from app.middleware.native_storage import NativeStorageDeliveryMiddleware
+from app.middleware.node_retirement import NodeRetirementMiddleware
 from app.middleware.operator_fence import OperatorFenceMiddleware
 from app.services import admin_service
+from app.services.business_traffic import BusinessTrafficMiddleware, monitor as traffic_monitor
+from app.services.resource_inventory import inventory as resource_inventory
+from app.services.resource_observation import observer as resource_observer
 from app.services.business_lifecycle import (
     ensure_follower_business_empty, ensure_follower_business_files_empty,
     initialize_business_services,
@@ -115,56 +119,134 @@ async def _storage_role_admission() -> str | None:
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI):
+async def _lifespan(app: FastAPI,*,native_lease):
     upload_cleanup_task = None
     edge_projection_task = None
+    traffic_task = None
+    inventory_task = None
+    transfer_reaper_task = None
+    s3_recovery_task = None
+    retirement_runtime = None
+    migration_runtime = None
     try:
+        from app.services.site_control import hard_fence_active
+        fenced = hard_fence_active()
         storage_endpoint = await _storage_role_admission()
-        await init_db()
+        if fenced:
+            from app.core import db
+            await db.validate_existing_database()
+        else:
+            await init_db()
         if storage_endpoint is not None:
-            await node_state.initialize()
+            if fenced:
+                await node_state.initialize(read_only=True)
+            else:
+                await node_state.initialize()
             if node_state.node["role"] == "Standalone":
+                if fenced:
+                    raise RuntimeError('Fenced startup cannot promote or replace the existing node identity')
                 from app.api.v1.media import MEDIA_ROOT
                 await ensure_follower_business_empty(node_state.database, media_root=MEDIA_ROOT)
                 await node_state.promote("Follower", storage_endpoint, "storage-deployment")
             if node_state.node["role"] != "Follower" or node_state.node["endpoint"] != storage_endpoint:
                 raise RuntimeError("Storage deployment cannot change an existing node role or paired endpoint")
         await recover_interrupted_media_deletions()
-        await initialize_ip_security_cache()
+        if fenced:
+            await initialize_ip_security_cache(read_only=True)
+        else:
+            await initialize_ip_security_cache()
         if storage_endpoint is None:
-            await node_state.initialize()
+            if fenced:
+                await node_state.initialize(read_only=True)
+            else:
+                await node_state.initialize()
         if node_state.node["role"] != "Standalone" and not settings.TLS_ENABLED:
             raise RuntimeError("Master/Follower 节点必须启用 TLS；请恢复 TLS 配置或显式重新初始化节点")
-        await initialize_business_services()
+        if fenced:
+            await initialize_business_services(read_only=True)
+        else:
+            await initialize_business_services()
+        inventory_task = asyncio.create_task(resource_inventory.reap(), name='native-inventory-reaper')
+        from app.api.internal_resource_transfer import transfers
+        transfer_reaper_task=asyncio.create_task(transfers.reap_cancel_census(),name='native-cancel-census-reaper')
+        traffic_monitor.require_gateway(settings.DEPLOYMENT_MODE != "only_stroge")
+        if settings.DEPLOYMENT_MODE != "only_stroge":
+            traffic_task = asyncio.create_task(traffic_monitor.watch_gateway(), name="business-traffic-observer")
+        from app.services.resource_migration_runtime import runtime as migration_runtime
+        migration_runtime.start()
         pending_revocations = any(row["state"] == "revoked" and not row["summary"].get("revocation_acknowledged")
                                   for row in await node_state.list_relationships(include_revoked=True))
         node_runtime.start(revocations=pending_revocations)
         edge_projection_task = asyncio.create_task(retry_edge_projection(), name="edge-security-retry")
-        announce_initial_secrets_once()
+        if not fenced:
+            announce_initial_secrets_once()
         await asyncio.to_thread(cleanup_stale_upload_parts)
         upload_cleanup_task = asyncio.create_task(
             run_stale_upload_cleanup(),
             name="stale-upload-cleanup",
         )
+        from app.services.s3_recovery import Recovery
+        s3_recovery_task = asyncio.create_task(Recovery(node_state).run(),name='s3-upload-recovery')
+        from app.services import node_retirement_runtime,runtime_gate
+        retirement_runtime=node_retirement_runtime.start(runtime_gate.DATA_ROOT,native_lease)
+        if node_state.node['role']=='Follower':
+            from app.services.node_retirement_files import Authority
+            from app.services.node_retirement_fences import RetirementError
+            try:
+                retirement_runtime.authority=await Authority.capture(retirement_runtime,node_state)
+                retirement_runtime.authority_error=''
+            except RetirementError as exc:
+                retirement_runtime.authority_error=exc.code
+            except OSError:
+                retirement_runtime.authority_error='retirement_native_files_unavailable'
         yield
     finally:
-        await node_runtime.stop()
-        if edge_projection_task is not None:
-            edge_projection_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await edge_projection_task
-        if upload_cleanup_task is not None:
-            upload_cleanup_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await upload_cleanup_task
-        await close_db()
+        try:
+            migration_stop_error=None
+            if migration_runtime is not None:
+                try:await migration_runtime.stop()
+                except Exception as error:migration_stop_error=error
+            if s3_recovery_task is not None:
+                s3_recovery_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await s3_recovery_task
+            await resource_observer.stop()
+            from app.api.internal_resource_transfer import transfers
+            if transfer_reaper_task is not None:
+                transfer_reaper_task.cancel()
+                with suppress(asyncio.CancelledError):await transfer_reaper_task
+            await transfers.close()
+            if inventory_task is not None:
+                inventory_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await inventory_task
+            if traffic_task is not None:
+                traffic_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await traffic_task
+            await node_runtime.stop()
+            if edge_projection_task is not None:
+                edge_projection_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await edge_projection_task
+            if upload_cleanup_task is not None:
+                upload_cleanup_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await upload_cleanup_task
+            if migration_stop_error is not None:raise migration_stop_error
+        finally:
+            try:
+                if retirement_runtime is not None:
+                    from app.services import node_retirement_runtime
+                    node_retirement_runtime.stop(retirement_runtime)
+            finally:await close_db()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.services import runtime_gate
-    with runtime_gate.acquire():
-        async with _lifespan(app):
+    with runtime_gate.acquire() as native_lease:
+        async with _lifespan(app,native_lease=native_lease):
             yield
 
 
@@ -324,7 +406,9 @@ app.add_middleware(RealIPLogMiddleware)
 app.add_middleware(NodeRoleMiddleware)
 app.add_middleware(CatalogFreshnessMiddleware)
 app.add_middleware(NativeStorageDeliveryMiddleware)
+app.add_middleware(NodeRetirementMiddleware)
 app.add_middleware(HtmlSecurityMiddleware)
+app.add_middleware(BusinessTrafficMiddleware, monitor=traffic_monitor)
 app.add_middleware(OperatorFenceMiddleware)
 app.include_router(api_v1_router, prefix="/api/v1")
 

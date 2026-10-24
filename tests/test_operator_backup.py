@@ -1,16 +1,18 @@
 """Private offline snapshots: full SQLite facts, safe paths, coherent control state."""
-from contextlib import closing
+from contextlib import closing,ExitStack
 import copy
 import io
 import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import sys
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock,patch
 
 from scripts import operator_backup as backup
 
@@ -312,6 +314,56 @@ class OperatorBackupTests(unittest.TestCase):
         with self.assertRaisesRegex(backup.BackupError, "overlaps"):
             backup.backup(self.plan, self.docker.data / "recursive-snapshot")
         self.assertFalse(self.docker.stopped)
+
+
+class OperationLockTests(unittest.TestCase):
+    """Controlled descriptor observations never open or weaken the host lock."""
+    def setUp(self):
+        stack=ExitStack();self.addCleanup(stack.close)
+        self.fcntl=SimpleNamespace(LOCK_EX=2,LOCK_NB=4,flock=Mock())
+        stack.enter_context(patch.dict(sys.modules,{'fcntl':self.fcntl}))
+        stack.enter_context(patch.object(backup.os,'O_NOFOLLOW',getattr(os,'O_NOFOLLOW',0x20000),create=True))
+        self.open=stack.enter_context(patch.object(backup.os,'open',return_value=73))
+        self.info=SimpleNamespace(st_mode=stat.S_IFREG|0o600,st_nlink=1,st_uid=0)
+        self.fstat=stack.enter_context(patch.object(backup.os,'fstat',return_value=self.info))
+        self.close=stack.enter_context(patch.object(backup.os,'close'))
+
+    def test_root_owned_regular_single_link_lock_is_exclusive_and_closed(self):
+        with backup.operation_lock('fixture-project'):
+            self.open.assert_called_once_with(Path('/var/lock/frontiercloud-snapshot-fixture-project.lock'),
+                os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+            self.fstat.assert_called_once_with(73)
+            self.fcntl.flock.assert_called_once_with(73,self.fcntl.LOCK_EX|self.fcntl.LOCK_NB)
+            self.close.assert_not_called()
+        self.close.assert_called_once_with(73)
+
+    def test_nonroot_nonregular_or_multiple_links_refuse_before_flock(self):
+        for changes in ({'st_uid':1001},{'st_mode':stat.S_IFIFO|0o600},{'st_nlink':2}):
+            with self.subTest(changes=changes):
+                self.fstat.return_value=SimpleNamespace(**{**vars(self.info),**changes})
+                with self.assertRaisesRegex(backup.BackupError,'^unsafe operator lock$'):
+                    with backup.operation_lock('fixture-project'):self.fail('unsafe lock entered')
+                self.fcntl.flock.assert_not_called();self.close.assert_called_once_with(73)
+                self.close.reset_mock()
+
+    def test_contended_lock_refuses_and_closes_descriptor(self):
+        self.fcntl.flock.side_effect=BlockingIOError()
+        with self.assertRaisesRegex(backup.BackupError,'another snapshot operation'):
+            with backup.operation_lock('fixture-project'):self.fail('contended lock entered')
+        self.close.assert_called_once_with(73)
+
+    def test_body_failure_is_preserved_and_descriptor_closed(self):
+        error=RuntimeError('unit business failure')
+        with self.assertRaises(RuntimeError) as caught:
+            with backup.operation_lock('fixture-project'):raise error
+        self.assertIs(caught.exception,error);self.close.assert_called_once_with(73)
+
+    def test_open_failure_does_not_lock_or_close_an_unopened_descriptor(self):
+        error=OSError('unit no-follow/open failure');self.open.side_effect=error
+        with self.assertRaises(OSError) as caught:
+            with backup.operation_lock('fixture-project'):self.fail('unopened lock entered')
+        self.assertIs(caught.exception,error);self.fstat.assert_not_called()
+        self.fcntl.flock.assert_not_called();self.close.assert_not_called()
 
 
 class SQLiteFactsTests(unittest.TestCase):

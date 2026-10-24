@@ -120,7 +120,8 @@ async def confirm(request: Request):
 @router.post("/revoke")
 async def revoke(request: Request):
     relation = await authenticated(request, pending=True, revoked=True)
-    await state.revoke(relation["relationship_id"], relation["peer_id"], peer_confirmed=True)
+    try:await state.revoke(relation["relationship_id"], relation["peer_id"], peer_confirmed=True)
+    except p.ProtocolError as exc:raise HTTPException(409,str(exc)) from exc
     from app.services.media_catalog_cache import invalidate_media_catalog
     await invalidate_media_catalog()
     return {"state": "revoked", "protocol": p.PROTOCOL_VERSION}
@@ -199,31 +200,6 @@ async def backup_commit(request: Request):
         relation["peer_id"], generation, checksum, state.node, state.database,
     )
     return {"status": "ready", "bytes": size}
-
-
-@router.post("/jobs/lease")
-async def job_lease(request: Request):
-    relation = await authenticated(request)
-    if state.node["role"] != "Master" or relation["direction"] != "downstream":
-        raise HTTPException(403, "Only Master leases worker jobs")
-    value = json.loads(request.state.node_control_body or b"{}")
-    capabilities = value.get("capabilities")
-    if not isinstance(capabilities, list) or len(capabilities) > 32:
-        raise HTTPException(400, "Invalid worker capabilities")
-    return {"job": await resource_pool.lease_job(relation["peer_id"], capabilities, state.database)}
-
-
-@router.post("/jobs/{job_id}/complete")
-async def job_complete(request: Request, job_id: str):
-    relation = await authenticated(request)
-    if state.node["role"] != "Master" or relation["direction"] != "downstream":
-        raise HTTPException(403, "Only Master accepts worker results")
-    value = json.loads(request.state.node_control_body or b"{}")
-    if not isinstance(value.get("result"), dict):
-        raise HTTPException(400, "Invalid worker result")
-    await resource_pool.complete_job(relation["peer_id"], job_id, str(value.get("lease") or ""),
-                                     value["result"], state.database)
-    return {"status": "complete"}
 
 
 async def owned_path(original: str):
@@ -419,8 +395,11 @@ async def owned_media(request: Request, original: str, token: str | None = None)
                      "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, ETag, Last-Modified"})
     if request.method == "OPTIONS":
         return Response(headers=cors)
+    path=await owned_path(original)
+    from app.services import resource_readers
+    await resource_readers.media(state,relation,original,resource_id,path,payload['e'])
     from app.api.v1.media import stream_media_file
-    response = await stream_media_file(await owned_path(original))
+    response = await stream_media_file(path)
     response.headers.update(cors)
     response.headers.update({
         "X-Media-Resource-ID": resource_id, "X-Media-Owner-ID": payload["o"], "X-Media-Object-ID": original,
@@ -466,6 +445,8 @@ async def recording_bytes(request: Request, recording_id: str):
     if request.method == "PUT":
         result = await karaoke_storage.receive(request, relation, value)
         return JSONResponse(result, headers=cors)
+    from app.services import resource_readers
+    await resource_readers.recording(state,relation,recording_id,value['u'],value['e'])
     redirect = karaoke_storage.protected_redirect(
         relation["relationship_id"], value["u"], recording_id
     )
@@ -496,13 +477,21 @@ async def recording_delete(request: Request, recording_id: str):
         raise HTTPException(403, "Only a Follower stores recordings")
     try:
         value = json.loads(request.state.node_control_body or b"{}")
-        removed = karaoke_storage.remove(relation["relationship_id"], value["user_id"], recording_id)
-        if removed:
+        from app.services import resource_fences
+        from app.services.media_manager import media_mutation_lock
+        async with media_mutation_lock.shared():
             async with state.database.begin() as conn:
-                await conn.execute(update(s.storage_members).where(
-                    s.storage_members.c.member_id == state.node["node_id"]
-                ).values(used_bytes=func.greatest(0, s.storage_members.c.used_bytes - removed),
-                         updated_at=int(time.time())))
+                try:
+                    await resource_fences.recording(conn,state.node['node_id'],value['user_id'])
+                except resource_fences.FenceConflict as exc:
+                    raise HTTPException(409,str(exc)) from exc
+            removed = karaoke_storage.remove(relation["relationship_id"], value["user_id"], recording_id)
+            if removed:
+                async with state.database.begin() as conn:
+                    await conn.execute(update(s.storage_members).where(
+                        s.storage_members.c.member_id == state.node["node_id"]
+                    ).values(used_bytes=func.greatest(0, s.storage_members.c.used_bytes - removed),
+                             updated_at=int(time.time())))
         return {"status": "deleted"}
     except (KeyError, ValueError, TypeError) as exc:
         raise HTTPException(400, "Invalid recording delete request") from exc
@@ -514,11 +503,19 @@ async def recording_user_delete(request: Request, user_id: str):
     relation = await authenticated(request)
     if state.node["role"] != "Follower" or relation["direction"] != "upstream":
         raise HTTPException(403, "Only a Follower stores recordings")
-    removed = karaoke_storage.remove_user(relation["relationship_id"], user_id)
-    if removed:
+    from app.services import resource_fences
+    from app.services.media_manager import media_mutation_lock
+    async with media_mutation_lock.shared():
         async with state.database.begin() as conn:
-            await conn.execute(update(s.storage_members).where(
-                s.storage_members.c.member_id == state.node["node_id"]
-            ).values(used_bytes=func.greatest(0, s.storage_members.c.used_bytes - removed),
-                     updated_at=int(time.time())))
+            try:
+                await resource_fences.recording(conn,state.node['node_id'],user_id)
+            except resource_fences.FenceConflict as exc:
+                raise HTTPException(409,str(exc)) from exc
+        removed = karaoke_storage.remove_user(relation["relationship_id"], user_id)
+        if removed:
+            async with state.database.begin() as conn:
+                await conn.execute(update(s.storage_members).where(
+                    s.storage_members.c.member_id == state.node["node_id"]
+                ).values(used_bytes=func.greatest(0, s.storage_members.c.used_bytes - removed),
+                         updated_at=int(time.time())))
     return {"status": "deleted", "removed_bytes": removed}

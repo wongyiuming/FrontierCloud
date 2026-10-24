@@ -110,6 +110,7 @@ services:
       - web_tmp:/tmp
       - runtime_secrets:/run/frontiercloud-secrets
       - certificate_runtime:/run/frontiercloud-certificate:ro
+      - traffic_runtime:/run/frontiercloud-traffic:ro
     healthcheck:
       test: ["CMD", "python", "-m", "app.services.health_probe"]
       interval: 30s
@@ -183,6 +184,7 @@ services:
     volumes:
       - ${DATA_DIRECTORY:-./data}:/app/data:ro,z
       - certificate_published:/run/frontiercloud-tls:ro
+      - traffic_runtime:/run/frontiercloud-traffic
     depends_on:
       web: {condition: service_healthy}
       certificate-agent: {condition: service_started}
@@ -233,3 +235,4 @@ volumes:
   certificate_state:
   certificate_runtime:
   certificate_published:
+  traffic_runtime:

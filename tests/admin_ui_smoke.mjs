@@ -43,6 +43,7 @@ function makeElement() {
 
 const elements = new Map();
 const documentListeners = new Map();
+const windowListeners = new Map();
 const fetchCalls = [];
 const element = id => {
     if (!elements.has(id)) elements.set(id, makeElement());
@@ -55,6 +56,10 @@ class TestFormData {
 }
 
 const context = {
+    window: {addEventListener(name, callback) {
+        if (!windowListeners.has(name)) windowListeners.set(name, new Set());
+        windowListeners.get(name).add(callback);
+    }},
     document: {
         cookie: 'admin_csrf=test-csrf',
         hidden: false,
@@ -211,7 +216,7 @@ assert(adminHtml.includes('{{NODES_JS_URL}}'));
 assert(adminHtml.includes('id="randomKey"'));
 assert(adminHtml.includes('id="temporaryKeyForm"'));
 assert(adminHtml.includes('id="permanentBanForm"'));
-assert(adminHtml.match(/class="module-heading"/g).length === 8);
+assert(adminHtml.match(/class="module-heading"/g).length === 9);
 assert(adminHtml.includes('data-admin-module="priority"'));
 assert(adminHtml.includes('媒体资源排序策略'));
 assert(adminHtml.includes('目录与媒体条目的排序优先级'));
@@ -250,6 +255,8 @@ assert(!adminHtml.includes('securityToggle'));
 const adminJs = fs.readFileSync('static/js/admin.js', 'utf8');
 const directoryAdminJs = fs.readFileSync('static/js/directory-admin.js', 'utf8');
 const nodesJs = fs.readFileSync('static/js/nodes.js', 'utf8');
+new vm.Script(fs.readFileSync('static/js/migrations.js', 'utf8'), {filename: 'static/js/migrations.js'});
+assert(adminHtml.includes('data-admin-module="migrations"'));
 new vm.Script(directoryAdminJs, {filename: 'static/js/directory-admin.js'});
 assert(!adminJs.includes('response.blob()'));
 assert(adminJs.includes('anchor.href = url'));
@@ -337,4 +344,5 @@ assert(adminCss.includes('.filename-toggle'));
 assert(directoryAdminCss.includes('.priority-directory-row'));
 assert(directoryAdminCss.includes('.priority-directory-control'));
 
+await import('./admin_media_address_smoke.mjs');
 console.log('admin-ui-smoke-ok');
