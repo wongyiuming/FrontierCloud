@@ -4,6 +4,7 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
+  overflow-anchor: none;
   pointer-events: auto;
   user-select: none;
 }

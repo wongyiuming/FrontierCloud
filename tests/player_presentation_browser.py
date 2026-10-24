@@ -6,6 +6,7 @@ from urllib.parse import quote
 from tests import browser_ui_regression as ui
 from tests import federation_stack as fleet
 from tests.player_logo_restart_browser import exercise as logo_restart
+from tests.lyrics_wrap_browser import exercise as lyric_asset_rendering
 
 
 def inline_scroll_state(page):
@@ -269,6 +270,7 @@ def exercise(browser,master,root,report,check):
         check('tall_inline_fixture_really_exceeds_the_viewport',inline['height']>inline['panelHeight'])
         exercise_inline_scrolling(page,context,report,check)
         exercise_center_play_button(page,report,check)
+        report['lyric_asset_rendering'] = lyric_asset_rendering(browser,root/'lyric-rendering')
         page.locator('.back-btn').click()
         fleet.wait_page(page,"new URL(location.href).searchParams.get('path')==='music/黄耀明'",timeout=15000)
         check('long_album_return_uses_the_business_parent',True)

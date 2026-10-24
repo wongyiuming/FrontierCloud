@@ -51,6 +51,7 @@ Never weaken an existing regression merely to make a new implementation pass. If
 
 ## Non-negotiable architecture boundaries
 
+- Frontend code MUST remain HTML, CSS and native JavaScript across public pages, players and Admin GUI. Do not introduce frontend frameworks, framework-based components or rendering engines in place of native browser APIs. Follow the [frontend baseline](ARCHITECTURE.md#frontend-baseline--html-css-and-native-javascript) when adding dependencies or redesigning UI; build/test tooling is not permission to change the shipped frontend stack.
 - A cluster has one business Master. Followers are resource nodes, not independent business authorities.
 - Master-owned business state (lyrics, lyric relations, playback/business facts, users, audit facts) must not silently migrate to Followers.
 - One managed media object is complete and belongs to exactly one storage member. Do not split one logical object across storage members.

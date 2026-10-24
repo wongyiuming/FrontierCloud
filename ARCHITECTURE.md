@@ -335,6 +335,25 @@ A regression may not be weakened merely to accommodate a new feature. Architectu
 
 ## Frozen Python release contracts
 
+### Frontend baseline — HTML, CSS and native JavaScript
+
+All frontend development MUST use HTML, CSS and native JavaScript. This applies
+to public pages, players, Admin GUI, new views and subsequent UI changes.
+
+Use browser-native DOM, CSS, Canvas, SVG and Web APIs for rendering, interaction
+and animation. Do not introduce frontend frameworks or framework runtimes,
+including React, Vue, Angular, Svelte, Solid, Next.js or Nuxt. Do not add JSX/TSX,
+framework-specific component files, virtual-DOM rendering, or framework-based UI
+component systems. Do not replace native browser rendering with an engine such
+as Three.js.
+
+Build-only tooling, such as the existing JavaScript obfuscator, and test-only
+browser automation do not change this baseline. They must not introduce a
+frontend framework into shipped browser code. A new UI feature, dependency or
+visual redesign is not authorization to change this architecture boundary.
+
+### Python runtime and operator boundaries
+
 This repository's final runtime remains Python/FastAPI, with one ASGI business
 worker. Business HTTPS uses Nginx; Storage uses Python's native TLS server.
 Published Business and Direct HTTP/HTTPS are fixed to 80/443. Relay Storage exposes

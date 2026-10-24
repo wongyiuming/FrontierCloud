@@ -92,7 +92,7 @@ for (const fixture of [
     vm.runInNewContext(fs.readFileSync(new URL('../static/js/directory-globe.js', import.meta.url), 'utf8'), context);
     nodes.get('globeToggle').handlers.get('click')();
     assert.equal(nodes.get('globeStage').attributes['aria-label'], fixture.category + '目录列表');
-    assert.equal(nodes.get('globeHint').textContent, fixture.kind === 'video' ? '选择视频，开始观看' : '');
+    assert.equal(nodes.get('globeHint').textContent, '');
     nodes.get('globeToggle').handlers.get('click')();
     assert.equal(nodes.get('globeStage').attributes['aria-label'], `九宫格${fixture.item}目录，左右滑动翻页`);
     assert.equal(nodes.get('globeHint').textContent, pathLabel);

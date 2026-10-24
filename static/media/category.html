@@ -64,7 +64,7 @@
         stage.dataset.listLabel = categoryLabel + '目录列表';
         stage.setAttribute('aria-label', stage.dataset.gridLabel);
         const hint = document.getElementById('globeHint');
-        hint.dataset.listLabel = isVideo ? '选择视频，开始观看' : '';
+        hint.dataset.listLabel = '';
         hint.dataset.directoryLabel = categoryLabel + '目录';
         const brandLogo = document.getElementById('pageBrandLogo');
         brandLogo.src = `/api/v1/media/brand/logo/${brandKind}`;

@@ -7,13 +7,35 @@ const source = fs.readFileSync(new URL('../static/js/lyrics-window.js', import.m
 function element() {
   const classes = new Set();
   let scroll = 0;
+  let text = '';
   const node = {children: [], dataset: {}, clientHeight: 200, clientWidth: 900, clientTop: 0,
-    scrollHeight: 500, scrollWrites: 0, rect: {top: 100, bottom: 300},
+    scrollHeight: 500, scrollWrites: 0, textWrites: 0, replacementWrites: 0, rect: {top: 100, bottom: 300},
     classList: {contains: name => classes.has(name), add: name => classes.add(name),
       remove: name => classes.delete(name), [Symbol.iterator]: () => classes.values()},
-    append(...children) { for (const child of children) {child.parentElement = this; this.children.push(child);} },
+    append(...children) { for (const child of children) this.insertBefore(child, null); },
     appendChild(child) {this.append(child);},
-    replaceChildren(...children) {this.children = []; this.append(...children);},
+    insertBefore(child, reference) {
+      if (child === reference) return child;
+      if (child.parentElement) child.parentElement.removeChild(child);
+      const index = reference === null ? this.children.length : this.children.indexOf(reference);
+      assert.ok(index >= 0, 'insertBefore reference must belong to its parent');
+      this.children.splice(index, 0, child);
+      child.parentElement = this;
+      return child;
+    },
+    removeChild(child) {
+      const index = this.children.indexOf(child);
+      assert.ok(index >= 0, 'removeChild requires an owned child');
+      this.children.splice(index, 1);
+      child.parentElement = null;
+      return child;
+    },
+    remove() {this.parentElement?.removeChild(this);},
+    replaceChildren(...children) {
+      this.replacementWrites++;
+      for (const child of [...this.children]) this.removeChild(child);
+      this.append(...children);
+    },
     getBoundingClientRect() {return this.rect;},
     closest(selector) {for (let row = this; row; row = row.parentElement) if (row.classList.contains(selector.slice(1))) return row; return null;},
     querySelector(selector) {
@@ -27,6 +49,7 @@ function element() {
   Object.defineProperty(node, 'className', {get: () => [...classes].join(' '), set: value => {
     classes.clear(); for (const name of value.split(/\s+/).filter(Boolean)) classes.add(name);
   }});
+  Object.defineProperty(node, 'textContent', {get: () => text, set: value => {text = value; node.textWrites++;}});
   Object.defineProperty(node, 'scrollTop', {get: () => scroll, set: value => {scroll = value; node.scrollWrites++;}});
   return node;
 }
@@ -101,6 +124,7 @@ test('columns without vertical overflow do not scroll', () => {
 
 function inlineFixture() {
   const panel = element(), viewport = element(), track = element(), styles = new Map(), timers = [];
+  const cancelledTimers = new Set();
   panel.clientWidth = 300;
   panel.style = {setProperty(name, value) {styles.set(name, value);}};
   track.style = {};
@@ -122,7 +146,16 @@ function inlineFixture() {
     scrollTo() {assert.fail('lyrics must never scroll the page');}};
   const context = {window, activeLyricEntries: Array.from({length: 12}, () => ({text: '歌词'})), activeLyricIndex: null,
     document: {createElement: rowElement, getElementById: id => ({inlineLyrics: panel, inlineLyricsTrack: track})[id]},
-    clearLyricSlide() {}, setActiveLyricTime() {}, setTimeout(callback) {timers.push(callback); return timers.length;},
+    clearLyricSlide() {
+      if (context.lyricSlideTimer !== null) cancelledTimers.add(context.lyricSlideTimer);
+      context.lyricSlideTimer = null;
+    },
+    setActiveLyricTime() {},
+    setTimeout(callback) {
+      const id = timers.length + 1;
+      timers.push(() => {if (!cancelledTimers.has(id)) callback();});
+      return id;
+    },
     lyricSlideTimer: null, LYRIC_SLIDE_MS: 480, requestAnimationFrame() {}};
   vm.runInNewContext(source, context);
   const current = () => track.children.find(row => row.classList.contains('current'));
@@ -183,4 +216,69 @@ test('ordinary single-line windows retain their measured first-row slide animati
   timers[0]();
   assert.equal(track.children.length, 7);
   assert.equal(track.style.transform, 'translateY(0)');
+});
+
+test('adjacent settled windows retain every overlapping line and its unchanged text', () => {
+  const {window, context, track, timers, current} = inlineFixture();
+  context.activeLyricEntries = context.activeLyricEntries.map((_, index) => ({text: `Line ${index}`}));
+  window.renderLyricWindow(3);
+  const original = [...track.children], writes = original.map(row => row.textWrites);
+  const replacements = track.replacementWrites;
+  window.animateLyricForward(4);
+  assert.ok(current() === original[4], 'the next existing line becomes current');
+  timers[0]();
+  assert.equal(track.children.length, 7);
+  for (let index = 0; index < 6; index++) {
+    assert.ok(track.children[index] === original[index + 1], 'settling must keep overlapping DOM nodes');
+    assert.equal(track.children[index].textWrites, writes[index + 1], 'settling must not replace unchanged text');
+  }
+  assert.ok(current() === original[4], 'settling must preserve the highlighted node');
+  assert.equal(track.replacementWrites, replacements, 'settling must never replace the entire window');
+});
+
+test('wrapped mixed-height advances retain overlapping rows without a whole-window replacement', () => {
+  const {window, context, track, timers, current, visible} = inlineFixture();
+  context.activeLyricEntries = context.activeLyricEntries.map((_, index) => ({text: index === 3 ? '长'.repeat(100) : `Line ${index}`}));
+  window.renderLyricWindow(3);
+  const original = [...track.children], replacements = track.replacementWrites;
+  window.animateLyricForward(4);
+  assert.equal(timers.length, 0);
+  assert.equal(track.children.length, 7);
+  assert.ok(current() === original[4], 'wrapped advances keep the existing current row');
+  assert.deepEqual(track.children.slice(0, 6), original.slice(1));
+  assert.equal(track.replacementWrites, replacements);
+  assert.equal(visible(), true);
+});
+
+test('an interrupted slide and a nearby seek reuse rows and cannot run a stale settlement', () => {
+  const {window, context, track, timers, current, visible} = inlineFixture();
+  context.activeLyricEntries = context.activeLyricEntries.map((_, index) => ({text: `Line ${index}`}));
+  window.renderLyricWindow(3);
+  const originalCurrent = track.children[5], replacements = track.replacementWrites;
+  window.animateLyricForward(4);
+  // The coordinator settles the current window before advancing a fast cue.
+  window.renderLyricWindow(4);
+  window.animateLyricForward(5);
+  assert.ok(current() === originalCurrent, 'a fast cue keeps the next existing row');
+  window.renderLyricWindow(7);
+  const soughtRows = [...track.children];
+  assert.equal(context.activeLyricIndex, 7);
+  assert.equal(current().textContent, 'Line 7');
+  timers.forEach(callback => callback());
+  assert.equal(context.activeLyricIndex, 7, 'cancelled timers must not restore an old cue');
+  assert.deepEqual(track.children, soughtRows);
+  assert.equal(track.replacementWrites, replacements);
+  assert.equal(visible(), true);
+});
+
+test('a new track and changed cue text cannot retain stale lyric content', () => {
+  const {window, context, track, current} = inlineFixture();
+  window.renderLyricWindow(3);
+  context.activeLyricEntries = Array.from({length: 12}, (_, index) => ({text: `New track ${index}`}));
+  window.renderLyricWindow(3);
+  assert.equal(current().textContent, 'New track 3');
+  assert.deepEqual(track.children.map(row => row.textContent), Array.from({length: 7}, (_, index) => `New track ${index}`));
+  context.activeLyricEntries[3].text = 'Updated lyric';
+  window.renderLyricWindow(3);
+  assert.equal(current().textContent, 'Updated lyric');
 });

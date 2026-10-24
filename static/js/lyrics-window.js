@@ -14,17 +14,36 @@
     return 'sync-lyric trailing';
   }
 
-  function makeRow(entry, offset) {
+  function updateRow(row, entry, offset, index) {
+    const className = rowClass(offset);
+    const text = entry?.text || (offset === 0 ? '♪' : '\u00a0');
+    if (row.className !== className) row.className = className;
+    if (row.textContent !== text) row.textContent = text;
+    if (row.dataset.lyricIndex !== String(index)) row.dataset.lyricIndex = String(index);
+    return row;
+  }
+
+  function makeRow(entry, offset, index) {
     const row = document.createElement('p');
-    row.className = rowClass(offset);
-    row.textContent = entry?.text || (offset === 0 ? '♪' : '\u00a0');
+    updateRow(row, entry, offset, index);
     return row;
   }
 
   function renderWindow(container, entries, active) {
     if (!container) return;
-    const rows = OFFSETS.map(offset => makeRow(entries[active + offset], offset));
-    container.replaceChildren(...rows);
+    const existing = new Map(Array.from(container.children).map(row => [row.dataset.lyricIndex, row]));
+    const rows = OFFSETS.map(offset => {
+      const index = active + offset;
+      const row = existing.get(String(index)) || document.createElement('p');
+      return updateRow(row, entries[index], offset, index);
+    });
+    const retained = new Set(rows);
+    for (const row of Array.from(container.children)) {
+      if (!retained.has(row)) container.removeChild(row);
+    }
+    rows.forEach((row, index) => {
+      if (container.children[index] !== row) container.insertBefore(row, container.children[index] || null);
+    });
   }
 
   function sizeFullscreenLyrics(overlay, entries) {
@@ -141,7 +160,7 @@
         window.renderLyricWindow(nextIndex);
         return;
       }
-      track.append(makeRow(activeLyricEntries[nextIndex + 3], 3));
+      track.append(makeRow(activeLyricEntries[nextIndex + 3], 3, nextIndex + 3));
       activeLyricIndex = nextIndex;
       setActiveLyricTime(panel, nextIndex);
       void track.offsetWidth;
