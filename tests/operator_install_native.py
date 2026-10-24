@@ -230,12 +230,13 @@ for name in ('private.pem','root.crt'):
             operation=upgrades.Upgrade.begin(current,prepared,verify=verify,acceptance=True)
             if restore:
                 operation.capture();operation.prepare_database(verify=verify)
+                self.assertEqual(operation.state['database_from_generation'],result['generation'])
                 self.assertEqual(operation.state['phase'],'database_prepared')
                 self.assertFalse(operation.state.get('business_may_have_written',False))
                 transaction=recovery.Recovery(operation);transaction.prepare()
                 restored=transaction.open()
                 self.assertTrue(restored['recovery_complete'])
-                self.assertEqual((restored['generation'],restored['node_id']),(8,result['node_id']))
+                self.assertEqual((restored['generation'],restored['node_id']),(result['generation'],result['node_id']))
                 self.assertEqual(recovery.Recovery(upgrades.Upgrade.load(directory,verify=verify,acceptance=True)).open(),restored)
             else:
                 following=upgrades.Upgrade.advance(directory,verify=verify,acceptance=True)
