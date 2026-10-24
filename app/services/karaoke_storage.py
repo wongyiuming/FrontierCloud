@@ -142,11 +142,16 @@ async def _receive(request: Request, relation: dict, value: dict) -> dict:
         from app.services.federation import schema as fs
         from app.services import resource_pool
         async with state.database.begin() as conn:
+            from app.services import resource_fences
+            try:
+                await resource_fences.recording(conn,state.node['node_id'],value['u'],upload=True)
+            except resource_fences.FenceConflict as exc:
+                raise HTTPException(409,str(exc)) from exc
             member = (await conn.execute(select(fs.storage_members).where(
                 fs.storage_members.c.member_id == state.node["node_id"]).with_for_update())).mappings().first()
             logical = (int(member["allocated_bytes"]) - int(member["used_bytes"])
                        - int(member["reserved_bytes"])) if member else 0
-            physical = resource_pool.physical_free(ROOT) - resource_pool.PHYSICAL_RESERVE_BYTES
+            physical = resource_pool.physical_free(ROOT) - resource_pool.PHYSICAL_RESERVE_BYTES - int(member['reserved_bytes'] if member else 0)
             if (not member or not member["storage_enabled"] or not member["writable"]
                     or min(logical, physical) < expected):
                 raise HTTPException(507, "Recording storage node is full")

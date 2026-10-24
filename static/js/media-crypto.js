@@ -85,10 +85,10 @@
             return await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
         } finally { new Uint8Array(raw).fill(0); }
     }
-    async function fileGrant(filePath, expectedFileId = '') {
+    async function fileGrant(filePath, expectedFileId = '', revalidate = false) {
         const activeSession = await getSession();
         const cached = envelopes.get(filePath);
-        if (cached && cached.deadline > common.monotonicNow() + 10000
+        if (!revalidate && cached && cached.deadline > common.monotonicNow() + 10000
             && (!expectedFileId || cached.encryption.file_id === expectedFileId)) return cached;
         const data = await jsonRequest('/key', {session_id: activeSession.session_id, file_path: filePath});
         if (expectedFileId && data.encryption?.file_id !== expectedFileId) {
@@ -154,7 +154,8 @@
             return;
         }
         if (data.type !== 'fc-crypto-grant' || !event.ports[0]) return;
-        try { event.ports[0].postMessage(await fileGrant(data.file_path, data.file_id)); }
+        try { event.ports[0].postMessage({...await fileGrant(data.file_path, data.file_id, data.revalidate === true),
+            revalidated: data.revalidate === true}); }
         catch (error) { event.ports[0].postMessage({error: error.message,
             status: error.status || (error.name === 'OperationError' ? 422 : undefined)}); }
     });

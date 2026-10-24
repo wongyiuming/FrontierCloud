@@ -6,6 +6,19 @@ const selectedItemKinds = new Map();
 let currentPath = '';
 let csrfCookieName = '__Host-admin-csrf';
 let uploadRunning = false;
+let uploadInterrupted = false;
+const activeUploadRequests = new Map();
+function interruptUploadTask(event) {
+    uploadInterrupted = true;
+    const message = event.type === 'offline' ? '网络连接中断' : '上传已取消';
+    for (const stop of activeUploadRequests.values()) stop(message);
+}
+function requireUploadTaskActive() {
+    if (navigator.onLine === false) interruptUploadTask({type: 'offline'});
+    if (uploadInterrupted) throw new Error('上传已中断，请重新选择文件重试');
+}
+window.addEventListener('offline', interruptUploadTask);
+window.addEventListener('pagehide', interruptUploadTask);
 let clusterUpload = false;
 let mediaSearchTimer = null;
 let securityTimer = null;
@@ -34,6 +47,7 @@ let uploadLimits = {
     max_upload_file_size: 800 * 1024 * 1024,
     max_upload_task_files: 5000,
     max_lyric_file_size: 2 * 1024 * 1024,
+    upload_inactivity_timeout: 300,
 };
 
 const $ = id => document.getElementById(id);
@@ -395,32 +409,72 @@ function parseXhrData(xhr) {
     }
 }
 
-function uploadOne(formData, onProgress, endpoint = '/api/v1/media/admin/upload/item') {
+function uploadRequest(method, url, body, onProgress, {direct = false, raw = false} = {}) {
     return new Promise((resolve, reject) => {
+        requireUploadTaskActive();
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', endpoint);
+        let settled = false, timer, lastSent = 0, lastReceived = 0, abortReason;
+        const seconds = Number(uploadLimits.upload_inactivity_timeout);
+        const idle = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, 2147483647) : 300000;
+        const finish = (error, value) => {
+            if (settled) return;
+            settled = true;
+            activeUploadRequests.delete(xhr);
+            clearTimeout(timer);
+            window.removeEventListener('offline', offline);
+            if (error) reject(error); else resolve(value);
+        };
+        const stop = message => {
+            if (settled) return;
+            abortReason = new Error(message);
+            xhr.abort();
+            finish(abortReason);
+        };
+        const offline = () => stop('网络连接中断');
+        const activity = () => {
+            if (settled) return;
+            clearTimeout(timer);
+            timer = setTimeout(() => stop('上传超时，请检查网络后重试'), idle);
+        };
+        xhr.open(method, url);
         xhr.responseType = 'json';
-        xhr.setRequestHeader('X-CSRF-Token', csrf());
+        if (!direct) xhr.setRequestHeader('X-CSRF-Token', csrf());
+        if (raw) xhr.setRequestHeader('Content-Type', 'application/octet-stream');
         xhr.upload.onprogress = event => {
-            if (event.lengthComputable) onProgress(event.loaded / event.total);
+            if (settled) return;
+            if (event.loaded > lastSent) { lastSent = event.loaded; activity(); }
+            if (event.lengthComputable && event.total > 0) onProgress?.(event.loaded / event.total);
         };
-        xhr.onerror = () => reject(new Error('网络连接中断'));
-        xhr.onabort = () => reject(new Error('上传已取消'));
+        xhr.onprogress = event => {
+            if (settled) return;
+            if (event.loaded > lastReceived) { lastReceived = event.loaded; activity(); }
+        };
+        xhr.onerror = () => finish(new Error(direct ? '存储节点连接中断' : '网络连接中断'));
+        xhr.onabort = () => finish(abortReason || new Error('上传已取消'));
+        xhr.ontimeout = () => finish(new Error('上传超时，请检查网络后重试'));
         xhr.onload = () => {
-            const data = parseXhrData(xhr);
-            if (xhr.status === 401) {
-                reject(new Error('特权模式已失效，请重新提权'));
-                location.href = '/api/v1/media';
-                return;
+            try {
+                const data = parseXhrData(xhr);
+                if (!direct && xhr.status === 401) {
+                    finish(new Error('特权模式已失效，请重新提权'));
+                    location.href = '/api/v1/media';
+                } else if (xhr.status < 200 || xhr.status >= 300) {
+                    finish(new Error(formatErrorDetail(data.detail)));
+                } else finish(null, data);
+            } catch (error) {
+                finish(error);
             }
-            if (xhr.status < 200 || xhr.status >= 300) {
-                reject(new Error(formatErrorDetail(data.detail)));
-                return;
-            }
-            resolve(data);
         };
-        xhr.send(formData);
+        activeUploadRequests.set(xhr, stop);
+        window.addEventListener('offline', offline);
+        if (navigator.onLine === false) { stop('网络连接中断'); return; }
+        activity();
+        try { xhr.send(body); } catch (error) { finish(error); }
     });
+}
+
+function uploadOne(formData, onProgress, endpoint = '/api/v1/media/admin/upload/item') {
+    return uploadRequest('POST', endpoint, formData, onProgress);
 }
 
 async function runUploadTask(fileList, relativePaths = null, lyricUpload = false) {
@@ -1148,20 +1202,7 @@ function priorityMediaRow(item, data) {
 }
 
 function uploadRaw(url, file, onProgress, direct = false) {
-    return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('PUT', url); xhr.responseType = 'json';
-        if (!direct) xhr.setRequestHeader('X-CSRF-Token', csrf());
-        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-        xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(event.loaded / event.total); };
-        xhr.onerror = () => reject(new Error('存储节点连接中断'));
-        xhr.onload = () => {
-            const data = parseXhrData(xhr);
-            if (xhr.status < 200 || xhr.status >= 300) reject(new Error(formatErrorDetail(data.detail)));
-            else resolve(data);
-        };
-        xhr.send(file);
-    });
+    return uploadRequest('PUT', url, file, onProgress, {direct, raw: true});
 }
 
 function renderMediaPriority(data) {
@@ -1494,7 +1535,7 @@ $('logout').onclick = async () => {
     }
 };
 
-(async () => {
+document.addEventListener('DOMContentLoaded', async () => {
     try {
         const status = await api('/api/v1/media/admin/status');
         uploadLimits = {...uploadLimits, ...status.limits};
@@ -1530,7 +1571,7 @@ $('logout').onclick = async () => {
     } catch (_error) {
         // api() handles expired sessions and navigation.
     }
-})();
+}, {once: true});
 // Karaoke user controls reuse the existing Admin session and CSRF boundary.
 (() => {
     const panel = document.getElementById('usersPanel');

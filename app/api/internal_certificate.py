@@ -8,6 +8,8 @@ from fastapi.responses import JSONResponse
 
 from app.api.internal_nodes import authenticated
 from app.services.certmanager import certificate_control
+from app.services.certmanager.client import CertificateControlError,unavailable
+from app.core.config import settings
 from app.services.federation.state import state
 
 router = APIRouter(prefix="/internal/v1", include_in_schema=False)
@@ -24,6 +26,9 @@ async def certificate(request: Request):
             raise ValueError()
         result = await certificate_control(action=value.get("action", "status"),
                 browser_public_key=value.get("browser_public_key", ""), browser_nonce=value.get("browser_nonce", ""))
+    except CertificateControlError as exc:
+        if value.get('action','status')!='status':raise HTTPException(409,exc.code) from None
+        result=unavailable(exc.code,settings.SERVER_NAME)
     except (ValueError, TypeError):
         raise HTTPException(409, "automatic certificate controller unavailable") from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})

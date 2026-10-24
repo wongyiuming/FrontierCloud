@@ -18,10 +18,13 @@ The Go implementation lives exclusively in the separate
 - Synchronized/fullscreen lyrics, explicit lyric relations, and non-destructive same-name auto-link.
 - Karaoke entry from media playback, guest preview, account recordings, and storage quota.
 - Master/Follower storage placement using Local, Direct, or Relay transport.
+- Whole-parent Direct/Relay migration with traffic pauses, restart reconciliation and independent safe retirement.
+- Optional private S3 storage with direct browser transfers and durable multipart recovery.
 - Transactional upload, visibility, priority, same-parent folder rename, and recovery-aware deletion.
 - Browser encryption, session-scoped key grants, and safe interrupted-upload recovery.
 - Priority dragging with stable ties and the full -7..500000 range.
 - Automatic ACME certificates, node health/control, Admin audit facts and bounded Backup artifacts.
+- A host Python operator for verified source/Compose installation, upgrades and state-only recovery.
 
 ## Quick start
 
@@ -80,12 +83,18 @@ The [final Python acceptance ledger](docs/python-final-parity.md),
 [browser encryption contract](docs/browser-media-encryption.md), and
 [operator recovery guide](docs/operator-recovery.md) describe the final release.
 Online software upgrade/rollback APIs and their Admin module are removed.
-Use the documented maintenance-window procedure for installation and migration.
+Use the [Python Compose operator](docs/python-source-operator.md) for installation,
+upgrades and controlled recovery during a maintenance window.
+
+The [current Python alignment ledger](docs/python-current-parity.md) tracks the
+new alignment cycle separately from that historical acceptance. It records
+runtime decisions, missing capabilities and exact-source evidence requirements;
+unfinished local work is not a new published release.
 
 ## Repository delivery
 
 FrontierCloud has exactly two canonical branches: `dev` for implementation and
-complete CI, and `main` for reviewed release history. Do not create additional
+bounded source CI, and `main` for reviewed release history. Do not create additional
 branches. The only valid promotion PR is same-repository `dev -> main`; after
 merge, fast-forward `dev` to the resulting `main` commit before the next change.
 Only Python/FastAPI `main` and `dev` are retained. No Gin archive references,

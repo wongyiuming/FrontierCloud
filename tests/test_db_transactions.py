@@ -5,6 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.dialects import mysql
+from sqlalchemy.schema import CreateIndex
+from sqlalchemy import CheckConstraint, Index, UniqueConstraint
 
 from app.core import db, schema_migrations
 
@@ -18,6 +21,8 @@ class _Rows:
 
 
 class _BootstrapConnection:
+    dialect = mysql.dialect()
+
     def __init__(self, *, tables=(), generation=None, lock_acquired=1):
         self.tables = set(tables)
         self.generation = generation
@@ -27,6 +32,80 @@ class _BootstrapConnection:
         self.commits = 0
         self.rollbacks = 0
         self.preference_check = True
+        from app.services.resource_pause_schema import CHECK, OLD_CHECK
+        self.pause_check = CHECK if generation == db.SCHEMA_GENERATION else OLD_CHECK
+        from app.services import resource_migration_schema,s3_schema,node_retirement_schema,resource_cancel_census_schema
+        tables = [*resource_migration_schema.metadata.tables.values(),*s3_schema.metadata.tables.values(),
+            *node_retirement_schema.metadata.tables.values(),*resource_cancel_census_schema.metadata.tables.values()]
+        self.indexes = {index.name for table in tables
+                        if table.name in self.tables for index in table.indexes}
+
+    async def run_sync(self, function, **kwargs):
+        # This transaction-order fake already assumes complete valid columns
+        # for existing tables, as its information_schema.columns response does.
+        # Real shape/corruption checks live in SQLite/MySQL runtime fixtures.
+        index = getattr(function, '__self__', None)
+        if isinstance(index, Index):
+            if not kwargs.get('checkfirst') or index.name not in self.indexes:
+                await self.execute(CreateIndex(index).compile(dialect=self.dialect))
+                self.indexes.add(index.name)
+            return
+        pause_inspection = (function.__module__ == 'app.services.resource_pause_schema'
+                            and function.__qualname__ == 'current.<locals>.<lambda>')
+        retirement_inspection=(function.__module__=='app.services.node_retirement_schema' and function.__qualname__=='validate.<locals>.observed')
+        census_inspection=(function.__module__=='app.services.resource_cancel_census_schema' and function.__qualname__=='validate.<locals>.verify')
+        if function.__name__ != 'inspect_tables' and not pause_inspection and not retirement_inspection and not census_inspection:
+            raise AssertionError(f'Unsupported sync operation: {function}')
+        from app.services import resource_migration_schema,s3_schema,node_retirement_schema,resource_cancel_census_schema
+        tables = {**resource_migration_schema.metadata.tables,**s3_schema.metadata.tables,
+            **node_retirement_schema.metadata.tables,**resource_cancel_census_schema.metadata.tables}
+        connection = self
+        class Inspector:
+            def table(self, name):
+                if name not in connection.tables:
+                    raise AssertionError(f'Missing fixture table: {name}')
+                return tables[name]
+
+            def get_columns(self, name):
+                return [dict(name=column.name, type=column.type, nullable=column.nullable)
+                        for column in self.table(name).columns]
+
+            def get_pk_constraint(self, name):
+                return {'constrained_columns': [column.name for column in self.table(name).primary_key]}
+
+            def get_indexes(self, name):
+                return [dict(name=index.name,column_names=[column.name for column in index.columns],unique=bool(index.unique)) for index in self.table(name).indexes
+                        if index.name in connection.indexes]
+
+            def get_check_constraints(self, name):
+                from app.services.resource_pause_schema import NAME
+                return [dict(name=constraint.name, sqltext=connection.pause_check
+                             if name == 'migration_tasks' and constraint.name == NAME else str(constraint.sqltext))
+                        for constraint in self.table(name).constraints
+                        if isinstance(constraint, CheckConstraint)]
+
+            def get_unique_constraints(self, name):
+                return [dict(column_names=[column.name for column in constraint.columns])
+                        for constraint in self.table(name).constraints if isinstance(constraint, UniqueConstraint)]
+
+            def get_foreign_keys(self,name):
+                self.table(name);return []
+
+            def get_table_options(self,name):
+                self.table(name);return dict(mysql_engine='InnoDB',mysql_collate='utf8mb4_bin')
+
+        class SyncView:
+            dialect=connection.dialect
+            def scalar(self,statement,parameters):
+                # Transaction-order tests assume healthy reflected structures;
+                # native MySQL tests separately corrupt these actual properties.
+                sql=str(statement)
+                if parameters!={'name':'node_retirements'}:raise AssertionError('Unexpected sync inspection parameters')
+                if any('FROM information_schema.'+name in sql for name in ('COLUMNS','TRIGGERS','TABLE_CONSTRAINTS')):return 0
+                raise AssertionError('Unsupported sync inspection: '+sql)
+
+        with patch.dict('sqlalchemy.inspection._registrars', {SyncView: lambda _subject: Inspector()}):
+            return function(SyncView())
 
     async def execute(self, statement, params=None):
         sql = str(statement)
@@ -53,6 +132,9 @@ class _BootstrapConnection:
             self.preference_check = False
         if "ADD CONSTRAINT chk_media_preference" in sql:
             self.preference_check = True
+        from app.services.resource_pause_schema import NAME, CHECK
+        if sql == f'ALTER TABLE migration_tasks DROP CHECK {NAME}, ADD CONSTRAINT {NAME} CHECK ({CHECK})':
+            self.pause_check = CHECK
         return _Rows()
 
     async def scalar(self, statement, _params=None):
@@ -70,6 +152,7 @@ class _BootstrapConnection:
             return int((_params or {}).get("table_name") in self.tables)
         if "FROM information_schema.columns" in sql:
             return int((_params or {}).get("table_name") in self.tables)
+        if "FROM information_schema.TRIGGERS" in sql and "migration_cancel_census" in sql:return None
         if "FROM information_schema.table_constraints" in sql:
             return int(self.preference_check)
         if "FROM media_playback_stats WHERE preference < -7" in sql:
@@ -117,7 +200,9 @@ class SchemaBootstrapTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CHECK (preference BETWEEN -7 AND 500000)", schema)
         self.assertIn("UNIQUE INDEX uq_ip_ban_active_ip", schema)
         self.assertIn("idx_webrtc_client_time", schema)
-        self.assertNotIn("ALTER TABLE", schema)
+        from app.services.resource_pause_schema import NAME, CHECK
+        alters = [sql for sql, _ in connection.executed if sql.startswith('ALTER TABLE')]
+        self.assertEqual(alters, [f'ALTER TABLE migration_tasks DROP CHECK {NAME}, ADD CONSTRAINT {NAME} CHECK ({CHECK})'])
 
     async def test_existing_unmarked_database_is_rejected_without_mutation(self):
         connection = _BootstrapConnection(tables={"karaoke_recordings"})

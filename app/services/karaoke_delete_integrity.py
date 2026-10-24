@@ -14,6 +14,8 @@ from app.services.federation.state import state
 async def stage_recording(user_id: str, recording_id: str, *, pending: bool) -> dict | None:
     now = int(time.time())
     async with state.database.begin() as conn:
+        from app.services import resource_fences
+        await resource_fences.lock_node(conn)
         row = (await conn.execute(select(ks.recordings).where(
             ks.recordings.c.recording_id == recording_id,
             ks.recordings.c.user_id == user_id,
@@ -21,6 +23,8 @@ async def stage_recording(user_id: str, recording_id: str, *, pending: bool) -> 
         if not row:
             return None
         row = dict(row)
+        from app.services import resource_fences
+        await resource_fences.recording(conn,row['storage_member_id'],user_id)
         finalized = bool(row.get("sha256"))
         if row["state"] != "deleting":
             if pending and row["state"] != "pending":
@@ -114,11 +118,18 @@ async def stage_user_deletion(user_id: str, *, request=None, action: str | None 
                               detail: dict | None = None) -> bool:
     now = int(time.time())
     async with state.database.begin() as conn:
+        from app.services import resource_fences
+        await resource_fences.lock_node(conn)
         user = (await conn.execute(select(ks.users).where(
             ks.users.c.user_id == user_id
         ).with_for_update())).mappings().first()
         if not user:
             return False
+        from app.services import resource_fences
+        members = list((await conn.execute(select(ks.recordings.c.storage_member_id).where(
+            ks.recordings.c.user_id == user_id).distinct())).scalars())
+        for member_id in members:
+            await resource_fences.recording(conn,member_id,user_id)
         await conn.execute(update(ks.users).where(ks.users.c.user_id == user_id).values(
             status="deleting", updated_at=now,
         ))

@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAINTENANCE_FLAG = ROOT / "data" / ".frontiercloud-maintenance"
 EXPECTED_ADMIN_MODULE_ORDER = [
     "media", "priority", "lyrics", "users", "security", "network",
-    "nodes", "site", "key", "brand",
+    "nodes", "migrations", "site", "key", "brand",
 ]
 
 

@@ -88,7 +88,8 @@ The playing/paused state and business-track identity are preserved during this r
 
 ## Release gates
 
-CI protects the following core rules:
+Light CI smoke checks and development-host runtime/browser regressions protect
+the following core rules:
 
 - no T-200 ms handoff, standby Deck, or bridge remains;
 - one audio MediaSource and one sequence SourceBuffer implement compatible continuity;

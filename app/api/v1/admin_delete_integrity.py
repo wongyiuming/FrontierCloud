@@ -40,6 +40,14 @@ async def retry_pending_media(media_id: str) -> bool:
     if row is None:
         return True
     try:
+        is_s3 = False
+        if getattr(node_state,'_s3_configured',False):
+            from app.services import s3_schema
+            async with node_state.database.connect() as conn:
+                is_s3 = await conn.scalar(select(s3_schema.objects.c.media_id).where(s3_schema.objects.c.media_id == media_id))
+        if is_s3:
+            from app.services.s3_objects import Objects
+            return (await Objects(node_state).delete(media_id))['state'] == 'deleted'
         if row["storage_member_id"] == node_state.node["node_id"]:
             target = (MEDIA_ROOT / row["media_path"]).resolve()
             if MEDIA_ROOT not in target.parents:

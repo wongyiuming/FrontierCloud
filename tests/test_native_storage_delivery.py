@@ -15,6 +15,19 @@ from app.services.federation.state import state
 
 @unittest.skipIf(os.name=="nt","Native storage product runs in Linux Compose")
 class NativeStorageDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_fstat_closes_the_already_opened_file_descriptor(self):
+        opened = []
+        def fail(descriptor):
+            opened.append(descriptor)
+            raise OSError('simulated inode inspection failure')
+        with patch.object(native.os, 'fstat', fail):
+            with self.assertRaisesRegex(OSError, 'inode inspection failure'):
+                native._open_beneath(self.media, ['music', 'artist', 'cipher.mp3'])
+        self.assertEqual(len(opened), 1)
+        with self.assertRaises(OSError):
+            os.fstat(opened[0])
+        self.assertEqual((self.media/'music/artist/cipher.mp3').read_bytes(), self.payload)
+
     async def asyncSetUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
         self.media=self.root/"media";self.recordings=self.root/"recordings"

@@ -44,6 +44,7 @@ class State:
         self.database = database
         self._vault = Fernet(key) if key else None
         self.node: dict = {"role": "Standalone", "node_id": "", "endpoint": ""}
+        self._s3_configured = False
 
     def seal(self, value: str) -> str:
         return self._vault.encrypt(value.encode()).decode()
@@ -68,12 +69,17 @@ class State:
             raise p.ProtocolError("Node is not initialized")
         return dict(row)
 
-    async def initialize(self):
-        if self._vault is None:
+    async def initialize(self, *, read_only=False):
+        if read_only:
+            from app.services.offline_upgrade import private_bytes
+            self._vault = Fernet(private_bytes(SECRET_DIR / 'node-vault.key', 44))
+        elif self._vault is None:
             self._vault = Fernet(vault_key(SECRET_DIR))
         async with self.database.begin() as conn:
             row = (await conn.execute(select(s.identity).where(s.identity.c.singleton == 1))).mappings().first()
             if row is None:
+                if read_only:
+                    raise p.ProtocolError('Fenced startup requires the existing node identity; initialization is forbidden')
                 row = dict(singleton=1, node_id=uuid.uuid4().hex, role="Standalone", endpoint="",
                            private_key=self.seal(p.new_key()), created_at=int(time.time()))
                 await conn.execute(insert(s.identity).values(**row))
@@ -82,7 +88,12 @@ class State:
             # Fail closed if the persistent secret volume is missing or mismatched.
             self.unseal(row["private_key"])
             self.node = dict(row)
-        if self.node["role"] == "Master":
+            if row['role'] == 'Master':
+                from app.services.s3_schema import members as s3_members
+                self._s3_configured = bool(await conn.scalar(select(s3_members.c.member_id).limit(1)))
+            else:
+                self._s3_configured = False
+        if self.node["role"] == "Master" and not read_only:
             from app.services import resource_pool
             await resource_pool.adopt_master_local_media(self.node, self.database)
 
@@ -134,6 +145,11 @@ class State:
             row = await self.lock(conn)
             if confirmation != row["node_id"]:
                 raise p.ProtocolError("请准确输入当前节点 ID 确认重新初始化")
+            from app.services import resource_fences
+            await resource_fences.node_clear(conn)
+            from app.services import s3_schema
+            if await conn.scalar(select(s3_schema.members.c.member_id).limit(1).with_for_update()):
+                raise p.ProtocolError("仍配置有 S3 节点，请先核销上传、移除资源并删除节点配置")
             file_query = select(func.count()).select_from(s.global_media).where(
                 s.global_media.c.state.in_(("active", "pending_delete")))
             if row["role"] == "Follower":
@@ -165,6 +181,7 @@ class State:
             await conn.execute(update(s.identity).where(s.identity.c.singleton == 1).values(**{k: v for k, v in row.items() if k != "singleton"}))
             await self.log(conn, "reinitialize", actor, old_node_id=confirmation, new_node_id=row["node_id"])
         self.node = row
+        self._s3_configured = False
 
     async def list_relationships(self, include_revoked=False) -> list[dict]:
         async with self.database.connect() as conn:
@@ -186,6 +203,8 @@ class State:
         now, nonce, token = int(time.time()), uuid.uuid4().hex, secrets.token_urlsafe(48)
         async with self.database.begin() as conn:
             row = await self.lock(conn)
+            from app.services.node_retirement_fences import clear
+            await clear(conn)
             if row["role"] != "Follower":
                 raise p.ProtocolError("Only Follower can issue pairing packages")
             if await conn.scalar(select(func.count()).select_from(s.relationships).where(
@@ -210,8 +229,13 @@ class State:
     async def prepare(self, identifier: str, peer: dict, credential: str, actor: str):
         async with self.database.begin() as conn:
             row = await self.lock(conn)
+            from app.services.node_retirement_fences import clear
+            await clear(conn,member_id=peer['node_id'])
             if row["role"] != "Master":
                 raise p.ProtocolError("Only Master can import a package")
+            from app.services.s3_schema import members as s3_members
+            if await conn.scalar(select(s3_members.c.member_id).where(s3_members.c.member_id == peer['node_id']).with_for_update()):
+                raise p.ProtocolError('节点身份与 S3 存储配置冲突')
             existing = (await conn.execute(select(s.relationships).where(s.relationships.c.peer_id == peer["node_id"]))).mappings().first()
             if existing and existing["state"] != "revoked":
                 raise p.ProtocolError("该 Follower 已配对或正在配对；请先撤销旧关系")
@@ -227,6 +251,8 @@ class State:
             raise p.ProtocolError("Invalid pairing credentials")
         async with self.database.begin() as conn:
             row = await self.lock(conn)
+            from app.services.node_retirement_fences import clear
+            await clear(conn)
             if row["role"] != "Follower" or package["node_id"] != row["node_id"]:
                 raise p.ProtocolError("Pair package does not belong to this Follower")
             pair = (await conn.execute(select(s.pairs).where(s.pairs.c.nonce == package["nonce"]))).mappings().first()
@@ -254,8 +280,10 @@ class State:
     async def activate(self, identifier: str, actor: str):
         async with self.database.begin() as conn:
             await self.lock(conn)
+            from app.services.node_retirement_fences import clear
+            await clear(conn,relationship_id=identifier)
             row = (await conn.execute(select(s.relationships).where(s.relationships.c.relationship_id == identifier))).mappings().first()
-            if not row or row["state"] == "revoked":
+            if not row or row["state"] not in {'pending','active'}:
                 raise p.ProtocolError("Relationship revoked or unknown")
             if row["state"] != "active":
                 await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == identifier).values(state="active"))
@@ -272,28 +300,18 @@ class State:
                 s.relationships.c.relationship_id == identifier).with_for_update())).mappings().first()
             if not relation:
                 raise p.ProtocolError("Unknown relationship")
-            from sqlalchemy import text
-            if node["role"] == "Follower":
-                valid_files = int((await conn.execute(text(
-                    "SELECT COUNT(*) FROM media_objects WHERE object_kind IN ('audio','video')"
-                ))).scalar_one())
-                from app.services import karaoke_storage
-                if karaoke_storage.ROOT.exists() and any(
-                        item.is_file() for item in karaoke_storage.ROOT.rglob("*")):
-                    valid_files += 1
-            else:
-                valid_files = (await conn.execute(select(func.count()).select_from(s.global_media).where(
-                    s.global_media.c.storage_member_id == relation["peer_id"],
-                    s.global_media.c.state.in_(("active", "pending_delete"))))).scalar_one()
-                valid_files += int((await conn.execute(text("""
-                    SELECT COUNT(*) FROM karaoke_recordings
-                    WHERE storage_member_id=:member_id AND state IN ('pending','ready','deleting')
-                """), {"member_id": relation["peer_id"]})).scalar_one())
-            if valid_files:
-                raise p.ProtocolError("Follower 仍保存 Storage Pool 有效文件，排空前禁止撤销关系")
+            from app.services import resource_fences
+            await resource_fences.member_clear(conn,
+                node['node_id'] if node['role'] == 'Follower' else relation['peer_id'],readers=True)
+            # Only cancel an unactivated pairing or acknowledge a historical
+            # revocation. Active nodes require signed, two-sided retirement;
+            # this legacy endpoint cannot assert physical emptiness.
+            if relation['state'] not in {'pending','revoked'}:
+                from app.services.node_retirement_fences import RetirementError
+                raise RetirementError('retirement_required')
             values = dict(state="revoked", status="offline")
             if peer_confirmed:
-                values["summary"] = {"revocation_acknowledged": True}
+                values["summary"] = {**relation['summary'], "revocation_acknowledged": True}
             result = await conn.execute(update(s.relationships).where(s.relationships.c.relationship_id == identifier).values(**values))
             if not result.rowcount:
                 raise p.ProtocolError("Unknown relationship")
@@ -306,6 +324,11 @@ class State:
             node = await self.lock(conn)
             if node["role"] != "Master":
                 raise p.ProtocolError("Only Master selects transport")
+            existing = (await conn.execute(select(s.relationships).where(
+                s.relationships.c.relationship_id == identifier))).mappings().first()
+            if existing is not None:
+                from app.services import resource_fences
+                await resource_fences.member_clear(conn,existing['peer_id'])
             result = await conn.execute(update(s.relationships).where(
                 s.relationships.c.relationship_id == identifier, s.relationships.c.state == "active").values(mode=mode))
             if not result.rowcount:
@@ -339,6 +362,8 @@ class State:
         async with self.database.begin() as conn:
             await self.lock(conn)
             # Recheck revocation under the same lock as nonce insertion.
+            from app.services.node_retirement_fences import clear
+            await clear(conn,relationship_id=row['relationship_id'])
             current = (await conn.execute(select(s.relationships.c.state).where(s.relationships.c.relationship_id == row["relationship_id"]))).scalar_one()
             if current not in allowed:
                 raise p.ProtocolError("Relationship revoked")

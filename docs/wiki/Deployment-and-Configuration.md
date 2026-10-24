@@ -2,6 +2,9 @@
 
 This guide describes the final FastAPI/Python runtime. Docker Compose owns business services and the certificate controller; the product installs no host business systemd service and mounts no Docker socket. Web uses one ASGI worker and one CPU. Additional workers must not bypass process-local media transaction fences.
 
+Use Docker Compose 2.24.4 or later. The MySQL overlay explicitly resets its
+optional profile so the documented two-file command activates the database.
+
 ## Business nodes
 
 A fresh Standalone node can use the explicit HTTP default without an `.env` file:
@@ -41,7 +44,14 @@ STORAGE_ENDPOINT=https://storage.4399.com
 bash scripts/deploy-storage.sh
 ```
 
-Direct uses native Python HTTPS on public 443. Its isolated certificate agent temporarily binds public 80 during HTTP-01 issuance or renewal and releases it afterward. Storage does not add Nginx. Relay keeps authenticated HTTPS on a restricted high port and has no permanent listener on 80/443:
+Direct uses native Python HTTPS on public 443. Its isolated certificate agent temporarily binds public 80 during HTTP-01 issuance or renewal and releases it afterward. Storage does not add Nginx. Relay keeps authenticated HTTPS on a restricted high port and has no permanent listener on 80/443.
+
+Native Storage defaults to no trusted reverse proxies. Unlike the business
+gateway, it receives HTTPS directly and uses the actual peer address. Only an
+explicit `TRUSTED_PROXY_NETWORKS` opts into a separately configured proxy; this
+also requires that proxy to supply the validated `X-Real-IP` header.
+
+Relay example:
 
 ```dotenv
 TLS_ENABLED=true
@@ -84,4 +94,18 @@ Rapidly click the second half of the home logo five times to open the Admin entr
 
 Admin displays certificate status and permits authorized download of the certificate/key pair wrapped for the requesting browser. It offers no upload, certificate paths, or manual renewal. Every file/folder upload requires a new explicit encrypted/plaintext storage choice and site selection. Encryption runs in the browser, never silently falls back after failure, and stores ciphertext on Storage. The backend checks authorization, hashes, and consistency.
 
-Online upgrade/rollback APIs, UI, and Updater have been retired. See [operator recovery](../operator-recovery.md) and [automatic Python TLS](../automatic-tls-python.md) for manual stopped-service upgrades and legacy certificate migration.
+`ADMIN_UPLOAD_INACTIVITY_TIMEOUT` defaults to 300 seconds. Authenticated status
+passes that same setting to the native browser uploader. Increasing byte
+progress renews its watchdog, so a large continuous upload can run longer.
+Abort, network loss and inactivity settle the client result; cancellation and
+its optional S3 status read share a ten-second control-request budget. Missing
+replies leave the authoritative reservation for normal safe reconciliation.
+Refresh or closing a tab cannot authorize deleting existing published media.
+
+Online upgrade/rollback business APIs, UI, and Updater have been retired.
+The candidate [Compose/Python operator](../python-source-operator.md) provides
+host one-shot installation, upgrading and controlled state recovery; it is
+subject to the current renewal's release gates. The earlier
+[operator recovery](../operator-recovery.md) and
+[automatic Python TLS](../automatic-tls-python.md) retain legacy recovery and
+certificate-migration guidance.

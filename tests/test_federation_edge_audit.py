@@ -97,9 +97,12 @@ class CapabilityAuditTests(unittest.IsolatedAsyncioTestCase):
             scopes.append(scope.get("media_audit", {}))
 
         stream = AsyncMock(return_value=Response(headers={"X-Accel-Redirect": "/_protected_media/music/test/song.wav"}))
+        # This test isolates signed provenance. Real filesystem/SQL leases and
+        # authentication failures are covered by test_resource_readers.
+        lease = AsyncMock()
         with patch.object(internal_nodes, "state", store), patch.object(internal_nodes.settings, "TLS_ENABLED", True), patch.object(
                 internal_nodes, "owned_path", AsyncMock(return_value="music/test/song.wav")), patch(
-                "app.api.v1.media.stream_media_file", stream):
+                "app.api.v1.media.stream_media_file", stream), patch("app.services.resource_readers.media", lease):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=record_scope),
                                          base_url="https://follower.example.com") as client:
                 response = await client.get(f"/internal/v1/media/{original}", params={"token": token},
@@ -116,7 +119,7 @@ class CapabilityAuditTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(internal_nodes, "state", store), patch.object(internal_nodes.settings, "TLS_ENABLED", True), patch.object(
                 internal_nodes, "owned_path", AsyncMock(return_value="music/test/song.wav")), patch(
-                "app.api.v1.media.stream_media_file", stream):
+                "app.api.v1.media.stream_media_file", stream), patch("app.services.resource_readers.media", lease):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=record_scope),
                                          base_url="https://follower.example.com") as client:
                 header_response = await client.head(f"/internal/v1/media/{original}",
@@ -128,6 +131,7 @@ class CapabilityAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(header_response.headers["X-Media-Parent-Request-ID"], origin_request_id)
         self.assertEqual(missing.status_code, 401)
         self.assertEqual(conflicting.status_code, 401)
+        self.assertEqual(lease.await_count,2)
 
     def test_capability_provenance_is_authenticated(self):
         credential, now = secrets.token_urlsafe(48), int(time.time())

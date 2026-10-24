@@ -33,8 +33,14 @@ class MediaCryptoHTTPTests(unittest.IsolatedAsyncioTestCase):
         from app.core.sqlite_compat import create_sqlite_engine
         self.database = create_sqlite_engine("sqlite+aiosqlite:///" + str(self.root / "test.sqlite"))
         async with self.database.begin() as conn:
+            from app.services.s3_schema import metadata as s3_metadata
+            await conn.run_sync(s3_metadata.create_all)
             await conn.run_sync(metadata.create_all)
             await conn.run_sync(fs.metadata.create_all)
+            from app.services.resource_migration_schema import metadata as migration_metadata
+            await conn.run_sync(migration_metadata.create_all)
+            from app.services.node_retirement_schema import metadata as retirement_metadata
+            await conn.run_sync(retirement_metadata.create_all)
             await conn.execute(text("CREATE TABLE media_objects(media_id TEXT PRIMARY KEY,object_kind TEXT,media_path TEXT,path_locator TEXT UNIQUE,created_at TIMESTAMP,updated_at TIMESTAMP)"))
             await conn.execute(text("CREATE TABLE media_playback_stats(media_id TEXT PRIMARY KEY,media_path TEXT,play_score INTEGER DEFAULT 0,preference INTEGER DEFAULT 0,created_at TIMESTAMP,updated_at TIMESTAMP)"))
             await conn.execute(text("CREATE TABLE media_playback_events(media_id TEXT)"))

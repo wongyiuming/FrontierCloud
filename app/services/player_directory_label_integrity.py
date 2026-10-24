@@ -18,6 +18,9 @@ def install() -> None:
 
     def load_html_template(filename: str) -> str:
         content = original_load_html_template(filename)
+        if filename in PLAYER_TEMPLATES | {"karaoke.html"}:
+            for asset in ("css/lyrics-window.css", "js/lyrics-window.js"):
+                content = content.replace(f'"/static/{asset}"', f'"{static_asset_url(asset)}"')
         if filename not in PLAYER_TEMPLATES:
             return content
         content = content.replace(
@@ -25,6 +28,11 @@ def install() -> None:
             '<span id="playerDirectoryLabel">当前目录</span>',
             1,
         )
+        assets = ["js/business-navigation.js"]
+        if filename == "audio-player.html":
+            assets.append("js/music-metadata.js")
+        scripts = "".join(f'<script src="{static_asset_url(name)}"></script>\n' for name in assets)
+        content = content.replace("<script", scripts + "<script", 1)
         if filename == "audio-player.html":
             continuous_stream_url = static_asset_url("js/audio-continuous-stream.js")
             content = content.replace(

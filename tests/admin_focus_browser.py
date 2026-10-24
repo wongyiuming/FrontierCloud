@@ -10,7 +10,7 @@ def fixture(root):
     css = '\n'.join((root / 'static/css' / name).read_text(encoding='utf-8')
                     for name in ('admin.css', 'admin-system-modules.css'))
     focus = (root / 'static/js/admin-focus.js').read_text(encoding='utf-8')
-    names = ['media', 'priority', 'lyrics', 'users', 'security', 'network', 'nodes', 'site', 'key', 'brand']
+    names = ['media', 'priority', 'lyrics', 'users', 'security', 'network', 'nodes', 'migrations', 'site', 'key', 'brand']
     modules = ''.join(f'<section class="admin-module" data-admin-module="{name}">'
                       f'<button class="module-heading"><strong>{name}</strong><b>＋</b></button>'
                       '<div class="module-content">Content</div></section>' for name in names)
@@ -71,7 +71,7 @@ def check(root, output, expect_broken=False):
                 page=browser.new_page(viewport={'width':size[0],'height':size[1]},reduced_motion=motion)
                 page.set_content(fixture(root))
                 page.wait_for_timeout(50)
-                for name in ('media','key','priority','brand','nodes','media'):
+                for name in ('media','key','priority','brand','nodes','migrations','media'):
                     click(page,name);page.wait_for_timeout(700)
                     actual=geometry(page,name)
                     results.append({'viewport':size,'motion':motion,'module':name,**actual})

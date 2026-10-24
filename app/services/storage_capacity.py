@@ -74,7 +74,7 @@ async def enrich_pool_summary(summary: dict, store) -> dict:
                           - int(member.get("reserved_bytes") or 0))
             physical = max(0, int(member.get("physical_free_bytes") or 0) - reserve)
             available = min(logical, physical) if (
-                member.get("health") == "online" and member.get("writable")
+                member.get("health") == "online" and member.get("writable") and not member.get('draining')
             ) else 0
             member["available_bytes"] = available
             member["online_writable_bytes"] = available
@@ -101,6 +101,9 @@ async def enrich_pool_summary(summary: dict, store) -> dict:
     result["project_used_bytes"] = sum(int(member.get("used_bytes") or 0) for member in real_members)
     result["available_bytes"] = sum(int(member.get("available_bytes") or 0) for member in real_members)
     result["online_writable_bytes"] = result["available_bytes"]
+    if getattr(store,'node',{}).get('role') == 'Master' and getattr(store,'_s3_configured',False):
+        from app.services.s3_members import Members
+        result['s3_members'] = await Members(store).list()
     return result
 
 

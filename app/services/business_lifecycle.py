@@ -16,6 +16,7 @@ BUSINESS_TABLES = (
     "cluster_business_backups", "cluster_business_backup_chunks",
     "karaoke_users", "karaoke_recordings", "karaoke_audit_log",
     "karaoke_registration_daily",
+    "s3_storage_members", "s3_upload_sessions", "s3_upload_parts", "s3_object_bindings",
 )
 
 
@@ -78,8 +79,11 @@ async def ensure_follower_business_empty(database=None, *, conn=None, media_root
         raise p.ProtocolError("Standalone 仍有媒体或歌词元数据；请先迁移，不能直接固定为 Follower")
 
 
-async def initialize_business_services() -> None:
+async def initialize_business_services(*, read_only=False) -> None:
     if state.node.get("role") == "Follower":
         return
-    await media_crypto.initialize()
-    await lyrics.initialize_default_lyrics()
+    if read_only:
+        await media_crypto.initialize(read_only=True)
+    else:
+        await media_crypto.initialize()
+        await lyrics.initialize_default_lyrics()

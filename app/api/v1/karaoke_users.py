@@ -302,6 +302,8 @@ async def create_ticket(request: Request, payload: TicketPayload):
             raise HTTPException(400, str(exc)) from exc
         except IntegrityError as exc:
             raise HTTPException(409, "录音或加密快照身份已被占用，请重新准备") from exc
+        except p.ProtocolError as exc:
+            raise HTTPException(409,str(exc)) from exc
 
 
 async def _create_ticket(request: Request, payload: TicketPayload, user: dict):
@@ -340,6 +342,8 @@ async def _create_ticket(request: Request, payload: TicketPayload, user: dict):
     filename = _safe_filename(title, user["username"], recording_id, payload.content_type.split(";", 1)[0].lower())
     await _cleanup_stale_pending(user["user_id"], now)
     async with state.database.begin() as conn:
+        from app.services import resource_fences
+        await resource_fences.recording(conn,member['member_id'],user['user_id'],upload=True)
         locked = (await conn.execute(select(ks.users).where(ks.users.c.user_id == user["user_id"])
                                      .with_for_update())).mappings().one()
         if locked["status"] != "active" or locked["used_bytes"] + payload.size_bytes > locked["quota_bytes"]:

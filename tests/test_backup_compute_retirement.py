@@ -87,13 +87,19 @@ class ComputeRetirementContractTests(unittest.TestCase):
         self.assertNotIn("worker_jobs", observability)
         self.assertNotIn("shared_queued", observability)
 
-    def test_retirement_filter_is_installed_before_internal_router_registration(self):
-        retirement = (ROOT / "app/api/internal_worker_retirement.py").read_text(encoding="utf-8")
+    def test_retired_job_routes_and_executable_helpers_are_removed(self):
+        nodes = (ROOT / "app/api/internal_nodes.py").read_text(encoding="utf-8")
+        pool = (ROOT / "app/services/resource_pool.py").read_text(encoding="utf-8")
         registry = (ROOT / "app/api/internal_control.py").read_text(encoding="utf-8")
-
-        self.assertIn('RETIRED_WORKER_PREFIX = "/internal/v1/jobs/"', retirement)
-        self.assertIn("internal_nodes.router.routes[:]", retirement)
-        self.assertIn("install_internal_worker_retirement()", registry)
+        self.assertNotIn('"/jobs/', nodes)
+        self.assertNotIn("worker_retirement", registry)
+        self.assertFalse((ROOT / "app/api/internal_worker_retirement.py").exists())
+        for name in ("enqueue_job", "lease_job", "complete_job", "compute_pressure"):
+            self.assertNotIn("def " + name + "(", pool)
+        self.assertNotIn("s.compute_members", pool)
+        self.assertNotIn("s.worker_jobs", pool)
+        for table in ("cluster_compute_members", "cluster_worker_jobs"):
+            self.assertIn('"'+table+'"', pool)  # Historical backup contents remain readable.
 
 
 if __name__ == "__main__":

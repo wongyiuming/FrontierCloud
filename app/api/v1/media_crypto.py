@@ -289,7 +289,7 @@ async def raw_bytes(request: Request, path: str, *, admin: bool, expected_id: st
                     source = (await conn.execute(select(fs.global_media).where(fs.global_media.c.media_id == expected_id))).mappings().one()
                 if crypto.download_snapshot(expected_id, path, obj["size_bytes"], crypto._global_revision(dict(source))) != snapshot:
                     raise HTTPException(409, "Download source changed")
-            if relation is not None:
+            if relation is not None or row.get('transport') == 'S3':
                 remote = obj["resource_id"]
         if remote is None:
             try:
@@ -302,7 +302,10 @@ async def raw_bytes(request: Request, path: str, *, admin: bool, expected_id: st
                     stream.close()
                     raise HTTPException(409, "Download source changed")
     if remote is not None:
-        response = await routing.stream(remote, path)
+        options={'method':'HEAD'} if request.method == 'HEAD' else {}
+        if admin and expected_id and row.get('transport') == 'S3':
+            options['download']=True
+        response = await routing.stream(remote, path,**options)
         response.headers.update(NO_STORE_HEADERS)
         return response
     return await pinned_bytes(request, obj, stream)
@@ -332,16 +335,16 @@ async def download_plan(request: Request, paths: str, binding: str = Depends(adm
     if not isinstance(selection, list) or not selection or len(selection) > settings.ADMIN_MAX_DOWNLOAD_ITEMS:
         raise HTTPException(400, "请选择合法下载对象")
     entries = await crypto.browser_download_plan(selection)
-    encrypted = any(item.get("encryption") for item in entries)
+    browser_download = any(item.get("encryption") or item.get('browser_download') for item in entries)
     for item in entries:
-        if encrypted:
+        if browser_download:
             item["url"] = "/api/v1/media/admin/download/bytes?" + urlencode({"file_path": item["path"], "media_id": item["media_id"], "snapshot": item.pop("snapshot")})
         else:
             item.pop("snapshot")
             item["url"] = "/api/v1/media/admin/download?" + urlencode({"paths": json.dumps([item["path"]], separators=(",", ":"))})
-    if encrypted:
+    if browser_download:
         await admin_service.audit(binding.removeprefix("admin:"), "download", len(entries),
-                                  json.dumps(selection, ensure_ascii=False), "success", "browser encrypted download plan", request)
+                                  json.dumps(selection, ensure_ascii=False), "success", "browser download plan", request)
     return {"items": entries}
 
 

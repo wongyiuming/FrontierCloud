@@ -9,9 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def controller_codes():
+    from app.services.certmanager.client import CODES
     tree = ast.parse((ROOT / 'app/services/certmanager/manager.py').read_text(encoding='utf-8'))
     classifier = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'classify')
-    codes = set()
+    codes = set(CODES)
     for node in ast.walk(classifier):
         if isinstance(node, ast.Return) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
             codes.add(node.value.value)

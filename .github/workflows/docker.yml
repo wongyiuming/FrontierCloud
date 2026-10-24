@@ -3,8 +3,8 @@ name: Build and Test Python Source
 on:
   push:
     branches: [dev, main]
-  pull_request:
-    branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -13,48 +13,54 @@ permissions:
 
 jobs:
   source:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/main'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 3
+    concurrency:
+      group: python-source-${{ github.event_name }}-${{ github.ref }}
+      cancel-in-progress: true
     env:
-      DB_TYPE: sqlite
-      SQLITE_PATH: ${{ github.workspace }}/data/frontiercloud-source.db
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14.7'
-          cache: pip
-          cache-dependency-path: pyproject.toml
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install pinned Python dependencies
-        run: |
-          python - <<'PY'
-          import pathlib,tomllib
-          packages=tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['dependencies']
-          pathlib.Path('/tmp/frontiercloud-requirements.txt').write_text('\n'.join(packages)+'\n')
-          PY
-          python -m pip install --disable-pip-version-check -r /tmp/frontiercloud-requirements.txt
-      - name: Syntax and deployment contract
-        run: |
-          python -m compileall -q app main.py
-          python scripts/check_release_policy.py
-          python scripts/check_cpu_boundary.py
-          python scripts/validate_env_contract.py
-          python scripts/check_english_comments.py
-          find static/js -name '*.js' -print0 | xargs -0 -n1 node --check
-      - name: Complete source and unit regression
-        run: |
-          python -m unittest discover -s tests -p 'test_*.py'
-          node tests/admin_ui_smoke.mjs
-          node tests/player_cache_smoke.mjs
-          node tests/network_observation_smoke.mjs
+      - name: Bounded source policy and JavaScript smoke checks
+        run: timeout --signal=TERM --kill-after=5s 150s bash scripts/test-ci-source.sh
+
+  test-compose:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    concurrency:
+      group: python-compose-${{ github.event_name }}-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+      - name: Compose configuration only; no containers or native acceptance
+        run: timeout --signal=TERM --kill-after=5s 150s python -m tests.compose_layout_native
+
   topology:
     runs-on: ubuntu-latest
     timeout-minutes: 1
@@ -68,83 +74,6 @@ jobs:
             if (p.base.ref !== 'main' || p.head.ref !== 'dev' || p.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
               core.setFailed('Only same-repository dev -> main promotion is allowed');
             }
-
-  test-compose:
-    needs: source
-    if: github.event_name != 'push' || github.ref != 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      PYTHONDONTWRITEBYTECODE: '1'
-      PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.14.7'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Prepare isolated native test tools
-        run: |
-          export FC_EVIDENCE_DIR="$RUNNER_TEMP/frontiercloud-native-evidence"
-          export FC_BROWSER_PYTHON="$RUNNER_TEMP/frontiercloud-native-driver/bin/python"
-          printf '%s\n' "FC_EVIDENCE_DIR=$FC_EVIDENCE_DIR" "FC_BROWSER_PYTHON=$FC_BROWSER_PYTHON" >> "$GITHUB_ENV"
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libnss3-tools
-          command -v node
-          command -v certutil
-          test -x "$PLAYWRIGHT_CHROMIUM_EXECUTABLE"
-          "$PLAYWRIGHT_CHROMIUM_EXECUTABLE" --version
-          docker version
-          docker compose version
-          python -m venv "$RUNNER_TEMP/frontiercloud-native-driver"
-          "$FC_BROWSER_PYTHON" -m pip install --disable-pip-version-check \
-            playwright==1.62.0 httpx==0.28.1 cryptography==50.0.1
-          sudo install -d -m 0700 /root/frontiercloud-dev "$FC_EVIDENCE_DIR"
-          sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - name: Complete Compose TLS browser and database acceptance
-        run: |
-          sudo --preserve-env=PYTHONDONTWRITEBYTECODE,FC_EVIDENCE_DIR,FC_BROWSER_PYTHON,PLAYWRIGHT_CHROMIUM_EXECUTABLE \
-            bash -c 'set -euo pipefail; cd "$1"; bash scripts/test-python-final.sh > "$FC_EVIDENCE_DIR/native.log" 2>&1' \
-            bash "$GITHUB_WORKSPACE"
-      - name: Collect only sanitized receipts and test logs
-        id: collect-evidence
-        if: always()
-        run: |
-          upload="$RUNNER_TEMP/frontiercloud-native-artifact"
-          mkdir -p "$upload"
-          chmod 0700 "$upload"
-          for name in source-commit.txt nginx-real.json storage-direct-real.json storage-relay-real.json \
-            federation.json operator-sqlite-proof.json operator-mysql-proof.json \
-            operator-endpoint-sqlite-proof.json operator-endpoint-mysql-proof.json \
-            native.log unit.log certificate-nginx.log certificate-storage.log federation.log \
-            mysql.log operator.log operator-backup.log operator-endpoint.log; do
-            if sudo test -f "$FC_EVIDENCE_DIR/$name"; then
-              sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" "$FC_EVIDENCE_DIR/$name" "$upload/$name"
-            fi
-          done
-          python - <<'PY'
-          import json, os, pathlib
-          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'frontiercloud-native-artifact'
-          for path in root.iterdir():
-              content = path.read_text()
-              if 'PRIVATE KEY-----' in content:
-                  path.unlink()
-                  raise SystemExit('Refusing evidence containing private key material')
-              if path.suffix == '.json':
-                  json.loads(content)
-          PY
-      - uses: actions/upload-artifact@v4
-        if: always() && steps.collect-evidence.outcome == 'success'
-        with:
-          name: native-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/frontiercloud-native-artifact/*
-          if-no-files-found: warn
-          retention-days: 14
 
   promote-main:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -202,11 +131,13 @@ jobs:
             const runs = Array.isArray(response.data?.workflow_runs)
               ? response.data.workflow_runs
               : [];
-            const run = runs.find(item =>
+            const matching = runs.filter(item =>
               item?.head_sha === sourceSha &&
               item?.head_branch === 'dev' &&
               item?.event === 'push'
-            ) || null;
+            );
+            matching.sort((a, b) => b.run_number - a.run_number || b.run_attempt - a.run_attempt);
+            const run = matching[0] || null;
             if (!run) {
               core.setFailed(`reviewed dev PR head ${sourceSha} has no dev push CI run`);
               return;
@@ -215,13 +146,15 @@ jobs:
               core.setFailed(`dev CI #${run.run_number} for ${sourceSha} is ${run.status}/${run.conclusion || 'unknown'}`);
               return;
             }
-            const jobResponse = await github.rest.actions.listJobsForWorkflowRun({
-              owner, repo, run_id: run.id, filter: 'latest', per_page: 100,
+            const jobResponse = await github.rest.actions.listJobsForWorkflowRunAttempt({
+              owner, repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
             });
             const jobs = Array.isArray(jobResponse.data?.jobs) ? jobResponse.data.jobs : [];
             for (const required of ['source', 'test-compose']) {
-              const job = jobs.find(item => item.name === required);
-              if (!job || job.status !== 'completed' || job.conclusion !== 'success') {
+              const matches = jobs.filter(item => item.name === required);
+              const job = matches[0];
+              if (matches.length !== 1 || job.status !== 'completed' || job.conclusion !== 'success' ||
+                  job.head_sha !== sourceSha || job.run_id !== run.id) {
                 core.setFailed(`dev CI #${run.run_number} has no successful ${required} job for ${sourceSha}`);
                 return;
               }

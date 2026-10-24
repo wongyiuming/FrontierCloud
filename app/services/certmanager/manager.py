@@ -45,10 +45,17 @@ class BusinessIngressPending(RuntimeError):
 
 def classify(exc):
     from acme import errors, messages
+    from requests import exceptions as requests_errors
     if isinstance(exc, socket.gaierror):
         return "dns_unavailable"
     if isinstance(exc, ChallengeBindError):
         return "port80_unavailable"
+    if isinstance(exc,(TimeoutError,requests_errors.Timeout)):
+        return "ca_request_timeout"
+    if isinstance(exc,requests_errors.SSLError):
+        return "tls_verification_failed"
+    if isinstance(exc,requests_errors.ConnectionError):
+        return "ca_connection_failed"
     if isinstance(exc, OSError) and exc.errno in (13, 28, 30):
         return "certificate_storage_unavailable"
     if isinstance(exc, messages.Error):

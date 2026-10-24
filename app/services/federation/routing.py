@@ -49,16 +49,29 @@ async def resolve(identifier: str, path: str | None = None):
         raise HTTPException(404, "Media object not found") from exc
     if relation is not None and relation["state"] != "active":
         raise HTTPException(404, "Media object not found")
+    if row.get('transport') == 'S3':
+        if row.get('health') != 'external' or relation is not None:
+            raise HTTPException(503,'Media placement unavailable',headers={'Cache-Control':'no-store'})
+        return row,None
     if row.get("health") != "online" or (relation is not None and (
             relation["status"] == "offline" or int(time.time()) - relation["last_heartbeat"] >= p.OFFLINE_SECONDS)):
         raise HTTPException(503, "Media temporarily unavailable", headers={"Retry-After": "30", "Cache-Control": "no-store"})
     return row, relation
 
 
-async def stream(identifier: str, path=None):
+async def stream(identifier: str, path=None,*,method='GET',download=False):
     row, relation = await resolve(identifier, path)
     provenance = {"X-Media-Resource-ID": row["resource_id"], "X-Media-Owner-ID": row["owner_id"],
                   "X-Media-Object-ID": row["object_id"]}
+    if row.get('transport') == 'S3':
+        from app.services.s3_objects import Objects
+        from app.services.s3_signing import S3Error
+        try:
+            grant = await Objects(state).grant(identifier,method=method,download=download)
+        except S3Error as error:
+            status = 404 if error.code == 's3_object_missing' else 503
+            raise HTTPException(status,'Media unavailable',headers={'Cache-Control':'no-store'}) from error
+        return RedirectResponse(grant.url,status_code=307,headers={**provenance,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
     if relation is None:
         from app.api.v1.media import stream_media_file
         response = await stream_media_file(row["path"])
@@ -94,7 +107,8 @@ def item(row):
             "url": "/api/v1/media/stream?" + urlencode({"file_path": row["path"], "resource_id": row["resource_id"]}),
             # The existing cover is a static product icon, not a media attachment.
             "cover": "/favicon.ico", "has_lyrics": payload["has_lyrics"],
-            "play_score": payload["play_score"], "preference": payload["preference"]}
+            "play_score": payload["play_score"], "preference": payload["preference"],
+            **({'browser_metadata':True,'size_bytes':payload['size'],'etag':payload['etag']} if row.get('transport') == 'S3' else {})}
 
 
 async def directory_items(path: str):

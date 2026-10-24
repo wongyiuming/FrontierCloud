@@ -2,7 +2,6 @@
 
 (() => {
   const OFFSETS = Object.freeze([-3, -2, -1, 0, 1, 2, 3]);
-  const ROW_PERCENT = 100 / OFFSETS.length;
 
   function rowClass(offset) {
     if (offset <= -4) return 'sync-lyric departing';
@@ -15,36 +14,65 @@
     return 'sync-lyric trailing';
   }
 
-  function makeRow(entry, offset) {
+  function updateRow(row, entry, offset, index) {
+    const className = rowClass(offset);
+    const text = entry?.text || (offset === 0 ? '♪' : '\u00a0');
+    if (row.className !== className) row.className = className;
+    if (row.textContent !== text) row.textContent = text;
+    if (row.dataset.lyricIndex !== String(index)) row.dataset.lyricIndex = String(index);
+    return row;
+  }
+
+  function makeRow(entry, offset, index) {
     const row = document.createElement('p');
-    row.className = rowClass(offset);
-    row.textContent = entry?.text || (offset === 0 ? '♪' : '\u00a0');
+    updateRow(row, entry, offset, index);
     return row;
   }
 
   function renderWindow(container, entries, active) {
     if (!container) return;
-    const rows = OFFSETS.map(offset => makeRow(entries[active + offset], offset));
-    container.replaceChildren(...rows);
+    const existing = new Map(Array.from(container.children).map(row => [row.dataset.lyricIndex, row]));
+    const rows = OFFSETS.map(offset => {
+      const index = active + offset;
+      const row = existing.get(String(index)) || document.createElement('p');
+      return updateRow(row, entries[index], offset, index);
+    });
+    const retained = new Set(rows);
+    for (const row of Array.from(container.children)) {
+      if (!retained.has(row)) container.removeChild(row);
+    }
+    rows.forEach((row, index) => {
+      if (container.children[index] !== row) container.insertBefore(row, container.children[index] || null);
+    });
   }
 
   function sizeFullscreenLyrics(overlay, entries) {
     if (!overlay || overlay.classList.contains('hidden') || !entries.length) return;
     const rowsPerColumn = Math.max(1, Math.ceil(entries.length / 3));
-    const longest = Math.max(1, ...entries.map(entry => Array.from(entry.text || '').length));
     const heightSize = Math.max(10, (overlay.clientHeight - 80) / (rowsPerColumn * 1.22));
-    const widthSize = Math.max(10, (overlay.clientWidth / 3 - 56) / Math.max(4, longest * 1.02));
-    const fontSize = Math.round(Math.max(10, Math.min(48, heightSize, widthSize)));
+    const fontSize = Math.round(Math.max(10, Math.min(48, heightSize)));
     Array.from(overlay.classList)
       .filter(name => /^fs-\d+$/.test(name))
       .forEach(name => overlay.classList.remove(name));
     overlay.classList.add(`fs-${fontSize}`);
+    revealFullscreenLyric(overlay.querySelector('.fullscreen-lyric-line.current'));
+  }
+
+  function revealFullscreenLyric(row) {
+    const column = row?.closest('.fullscreen-lyrics-column');
+    if (!column || column.scrollHeight <= column.clientHeight) return;
+    const bounds = column.getBoundingClientRect(), line = row.getBoundingClientRect();
+    const top = bounds.top + column.clientTop, bottom = top + column.clientHeight;
+    if (line.top < top) column.scrollTop += line.top - top;
+    else if (line.bottom > bottom) column.scrollTop += Math.min(line.bottom - bottom, line.top - top);
   }
 
   function syncFullscreenLyrics(container, active) {
     if (!container) return;
     container.querySelector('.fullscreen-lyric-line.current')?.classList.remove('current');
-    if (active >= 0) container.querySelector(`[data-lyric-index="${active}"]`)?.classList.add('current');
+    const row = active >= 0 ? container.querySelector(`[data-lyric-index="${active}"]`) : null;
+    row?.classList.add('current');
+    revealFullscreenLyric(row);
   }
 
   function renderFullscreenColumns(columns, entries, active, overlay) {
@@ -75,6 +103,16 @@
     renderFullscreenColumns(columns, entries, active, overlay);
   }
 
+  function revealInlineLyric(track) {
+    const viewport = track.parentElement;
+    const row = Array.from(track.children).find(line => line.classList.contains('current'));
+    if (!row || !viewport || viewport.scrollHeight <= viewport.clientHeight) return;
+    const bounds = viewport.getBoundingClientRect(), line = row.getBoundingClientRect();
+    const top = bounds.top + viewport.clientTop, bottom = top + viewport.clientHeight;
+    if (line.top < top) viewport.scrollTop += line.top - top;
+    else if (line.bottom > bottom) viewport.scrollTop += Math.min(line.bottom - bottom, line.top - top);
+  }
+
   function installAudioPlayerOverrides() {
     if (typeof window.renderLyricWindow !== 'function' || typeof window.updateSynchronizedLyrics !== 'function') return;
 
@@ -83,11 +121,10 @@
       const panel = document.getElementById('inlineLyrics');
       const track = document.getElementById('inlineLyricsTrack');
       if (!panel || !track || activeLyricEntries.length === 0) return;
-      const visible = Array.from(track.children).slice(0, OFFSETS.length).map(row => row.textContent || '');
-      const longest = Math.max(1, ...visible.map(line => Array.from(line).length));
+      panel.style.setProperty('--sync-lyric-row-height', `${panel.clientHeight / OFFSETS.length}px`);
       const heightSize = Math.max(14, panel.clientHeight / 7.3);
-      const widthSize = Math.max(14, (panel.clientWidth - 40) / Math.max(6, longest * 1.02));
-      panel.style.setProperty('--sync-lyric-font-size', `${Math.max(14, Math.min(44, heightSize, widthSize))}px`);
+      panel.style.setProperty('--sync-lyric-font-size', `${Math.max(14, Math.min(44, heightSize))}px`);
+      revealInlineLyric(track);
     };
 
     window.renderLyricWindow = function renderSevenLineWindow(index) {
@@ -114,12 +151,21 @@
       Array.from(track.children).forEach((row, rowIndex) => {
         row.className = rowClass(OFFSETS[rowIndex] - 1);
       });
-      track.append(makeRow(activeLyricEntries[nextIndex + 3], 3));
+      const wrapped = Array.from(track.children).some(row => {
+        const style = window.getComputedStyle(row);
+        const singleLine = parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+        return row.offsetHeight > Math.max(panel.clientHeight / OFFSETS.length, singleLine) + 1;
+      });
+      if (wrapped) {
+        window.renderLyricWindow(nextIndex);
+        return;
+      }
+      track.append(makeRow(activeLyricEntries[nextIndex + 3], 3, nextIndex + 3));
       activeLyricIndex = nextIndex;
       setActiveLyricTime(panel, nextIndex);
       void track.offsetWidth;
       track.classList.add('sliding');
-      track.style.transform = `translateY(-${ROW_PERCENT}%)`;
+      track.style.transform = `translateY(-${track.children[0].offsetHeight}px)`;
       lyricSlideTimer = setTimeout(() => window.renderLyricWindow(nextIndex), LYRIC_SLIDE_MS + 30);
     };
 

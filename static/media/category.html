@@ -1,32 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="frontier-covers">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{PAGE_TITLE}}</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: #121212; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .container { text-align: center; max-width: 760px; width: 92%; }
-        .header { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 2rem; }
-        .page-brand { display: flex; min-width: 0; align-items: center; gap: 14px; text-align: left; }
-        .page-brand img { display: block; width: min(360px, 52vw); height: auto; object-fit: contain; }
-        .page-brand-suffix { color: #d8e4f0; font-size: 1.05rem; font-weight: 700; white-space: nowrap; }
-        .page-brand-suffix:empty { display: none; }
-        .back-btn { flex: 0 0 auto; color: #888; text-decoration: none; font-size: 14px; }
-        .back-btn:hover { color: #fff; }
-        .card-grid { display: flex; flex-direction: column; gap: 15px; }
-        .card { background: #1e1e1e; border: 1px solid #2d2d2d; border-radius: 10px; padding: 20px; text-decoration: none; color: #fff; display: flex; align-items: center; justify-content: space-between; transition: background 0.2s; }
-        .card:hover { background: #282828; }
-        .card-title { font-size: 1.1rem; font-weight: bold; }
-        .card-arrow { color: #666; font-size: 1.2rem; }
-        .empty { color: #666; padding: 40px; }
-        @media (max-width: 600px) {
-            .header { align-items: flex-start; flex-direction: column; }
-            .page-brand img { width: min(420px, 88vw); }
-            .back-btn { align-self: flex-end; }
-        }
-    </style>
+    <link rel="stylesheet" href="{{DIRECTORY_GLOBE_CSS_URL}}">
 </head>
 <body>
     <div class="container">
@@ -37,7 +15,26 @@
             </div>
             <a href="{{BACK_URL}}" class="back-btn">← 返回上级</a>
         </div>
-        <div id="categoryGrid" class="card-grid"><div class="empty">正在加载目录…</div></div>
+        <main class="orbit-layout">
+            <section class="orbit-intro" aria-label="目录信息">
+                <div id="directoryEyebrow" class="orbit-eyebrow">前沿UI</div>
+                <h1 id="globeTitle">This is my party</h1>
+                <div id="globeCount" class="orbit-stat">加载中</div>
+            </section>
+            <section id="globePanel" class="orbit-panel" aria-label="媒体目录">
+                <div class="globe-toolbar">
+                    <span id="globeHint">媒体目录</span>
+                    <button id="globeToggle" class="globe-toggle" type="button" aria-pressed="false">列表视图</button>
+                </div>
+                <div id="globeStage" class="globe-stage" role="region" aria-label="九宫格目录，左右滑动翻页" tabindex="0">
+                    <div id="categoryGrid" class="card-grid"><div class="empty">正在加载目录…</div></div>
+                </div>
+                <nav id="albumPagination" class="album-pagination" aria-label="目录翻页" hidden>
+                    <div id="albumPages" class="album-pages" aria-hidden="true"></div>
+                    <span id="albumPageStatus" aria-live="polite"></span>
+                </nav>
+            </section>
+        </main>
     </div>
     <script>
         const pageBrand = document.getElementById('pageBrand');
@@ -52,17 +49,40 @@
         } else if (pageTitle.startsWith('前沿媒体')) {
             brandKind = 'media'; brandLabel = '前沿媒体'; sourcePrefix = '前沿媒体';
         }
+        const catalogConfig = {{CATALOG_CONFIG_JSON}};
+        const isVideo = catalogConfig.url
+            ? new URL(catalogConfig.url, location.href).searchParams.get('media_type') === 'video'
+            : brandKind === 'media';
+        const mediaKind = isVideo ? 'video' : 'music';
+        const categoryLabel = isVideo ? '视频' : '音乐';
+        const itemLabel = isVideo ? '视频' : '专辑';
+        document.getElementById('directoryEyebrow').textContent = '前沿UI / ' + mediaKind.toUpperCase();
+        document.getElementById('globePanel').setAttribute('aria-label', categoryLabel + '目录');
+        document.getElementById('albumPagination').setAttribute('aria-label', itemLabel + '翻页');
+        const stage = document.getElementById('globeStage');
+        stage.dataset.gridLabel = `九宫格${itemLabel}目录，左右滑动翻页`;
+        stage.dataset.listLabel = categoryLabel + '目录列表';
+        stage.setAttribute('aria-label', stage.dataset.gridLabel);
+        const hint = document.getElementById('globeHint');
+        hint.dataset.listLabel = '';
+        hint.dataset.directoryLabel = categoryLabel + '目录';
         const brandLogo = document.getElementById('pageBrandLogo');
         brandLogo.src = `/api/v1/media/brand/logo/${brandKind}`;
         brandLogo.alt = brandLabel;
         document.getElementById('pageBrandSuffix').textContent =
-            pageTitle.slice(sourcePrefix.length).replace(/^\s*-\s*/, '');
-        window.frontierCloudCatalogRevealKind =
-            brandKind === 'music' ? 'music' : (brandKind === 'media' ? 'video' : '');
+            pageTitle.slice(sourcePrefix.length).replace(/^\s*-\s*/, '') || categoryLabel + '目录';
+        const directoryLabel = pageTitle.slice(sourcePrefix.length).replace(/^\s*-\s*/, '');
+        if (directoryLabel) document.getElementById('globeTitle').textContent = directoryLabel;
+        const directoryPath = new URL(location.href).searchParams.get('path') || (isVideo ? 'vido' : 'music');
+        const pathLabel = directoryPath.split('/').map(part => part === 'music' ? '音乐' : part === 'vido' ? '视频' : part).join(' / ');
+        document.getElementById('globeHint').dataset.pathLabel = pathLabel;
+        document.getElementById('globeHint').textContent = pathLabel;
+        window.frontierCloudCatalogRevealKind = mediaKind;
         window.frontierCloudStunUrls = {{STUN_URLS_JSON}};
         window.frontierCloudWebrtcIntervalMs = {{WEBRTC_INTERVAL_MS}};
-        window.frontierCloudCatalogConfig = {{CATALOG_CONFIG_JSON}};
+        window.frontierCloudCatalogConfig = catalogConfig;
     </script>
+    <script src="{{DIRECTORY_GLOBE_JS_URL}}"></script>
     <script src="{{MEDIA_BROWSER_JS_URL}}"></script>
     <script async src="{{NETWORK_OBSERVATION_JS_URL}}"></script>
 </body>

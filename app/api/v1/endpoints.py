@@ -22,10 +22,13 @@ from app.api.v1.brand import (
     upload_router as brand_upload_router,
 )
 from app.api.v1.media import router as media_router
+from app.api.v1.music_artwork import router as music_artwork_router
 from app.api.v1.karaoke import router as karaoke_router
 from app.api.v1.karaoke_integrity import router as karaoke_integrity_router
 from app.api.v1.karaoke_users import router as karaoke_users_router
 from app.api.v1.admin_nodes import router as nodes_router
+from app.api.v1.admin_migrations import router as migrations_router
+from app.api.v1.admin_s3 import router as s3_router
 from app.api.v1.admin_karaoke_users import router as admin_karaoke_users_router
 from app.api.v1.playback_continuity_diagnostics import (
     admin_router as playback_continuity_admin_router,
@@ -108,6 +111,7 @@ def _include_admin(source: APIRouter, *, prefix: str = "/media/admin") -> None:
 router = APIRouter()
 router.include_router(brand_public_router, prefix="/media/brand", tags=["Brand"])
 router.include_router(media_router, prefix="/media", tags=["MediaCenter"])
+router.include_router(music_artwork_router, prefix="/media", tags=["MediaCenter"])
 router.include_router(playback_continuity_router, prefix="/media", tags=["MediaCenter"])
 router.include_router(karaoke_router, prefix="/karaoke", tags=["Karaoke"])
 router.include_router(karaoke_integrity_router, prefix="/karaoke", tags=["KaraokeUsers"])
@@ -125,7 +129,9 @@ _include_admin(admin_directories_router)
 _include_admin(_without_paths(cluster_admin_router, _CLUSTER_OVERRIDE_PATHS))
 _include_admin(_without_paths(admin_router, _ADMIN_OVERRIDE_PATHS))
 _include_admin(_without_paths(nodes_router, _NODE_OVERRIDE_PATHS))
+_include_admin(migrations_router)
 _include_admin(node_observability_router)
+_include_admin(s3_router)
 _include_admin(playback_continuity_admin_router)
 _include_admin(admin_karaoke_integrity_router)
 _include_admin(_without_paths(admin_karaoke_users_router, _ADMIN_KARAOKE_OVERRIDE_PATHS))
